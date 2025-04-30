@@ -20,6 +20,7 @@
             text-align: center;
         }
     </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </head>
 <body>
 
@@ -27,6 +28,8 @@
     <input type="file" id="imageInput" accept="image/*">
     <input type="number" id="hexInput" min="0" max="63" placeholder="Enter a number (0-63)">
     <button id="drawButton">Draw Hexagon</button>
+    <button id="downloadButton">Download Image</button>
+    <button id="downloadSetButton">Download Set</button>
 </div>
 <canvas id="hexagonCanvas" width="600" height="600"></canvas>
 
@@ -35,13 +38,11 @@
     const ctx = canvas.getContext('2d');
     let image = new Image();
 
-    // Function to draw a hexagon based on the input number and binary representation
     function drawHexagon(binary) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         const hexSize = 100;
         const center = { x: canvas.width / 2, y: canvas.height / 2 };
         
-        // Calculate hexagon vertices
         const hexagon = Array.from({ length: 6 }, (_, i) => {
             const angle = (Math.PI / 3) * i;
             return {
@@ -50,14 +51,12 @@
             };
         });
 
-        // Draw the hexagon outline
         ctx.beginPath();
         ctx.moveTo(hexagon[0].x, hexagon[0].y);
         hexagon.forEach(v => ctx.lineTo(v.x, v.y));
         ctx.closePath();
         ctx.stroke();
 
-        // Draw circles based on binary representation
         hexagon.forEach((vertex, index) => {
             const nextIndex = (index + 1) % 6;
             if (binary[index] === '1') {
@@ -66,32 +65,27 @@
         });
     }
 
-    // Function to draw a full circle and fill its overlapping part with the image
     function drawCircle(start, end) {
         const centerX = (start.x + end.x) / 2;
         const centerY = (start.y + end.y) / 2;
-        const radius = 40; // Radius of the circle
+        const radius = 40;
 
-        // Store the image in a temporary canvas to create a pattern for filling
         const tempCanvas = document.createElement('canvas');
         const tempCtx = tempCanvas.getContext('2d');
         tempCanvas.width = radius * 2;
         tempCanvas.height = radius * 2;
 
-        // Fill the entire circle area with the image
         tempCtx.drawImage(image, 0, 0, radius * 2, radius * 2); 
         
-        // Draw the actual circle
         ctx.save();
         ctx.beginPath();
-        ctx.arc(centerX, centerY, radius, 0, Math.PI * 2); // Full circle
-        ctx.clip(); // Clip to circle
+        ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+        ctx.clip();
         ctx.drawImage(tempCanvas, centerX - radius, centerY - radius);
         ctx.restore();
         
-        // Now draw the circle outline
         ctx.beginPath();
-        ctx.arc(centerX, centerY, radius, 0, Math.PI * 2); // Full circle outline
+        ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
         ctx.stroke();
     }
 
@@ -113,6 +107,97 @@
             alert('Please select an image and enter an integer from 0 to 63.');
         }
     });
+
+    document.getElementById('downloadButton').addEventListener('click', () => {
+        const link = document.createElement('a');
+        link.download = 'hexagon.png';
+        link.href = canvas.toDataURL();
+        link.click();
+    });
+
+    document.getElementById('downloadSetButton').addEventListener('click', () => {
+        const zip = new JSZip();
+        
+        const imageInput = document.getElementById('imageInput').files[0];
+        if (!imageInput) {
+            alert('Please select an image to create a set.');
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = function(event) {
+            const imageURL = event.target.result;
+
+            for (let i = 0; i < 64; i++) {
+                const binary = i.toString(2).padStart(6, '0');
+                drawHexagonForDownload(binary, i, imageURL, zip);
+            }
+        };
+        reader.readAsDataURL(imageInput);
+    });
+
+    const drawHexagonForDownload = (binary, index, imageURL, zip) => {
+        const tempCanvas = document.createElement('canvas');
+        const tempCtx = tempCanvas.getContext('2d');
+        tempCanvas.width = 600;
+        tempCanvas.height = 600;
+
+        const hexSize = 100;
+        const center = { x: tempCanvas.width / 2, y: tempCanvas.height / 2 };
+
+        const hexagon = Array.from({ length: 6 }, (_, i) => {
+            const angle = (Math.PI / 3) * i;
+            return {
+                x: center.x + hexSize * Math.cos(angle),
+                y: center.y + hexSize * Math.sin(angle)
+            };
+        });
+
+        tempCtx.beginPath();
+        tempCtx.moveTo(hexagon[0].x, hexagon[0].y);
+        hexagon.forEach(v => tempCtx.lineTo(v.x, v.y));
+        tempCtx.closePath();
+        tempCtx.stroke();
+
+        hexagon.forEach((vertex, idx) => {
+            const nextIndex = (idx + 1) % 6;
+            if (binary[idx] === '1') {
+                drawCircleForDownload(vertex, hexagon[nextIndex], imageURL, tempCtx);
+            }
+        });
+
+        // Add the canvas data to the zip
+        tempCanvas.toBlob(function(blob) {
+            zip.file(`hexagon_${index}.png`, blob);
+            if (index === 63) {
+                zip.generateAsync({ type: "blob" }).then(function(content) {
+                    const link = document.createElement("a");
+                    link.href = URL.createObjectURL(content);
+                    link.download = "hexagons.zip";
+                    link.click();
+                });
+            }
+        });
+    };
+
+    const drawCircleForDownload = (start, end, imageURL, ctx) => {
+        const centerX = (start.x + end.x) / 2;
+        const centerY = (start.y + end.y) / 2;
+        const radius = 40;
+
+        const img = new Image();
+        img.crossOrigin = "Anonymous";
+        img.onload = function() {
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+            ctx.clip();
+            ctx.drawImage(img, centerX - radius, centerY - radius, radius * 2, radius * 2);
+            ctx.restore();
+        };
+        img.src = imageURL;
+    };
+
 </script>
 
 </body>
