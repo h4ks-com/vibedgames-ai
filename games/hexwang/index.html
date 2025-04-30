@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-<title>Image in Hexagon Circles</title>
+<title>Image in Hexagon Circles - Overlap Blend</title>
 <style>
 body {
   font-family: sans-serif;
@@ -51,79 +51,117 @@ function handleImage(e){
 
 
 function drawImageInHexagonCircles() {
-  const centerX = canvas.width / 2;
-  const centerY = canvas.height / 2;
-  const hexagonRadius = 200;
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    const hexagonRadius = 200;
+    const circleCount = 6;
 
-  // Clear the canvas
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // Clear the canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // Draw the hexagon
-  ctx.beginPath();
-  for (let i = 0; i < 6; i++) {
-    const angle = (Math.PI / 3) * i;
-    const x = centerX + hexagonRadius * Math.cos(angle);
-    const y = centerY + hexagonRadius * Math.sin(angle);
-    ctx.lineTo(x, y);
-  }
-  ctx.closePath();
-  ctx.stroke(); // Draw hexagon outline
-
-  for (let i = 0; i < 6; i++) {
-    // Calculate the start and end points of the edge
-    const startX = centerX + hexagonRadius * Math.cos((Math.PI / 3) * i);
-    const startY = centerY + hexagonRadius * Math.sin((Math.PI / 3) * i);
-    const endX = centerX + hexagonRadius * Math.cos((Math.PI / 3) * (i + 1));
-    const endY = centerY + hexagonRadius * Math.sin((Math.PI / 3) * (i + 1));
-
-    // Calculate the midpoint of the edge (center of the circle)
-    const circleCenterX = (startX + endX) / 2;
-    const circleCenterY = (startY + endY) / 2;
-
-    // Calculate the radius of the circle (half the edge length)
-    const circleRadius = Math.sqrt(Math.pow(endX - startX, 2) + Math.pow(endY - startY, 2)) / 2;
-
-    // Save the current state *before* clipping
-    ctx.save();
-
-    // Draw the circle (for clipping)
+    // Draw the hexagon
     ctx.beginPath();
-    ctx.arc(circleCenterX, circleCenterY, circleRadius, 0, 2 * Math.PI);
+    for (let i = 0; i < circleCount; i++) {
+        const angle = (Math.PI / 3) * i;
+        const x = centerX + hexagonRadius * Math.cos(angle);
+        const y = centerY + hexagonRadius * Math.sin(angle);
+        ctx.lineTo(x, y);
+    }
     ctx.closePath();
+    ctx.stroke(); // Draw hexagon outline
 
-    // Clip the circle to the hexagon
-    ctx.clip();
+    const circleData = []; // Store circle data
 
-    // Draw the image inside the clipped circle
-    const imageWidth = circleRadius * 2;
-    const imageHeight = circleRadius * 2;
+    // Calculate circle data
+    for (let i = 0; i < circleCount; i++) {
+        const startX = centerX + hexagonRadius * Math.cos((Math.PI / 3) * i);
+        const startY = centerY + hexagonRadius * Math.sin((Math.PI / 3) * i);
+        const endX = centerX + hexagonRadius * Math.cos((Math.PI / 3) * (i + 1));
+        const endY = centerY + hexagonRadius * Math.sin((Math.PI / 3) * (i + 1));
+        const circleCenterX = (startX + endX) / 2;
+        const circleCenterY = (startY + endY) / 2;
+        const circleRadius = Math.sqrt(Math.pow(endX - startX, 2) + Math.pow(endY - startY, 2)) / 2;
 
-    // Calculate the top-left corner of the image so that the center of the image aligns with the center of the circle
-    const imageX = circleCenterX - imageWidth / 2;
-    const imageY = circleCenterY - imageHeight / 2;
+        circleData.push({
+            x: circleCenterX,
+            y: circleCenterY,
+            radius: circleRadius
+        });
+    }
 
-    ctx.drawImage(img, imageX, imageY, imageWidth, imageHeight);
 
-    // Restore the canvas state *after* drawing the image
-    ctx.restore();
+    // Create an offscreen canvas for drawing circles individually
+    const offscreenCanvas = document.createElement('canvas');
+    offscreenCanvas.width = canvas.width;
+    offscreenCanvas.height = canvas.height;
+    const offscreenCtx = offscreenCanvas.getContext('2d');
 
-    // Redraw the circle outline
+    // Draw each circle with image onto the offscreen canvas
+    const images = [];
+    for (let i = 0; i < circleCount; i++) {
+        const circle = circleData[i];
+
+        offscreenCtx.clearRect(0, 0, offscreenCanvas.width, offscreenCanvas.height); // Clear before drawing
+
+        offscreenCtx.save();
+        offscreenCtx.beginPath();
+        offscreenCtx.arc(circle.x, circle.y, circle.radius, 0, 2 * Math.PI);
+        offscreenCtx.clip();
+
+        const imageWidth = circle.radius * 2;
+        const imageHeight = circle.radius * 2;
+        const imageX = circle.x - imageWidth / 2;
+        const imageY = circle.y - imageHeight / 2;
+        offscreenCtx.drawImage(img, imageX, imageY, imageWidth, imageHeight);
+        offscreenCtx.restore();
+
+        images.push(offscreenCtx.getImageData(0, 0, offscreenCanvas.width, offscreenCanvas.height)); // Capture image data
+    }
+
+
+
+    // Blend the images directly onto the main canvas
+    const blendedData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    for (let x = 0; x < canvas.width; x++) {
+        for (let y = 0; y < canvas.height; y++) {
+            let circleIndices = [];
+            for (let i = 0; i < circleCount; i++) {
+                const circle = circleData[i];
+                const dx = x - circle.x;
+                const dy = y - circle.y;
+                if (dx * dx + dy * dy <= circle.radius * circle.radius) {
+                    circleIndices.push(i);
+                }
+            }
+
+            if (circleIndices.length > 0) {
+                // Randomly select a circle from those that contain the pixel
+                const chosenCircleIndex = circleIndices[Math.floor(Math.random() * circleIndices.length)];
+                const chosenImageData = images[chosenCircleIndex].data;
+
+                // Get the pixel data from the chosen image
+                const index = (y * canvas.width + x) * 4;
+                blendedData.data[index] = chosenImageData[index];     // Red
+                blendedData.data[index + 1] = chosenImageData[index + 1]; // Green
+                blendedData.data[index + 2] = chosenImageData[index + 2]; // Blue
+                blendedData.data[index + 3] = 255; // Alpha (fully opaque)
+            }
+        }
+    }
+
+    ctx.putImageData(blendedData, 0, 0);
+
+
+    // Redraw the hexagon outline over the circles for clarity
     ctx.beginPath();
-    ctx.arc(circleCenterX, circleCenterY, circleRadius, 0, 2 * Math.PI);
-    ctx.stroke();
-
-  }
-
-  // Redraw the hexagon outline over the circles for clarity
-  ctx.beginPath();
-  for (let i = 0; i < 6; i++) {
-    const angle = (Math.PI / 3) * i;
-    const x = centerX + hexagonRadius * Math.cos(angle);
-    const y = centerY + hexagonRadius * Math.sin(angle);
-    ctx.lineTo(x, y);
-  }
-  ctx.closePath();
-  ctx.stroke(); // Redraw hexagon outline
+    for (let i = 0; i < circleCount; i++) {
+        const angle = (Math.PI / 3) * i;
+        const x = centerX + hexagonRadius * Math.cos(angle);
+        const y = centerY + hexagonRadius * Math.sin(angle);
+        ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.stroke(); // Redraw hexagon outline
 }
 </script>
 
