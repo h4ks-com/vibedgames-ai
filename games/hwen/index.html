@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Time Machine Simulator</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f0f0f0;
+            padding: 20px;
+        }
+        #app {
+            width: 300px;
+            margin: auto;
+            background: white;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+        select, button {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+        }
+        #messages {
+            white-space: pre-wrap;
+            border: 1px solid #ccc;
+            padding: 10px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <h2>Time Machine Simulator</h2>
+        <select id="topicSelect">
+            <option value="Ancient Rome">Ancient Rome</option>
+            <option value="World War II">World War II</option>
+            <option value="Renaissance">Renaissance</option>
+            <option value="French Revolution">French Revolution</option>
+            <option value="Industrial Revolution">Industrial Revolution</option>
+        </select>
+        <button id="startButton">Start Simulation</button>
+        <div id="messages"></div>
+    </div>
+
+    <script>
+        const appDiv = document.getElementById('app');
+        const messagesDiv = document.getElementById('messages');
+        const topicSelect = document.getElementById('topicSelect');
+        const startButton = document.getElementById('startButton');
+        let websocket;
+
+        startButton.onclick = async () => {
+            const topic = topicSelect.value;
+            const sanitizedChannel = topic.replace(/\s+/g, '_').toLowerCase();
+
+            // Fetch summary from Wikipedia
+            const summary = await fetchWikiSummary(topic);
+            if (summary) {
+                connectToIRC(sanitizedChannel, summary);
+            }
+        };
+
+        async function fetchWikiSummary(topic) {
+            const url = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(topic)}`;
+            const response = await fetch(url);
+            if (response.ok) {
+                const data = await response.json();
+                return data.extract;
+            } else {
+                alert("Failed to fetch summary");
+                return null;
+            }
+        }
+
+        function connectToIRC(channel, message) {
+            // Connect to IRC server
+            websocket = new WebSocket('wss://irc.h4ks.com', 'irc');
+
+            websocket.onopen = () => {
+                websocket.send(`NICK TimeMachineBot`);
+                websocket.send(`USER TimeMachineBot 0 * :Time Machine Bot`);
+                websocket.send(`JOIN #${channel}`);
+                sendMessageToIRC(message);
+            };
+
+            websocket.onmessage = (event) => {
+                const msg = event.data;
+                messagesDiv.innerText += msg + '\n';
+                messagesDiv.scrollTop = messagesDiv.scrollHeight; // Scroll to bottom
+            };
+
+            websocket.onerror = (error) => {
+                console.error('WebSocket Error:', error);
+            };
+        }
+
+        function sendMessageToIRC(message) {
+            const messages = message.match(/(.|[\r\n]){1,400}/g); // Split messages into 400 char chunks
+            messages.forEach(msg => {
+                websocket.send(`PRIVMSG #${topicSelect.value.replace(/\s+/g, '_').toLowerCase()} :${msg}`);
+            });
+        }
+    </script>
+</body>
+</html>
