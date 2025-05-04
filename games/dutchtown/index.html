@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>GTA</title>
+    <script src="https://aframe.io/releases/1.2.0/aframe.min.js"></script>
+    <style>
+        body { margin: 0; }
+        label { position: absolute; top: 10%; left: 50%; transform: translateX(-50%);
+        color: white; font-size: 24px; text-align: center; }
+        #coordinates-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 10px;
+            border-radius: 5px;
+            font-family: Arial, sans-serif;
+            z-index: 999; /* Make sure it appears above other elements */
+        }
+        #info {
+            position: absolute;
+            top: 100px;
+            left: 10px;
+            color: white;
+            z-index: 1000; /* Make sure it’s on top of the 3D scene */
+            background-color: rgba(0, 0, 0, 0.7); /* Semi-transparent background */
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 18px;
+        }
+        #json-display {
+            position: fixed;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            font-size: 18px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            white-space: pre-wrap; /* Allows wrapping of text */
+            z-index: 1000; /* Ensure text is above other elements */
+        }
+        a-scene { height: 100vh; } /* Setting the background color to blue sky */
+    </style>
+</head>
+<body>
+    <div id="coordinates-panel">Coordinates: (0, 0, 0)</div> <!-- Overlay Panel for Coordinates -->
+    <div id="info">Number of Objects: <span id="object-count">0</span></div>
+
+<audio autoplay loop>
+    <source src="https://archive.org/download/Dutch_Language/08%20Learn%20Dutch%21%20Audio.mp3" type="audio/mpeg">
+</audio>
+
+    <a-scene hdr-environment="url: ./qwantani_moonrise_4k.hdr; showBackground: true; showGround: true; groundSize: 15">
+
+        <!-- Skybox as Mandelbrot Image -->
+
+        <!-- Ambient Lights -->
+        <a-entity light="type: ambient; intensity: 0.2"></a-entity>
+        <a-entity light="type: directional; intensity: 0.5; position: 0 10 0"></a-entity>
+
+        <!-- Rain Effect -->
+        <a-entity id="rain" position="0 10 0"></a-entity>
+
+<a-entity id="ducks"></a-entity>
+<a-entity id="flowers"></a-entity>
+
+        <!-- 7-storey building with 4x4 grid of windows, skinned with Mandelbrot image -->
+        <a-box position="0 3.5 -10" depth="5" height="15" width="5" src="#" castShadow receiveShadow id="mandelbrot-building"></a-box>
+
+        <!-- Tiled floor with Mandelbrot image -->
+        <a-plane position="0 -2 -10" width="4000" height="4000" src="#" rotation="-90 0 0" repeat="1000 1000"></a-plane>
+
+        <!-- Green Floor -->
+        <a-box position="0 0.05 0" width="100" height="0.1" depth="100" color="yellow"></a-box>
+        
+        <!-- Sinusoidal Road -->
+        <a-entity id="curved-road" position="0 0.2 0"></a-entity>
+        
+        <!-- White Road Boundaries -->
+        <a-entity id="road-boundaries" position="0 0.1 0"></a-entity>
+        
+        <!-- Camera -->
+        <a-camera position="0 5 20"></a-camera>
+        
+        <!-- Sky 
+        <a-sky color="#87CEEB"></a-sky> -->
+        
+        <!-- Billboard Container -->
+        <a-entity id="structures"></a-entity>
+        
+        <!-- Cars will be generated here -->
+        <a-entity id="cars"></a-entity>
+
+<script>
+        const ducks = [];
+
+        const roadWidth = 12.5; 
+        const roadLength = 100;
+        const roadSegments = 150; // Number of segments for the sinusoidal curve
+
+        const track1Segments = 100; // Number of segments
+        const track2Segments = 100; // Number of segments
+
+        const cars = []; // Array to keep track of cars
+        const buildings = []; // Array to keep track of buildings
+
+        function createCurvedRoad() {
+            for (let i = 0; i < roadSegments; i++) {
+                const positionZ = (i / roadSegments) * roadLength - (roadLength / 2);
+                const sinValue = Math.sin((i / roadSegments) * Math.PI * 2) * (roadWidth / 2);
+
+                //const rdistort = Math.random() * 100;
+
+                const segment = document.createElement('a-box');
+                segment.setAttribute('width', 1);
+                segment.setAttribute('height', 0.8);
+                segment.setAttribute('depth', 2);
+                segment.setAttribute('color', 'black');
+                segment.setAttribute('position', `${sinValue} 0.05 ${positionZ}`);
+                segment.setAttribute('rotation', '0 90 0');
+
+                document.getElementById('curved-road').appendChild(segment);
+            }
+        }
+
+        function createRoadBoundaries() {
+            const boundaryWidth = 0.2; // Width of the boundary sections
+            
+            for (let i = 0; i < roadSegments; i++) {
+                const positionZ = (i / roadSegments) * roadLength - (roadLength / 2);
+                const sinValueLeft = Math.sin((i / roadSegments) * Math.PI * 2) * (roadWidth / 2) - (roadWidth / 2) - (boundaryWidth / 2);
+                const sinValueRight = Math.sin((i / roadSegments) * Math.PI * 2) * (roadWidth / 2) + (roadWidth / 2) + (boundaryWidth / 2);
+
+                const leftBoundary = document.createElement('a-box');
+                leftBoundary.setAttribute('width', boundaryWidth);
+                leftBoundary.setAttribute('height', 0.1);
+                leftBoundary.setAttribute('depth', 2);
+                leftBoundary.setAttribute('color', 'white');
+                leftBoundary.setAttribute('position', `${sinValueLeft} 0.1 ${positionZ}`);
+                leftBoundary.setAttribute('rotation', '0 90 0');
+                document.getElementById('road-boundaries').appendChild(leftBoundary);
+
+                const rightBoundary = document.createElement('a-box');
+                rightBoundary.setAttribute('width', boundaryWidth);
+                rightBoundary.setAttribute('height', 0.1);
+                rightBoundary.setAttribute('depth', 2);
+                rightBoundary.setAttribute('color', 'white');
+                rightBoundary.setAttribute('position', `${sinValueRight} 0.1 ${positionZ}`);
+                rightBoundary.setAttribute('rotation', '0 90 0');
+                document.getElementById('road-boundaries').appendChild(rightBoundary);
+            }
+        }
+
+
+const addDucks = () => {
+// Duck generation and movement logic
+            const duckContainer = document.getElementById('ducks');
+            //const duckCount = NUM_DUCKS; // Number of ducks
+
+            const duckCount = 50; // Number of ducks
+            
+
+            for (let i = 0; i < duckCount; i++) {
+                let duck = document.createElement('a-entity');
+                let xposition = Math.random() * 100 - 50;
+                let yposition = 0.4;
+                //let yposition = tree.getAttribute('radius');
+                
+                let zposition = Math.random() * 100 - 50;
+
+
+                let duckbody = document.createElement('a-sphere');
+                duckbody.setAttribute('radius', '0.35'); // Size of the duck
+                duckbody.setAttribute('color', '#FFFACD'); // Cream color
+                duckbody.setAttribute('position', `${xposition} ${yposition} ${zposition}`); // Initial random position
+
+                let duckhead = document.createElement('a-sphere');
+                duckhead.setAttribute('radius', '0.15'); // Size of the duck
+                duckhead.setAttribute('color', '#FF0000'); // red color
+                duckhead.setAttribute('position', `${xposition - .33} ${yposition + 0.2 } ${zposition}`); // Initial random position
+
+
+                let duckbill = document.createElement('a-box');
+                duckbill.setAttribute('width', '0.10'); // Size of the bill
+                duckbill.setAttribute('height', '0.03'); // Size of the bill
+                duckbill.setAttribute('depth', '0.15'); // Size of the bill
+                duckbill.setAttribute('color', '#00FF00'); // green color
+                duckbill.setAttribute('position', `${xposition - 0.53} ${yposition + 0.23 } ${zposition}`); // Initial random position
+
+                let duckeyeball1 = document.createElement('a-sphere');
+                duckeyeball1.setAttribute('radius', '0.03'); // Size of the duck
+                duckeyeball1.setAttribute('color', '#0000FF'); // red color
+                duckeyeball1.setAttribute('position', `${xposition - .43} ${yposition + 0.2 } ${zposition + 0.08 }`); // Initial random position
+
+                let duckeyeball2 = document.createElement('a-sphere');
+                duckeyeball2.setAttribute('radius', '0.03'); // Size of the duck
+                duckeyeball2.setAttribute('color', '#0000FF'); // red color
+                duckeyeball2.setAttribute('position', `${xposition - .43} ${yposition + 0.2 } ${zposition - 0.08 }`); // Initial random position
+
+
+                duck.appendChild(duckbody);
+                duck.appendChild(duckhead);
+                duck.appendChild(duckbill);
+
+                duck.appendChild(duckeyeball1);
+                duck.appendChild(duckeyeball2);
+
+
+                // Create the text label
+
+                let a = ["Worker", "Knight", "Bishop", "Rook", "Prince", "Vizier"];
+                let i = Math.floor(Math.random() * a.length);
+                let r = a[i];
+
+                const label = r;
+                const ducktext = document.createElement('a-text');
+                ducktext.setAttribute('value', label);
+                ducktext.setAttribute('position', `${xposition} ${ yposition + 1.73 } ${zposition}`); // Position text above the sphere
+                ducktext.setAttribute('color', '#FFFFFF'); // White text color
+                //ducktext.setAttribute('size', '72'); // White text color
+
+                duck.appendChild(ducktext);
+            
+                duckContainer.appendChild(duck);
+                //duckContainer.appendChild(ducktext);
+                ducks.push(duck);
+            }
+};
+
+    // Function to move ducks randomly
+            const moveDucks = () => {
+                ducks.forEach(duck => {
+                    const currentPosition = duck.getAttribute('position');
+                    // Set duck to a new random position around the pond
+                    duck.setAttribute('position', {
+                        x: currentPosition.x + (Math.random() - 0.5) * 0.9, // Random horizontal movement
+                        y: 0.35,
+                        z: currentPosition.z + (Math.random() - 0.5) * 0.9 // Random depth movement
+                    });
+                });
+            };
+
+
+        function createBuilding() {
+            const randomWidth = Math.random() * 4 + 1; // Width between 1 and 5
+            const randomHeight = Math.random() * 10 + 3; // Height between 3 and 13
+            
+            let xPosition, zPosition;
+
+            if (Math.random() < 0.5) {
+                xPosition = Math.random() * (40 - (randomWidth / 2)) + (6.25 + (randomWidth / 2));
+            } else {
+                xPosition = Math.random() * (40 - (randomWidth / 2)) - (6.25 + (randomWidth / 2));
+            }
+            
+            //zPosition = Math.random() * 80 - 40; // Random Z position
+            zPosition = Math.random() * 80; // Random Z position
+
+            const building = document.createElement('a-box');
+            const buildingColor = `hsl(${Math.random() * 360}, 100%, 50%)`; // Random building color
+
+            building.setAttribute('color', buildingColor);
+            building.setAttribute('width', randomWidth);
+            building.setAttribute('depth', randomWidth);
+            building.setAttribute('height', randomHeight);
+            building.setAttribute('position', `${xPosition} ${randomHeight / 2} ${zPosition}`);
+
+            createWindows(building, randomWidth, randomHeight);
+
+            document.getElementById('structures').appendChild(building);
+            buildings.push(building); // Keep track of the building
+        }
+
+        function createWindows(building, width, height) {
+            const windowSize = 0.5; // Size of each window
+            const spacing = 0.2; // Space between windows
+            const rows = 4; // Number of rows
+            const cols = 4; // Number of columns
+
+            const startX = -width / 2 + (windowSize / 2) + spacing;
+            const startY = height / 2 - (windowSize / 2) - spacing;
+
+            for (let row = 0; row < rows; row++) {
+                for (let col = 0; col < cols; col++) {
+                    const window = document.createElement('a-box');
+                    const windowColor = Math.random() < 0.5 ? 'white' : 'yellow'; // Randomly choose window color
+                    window.setAttribute('color', windowColor);
+                    window.setAttribute('width', windowSize);
+                    window.setAttribute('height', windowSize);
+                    window.setAttribute('depth', 0.05); // Thickness of the window
+                    window.setAttribute('position', `${startX + col * (windowSize + spacing)} ${startY - row * (windowSize + spacing)} 0.501`); // Just in front of the building
+                    building.appendChild(window);
+                }
+            }
+        }
+
+        function createCar() {
+            const carColors = ['red', 'black', 'gray', 'orange', 'blue', 'yellow'];
+
+            const car = document.createElement('a-entity');
+            const randomColor = carColors[Math.floor(Math.random() * carColors.length)];
+
+            const carWidth = 2.3; 
+            const carLength = 3.5; 
+            const carDepth = 7.5; 
+            const carHeight = 3.5; 
+            
+            const startZ = 50; 
+            const endZ = -50; 
+            //const randomSpeed = (Math.random() * 3 + 2) * 0.5; 
+            //const randomSpeed = (Math.random() * 2 + 1) * 0.3; 
+            //const randomSpeed = (Math.random() * 1 + .3) * 0.02; 
+            const randomSpeed = 0.04; 
+
+            direction = Math.floor(Math.random() * 2);
+            //direction = 0;
+
+            var positionZ;
+
+
+            const carBody = document.createElement('a-box');
+            carBody.setAttribute('color', randomColor);
+            carBody.setAttribute('position', `0 2.55 0`);
+            carBody.setAttribute('width', carWidth);
+            carBody.setAttribute('length', carLength); 
+            carBody.setAttribute('height', carHeight);
+            carBody.setAttribute('depth', carDepth); 
+
+
+
+            for (let i = -1; i <= 1; i += 2) {
+                const headlight = document.createElement('a-sphere');
+                headlight.setAttribute('position', `${i * 0.7} 0.25 ${carDepth/2}`); 
+                headlight.setAttribute('radius', 0.15);
+                headlight.setAttribute('color', 'white');
+                carBody.appendChild(headlight);
+            }
+
+            car.appendChild(carBody);
+            document.getElementById('cars').appendChild(car);
+            cars.push(car); // Add car to the array
+
+
+            //const laneOffset = Math.random() > 0.5 ? -6 : 6; 
+
+            var laneOffset;
+            var rotation;
+
+            if (direction == 0) { 
+            positionZ = startZ;
+            laneOffset = 6 + (Math.random() * 0.03); 
+             }
+            else { positionZ = endZ;
+            laneOffset = -6 - (Math.random() * 0.03); 
+             }
+            
+            function drive1() {
+                rotation =  0;
+                positionZ -= randomSpeed;
+                const sineIndex = ((positionZ + 50) / 100) * Math.PI * 2; 
+                const sinValue = Math.sin(sineIndex) * (roadWidth / 2); 
+
+                car.setAttribute('position', `${sinValue + laneOffset} 0.25 ${positionZ}`);
+                car.setAttribute('rotation', `0 ${rotation} 0`);  
+
+                if (positionZ < -50) {
+                    positionZ = 50;
+                }
+                requestAnimationFrame(drive1);
+
+                
+            }
+
+
+            function drive2() {
+                //rotation =  Math.floor(Math.random() * 90) - 45;
+                rotation =  0;
+                positionZ += randomSpeed;
+                const sineIndex = ((positionZ + 50) / 100) * Math.PI * 2; 
+                const sinValue = Math.sin(sineIndex) * (roadWidth / 2); 
+
+                car.setAttribute('position', `${sinValue + laneOffset} 0.25 ${positionZ}`);
+                car.setAttribute('rotation', `0 ${rotation} 0`); 
+
+                if (positionZ > 50) {
+                    positionZ = -50;
+                }
+                requestAnimationFrame(drive2);
+            }
+
+
+            if (direction == 0) { requestAnimationFrame(drive1); }
+            else { requestAnimationFrame(drive2); }
+            
+        }
+
+        function removeRandomCar() {
+            if (cars.length > 0) {
+                const randomIndex = Math.floor(Math.random() * cars.length);
+                const carToRemove = cars[randomIndex];
+                carToRemove.parentNode.removeChild(carToRemove); // Remove car from the scene
+                cars.splice(randomIndex, 1); // Remove from the cars array
+            }
+        }
+
+        function updateObjectCount() {
+            const currentCount = cars.length + buildings.length + droplets.length;
+            document.getElementById('object-count').innerText = currentCount;
+        }
+
+        createCurvedRoad();
+        addDucks();
+        createRoadBoundaries();
+
+        for (let i = 0; i < 10; i++) {
+            createBuilding();
+        }
+
+        setInterval(createCar, 3200); 
+        setInterval(moveDucks, 30); 
+
+        //setInterval(removeRandomCar, 1100); // Remove one random car every 10
+        setInterval(updateObjectCount, 1000); // Update object count every
+    </script>
+
+
+
+        <script>
+            AFRAME.registerComponent('building-windows', {
+                init: function () {
+                    const numberOfStoreys = 7; // 7 storeys
+                    const windowHeight = 1.5; // Height of each window
+                    const windowWidth = 1; // Width of each window
+                    const spacing = 0.2; // Space between windows
+
+                    // Create a grid of windows on the building
+                    for (let row = 0; row < 4; row++) {
+                        for (let col = 0; col < 4; col++) {
+                            const windowId = `window-${row}-${col}`;
+                            const isLightOn = Math.random() >= 0.5;
+                            const windowColor = isLightOn ? 'yellow' : 'white'; // Random window color
+                            const windowPosY = (row * (windowHeight + spacing)) + (windowHeight / 2) - 1.5; // Calculate Y position
+                            const windowPosX = col * (windowWidth + spacing) - 2; // Calculate X position for each side
+
+                            // Create windows on the front side
+                            const windowFront = document.createElement('a-plane');
+                            windowFront.setAttribute('id', windowId);
+                            windowFront.setAttribute('position', `${windowPosX} ${windowPosY} -10.1`);
+                            windowFront.setAttribute('width', windowWidth);
+                            windowFront.setAttribute('height', windowHeight);
+                            windowFront.setAttribute('color', windowColor);
+                            windowFront.setAttribute('opacity', '0.9');
+                            this.el.sceneEl.appendChild(windowFront);
+                        }
+                    }
+                }
+            });
+
+            function addRandomWindowGrid() {
+                const windowGridSize = 4;
+                const numberOfGrids = 5; // Number of 4x4 grids to add
+                const gridHeight = 1.5;
+
+                for (let i = 0; i < numberOfGrids; i++) {
+                    const xPosition = (Math.random() - 0.5) * 20; // Random X position
+                    const yPosition = Math.random() * 10 + 1; // Random Y position above ground
+                    const zPosition = (Math.random() - 0.5) * 20; // Random Z position
+
+                    for (let row = 0; row < windowGridSize; row++) {
+                        for (let col = 0; col < windowGridSize; col++) {
+                            const windowId = `extra-window-${i}-${row}-${col}`;
+                            const isLightOn = Math.random() >= 0.5;
+                            const windowColor = isLightOn ? 'yellow' : 'white'; // Random color for the window
+                            const windowPosY = yPosition + (row * (gridHeight + 0.2)) - (gridHeight / 2); // Calculate Y position in grid
+                            const windowPosX = xPosition + col * (1 + 0.2); // Calculate X position in grid
+                            const windowPosZ = zPosition; // Keep Z position constant for the grid
+
+                            const windowEl = document.createElement('a-plane');
+                            windowEl.setAttribute('id', windowId);
+                            windowEl.setAttribute('position', `${windowPosX} ${windowPosY} ${windowPosZ}`);
+                            windowEl.setAttribute('width', '1');
+                            windowEl.setAttribute('height', '1.5');
+                            windowEl.setAttribute('color', windowColor);
+                            windowEl.setAttribute('opacity', '0.9');
+
+                            document.querySelector('a-scene').appendChild(windowEl);
+                        }
+                    }
+                }
+            }
+
+            document.querySelector('a-scene').setAttribute('building-windows', '');
+            addRandomWindowGrid();
+
+            // Function to draw Mandelbrot fractal with transparent background
+            function createMandelbrotImage(width, height) {
+                const canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+
+                ctx.clearRect(0, 0, width, height); // Clear the canvas to transparent
+
+                // Generate a color map
+                const colors = [];
+                for (let i = 0; i < 256; i++) {
+                    const r = (i & 0xFF) % 256; // Red
+                    const g = (i * 2) % 256; // Green
+                    const b = (i * 4) % 256; // Blue
+                    colors.push(`rgba(${r},${g},${b},1)`); // Set full opacity for colors
+                }
+
+                const maxIterations = 100;
+
+                for (let x = 0; x < width; x++) {
+
+
+                    for (let y = 0; y < height; y++) {
+                        let zx = 0, zy = 0;
+                        let cX = (x / width) * 4 - 2; // Scale to (-2, 2)
+                        let cY = (y / height) * 4 - 2; // Scale to (-2, 2)
+                        let iterations = 0;
+
+                        while (zx * zx + zy * zy < 4 && iterations < maxIterations) {
+                            let tmp = zx * zx - zy * zy + cX;
+                            zy = 2 * zx * zy + cY;
+                            zx = tmp;
+                            iterations++;
+                        }
+
+                        const colorIndex = Math.min(Math.floor((iterations / maxIterations) * 256), 255);
+                        if (iterations < maxIterations) {
+                            ctx.fillStyle = colors[colorIndex];
+                            //ctx.fillRect(x, y, 1, 1); // Draw the pixel
+                            ctx.fillRect(x, y, 1, 1); // Draw the pixel
+                        }
+                        else {
+                            //ctx.fillStyle = colors[colorIndex];
+                            //ctx.fillStyle = colors[(Math.random() * 256)];
+                            //ctx.fillRect(x, y, 1, 1); // Draw the pixel
+                        }
+
+
+
+
+                    }
+                }
+                return canvas.toDataURL();
+            }
+
+            const mandelbrotImageSrc = createMandelbrotImage(200, 200); // Create Mandelbrot image
+            
+            // Apply the Mandelbrot image to the sky and building
+            //document.getElementById('mandelbrot-sky').setAttribute('src', mandelbrotImageSrc);
+            document.getElementById('mandelbrot-building').setAttribute('src', mandelbrotImageSrc);
+            document.querySelector('a-plane').setAttribute('src', mandelbrotImageSrc); // Tiling the floor with Mandelbrot image
+
+            // Set the new repeat value
+            document.querySelector('a-plane').setAttribute('repeat', '1000 1000'); // Repeat the texture on the floor
+
+            // Update coordinates panel
+            const coordinatesPanel = document.getElementById('coordinates-panel');
+            const camera = document.querySelector('[camera]');
+
+            function updateCoordinates() {
+                const position = camera.getAttribute('position');
+
+                // Check if X coordinate is less than -11 and reset
+                if (position.x < -30) {
+                    position.x = 30; // Reset X coordinate
+                    camera.setAttribute('position', `${position.x} ${position.y} ${position.z}`); // Update camera position
+                }
+
+                // Check if X coordinate is greater than 20 and reset
+                if (position.x > 30) {
+                    position.x = -30; // Reset X coordinate
+                    camera.setAttribute('position', `${position.x} ${position.y} ${position.z}`); // Update camera position
+                }
+
+                // Check if Z coordinate is greater than 11 and reset
+                if (position.z > 36) {
+                    position.z = -36; // Reset Z coordinate
+                    camera.setAttribute('position', `${position.x} ${position.y} ${position.z}`); // Update camera position
+                }
+
+                // Check if Z coordinate is less than -29 and reset
+                if (position.z < -36) {
+                    position.z = 36; // Reset Z coordinate
+                    camera.setAttribute('position', `${position.x} ${position.y} ${position.z}`); // Update camera position
+                }
+
+                coordinatesPanel.innerHTML = `Coordinates: (${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`;
+                requestAnimationFrame(updateCoordinates); // Keep updating
+            }
+            updateCoordinates();
+
+            // Add raindrop functionality
+            const dropletCount = 12; // Number of rain droplets
+            const droplets = [];
+
+            for (let i = 0; i < dropletCount; i++) {
+                createDroplet();
+            }
+
+            function createDroplet() {
+                const droplet = document.createElement('a-box'); // Use box for the raindrop
+                const randomX = (Math.random() * 40) - 20; // Random X position
+                const randomY = Math.random() * 15 + 10; // Start from a random height above the building
+                const randomZ = (Math.random() * 40) - 20; // Random Z position
+
+                const height = (Math.random() * .10); // Random Z position
+                const width = (Math.random() * .10); // Random Z position
+                const depth = (Math.random() * .10); // Random Z position
+
+                droplet.setAttribute('position', `${randomX} ${randomY} ${randomZ}`); // Set random height
+                droplet.setAttribute('depth', depth); // Adjust depth for the box
+                droplet.setAttribute('height', height); // Adjust height for the box
+                droplet.setAttribute('width', width); // Adjust width for the box
+                droplet.setAttribute('src', mandelbrotImageSrc); // Use the Mandelbrot image
+                droplet.setAttribute('opacity', '1'); // Fully opaque
+                droplets.push(droplet);
+                document.querySelector('a-scene').appendChild(droplet);
+                fallDroplet(droplet); // Start falling immediately after creating
+            }
+
+            function resetDroplet(droplet) {
+                const randomX = (Math.random() * 40) - 20; // Random X position
+                const randomY = Math.random() * 15 + 10; // Random height above the building
+                const randomZ = (Math.random() * 40) - 20; // Random Z position
+                droplet.setAttribute('position', `${randomX} ${randomY} ${randomZ}`); // Reset to a random height
+            }
+
+            function fallDroplet(droplet) {
+                const fallSpeed = 0.01; // Fixed falling speed
+                const animate = () => {
+                    const position = droplet.getAttribute('position');
+                    const randXShift = (Math.random() - 0.5) * 0.1; // Random shift in X
+                    const randZShift = (Math.random() - 0.5) * 0.1; // Random shift in Z
+                    
+                    if (position.y <= 0) {
+                        resetDroplet(droplet); // Reset the droplet after hitting the ground
+                    } else {
+                        droplet.setAttribute('position', `${position.x + randXShift} ${position.y - fallSpeed} ${position.z + randZShift}`); // Update position with shifts
+                    }
+                    requestAnimationFrame(animate); // Schedule next fall step
+                };
+                animate();
+            }
+        </script>
+
+        <!-- Floor with Black and Gray Splotches -->
+        <script>
+            const floorSplotchCount = 100; // Number of splotches
+            for (let i = 0; i < floorSplotchCount; i++) {
+                const splotch = document.createElement('a-plane');
+                const randomX = (Math.random() * 20) - 10; // Random X position
+                const randomZ = (Math.random() * 20) - 10; // Random Z position
+                splotch.setAttribute('position', `${randomX} 0 ${randomZ}`); // Set position
+                splotch.setAttribute('width', '2'); // Width of the splotch
+                splotch.setAttribute('height', '2'); // Height of the splotch
+                splotch.setAttribute('color', Math.random() < 0.5 ? 'black' : 'gray'); // Random color
+                splotch.setAttribute('opacity', '0.8'); // Slightly transparent
+                splotch.setAttribute('rotation', '0 0 0'); // No rotation
+                document.querySelector('a-scene').appendChild(splotch); // Add to scene
+            }
+
+
+        </script>
+
+
+</a-scene>
+
+</body>
+</html>
+
