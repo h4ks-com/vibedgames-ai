@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>IRC Client with WebRTC Video Call</title>
+    <title>IRC Client Like Telegram</title>
     <style>
         body {
             font-family: 'Helvetica Neue', Arial, sans-serif;
@@ -32,6 +32,7 @@
             max-width: 80%;
             border-radius: 20px;
             padding: 10px;
+            position: relative;
         }
         .message.received {
             background-color: #f1f0f0;
@@ -42,6 +43,11 @@
             background-color: #0088cc;
             color: white;
             align-self: flex-end;
+        }
+        .nickname {
+            font-size: 0.9em;
+            color: #555;
+            margin-bottom: 5px;
         }
         #input {
             display: flex;
@@ -69,19 +75,6 @@
         button:hover {
             background-color: #0077b3;
         }
-        #video-container {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            margin-top: 10px;
-        }
-        video {
-            width: 100%;
-            max-width: 400px;
-            border: 1px solid #ccc;
-            border-radius: 10px;
-            background-color: black;
-        }
     </style>
 </head>
 <body>
@@ -91,11 +84,6 @@
             <input type="text" id="message" placeholder="Type a message or /me action..." />
             <button id="sendBtn">Send</button>
         </div>
-        <div id="video-container">
-            <video id="localVideo" autoplay muted></video>
-            <video id="remoteVideo" autoplay></video>
-            <button id="callBtn">Start Call</button>
-        </div>
     </div>
 
     <script>
@@ -103,17 +91,7 @@
         const messagesDiv = document.getElementById('messages');
         const input = document.getElementById('message');
         const sendBtn = document.getElementById('sendBtn');
-
-        const localVideo = document.getElementById('localVideo');
-        const remoteVideo = document.getElementById('remoteVideo');
-        const callBtn = document.getElementById('callBtn');
-
-        let localStream;
-        let remoteStream;
-        let peerConnection;
-
-        const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-
+        
         function generateUsername() {
             const randomNum = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
             return `doesnm${randomNum}`;
@@ -131,71 +109,39 @@
 
         ws.onmessage = (event) => {
             const message = event.data;
-            const messageElement = document.createElement('div');
-            messageElement.classList.add('message', 'received');
-            messageElement.textContent = message;
-            messagesDiv.appendChild(messageElement);
-            messagesDiv.scrollTop = messagesDiv.scrollHeight; // Auto scroll to bottom
+            createMessageBubble(message, 'received');
         };
 
         sendBtn.onclick = () => {
             const messageText = input.value.trim();
             if (messageText) {
-                let messageElement = document.createElement('div');
                 if (messageText.startsWith('/me ')) {
                     const actionText = messageText.substring(4);
                     ws.send(`PRIVMSG #lobby :\u0001ACTION ${actionText}\u0001`);
-                    messageElement.classList.add('message', 'sent');
-                    messageElement.textContent = `* ${username} ${actionText}`;
+                    createMessageBubble(`* ${username} ${actionText}`, 'sent');
                 } else {
                     ws.send(`PRIVMSG #lobby :${messageText}`);
-                    messageElement.classList.add('message', 'sent');
-                    messageElement.textContent = messageText;
+                    createMessageBubble(messageText, 'sent');
                 }
-                messagesDiv.appendChild(messageElement);
-                messagesDiv.scrollTop = messagesDiv.scrollHeight; // Auto scroll to bottom
                 input.value = ''; // Clear input field
             }
         };
 
-        // Start video call
-        callBtn.onclick = async () => {
-            localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-            localVideo.srcObject = localStream;
+        const createMessageBubble = (messageContent, messageType) => {
+            const messageElement = document.createElement('div');
+            messageElement.classList.add('message', messageType);
+            
+            const nicknameElement = document.createElement('div');
+            nicknameElement.classList.add('nickname');
+            nicknameElement.textContent = messageType === 'sent' ? username : 'User'; // Display the sender's name
 
-            peerConnection = new RTCPeerConnection(configuration);
-            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+            const textElement = document.createElement('div');
+            textElement.textContent = messageContent;
 
-            peerConnection.onicecandidate = event => {
-                if (event.candidate) {
-                    ws.send(JSON.stringify({ type: 'candidate', candidate: event.candidate }));
-                }
-            };
-
-            peerConnection.ontrack = event => {
-                remoteStream = new MediaStream();
-                remoteVideo.srcObject = event.streams[0];
-                remoteStream.addTrack(event.track);
-            };
-
-            const offer = await peerConnection.createOffer();
-            await peerConnection.setLocalDescription(offer);
-            ws.send(JSON.stringify({ type: 'offer', offer: offer }));
-        };
-
-        // Handle incoming WebRTC messages
-        ws.onmessage = async (event) => {
-            const message = JSON.parse(event.data);
-            if (message.type === 'offer') {
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(message.offer));
-                const answer = await peerConnection.createAnswer();
-                await peerConnection.setLocalDescription(answer);
-                ws.send(JSON.stringify({ type: 'answer', answer: answer }));
-            } else if (message.type === 'answer') {
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(message.answer));
-            } else if (message.type === 'candidate') {
-                await peerConnection.addIceCandidate(new RTCIceCandidate(message.candidate));
-            }
+            messageElement.appendChild(nicknameElement);
+            messageElement.appendChild(textElement);
+            messagesDiv.appendChild(messageElement);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight; // Auto scroll to bottom
         };
 
         // Optional: Send message with Enter key
