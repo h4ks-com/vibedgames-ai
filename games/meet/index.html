@@ -47,6 +47,7 @@
 
         let localStream;
         let peerConnection;
+        let dataChannel;
         const iceServers = {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
@@ -68,7 +69,7 @@
 
         ircSocket.onmessage = (event) => {
             const msg = event.data;
-            // Handle incoming messages here (like signaling)
+            // Handle incoming signaling messages here
             const parsed = msg.split(' '); // Simplified parsing
             if (parsed[0] === 'PRIVMSG') {
                 const message = parsed.slice(3).join(' ').replace(/^:/, '');
@@ -88,17 +89,23 @@
                 handleAnswer(data.answer);
             } else if (data.iceCandidate) {
                 handleICECandidate(data.iceCandidate);
-            } else {
-                displayChatMessage(message);
+            } else if (data.chatMessage) {
+                displayChatMessage(data.chatMessage);
             }
         }
 
         async function startCall() {
             localStream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
-            localVideo.srcObject = localStream; // Only for local video purposes, though video is disabled
+            localVideo.srcObject = localStream; // Video is disabled, but we keep the video element for future use
             peerConnection = new RTCPeerConnection(iceServers);
 
             localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+            // Create data channel for text chat
+            dataChannel = peerConnection.createDataChannel("chat");
+            dataChannel.onmessage = (event) => {
+                displayChatMessage(event.data);
+            };
 
             peerConnection.onicecandidate = event => {
                 if (event.candidate) {
@@ -119,6 +126,12 @@
             peerConnection = new RTCPeerConnection(iceServers);
             await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
             localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+            // Create data channel for text chat
+            dataChannel = peerConnection.createDataChannel("chat");
+            dataChannel.onmessage = (event) => {
+                displayChatMessage(event.data);
+            };
 
             peerConnection.onicecandidate = event => {
                 if (event.candidate) {
@@ -153,8 +166,12 @@
         sendChatButton.onclick = () => {
             const message = chatInput.value;
             chatInput.value = '';
-            sendMessage(message);
-            displayChatMessage(message);
+            const chatMessage = JSON.stringify({ chatMessage: message });
+            if (dataChannel && dataChannel.readyState === "open") {
+                dataChannel.send(message); // Send the chat message over WebRTC
+            }
+            displayChatMessage(message); // Show message in local chat
+            sendMessage(chatMessage); // Also send the message over IRC for others to see
         };
 
         startCallButton.onclick = startCall;
