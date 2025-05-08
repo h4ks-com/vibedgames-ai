@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rock Paper Scissors IRC Game</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+        #messages {
+            border: 1px solid #ccc;
+            height: 300px;
+            overflow-y: scroll;
+            padding: 10px;
+            background: white;
+        }
+        #input {
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+
+<h1>Rock Paper Scissors IRC Game</h1>
+<div id="messages"></div>
+<input type="text" id="messageInput" placeholder="What will you choose? (rock/paper/scissors)">
+<button id="sendButton">Send</button>
+
+<script>
+    const ircServer = "wss://irc.h4ks.com:8097";
+    const channel = "#lobby";
+    let ws;
+
+    function updateMessages(msg) {
+        const messagesDiv = document.getElementById("messages");
+        messagesDiv.innerHTML += `<div>${msg}</div>`;
+        messagesDiv.scrollTop = messagesDiv.scrollHeight; // Scroll to the bottom
+    }
+
+    function connectWebSocket() {
+        ws = new WebSocket(ircServer);
+
+        ws.onopen = () => {
+            updateMessages("Connected to IRC! Joining channel...");
+            ws.send(`NICK User_${Math.floor(Math.random() * 1000)}`); // Generate a random nickname
+            ws.send(`USER User 0 * :User`);
+            ws.send(`JOIN ${channel}`);
+        };
+
+        ws.onmessage = (event) => {
+            const data = event.data;
+            updateMessages(data);
+            // Example logic to respond to game messages
+            if (data.includes("PRIVMSG") && data.includes("RPS")) {
+                const choice = data.split(':')[2].split(' ')[1];
+                playRPS(choice);
+            }
+        };
+
+        ws.onclose = () => {
+            updateMessages("Disconnected from IRC. Reconnecting...");
+            setTimeout(connectWebSocket, 3000);
+        };
+    }
+
+    // Simple Rock Paper Scissors game logic
+    function playRPS(choice) {
+        const choices = ['rock', 'paper', 'scissors'];
+        const userChoice = choice.toLowerCase();
+        const botChoice = choices[Math.floor(Math.random() * choices.length)];
+        
+        let result = '';
+        if (userChoice === botChoice) {
+            result = "It's a tie!";
+        } else if (
+            (userChoice === 'rock' && botChoice === 'scissors') ||
+            (userChoice === 'paper' && botChoice === 'rock') ||
+            (userChoice === 'scissors' && botChoice === 'paper')
+        ) {
+            result = "You win!";
+        } else {
+            result = "You lose!";
+        }
+        
+        const message = `You played ${userChoice}, bot played ${botChoice}. ${result}`;
+        ws.send(`PRIVMSG ${channel} :${message}`);
+        updateMessages(message);
+    }
+
+    document.getElementById("sendButton").onclick = () => {
+        const input = document.getElementById("messageInput").value;
+        if (input) {
+            playRPS(input);
+            document.getElementById("messageInput").value = '';
+        }
+    };
+
+    window.onload = connectWebSocket;
+</script>
+
+</body>
+</html>
