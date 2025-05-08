@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Calling App</title>
+    <style>
+        body { font-family: 'Arial', sans-serif; }
+        #localVideo, #remoteVideo { width: 45%; }
+        #videosContainer { display: flex; justify-content: space-around; }
+        #controls { margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+<h1>WebRTC Calling App</h1>
+<div id="videosContainer">
+    <video id="localVideo" autoplay muted></video>
+    <video id="remoteVideo" autoplay></video>
+</div>
+<div id="controls">
+    <button id="startCall">Start Call</button>
+    <button id="hangUp" disabled>Hang Up</button>
+</div>
+
+<script>
+const localVideo = document.getElementById('localVideo');
+const remoteVideo = document.getElementById('remoteVideo');
+const startCallButton = document.getElementById('startCall');
+const hangUpButton = document.getElementById('hangUp');
+
+let localStream;
+let peerConnection;
+
+// Replace with your TURN server
+const TURN_SERVER = "turn:turn.server.url:3478"; // Example: "turn:turn.example.com:3478"
+const ICE_SERVERS = { iceServers: [{ urls: TURN_SERVER }] };
+const IRC_SERVER = "irc.h4ks.com";
+const IRC_PORT = 8097;
+const CHANNEL = "#webrtc";
+let ircSocket;
+
+// Start the IRC connection
+function connectIRC() {
+    ircSocket = new WebSocket(`wss://${IRC_SERVER}:${IRC_PORT}`);
+    ircSocket.onopen = () => {
+        ircSocket.send(`NICK WebRTCClient`);
+        ircSocket.send(`USER WebRTCClient 0 * :WebRTC Client`);
+        ircSocket.send(`JOIN ${CHANNEL}`);
+    };
+    
+    ircSocket.onmessage = (message) => {
+        console.log("Received on IRC:", message.data);
+        handleSignalingMessage(message.data);
+    };
+}
+
+startCallButton.onclick = async () => {
+    startCallButton.disabled = true;
+    hangUpButton.disabled = false;
+
+    // Get media stream from the local user
+    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    localVideo.srcObject = localStream;
+
+    peerConnection = new RTCPeerConnection(ICE_SERVERS);
+    
+    // Add tracks from local stream
+    localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+    peerConnection.onicecandidate = event => {
+        if (event.candidate) {
+            // Send candidate to the other peer through IRC
+            sendSignal({ "ice": event.candidate });
+        }
+    };
+
+    peerConnection.ontrack = event => {
+        remoteVideo.srcObject = event.streams[0];
+    };
+
+    // Create offer and set local description
+    const offer = await peerConnection.createOffer();
+    await peerConnection.setLocalDescription(offer);
+    
+    // Send offer through IRC
+    sendSignal({ "offer": peerConnection.localDescription });
+};
+
+// Handle incoming signaling messages
+function handleSignalingMessage(message) {
+    const data = JSON.parse(message);
+    
+    if (data.answer) {
+        // Set remote description when receiving an answer
+        peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+    }
+
+    if (data.ice) {
+        // Add incoming ICE candidates
+        peerConnection.addIceCandidate(new RTCIceCandidate(data.ice));
+    }
+}
+
+// Send signaling messages via IRC
+function sendSignal(message) {
+    ircSocket.send(JSON.stringify(message));
+}
+
+hangUpButton.onclick = () => {
+    peerConnection.close();
+    localStream.getTracks().forEach(track => track.stop());
+    startCallButton.disabled = false;
+    hangUpButton.disabled = true;
+};
+
+// Connect to IRC on page load
+connectIRC();
+</script>
+
+</body>
+</html>
