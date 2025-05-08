@@ -5,10 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WebRTC Calling App</title>
     <style>
-        body { font-family: 'Arial', sans-serif; }
-        #localVideo, #remoteVideo { width: 45%; }
-        #videosContainer { display: flex; justify-content: space-around; }
+        body { font-family: Arial, sans-serif; }
+        #localVideo, #remoteVideo { width: 45%; border: 1px solid black; }
+        #videosContainer { display: flex; justify-content: space-around; margin: 20px; }
         #controls { margin-top: 10px; }
+        button { padding: 10px; }
     </style>
 </head>
 <body>
@@ -31,46 +32,49 @@ const hangUpButton = document.getElementById('hangUp');
 
 let localStream;
 let peerConnection;
-
-// Replace with your TURN server
-const TURN_SERVER = "turn:turn.server.url:3478"; // Example: "turn:turn.example.com:3478"
-const ICE_SERVERS = { iceServers: [{ urls: TURN_SERVER }] };
+const ICE_SERVERS = { iceServers: [{ urls: 'turn:turn.server.url:3478', username: 'user', credential: 'pass' }] }; // Replace with valid TURN server
 const IRC_SERVER = "irc.h4ks.com";
 const IRC_PORT = 8097;
 const CHANNEL = "#webrtc";
 let ircSocket;
 
-// Start the IRC connection
+// Connect to the IRC server
 function connectIRC() {
     ircSocket = new WebSocket(`wss://${IRC_SERVER}:${IRC_PORT}`);
+    
     ircSocket.onopen = () => {
         ircSocket.send(`NICK WebRTCClient`);
         ircSocket.send(`USER WebRTCClient 0 * :WebRTC Client`);
         ircSocket.send(`JOIN ${CHANNEL}`);
     };
-    
+
     ircSocket.onmessage = (message) => {
-        console.log("Received on IRC:", message.data);
-        handleSignalingMessage(message.data);
+        const msg = message.data;
+        if(msg.startsWith(":")) {
+            const parts = msg.split(' ');
+            // Handle PING messages
+            if (parts[1] === 'PING') {
+                ircSocket.send(`PONG ${parts[2]}`);
+            }
+        } else {
+            handleSignalingMessage(msg);
+        }
     };
 }
 
+// Start the call
 startCallButton.onclick = async () => {
     startCallButton.disabled = true;
     hangUpButton.disabled = false;
 
-    // Get media stream from the local user
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
     localVideo.srcObject = localStream;
 
     peerConnection = new RTCPeerConnection(ICE_SERVERS);
-    
-    // Add tracks from local stream
     localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
 
     peerConnection.onicecandidate = event => {
         if (event.candidate) {
-            // Send candidate to the other peer through IRC
             sendSignal({ "ice": event.candidate });
         }
     };
@@ -79,11 +83,9 @@ startCallButton.onclick = async () => {
         remoteVideo.srcObject = event.streams[0];
     };
 
-    // Create offer and set local description
     const offer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offer);
     
-    // Send offer through IRC
     sendSignal({ "offer": peerConnection.localDescription });
 };
 
@@ -92,13 +94,11 @@ function handleSignalingMessage(message) {
     const data = JSON.parse(message);
     
     if (data.answer) {
-        // Set remote description when receiving an answer
         peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
     }
 
     if (data.ice) {
-        // Add incoming ICE candidates
-        peerConnection.addIceCandidate(new RTCIceCandidate(data.ice));
+        peerConnection.addIceCandidate(new RTCIceCandidate(data.ice)).catch(e => console.error('Error adding received ice candidate', e));
     }
 }
 
@@ -107,6 +107,7 @@ function sendSignal(message) {
     ircSocket.send(JSON.stringify(message));
 }
 
+// Hang up the call
 hangUpButton.onclick = () => {
     peerConnection.close();
     localStream.getTracks().forEach(track => track.stop());
