@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D IRC Rooms</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; }
+        #info { position: absolute; top: 10px; left: 10px; color: white; z-index: 10; }
+    </style>
+</head>
+<body>
+    <div id="info">Connecting...</div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        const infoDiv = document.getElementById('info');
+
+        let ws;
+        function connectIRC() {
+            ws = new WebSocket('wss://irc.h4ks.com:8097');
+            ws.onopen = () => {
+                infoDiv.innerText = 'Connected, sending LIST command...';
+                ws.send('NICK web_user\nUSER web_user 0 * :web_user\nLIST');
+            };
+
+            ws.onmessage = (event) => {
+                const response = event.data;
+                if (response.includes('353')) {
+                    const lines = response.split('\n');
+                    generateRooms(lines.filter(line => line.startsWith('#')));
+                }
+            };
+
+            ws.onclose = () => {
+                infoDiv.innerText = 'Disconnected from IRC';
+            };
+        }
+
+        function generateRooms(channels) {
+            channels.forEach((channel, index) => {
+                const roomSize = 1; // Size of each room
+                const geometry = new THREE.BoxGeometry(roomSize, roomSize, roomSize);
+                const material = new THREE.MeshBasicMaterial({ color: Math.random() * 0xffffff });
+                const cube = new THREE.Mesh(geometry, material);
+
+                cube.position.x = (index % 5) * 1.5;
+                cube.position.y = 0.5;
+                cube.position.z = Math.floor(index / 5) * 1.5;
+
+                cube.userData.channel = channel;
+                scene.add(cube);
+            });
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        window.addEventListener('resize', onWindowResize);
+
+        camera.position.z = 5;
+        connectIRC();
+        animate();
+    </script>
+</body>
+</html>
