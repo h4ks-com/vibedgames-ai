@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Calling App with IRC Signaling</title>
+    <style>
+        body { font-family: Arial, sans-serif; }
+        video { width: 300px; height: 200px; border: 1px solid; }
+        #local, #remote { display: inline-block; }
+        #controls { margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <h1>WebRTC Calling App with IRC Signaling</h1>
+    <div>
+        <div id="local">
+            <h2>Local</h2>
+            <video id="localVideo" autoplay muted></video>
+        </div>
+        <div id="remote">
+            <h2>Remote</h2>
+            <video id="remoteVideo" autoplay></video>
+        </div>
+    </div>
+    <div id="controls">
+        <button id="startCall">Start Call</button>
+        <button id="hangUp">Hang Up</button>
+    </div>
+    <script>
+        const localVideo = document.getElementById("localVideo");
+        const remoteVideo = document.getElementById("remoteVideo");
+        const startCallButton = document.getElementById("startCall");
+        const hangUpButton = document.getElementById("hangUp");
+
+        let localStream;
+        let peerConnection;
+        const iceServers = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'turn:TURN_SERVER_URL', username: 'username', credential: 'password' } // Update with TURN server credentials
+            ]
+        };
+
+        // IRC Variables
+        const ircServer = 'irc.h4ks.com';
+        const port = 8097;
+        const channel = "#lobby";
+        let ircSocket = new WebSocket(`wss://${ircServer}:${port}`);
+
+        ircSocket.onopen = () => {
+            ircSocket.send(`NICK mynickname`);
+            ircSocket.send(`USER mynickname 0 * :My Name`);
+            ircSocket.send(`JOIN ${channel}`);
+        };
+
+        ircSocket.onmessage = (event) => {
+            const msg = event.data;
+            // Handle incoming messages here (like signaling)
+            const parsed = msg.split(' '); // Simplified parsing
+            if (parsed[0] === 'PRIVMSG') {
+                const message = parsed.slice(3).join(' ').replace(/^:/, '');
+                processMessage(message);
+            }
+        };
+
+        function sendMessage(message) {
+            ircSocket.send(`PRIVMSG ${channel} :${message}`);
+        }
+
+        function processMessage(message) {
+            const data = JSON.parse(message);
+            if (data.offer) {
+                handleOffer(data.offer);
+            } else if (data.answer) {
+                handleAnswer(data.answer);
+            } else if (data.iceCandidate) {
+                handleICECandidate(data.iceCandidate);
+            }
+        }
+
+        async function startCall() {
+            localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            localVideo.srcObject = localStream;
+            peerConnection = new RTCPeerConnection(iceServers);
+
+            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+            peerConnection.onicecandidate = event => {
+                if (event.candidate) {
+                    sendMessage(JSON.stringify({ iceCandidate: event.candidate }));
+                }
+            };
+
+            peerConnection.ontrack = event => {
+                remoteVideo.srcObject = event.streams[0];
+            };
+
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            sendMessage(JSON.stringify({ offer: offer }));
+        }
+
+        async function handleOffer(offer) {
+            peerConnection = new RTCPeerConnection(iceServers);
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+            peerConnection.onicecandidate = event => {
+                if (event.candidate) {
+                    sendMessage(JSON.stringify({ iceCandidate: event.candidate }));
+                }
+            };
+
+            peerConnection.ontrack = event => {
+                remoteVideo.srcObject = event.streams[0];
+            };
+
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            sendMessage(JSON.stringify({ answer: answer }));
+        }
+
+        async function handleAnswer(answer) {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        }
+
+        async function handleICECandidate(candidate) {
+            await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        }
+
+        startCallButton.onclick = startCall;
+        hangUpButton.onclick = () => {
+            peerConnection.close();
+            peerConnection = null;
+            localVideo.srcObject = null;
+            remoteVideo.srcObject = null;
+        };
+    </script>
+</body>
+</html>
