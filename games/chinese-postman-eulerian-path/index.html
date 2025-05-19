@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>MapLibre + Overpass + Eulerian Path (Fixed Splitting)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- MapLibre CSS/JS -->
+  <link href="https://unpkg.com/maplibre-gl@1.15.3/dist/maplibre-gl.css" rel="stylesheet" />
+  <script src="https://unpkg.com/maplibre-gl@1.15.3/dist/maplibre-gl.js"></script>
+  <!-- Mapbox-GL-Draw -->
+  <link href="https://unpkg.com/@mapbox/mapbox-gl-draw@1.4.0/dist/mapbox-gl-draw.css" rel="stylesheet" />
+  <script src="https://unpkg.com/@mapbox/mapbox-gl-draw@1.4.0/dist/mapbox-gl-draw.js"></script>
+  <!-- Turf.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7.2.0/turf.min.js"></script>
+  <style>
+    body, html { margin:0; padding:0; width:100%; height:100%; }
+    #map { width:100%; height:100%; }
+    #controls {
+      position: absolute; bottom: 20px; left: 20px;
+      background: rgba(255,255,255,0.9);
+      padding: 8px 12px;
+      font-family: sans-serif;
+      border-radius: 4px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+    }
+    #controls input { vertical-align: middle; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="controls">
+    <div>Total Distance: <span id="distance">0</span> m</div>
+    <label>Speed:
+      <input type="range" id="speed" min="1" max="20" value="5" />
+    </label>
+  </div>
+
+  <script>
+  // Initialize MapLibre with OSM raster
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: {
+      version: 8,
+      sources: { osm: {
+        type: 'raster',
+        tiles: [
+          'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
+          'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png',
+          'https://c.tile.openstreetmap.org/{z}/{x}/{y}.png'
+        ], tileSize: 256,
+        attribution: '© OpenStreetMap contributors'
+      }},
+      layers: [{ id: 'osm', type: 'raster', source: 'osm' }]
+    }, center: [0,0], zoom: 2
+  });
+
+  // Add draw controls
+  const draw = new MapboxDraw({ displayControlsDefault: false, controls: { polygon: true, trash: true } });
+  map.addControl(draw);
+
+  let pathCoords = [], marker, frameId;
+
+  map.on('draw.create', processPolygon);
+  map.on('draw.update', processPolygon);
+  map.on('draw.delete', clearAll);
+
+  async function processPolygon() {
+    clearAll();
+    const data = draw.getAll(); if (!data.features.length) return;
+    const polygon = data.features[0];
+
+    // Build bbox + Overpass query
+    const bbox = turf.bbox(polygon);
+    const [minX, minY, maxX, maxY] = [bbox[0], bbox[1], bbox[2], bbox[3]];
+    const query = `
+      [out:json][timeout:25];
+      ( way["highway"](${minY},${minX},${maxY},${maxX}); );
+      (._;>;);
+      out body;
+    `;
+    const resp = await fetch('https://overpass-api.de/api/interpreter', {
+      method: 'POST', body: query, headers: { 'Content-Type': 'text/plain' }
+    });
+    const osm = await resp.json();
+
+    // Nodes lookup
+    const nodes = {};
+    osm.elements.filter(e => e.type==='node').forEach(n => nodes[n.id] = [n.lon, n.lat]);
+    // Build segments
+    let segments = osm.elements
+      .filter(e => e.type==='way' && e.nodes.length>1)
+      .map(w => turf.lineString(w.nodes.map(id => nodes[id])));
+
+    // Filter fully within polygon
+    segments = segments.filter(line => turf.booleanWithin(line, polygon));
+
+    // Highlight raw segments in blue
+    const rawFC = turf.featureCollection(segments);
+    map.addSource('raw-roads', { type:'geojson', data: rawFC });
+    map.addLayer({
+      id: 'raw-roads-layer', type: 'line', source: 'raw-roads',
+      paint: { 'line-color': '#3498db', 'line-width': 2 }
+    });
+
+    // Split at intersections properly
+    let splitSegs = [];
+    segments.forEach(orig => {
+      // start with original line
+      let pieces = [orig];
+      pieces = pieces.flatMap(line => {
+        // find points intersecting this line
+        const pts = segments
+          .flatMap(other => turf.lineIntersect(line, other).features)
+          .map(f => f.geometry.coordinates);
+        // remove duplicates
+        const uniq = Array.from(new Set(pts.map(c => c.join(','))))
+          .map(s => s.split(',').map(Number));
+        // split sequentially
+        let result = [line];
+        uniq.forEach(coord => {
+          result = result.flatMap(l => {
+            if (turf.booleanPointOnLine(turf.point(coord), l)) {
+              const split = turf.lineSplit(l, turf.point(coord));
+              return split.features;
+            }
+            return [l];
+          });
+        });
+        return result;
+      });
+      pieces.forEach(p => {
+        const c = p.geometry.coordinates;
+        if (c.length > 1) splitSegs.push(c);
+      });
+    });
+
+    // Build graph
+    const graph = {};
+    splitSegs.forEach(coords => {
+      for (let i=0; i<coords.length-1; i++) {
+        const u=coords[i].join(','), v=coords[i+1].join(',');
+        graph[u]=graph[u]||[]; graph[v]=graph[v]||[];
+        graph[u].push(v); graph[v].push(u);
+      }
+    });
+
+    // Eulerian Path
+    function eulerianPath(adj) {
+      const odds = Object.keys(adj).filter(v => adj[v].length % 2);
+      const start = odds[0] || Object.keys(adj)[0];
+      const stk=[start], path=[];
+      const local = JSON.parse(JSON.stringify(adj));
+      while (stk.length) {
+        const v = stk[stk.length-1];
+        if (local[v].length) {
+          const u = local[v].pop();
+          local[u].splice(local[u].indexOf(v),1);
+          stk.push(u);
+        } else {
+          path.push(stk.pop());
+        }
+      }
+      return path.reverse();
+    }
+
+    pathCoords = eulerianPath(graph).map(k=>k.split(',').map(Number));
+    const lineFc = turf.lineString(pathCoords);
+    const dist = turf.length(lineFc, { units: 'meters' });
+    document.getElementById('distance').innerText = dist.toFixed(2);
+
+    map.addSource('eulerian', { type: 'geojson', data: lineFc });
+    map.addLayer({
+      id: 'eulerianLine', type: 'line', source: 'eulerian',
+      layout: {'line-join':'round','line-cap':'round'},
+      paint: {'line-color':'#e74c3c','line-width':3}
+    });
+
+    animate(parseFloat(document.getElementById('speed').value));
+    document.getElementById('speed').oninput = () => {
+      cancelAnimationFrame(frameId);
+      if (marker) marker.remove();
+      animate(parseFloat(document.getElementById('speed').value));
+    };
+  }
+
+  function animate(speed) {
+    let i = 0;
+    marker = new maplibregl.Marker({ color:'#e74c3c' })
+      .setLngLat(pathCoords[0]).addTo(map);
+    (function step(){
+      i = (i + speed*0.01) % pathCoords.length;
+      marker.setLngLat(pathCoords[Math.floor(i)]);
+      frameId = requestAnimationFrame(step);
+    })();
+  }
+
+  function clearAll() {
+    ['raw-roads-layer','eulerianLine'].forEach(id => {
+      if (map.getLayer(id)) map.removeLayer(id);
+      const src = id === 'raw-roads-layer' ? 'raw-roads' : 'eulerian';
+      if (map.getSource(src)) map.removeSource(src);
+    });
+    if (marker) marker.remove(); if (frameId) cancelAnimationFrame(frameId);
+    document.getElementById('distance').innerText = '0'; pathCoords=[];
+  }
+  </script>
+</body>
+</html>
