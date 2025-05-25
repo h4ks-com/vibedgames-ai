@@ -1,12 +1,18 @@
 <!DOCTYPE html>
 <html>
 <head>
-<title>Pixel Map Search</title>
+<title>Pixel Map Search with User Input</title>
 <style>
 body {
   font-family: sans-serif;
   margin: 20px;
 }
+
+#spriteCanvas {
+  border: 1px solid #000;
+  cursor: pointer; /* Indicate it's interactive */
+}
+
 .pixel-map {
   width: 50px;
   height: 50px;
@@ -14,6 +20,7 @@ body {
   margin: 5px;
   display: inline-block;
 }
+
 #results {
   margin-top: 20px;
 }
@@ -21,7 +28,10 @@ body {
 </head>
 <body>
 
-<h1>Pixel Map Search</h1>
+<h1>Pixel Map Search with User Input</h1>
+
+<h2>Draw Your Sprite (4x4):</h2>
+<canvas id="spriteCanvas" width="64" height="64"></canvas>  <!-- Increased size for better drawing -->
 
 <label for="functionSelect">Select Function:</label>
 <select id="functionSelect">
@@ -45,33 +55,83 @@ body {
 </div>
 
 <script>
-// Test Data (20 Random Pixel Maps)
-const pixelMaps = [];
-for (let i = 0; i < 20; i++) {
-  const map = [];
-  for (let j = 0; j < 25; j++) { // 5x5 = 25 pixels
-    map.push([
-      Math.floor(Math.random() * 256), // Red
-      Math.floor(Math.random() * 256), // Green
-      Math.floor(Math.random() * 256)  // Blue
-    ]);
+const canvas = document.getElementById('spriteCanvas');
+const ctx = canvas.getContext('2d');
+const pixelSize = 16; // 64 / 4 = 16 pixels per sprite "pixel"
+
+let spriteData = []; // Stores the user-drawn sprite as a 4x4 array of RGB values
+
+// Initialize spriteData with default (black) pixels
+function initSpriteData() {
+  spriteData = [];
+  for (let i = 0; i < 4; i++) {
+    spriteData[i] = [];
+    for (let j = 0; j < 4; j++) {
+      spriteData[i][j] = [0, 0, 0]; // Black by default
+    }
   }
-  pixelMaps.push(map);
 }
+initSpriteData(); // Initialize on page load
+
+// Function to draw the current spriteData on the canvas
+function drawSprite() {
+  for (let i = 0; i < 4; i++) {
+    for (let j = 0; j < 4; j++) {
+      ctx.fillStyle = `rgb(${spriteData[i][j][0]}, ${spriteData[i][j][1]}, ${spriteData[i][j][2]})`;
+      ctx.fillRect(j * pixelSize, i * pixelSize, pixelSize, pixelSize);
+    }
+  }
+}
+drawSprite(); // Initial draw
+
+// Event listener for drawing on the canvas
+canvas.addEventListener('mousedown', startDrawing);
+canvas.addEventListener('mouseup', stopDrawing);
+canvas.addEventListener('mouseout', stopDrawing);
+canvas.addEventListener('mousemove', draw);
+
+let isDrawing = false;
+
+function startDrawing(e) {
+  isDrawing = true;
+  draw(e); // Draw immediately on mouse down
+}
+
+function stopDrawing(e) {
+  isDrawing = false;
+}
+
+function draw(e) {
+  if (!isDrawing) return;
+
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+
+  const pixelX = Math.floor(x / pixelSize);
+  const pixelY = Math.floor(y / pixelSize);
+
+  if (pixelX >= 0 && pixelX < 4 && pixelY >= 0 && pixelY < 4) {
+    // Set the pixel color (example: red - you can add a color picker)
+    spriteData[pixelY][pixelX] = [255, 0, 0]; // Red
+    drawSprite(); // Redraw the sprite
+  }
+}
+
 
 // Function Definitions
 const functions = {
-  avgRed: (map) => map.reduce((sum, pixel) => sum + pixel[0], 0) / map.length,
-  avgGreen: (map) => map.reduce((sum, pixel) => sum + pixel[1], 0) / map.length,
-  avgBlue: (map) => map.reduce((sum, pixel) => sum + pixel[2], 0) / map.length,
-  totalPixels: (map) => map.length,
-  redPixelCount: (map) => map.filter(pixel => pixel[0] > 128).length, // Example: Count red pixels > 128
-  greenPixelCount: (map) => map.filter(pixel => pixel[1] > 128).length,
-  bluePixelCount: (map) => map.filter(pixel => pixel[2] > 128).length,
-  brightness: (map) => map.reduce((sum, pixel) => sum + (pixel[0] + pixel[1] + pixel[2]) / 3, 0) / map.length,
+  avgRed: (map) => map.flat().reduce((sum, pixel) => sum + pixel[0], 0) / (map.length * map[0].length),  // map[0].length ensures correct calculation for rectangular maps
+  avgGreen: (map) => map.flat().reduce((sum, pixel) => sum + pixel[1], 0) / (map.length * map[0].length),
+  avgBlue: (map) => map.flat().reduce((sum, pixel) => sum + pixel[2], 0) / (map.length * map[0].length),
+  totalPixels: (map) => map.length * map[0].length,
+  redPixelCount: (map) => map.flat().filter(pixel => pixel[0] > 128).length, // Example: Count red pixels > 128
+  greenPixelCount: (map) => map.flat().filter(pixel => pixel[1] > 128).length,
+  bluePixelCount: (map) => map.flat().filter(pixel => pixel[2] > 128).length,
+  brightness: (map) => map.flat().reduce((sum, pixel) => sum + (pixel[0] + pixel[1] + pixel[2]) / 3, 0) / (map.length * map[0].length),
   contrast: (map) => { //Simple contrast calculation, not perfect
       const avgBrightness = functions.brightness(map);
-      return map.reduce((sum, pixel) => sum + Math.abs((pixel[0] + pixel[1] + pixel[2]) / 3 - avgBrightness), 0) / map.length;
+      return map.flat().reduce((sum, pixel) => sum + Math.abs((pixel[0] + pixel[1] + pixel[2]) / 3 - avgBrightness), 0) / (map.length * map[0].length);
   },
   randomValue: (map) => Math.random() // Just for testing
 };
@@ -88,26 +148,27 @@ function searchPixelMaps() {
   const resultsContainer = document.getElementById("pixelMapContainer");
   resultsContainer.innerHTML = ""; // Clear previous results
 
-  pixelMaps.forEach((map, index) => {
-    const value = searchFunction(map);
+    const value = searchFunction(spriteData);
 
     const mapElement = document.createElement("div");
     mapElement.classList.add("pixel-map");
     mapElement.title = `Value: ${value.toFixed(2)}`; // Show the value as a tooltip
 
     // Draw the pixel map (simplified for demonstration)
-    map.forEach(pixel => {
-      const pixelDiv = document.createElement("div");
-      pixelDiv.style.width = "8px";
-      pixelDiv.style.height = "8px";
-      pixelDiv.style.backgroundColor = `rgb(${pixel[0]}, ${pixel[1]}, ${pixel[2]})`;
-      pixelDiv.style.display = "inline-block"; // Display pixels horizontally
-      mapElement.appendChild(pixelDiv);
-    });
+    for (let i = 0; i < 4; i++) {
+        for (let j = 0; j < 4; j++) {
+            const pixel = spriteData[i][j];
+            const pixelDiv = document.createElement("div");
+            pixelDiv.style.width = "12px"; // Slightly smaller pixels for display
+            pixelDiv.style.height = "12px";
+            pixelDiv.style.backgroundColor = `rgb(${pixel[0]}, ${pixel[1]}, ${pixel[2]})`;
+            pixelDiv.style.display = "inline-block"; // Display pixels horizontally
+            mapElement.appendChild(pixelDiv);
+        }
+    }
 
 
     resultsContainer.appendChild(mapElement);
-  });
 }
 
 
