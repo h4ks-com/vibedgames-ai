@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>3D Solar System Simulation with Asteroid Belt</title>
+    <title>3D Solar System Simulation with Orbits and Rotation Control</title>
     <style>
         body {
             margin: 0;
@@ -16,16 +16,18 @@
 <body>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script>
-        let scene, camera, renderer, sun, earth, mercury, venus, mars, jupiter, saturn, uranus, neptune, asteroidBelt = [];
+        let scene, camera, renderer, sun;
+        let planets = {};
+        let asteroidBelt = [];
+        let tails = {};
+        let dragging = false;
+        let previousMousePosition = { x: 0, y: 0 };
+        const AU = 100; // 1 AU = 100 units
 
-        // Constants for Astronomical Units
-        const AU = 100;
-
-        // Planet parameters
-        const planets = {
-            earth: { orbitRadius: 149.6, eccentricity: 0.0167, color: 0x0000ff, size: 0.5 },
+        const planetData = {
             mercury: { orbitRadius: 57.9, eccentricity: 0.206, color: 0xaaaaaa, size: 0.3 },
             venus: { orbitRadius: 108.2, eccentricity: 0.007, color: 0xffcc00, size: 0.4 },
+            earth: { orbitRadius: 149.6, eccentricity: 0.0167, color: 0x0000ff, size: 0.5 },
             mars: { orbitRadius: 227.9, eccentricity: 0.093, color: 0xff4500, size: 0.4 },
             jupiter: { orbitRadius: 778.5, eccentricity: 0.049, color: 0xffcc00, size: 0.8 },
             saturn: { orbitRadius: 1439.0, eccentricity: 0.056, color: 0xd19a6a, size: 0.7 },
@@ -33,71 +35,75 @@
             neptune: { orbitRadius: 4500.0, eccentricity: 0.010, color: 0x4B0082, size: 0.5 }
         };
 
-        // Initialize angles for animation
-        let angles = {
-            earth: 0,
-            mercury: 0,
-            venus: 0,
-            mars: 0,
-            jupiter: 0,
-            saturn: 0,
-            uranus: 0,
-            neptune: 0
-        };
+        let worldRotation = { x: 0.0, y: 0.0 }; // Rotation values
+        let angles = {}; // Stores angles for planet positions
 
         function init() {
-            // Scene
             scene = new THREE.Scene();
-
-            // Camera
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-            camera.position.z = 450; // Adjusted to see all planets
+            camera.position.z = 450;
 
-            // Renderer
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
 
-            // Create Sun
+            createSun();
+            createPlanets();
+
+            populateAsteroidBelt(100); // Create 100 asteroids in the belt
+
+            window.addEventListener('resize', onWindowResize);
+            window.addEventListener('mousedown', onMouseDown);
+            window.addEventListener('mousemove', onMouseMove);
+            window.addEventListener('mouseup', onMouseUp);
+            animate();
+        }
+
+        function createSun() {
             const sunGeometry = new THREE.SphereGeometry(2, 32, 32);
-            const sunMaterial = new THREE.MeshBasicMaterial({
-                color: 0xffff00,
-                emissive: 0xff4500,
-                emissiveIntensity: 0.5
-            });
+            const sunMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00, emissive: 0xff4500, emissiveIntensity: 0.5 });
             sun = new THREE.Mesh(sunGeometry, sunMaterial);
             scene.add(sun);
 
-            // Add Glow Effect
             const glowGeometry = new THREE.SphereGeometry(2.2, 32, 32);
-            const glowMaterial = new THREE.MeshBasicMaterial({
-                color: 0xffff00,
-                transparent: true,
-                opacity: 0.5
-            });
+            const glowMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00, transparent: true, opacity: 0.5 });
             const glow = new THREE.Mesh(glowGeometry, glowMaterial);
             scene.add(glow);
 
-            // Light
             const pointLight = new THREE.PointLight(0xffffff, 1, 100);
             scene.add(pointLight);
+        }
 
-            // Create Planets
-            Object.keys(planets).forEach(key => {
-                const planet = planets[key];
+        function createPlanets() {
+            Object.keys(planetData).forEach(key => {
+                const planet = planetData[key];
                 const geometry = new THREE.SphereGeometry(planet.size, 32, 32);
                 const material = new THREE.MeshBasicMaterial({ color: planet.color });
                 const mesh = new THREE.Mesh(geometry, material);
                 scene.add(mesh);
-                planet.mesh = mesh; // Store reference to the mesh for later updates
+                
+                planets[key] = { mesh, orbitRadius: planet.orbitRadius, eccentricity: planet.eccentricity, angle: 0 };
+                tails[key] = createOrbitTail(planet.orbitRadius);
             });
+        }
 
-            // Add Asteroid Belt
-            populateAsteroidBelt(100); // Create 100 asteroids in the belt
+        function createOrbitTail(orbitRadius) {
+            const tailGeometry = new THREE.BufferGeometry();
+            const tailMaterial = new THREE.LineBasicMaterial({ color: 0xaaaaaa, linewidth: 2 });
 
-            // Resize Event
-            window.addEventListener('resize', onWindowResize);
-            animate();
+            const points = [];
+            for (let i = 0; i <= 360; i++) {
+                const angle = i * (Math.PI / 180);
+                const x = (orbitRadius * AU) * Math.cos(angle);
+                const y = (orbitRadius * AU) * Math.sin(angle);
+                points.push(x, y, 0);
+            }
+
+            tailGeometry.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
+            const tail = new THREE.LineLoop(tailGeometry, tailMaterial);
+            scene.add(tail);
+
+            return tail;
         }
 
         function populateAsteroidBelt(count) {
@@ -111,7 +117,7 @@
                 // Randomize position within a range to simulate a diffuse cloud
                 const angle = Math.random() * 2 * Math.PI;
                 const eccentricityAdjustment = ((Math.random() - 0.5) * 0.1 + 1); // Slightly elliptical
-                const adjustedRadius = beltRadius * eccentricityAdjustment;
+                let adjustedRadius = beltRadius * eccentricityAdjustment;
 
                 // Set position with slight randomization
                 asteroid.position.x = adjustedRadius * Math.cos(angle) + (Math.random() - 0.5) * (AU * 0.2);
@@ -129,40 +135,65 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
         }
 
+        function onMouseDown(event) {
+            dragging = true;
+            previousMousePosition = {
+                x: (event.clientX / window.innerWidth) * 2 - 1,
+                y: -(event.clientY / window.innerHeight) * 2 + 1
+            };
+        }
+
+        function onMouseMove(event) {
+            if (!dragging) return;
+
+            const mousePosition = {
+                x: (event.clientX / window.innerWidth) * 2 - 1,
+                y: -(event.clientY / window.innerHeight) * 2 + 1
+            };
+
+            // Calculate change in position
+            const deltaX = mousePosition.x - previousMousePosition.x;
+            const deltaY = mousePosition.y - previousMousePosition.y;
+
+            // Update world rotation based on mouse movement
+            worldRotation.y += deltaX * Math.PI; // Horizontal rotation
+            worldRotation.x += deltaY * Math.PI; // Vertical rotation
+
+            previousMousePosition = mousePosition;
+        }
+
+        function onMouseUp() {
+            dragging = false;
+        }
+
         function animate() {
             requestAnimationFrame(animate);
 
-            // Update position of planets
-            angles.earth += (2 * Math.PI) / (365.25);
-            angles.mercury += (2 * Math.PI) / (88);
-            angles.venus += (2 * Math.PI) / (225);
-            angles.mars += (2 * Math.PI) / (687);
-            angles.jupiter += (2 * Math.PI) / (11.86 * 365);
-            angles.saturn += (2 * Math.PI) / (29.5 * 365);
-            angles.uranus += (2 * Math.PI) / (84 * 365);
-            angles.neptune += (2 * Math.PI) / (165 * 365);
+            // Update position of planets and their tails
+            Object.keys(planets).forEach(key => {
+                const planet = planets[key];
+                planet.angle += (2 * Math.PI) / (planet.orbitRadius === 227.9 ? 687 : planet.orbitRadius === 778.5 ? 11.86 * 365 : planet.orbitRadius === 1439.0 ? 29.5 * 365 : planet.orbitRadius === 2870.0 ? 84 * 365 : planet.orbitRadius === 4500.0 ? 165 * 365 : 365.25);
+                const x = (planet.orbitRadius * AU * Math.cos(planet.angle)) + (planet.eccentricity * AU * planet.orbitRadius);
+                const y = (planet.orbitRadius * AU * Math.sin(planet.angle) * Math.sqrt(1 - Math.pow(planet.eccentricity, 2)));
 
-            // Update positions based on the computed angles
-            updatePlanetPosition('mercury', mercury);
-            updatePlanetPosition('venus', venus);
-            updatePlanetPosition('earth', earth);
-            updatePlanetPosition('mars', mars);
-            updatePlanetPosition('jupiter', jupiter);
-            updatePlanetPosition('saturn', saturn);
-            updatePlanetPosition('uranus', uranus);
-            updatePlanetPosition('neptune', neptune);
+                planet.mesh.position.set(x, y, 0);
+            });
+
+            // Update the angular position for the asteroid belt
+            asteroidBelt.forEach(asteroid => {
+                asteroid.rotation.z += 0.01;
+            });
 
             sun.rotation.y += 0.01; // Rotate the sun
-            renderer.render(scene, camera);
-        }
+            // Rotate the entire solar system
+            scene.rotation.y += worldRotation.y * 0.01;
+            scene.rotation.x += worldRotation.x * 0.01;
 
-        function updatePlanetPosition(name, planet) {
-            const { orbitRadius, eccentricity } = planets[name];
-            const angle = angles[name];
-            const x = (orbitRadius * AU * Math.cos(angle)) + (eccentricity * AU * orbitRadius);
-            const y = (orbitRadius * AU * Math.sin(angle) * Math.sqrt(1 - Math.pow(eccentricity, 2)));
-            
-            planets[name].mesh.position.set(x, y, 0);
+            // Reset world rotation to prevent accumulation
+            worldRotation.y = 0;
+            worldRotation.x = 0;
+
+            renderer.render(scene, camera);
         }
 
         window.onload = init;
