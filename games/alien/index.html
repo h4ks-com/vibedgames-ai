@@ -3,105 +3,118 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Fly and Shoot Game</title>
+    <title>3D Fly and Shoot Game</title>
     <style>
         body {
             margin: 0;
             overflow: hidden;
-            background-color: #1a1a1a;
-            color: white;
             font-family: Arial, sans-serif;
+            background-color: #1a1a1a;
         }
-        canvas {
-            display: block;
-            margin: auto;
-            background: #333;
+        #score {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-size: 24px;
+            z-index: 1;
         }
     </style>
 </head>
 <body>
-    <canvas id="gameCanvas"></canvas>
+    <div id="score">Score: 0</div>
     <audio id="evilLaugh" src="https://www.soundjay.com/misc/sounds/evil-laugh-1.mp3"></audio>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script>
-        const canvas = document.getElementById('gameCanvas');
-        const ctx = canvas.getContext('2d');
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-
+        let scene, camera, renderer;
         let humans = [];
         let score = 0;
         let powerUpActive = false;
-        let powerUpDuration = 10000; // in milliseconds
+        const maxHumans = 50;
 
-        class Human {
-            constructor(x, y) {
-                this.x = x;
-                this.y = y;
-                this.radius = 15;
-            }
-            draw() {
-                ctx.fillStyle = 'red';
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
-                ctx.fill();
-            }
+        function init() {
+            // Scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x333333);
+
+            // Camera
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 10, 20);
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // Add Light
+            const light = new THREE.AmbientLight(0xffffff); // soft white light
+            scene.add(light);
+
+            // Event Listener
+            window.addEventListener('click', shoot);
+
+            // Spawn Humans
+            setInterval(spawnHuman, 1000);
+            animate();
         }
 
         function spawnHuman() {
-            const x = Math.random() * canvas.width;
-            const y = Math.random() * canvas.height;
-            humans.push(new Human(x, y));
+            if (humans.length < maxHumans) {
+                const geometry = new THREE.BoxGeometry(1, 1, 1);
+                const material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+                const human = new THREE.Mesh(geometry, material);
+                human.position.set(Math.random() * 20 - 10, Math.random() * 20, Math.random() * 20 - 10);
+                humans.push(human);
+                scene.add(human);
+            }
         }
-        
+
+        function shoot(event) {
+            const raycaster = new THREE.Raycaster();
+            const mouse = new THREE.Vector2();
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+
+            const intersects = raycaster.intersectObjects(humans);
+
+            if (intersects.length > 0) {
+                const human = intersects[0].object;
+                scene.remove(human);
+                humans.splice(humans.indexOf(human), 1);
+                score++;
+
+                if (score % 10 === 0) {
+                    activatePowerUp();
+                }
+                document.getElementById('score').innerText = `Score: ${score}`;
+            }
+        }
+
         function resetPowerUp() {
             powerUpActive = false;
-        }
-
-        function update() {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            humans.forEach(human => human.draw());
-
-            ctx.fillStyle = 'white';
-            ctx.font = '30px Arial';
-            ctx.fillText(`Score: ${score}`, 20, 40);
-
-            if (powerUpActive) {
-                ctx.fillText(`Power-Up Active!`, 20, 80);
-            }
-
-            requestAnimationFrame(update);
-        }
-
-        function shoot(x, y) {
-            humans.forEach((human, index) => {
-                const dx = human.x - x;
-                const dy = human.y - y;
-                const distance = Math.sqrt(dx * dx + dy * dy);
-                if (distance < human.radius) {
-                    humans.splice(index, 1);
-                    score++;
-
-                    if (score % 10 === 0) {
-                        activatePowerUp();
-                    }
-                }
-            });
         }
 
         function activatePowerUp() {
             if (!powerUpActive) {
                 powerUpActive = true;
                 document.getElementById('evilLaugh').play();
-                setTimeout(resetPowerUp, powerUpDuration);
+                setTimeout(resetPowerUp, 10000);
             }
         }
 
-        canvas.addEventListener('click', (e) => {
-            shoot(e.clientX, e.clientY);
-        });
+        function animate() {
+            requestAnimationFrame(animate);
+            if (powerUpActive) {
+                humans.forEach(human => human.scale.set(2, 2, 2)); // Scale up for power-up effect
+            } else {
+                humans.forEach(human => human.scale.set(1, 1, 1));
+            }
+            renderer.render(scene, camera);
+        }
 
-        setInterval(spawnHuman, 1000);
-        update();
+        window.onload = init;
     </script>
 </body>
 </html>
