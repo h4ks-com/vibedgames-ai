@@ -1,6 +1,5 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -15,22 +14,21 @@
             font-family: 'Arial', sans-serif;
             background-color: #222;
             color: #fff;
-            position: relative;
         }
 
         #slots {
             display: flex;
             justify-content: center;
-            font-size: 2.5rem;
+            font-size: 2.5rem; /* Adjusted font size for readability */
             opacity: 0;
             transition: opacity 1s;
         }
 
         .result {
-            margin-top: 10px;
-            font-size: 1.2rem;
+            margin-top: 10px; /* Reduced margin */
+            font-size: 1.2rem; /* Adjusted font size for readability */
             color: #f39c12;
-            text-align: center;
+            text-align: center; /* Centered text */
         }
 
         #spin {
@@ -42,7 +40,7 @@
             border: none;
             border-radius: 5px;
             color: white;
-            display: none;
+            display: none; /* Hidden until the user logs in */
         }
 
         #spin:hover {
@@ -101,143 +99,146 @@
         }
     </style>
 </head>
-
 <body>
 
-    <div id="nickname-dialog">
-        <h3>Choose Your Nickname</h3>
-        <input id="nickname-input" type="text" />
-        <p>Send beans to this nick to play.</p>
-        <button id="confirm-nick">Confirm</button>
-    </div>
+<div id="nickname-dialog">
+    <h3>Choose Your Nickname</h3>
+    <input id="nickname-input" type="text" />
+    <p>Send beans to this nick to play.</p>
+    <button id="confirm-nick">Confirm</button>
+</div>
 
-    <div id="slots"></div>
-    <div class="result" id="result"></div>
-    <input id="bet-input" type="number" value="3" min="1" />
-    <button id="spin">Spin Again</button>
-    <button id="change-nick" style="display:none;">Change Nick</button> <!-- Button to change nick -->
+<div id="slots"></div>
+<div class="result" id="result"></div>
+<input id="bet-input" type="number" value="3" min="1" />
+<button id="spin">Spin Again</button>
+<button id="change-nick" style="display:none;">Change Nick</button> <!-- Button to change nick -->
 
-    <script>
-        const slotsDiv = document.getElementById('slots');
-        const resultDiv = document.getElementById('result');
-        const spinButton = document.getElementById('spin');
-        const changeNickButton = document.getElementById('change-nick');
-        let ws;
-        let username;
+<script>
+    const slotsDiv = document.getElementById('slots');
+    const resultDiv = document.getElementById('result');
+    const spinButton = document.getElementById('spin');
+    const changeNickButton = document.getElementById('change-nick');
+    let ws;
+    let username;
 
-        // Show the nickname dialog
-        function showNicknameDialog() {
-            document.getElementById('nickname-dialog').style.display = 'flex'; // Show dialog
-        }
+    // Function to generate a random nickname
+    function generateRandomNickname() {
+        return 'casino_' + Math.random().toString(36).substring(2, 8);
+    }
 
-        function connectWebSocket() {
-            ws = new WebSocket('wss://irc.h4ks.com:8097');
+    // Show the nickname dialog
+    function showNicknameDialog() {
+        document.getElementById('nickname-dialog').style.display = 'flex'; // Show dialog
+        const defaultNick = generateRandomNickname();
+        document.getElementById('nickname-input').value = defaultNick; // Set default random nickname
+    }
 
-            ws.onopen = () => {
-                console.log('Connected to IRC');
-                ws.send(`NICK ${username}`);
-                ws.send(`USER ${username} 0 * :WebSocket IRChat`);
-            };
+    function connectWebSocket() {
+        ws = new WebSocket('wss://irc.h4ks.com:8097');
 
-            ws.onmessage = (event) => {
-                console.log('Message from server:', event.data);
-                handleServerMessage(event.data);
-            };
-
-            ws.onclose = () => {
-                console.log('Disconnected from IRC');
-            };
-
-            ws.onerror = (error) => {
-                console.error('WebSocket Error:', error);
-            };
-        }
-
-        function handleServerMessage(data) {
-            // Respond to ping messages
-            if (data.startsWith('PING')) {
-                ws.send(`PONG ${data.split(' ')[1]}`);
-                return;
-            }
-
-            // Check for IRC status 422
-            if (/^:.* 422/.test(data)) {
-                console.log("Received status 422, sending .slot to _cloudbot");
-                sendSlotCommand();
-                return;
-            }
-
-            // Handle responses from _cloudbot
-            if (data.startsWith(`:_cloudbot!`)) {
-                const message = data.split(":").slice(2).join(":").trim(); // Get the message after the second ":"
-
-                // Handle the cooldown message
-                if (message.includes("You entered a cooldown")) {
-                    resultDiv.innerHTML = message; // Display cooldown message
-                    return;
-                }
-
-                // Match the results format for emojis
-                const resultRegex = /^.* PRIVMSG .* :([^\|]+) \| ([^\|]+) \| ([^\|]+) (.*)$/;
-                const match = message.match(resultRegex);
-                if (match) {
-                    const emoji1 = match[1].trim(); // First column emojis
-                    const emoji2 = match[2].trim(); // Second column emojis
-                    const emoji3 = match[3].trim(); // Third column emojis
-                    const resultText = match[4].trim();
-
-                    slotsDiv.innerHTML = `${emoji1} | ${emoji2} | ${emoji3}`; // Show emojis in 3 columns
-                    resultDiv.innerHTML = resultText; // Show result text
-                    slotsDiv.style.opacity = 1; // Ensure opacity is set to show results
-                }
-            }
-        }
-
-        function sendSlotCommand() {
-            const betValue = document.getElementById('bet-input').value || 3; // Default to 3 if empty
-            if (ws) {
-                ws.send(`PRIVMSG _cloudbot :.slot ${betValue}`); // Send command with bet value
-            }
-        }
-
-        // Assign the confirmed nickname
-        document.getElementById('confirm-nick').addEventListener('click', () => {
-            username = document.getElementById('nickname-input').value;
-            document.getElementById('nickname-dialog').style.display = 'none'; // Hide dialog
-            spinButton.style.display = 'block'; // Show the spin button
-            connectWebSocket(); // Connect to the IRC server
-            
-            // Save username to local storage
-            localStorage.setItem('username', username);
-            changeNickButton.style.display = 'block'; // Show change nick button
-        });
-
-        window.onload = () => {
-            // Check for existing username in local storage
-            const storedUsername = localStorage.getItem('username');
-            if (storedUsername) {
-                username = storedUsername; // Set username from local storage
-                connectWebSocket(); // Connect if there is a username in local storage
-                spinButton.style.display = 'block'; // Show the spin button
-                changeNickButton.style.display = 'block'; // Show change nick button
-            } else {
-                showNicknameDialog(); // Show the nickname selection dialog if no user in storage
-            }
+        ws.onopen = () => {
+            console.log('Connected to IRC');
+            ws.send(`NICK ${username}`);
+            ws.send(`USER ${username} 0 * :WebSocket IRChat`);
         };
 
-        spinButton.addEventListener('click', () => {
-            slotsDiv.style.opacity = 0; // Fade out
-            setTimeout(() => {
-                sendSlotCommand(); // Send the command to the bot when spinning again
-            }, 1000); // Wait for fade out before sending command
-        });
+        ws.onmessage = (event) => {
+            console.log('Message from server:', event.data);
+            handleServerMessage(event.data);
+        };
 
-        // Change nick button logic
-        changeNickButton.addEventListener('click', () => {
-            localStorage.removeItem('username'); // Remove old username from storage
-            showNicknameDialog(); // Show dialog to choose a new nickname
-        });
-    </script>
+        ws.onclose = () => {
+            console.log('Disconnected from IRC');
+        };
+
+        ws.onerror = (error) => {
+            console.error('WebSocket Error:', error);
+        };
+    }
+
+    function handleServerMessage(data) {
+        // Respond to ping messages
+        if (data.startsWith('PING')) {
+            ws.send(`PONG ${data.split(' ')[1]}`);
+            return;
+        }
+
+        // Check for IRC status 422
+        if (/^:.* 422/.test(data)) {
+            console.log("Received status 422, sending .slot to _cloudbot");
+            sendSlotCommand();
+            return;
+        }
+
+        // Handle responses from _cloudbot
+        if (data.startsWith(`:_cloudbot!`)) {
+            const message = data.split(":").slice(2).join(":").trim(); // Get the message after the second ":"
+
+            // Handle the cooldown message
+            if (message.includes("You entered a cooldown")) {
+                resultDiv.innerHTML = message; // Display cooldown message
+                return;
+            }
+
+            // Match the results format for emojis
+            const resultRegex = /^.* PRIVMSG .* :([^\|]+) \| ([^\|]+) \| ([^\|]+) (.*)$/;
+            const match = message.match(resultRegex);
+            if (match) {
+                const emoji1 = match[1].trim(); // First column emojis
+                const emoji2 = match[2].trim(); // Second column emojis
+                const emoji3 = match[3].trim(); // Third column emojis
+                const resultText = match[4].trim();
+
+                slotsDiv.innerHTML = `${emoji1} | ${emoji2} | ${emoji3}`; // Show emojis in 3 columns
+                resultDiv.innerHTML = resultText; // Show result text
+                slotsDiv.style.opacity = 1; // Ensure opacity is set to show results
+            }
+        }
+    }
+
+    function sendSlotCommand() {
+        const betValue = document.getElementById('bet-input').value || 3; // Default to 3 if empty
+        if (ws) {
+            ws.send(`PRIVMSG _cloudbot :.slot ${betValue}`); // Send command with bet value
+        }
+    }
+
+    // Assign the confirmed nickname
+    document.getElementById('confirm-nick').addEventListener('click', () => {
+        username = document.getElementById('nickname-input').value;
+        document.getElementById('nickname-dialog').style.display = 'none'; // Hide dialog
+        spinButton.style.display = 'block'; // Show the spin button
+        localStorage.setItem('username', username); // Save username to local storage
+        changeNickButton.style.display = 'block'; // Show change nick button
+        connectWebSocket(); // Connect to the IRC server
+    });
+
+    window.onload = () => {
+        // Check for existing username in local storage
+        const storedUsername = localStorage.getItem('username');
+        if (storedUsername) {
+            username = storedUsername; // Set username from local storage
+            connectWebSocket(); // Connect if there is a username in local storage
+            spinButton.style.display = 'block'; // Show the spin button
+            changeNickButton.style.display = 'block'; // Show change nick button
+        } else {
+            showNicknameDialog(); // Show the nickname selection dialog if no user in storage
+        }
+    };
+
+    spinButton.addEventListener('click', () => {
+        slotsDiv.style.opacity = 0; // Fade out
+        setTimeout(() => {
+            sendSlotCommand(); // Send the command to the bot when spinning again
+        }, 1000); // Wait for fade out before sending command
+    });
+
+    // Change nick button logic
+    changeNickButton.addEventListener('click', () => {
+        showNicknameDialog(); // Show dialog to choose a new nickname
+    });
+</script>
 
 </body>
 </html>
