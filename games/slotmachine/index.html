@@ -90,6 +90,7 @@
     const resultDiv = document.getElementById('result');
     let ws;
     let username;
+    let waitingForResult = false;  // Flag to check if waiting for the result
 
     // Function to generate a random nickname
     function generateRandomNickname() {
@@ -110,7 +111,7 @@
             slots.push(randomSymbol);
         }
         slotsDiv.innerHTML = slots.join(' ');
-        slotsDiv.style.opacity = 1;
+        slotsDiv.style.opacity = 1;  // Fade in
     }
 
     function connectWebSocket() {
@@ -147,28 +148,38 @@
         if (/^:.* 422/.test(data)) {
             console.log("Received status 422, sending .slot to _cloudbot");
             sendSlotCommand();
+            waitingForResult = true; // Set the flag to wait for the result
+            return;
         }
 
-        parseResponse(data);
+        // Handle specific responses from _cloudbot
+        if (waitingForResult) {
+            if (data.startsWith(`:_cloudbot!`) && data.includes('You don't have enough beans')) {
+                resultDiv.innerHTML = 'You do not have enough beans to play. Please send beans to your nick.';
+                waitingForResult = false; // Clear the flag
+                return;
+            }
+
+            // Check if it matches the results format
+            const resultRegex = /^\((.*?)\) (.*?) (.*?) \| (.*?) (.*?) (.*?)$/;
+            const match = data.match(resultRegex);
+            if (match) {
+                const username = match[1];
+                const slots = match.slice(2, 5).join(' | ');
+                const resultText = match[6];
+
+                slotsDiv.innerHTML = `${username} ${slots}`;
+                resultDiv.innerHTML = resultText;
+                slotsDiv.style.fontSize = '3rem';
+                
+                waitingForResult = false; // Clear the flag
+            }
+        }
     }
 
     function sendSlotCommand() {
         if (ws) {
-            ws.send('PRIVMSG _cloudbot :.slot');  // No space before ".slot"
-        }
-    }
-
-    function parseResponse(data) {
-        const regex = /^\((.*?)\) (.*?) (.*?) \| (.*?) (.*?) Almost there! Keep trying! You lost (\{[^}]+\}) beans$/;
-        const match = data.match(regex);
-        if (match) {
-            const username = match[1];
-            const slots = match.slice(2, 5).join(' | ');
-            const resultText = match[5] + ' Almost there! Keep trying! You lost ' + match[6] + ' beans';
-
-            slotsDiv.innerHTML = `${username} ${slots}`;
-            resultDiv.innerHTML = resultText;
-            slotsDiv.style.fontSize = '3rem';
+            ws.send('PRIVMSG _cloudbot :.slot');  // Send command without space
         }
     }
 
