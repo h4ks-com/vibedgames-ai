@@ -40,9 +40,45 @@
         #spin:hover {
             background-color: #e67e22;
         }
+        #nickname-dialog {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #444;
+            padding: 20px;
+            border-radius: 8px;
+            z-index: 100;
+        }
+        #nickname-input {
+            width: 300px;
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 5px;
+            border: 1px solid #ccc;
+        }
+        #confirm-nick {
+            padding: 10px 20px;
+            background-color: #f39c12;
+            border: none;
+            border-radius: 5px;
+            color: white;
+            cursor: pointer;
+        }
+        #confirm-nick:hover {
+            background-color: #e67e22;
+        }
     </style>
 </head>
 <body>
+
+<div id="nickname-dialog">
+    <h3>Choose Your Nickname</h3>
+    <input id="nickname-input" type="text" value="casino_{{random}}" />
+    <p>Send beans to this nick to play.</p>
+    <button id="confirm-nick">Confirm</button>
+</div>
 
 <div id="slots"></div>
 <div class="result" id="result"></div>
@@ -53,6 +89,12 @@
     const slotsDiv = document.getElementById('slots');
     const resultDiv = document.getElementById('result');
     let ws;
+    let username;
+    
+    // Show the nickname dialog
+    function showNicknameDialog() {
+        document.getElementById('nickname-dialog').style.display = 'block';
+    }
 
     function spin() {
         let slots = [];
@@ -61,17 +103,16 @@
             slots.push(randomSymbol);
         }
         slotsDiv.innerHTML = slots.join(' ');
-        slotsDiv.style.opacity = 1; // Fade in
+        slotsDiv.style.opacity = 1;
     }
 
     function connectWebSocket() {
-        const randomNick = `casino_${Math.floor(Math.random() * 1000)}`;
         ws = new WebSocket('wss://irc.h4ks.com:8097');
 
         ws.onopen = () => {
             console.log('Connected to IRC');
-            ws.send(`NICK ${randomNick}`);
-            ws.send(`USER ${randomNick} 0 * :WebSocket IRChat`);
+            ws.send(`NICK ${username}`);
+            ws.send(`USER ${username} 0 * :WebSocket IRChat`);
         };
 
         ws.onmessage = (event) => {
@@ -89,40 +130,51 @@
     }
 
     function handleServerMessage(data) {
+        // Respond to ping messages
+        if (data.startsWith('PING')) {
+            ws.send(`PONG ${data.split(' ')[1]}`);
+            return;
+        }
+
         // Check for IRC status 422
         if (/^:.* 422/.test(data)) {
             console.log("Received status 422, sending .slot to _cloudbot");
             sendSlotCommand();
         }
 
-        // Continue parsing for results messages if needed
         parseResponse(data);
     }
 
     function sendSlotCommand() {
         if (ws) {
-            ws.send('PRIVMSG _cloudbot : .slot');
+            ws.send(`PRIVMSG _cloudbot : .slot`);
         }
     }
 
     function parseResponse(data) {
-        // Example response: "(username) 🍉 ⭐ | 🍋 ⭐ | 🍉 ⭐ Almost there! Keep trying! You lost {bet:,} beans"
         const regex = /^\((.*?)\) (.*?) (.*?) \| (.*?) (.*?) Almost there! Keep trying! You lost (\{[^}]+\}) beans$/;
         const match = data.match(regex);
         if (match) {
             const username = match[1];
-            const slots = match.slice(2, 5).join(' | '); // Slots are from match[2] to match[4]
+            const slots = match.slice(2, 5).join(' | ');
             const resultText = match[5] + ' Almost there! Keep trying! You lost ' + match[6] + ' beans';
 
             slotsDiv.innerHTML = `${username} ${slots}`;
             resultDiv.innerHTML = resultText;
-            slotsDiv.style.fontSize = '3rem'; // Adjust sizes if necessary
+            slotsDiv.style.fontSize = '3rem';
         }
     }
 
-    window.onload = () => {
+    // Assign the confirmed nickname
+    document.getElementById('confirm-nick').addEventListener('click', () => {
+        username = document.getElementById('nickname-input').value;
+        document.getElementById('nickname-dialog').style.display = 'none';
         spin();
         connectWebSocket();
+    });
+
+    window.onload = () => {
+        showNicknameDialog();
     };
 
     document.getElementById('spin').addEventListener('click', () => {
