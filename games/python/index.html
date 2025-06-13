@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.6.0/styles/github-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.6.0/highlight.min.js"></script>
     <script src="https://cdn.jsdelivr.net/pyodide/v0.27.7/full/pyodide.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/zstd@1.0.4/index.min.js"></script>
     <style>
         body { 
             font-family: Arial, sans-serif; 
@@ -46,7 +47,7 @@
 <body>
     <div class="container">
         <h1 class="text-center">Python REPL</h1>
-        <div id="editor" contenteditable="true" spellcheck="false" autocomplete="off" onblur="highlightCode()">
+        <div id="editor" contenteditable="true" spellcheck="false" autocomplete="off" onblur="highlightCode(); updateURL()">
 import random
 
 def slot_machine():
@@ -75,7 +76,8 @@ def run_simulation(trials=1000):
 print(run_simulation())  # Wrap with print to display in output
         </div>
         <br>
-        <button id="runBtn" class="btn btn-primary btn-block">Run Script</button>
+        <button id="runBtn" class="btn btn-primary btn-block" onclick="runCode()">Run Script</button>
+        <button id="shareBtn" class="btn btn-secondary btn-block" onclick="updateURL()">Share Code</button>
         <h2 class="mt-4">Output:</h2>
         <pre id="output" class="border rounded p-2"></pre>
     </div>
@@ -86,7 +88,7 @@ print(run_simulation())  # Wrap with print to display in output
             const code = editor.innerText || editor.textContent; // Get the code
 
             // Clean up the code for syntax highlighting
-            const highlightedHTML = hljs.highlight(code, { language: 'python' }).value;
+            const highlightedHTML = hljs.highlight('python', code).value;
 
             // Replace the editor content with the highlighted HTML
             editor.innerHTML = highlightedHTML;
@@ -112,7 +114,7 @@ print(run_simulation())  # Wrap with print to display in output
 
         let pyodideReady = loadPyodideAndRun();
 
-        document.getElementById("runBtn").addEventListener("click", async () => {
+        async function runCode() {
             const output = document.getElementById("output");
             const editorCode = document.getElementById('editor').innerText; // Get text content
             const pyodide = await pyodideReady;
@@ -146,11 +148,40 @@ output
                 output.innerHTML = hljs.highlight(error.toString(), { language: 'python' }).value; 
                 output.scrollTop = output.scrollHeight; // Scroll to the bottom
             }
-        });
+        }
 
-        // Highlight on page load
+        function updateURL() {
+            const editor = document.getElementById('editor');
+            const code = editor.innerText || editor.textContent; // Get the code to compress
+            const compressed = new Zstd.compress(code); // Compress the code
+            const base64 = btoa(String.fromCharCode.apply(null, new Uint8Array(compressed))); // Convert to base64
+            const newUrl = window.location.origin + window.location.pathname + '?code=' + base64; // Create new URL
+            history.replaceState(null, '', newUrl); // Update URL in the browser
+            highlightCode(); // Highlight the code after updating
+        }
+
+        function getParam(param) {
+            const params = new URLSearchParams(window.location.search);
+            return params.get(param);
+        }
+
+        // Load code from URL params if available
         document.addEventListener("DOMContentLoaded", () => {
-            highlightCode(); // Initial highlight
+            const codeParam = getParam('code');
+            if (codeParam) {
+                // Decode base64 and decompress
+                const decoded = atob(codeParam);
+                const compressedBytes = new Uint8Array(decoded.length);
+                for (let i = 0; i < decoded.length; i++) {
+                    compressedBytes[i] = decoded.charCodeAt(i);
+                }
+                Zstd.decompress(compressedBytes).then(uncompressed => {
+                    document.getElementById('editor').textContent = uncompressed;
+                    highlightCode(); // Highlight loaded code
+                });
+            } else {
+                highlightCode(); // Initial highlight on load
+            }
         });
     </script>
 </body>
