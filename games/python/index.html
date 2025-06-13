@@ -84,7 +84,7 @@ print(run_simulation())  # Wrap with print to display in output
         </div>
         <br>
         <button id="runBtn" class="btn btn-primary btn-block">Run Script</button>
-        <button id="shareBtn" class="btn btn-secondary btn-block" onclick="shareURL()">Share URL</button>
+        <button id="shareBtn" class="btn btn-secondary btn-block" onclick="shareCode()">Share URL</button>
         <h2 class="mt-4">Output:</h2>
         <pre id="output" class="border rounded p-2"></pre>
     </div>
@@ -114,56 +114,72 @@ print(run_simulation())  # Wrap with print to display in output
             sel.addRange(range); // Set the selection to the range
         }
 
-        async function loadPyodideAndRun() {
-            let pyodide = await loadPyodide();
-            return pyodide;
-        }
+        function lzwCompress(uncompressed) {
+            const dict = {};
+            const data = (uncompressed + '').split('');
+            const output = [];
+            let currChar;
+            let phrase = data[0];
+            let code = 256; // Start codes from 256
 
-        let pyodideReady = loadPyodideAndRun();
-
-        async function runCode() {
-            const output = document.getElementById("output");
-            const editorCode = document.getElementById('editor').innerText; // Get text content
-            const pyodide = await pyodideReady;
-
-            output.textContent = ""; // Clear output
-            try {
-                await pyodide.runPythonAsync(`
-import sys
-from io import StringIO
-
-# Redirect stdout to capture print statements
-old_stdout = sys.stdout
-sys.stdout = StringIO()
-
-# Run the user script
-exec(${JSON.stringify(editorCode)})
-
-# Get the output
-output = sys.stdout.getvalue()
-
-# Reset stdout back to the original
-sys.stdout = old_stdout
-output
-                `).then(result => {
-                    // Highlight the output and keep it scrolled to bottom
-                    output.innerHTML = hljs.highlight(result, { language: 'python' }).value; 
-                    output.scrollTop = output.scrollHeight; // Scroll to the bottom
-                });
-            } catch (error) {
-                // Highlight the error output and scroll to bottom
-                output.innerHTML = hljs.highlight(error.toString(), { language: 'python' }).value; 
-                output.scrollTop = output.scrollHeight; // Scroll to the bottom
+            for (let i = 1; i < data.length; i++) {
+                currChar = data[i];
+                if (dict[phrase + currChar]) {
+                    phrase += currChar;
+                } else {
+                    output.push(phrase.length > 1 ? dict[phrase] : phrase.charCodeAt(0));
+                    dict[phrase + currChar] = code++;
+                    phrase = currChar;
+                }
             }
+
+            output.push(phrase.length > 1 ? dict[phrase] : phrase.charCodeAt(0)); // Add last phrase
+            return output;
         }
 
-        function shareURL() {
+        function lzwDecompress(compressed) {
+            const dict = {};
+            let currChar;
+            let phrase;
+            let code = 256; // Start codes from 256
+            const output = String.fromCharCode(compressed[0]);
+            let oldPhrase = output;
+
+            for (let i = 1; i < compressed.length; i++) {
+                const currCode = compressed[i];
+
+                if (currCode < 256) {
+                    currChar = String.fromCharCode(currCode);
+                } else if (currCode in dict) {
+                    currChar = dict[currCode];
+                } else if (currCode === code) {
+                    currChar = oldPhrase + oldPhrase.charAt(0);
+                } else {
+                    throw new Error('Invalid compressed code');
+                }
+
+                output += currChar;
+                dict[code++] = oldPhrase + currChar;
+                oldPhrase = currChar;
+            }
+
+            return output;
+        }
+
+        function updateURL() {
             const editor = document.getElementById('editor');
             const code = editor.innerText || editor.textContent; // Get the code to compress
             const compressed = lzwCompress(code); // Compress the code
             const base64 = btoa(String.fromCharCode.apply(null, new Uint8Array(compressed))); // Convert to base64
-            const link = window.location.origin + window.location.pathname + '?code=' + base64; // Create link
+            const newUrl = window.location.origin + window.location.pathname + '?code=' + base64; // Create new URL
+            history.replaceState(null, '', newUrl); // Update URL in the browser
+        }
+
+        function shareCode() {
+            updateURL(); // Call updateURL before copying the link
+            const link = window.location.href; // Get the current URL
             
+            // Copy the URL to the clipboard
             navigator.clipboard.writeText(link).then(() => {
                 const shareButton = document.getElementById("shareBtn");
                 shareButton.classList.add("animated"); // Add animation class
@@ -199,7 +215,10 @@ output
         });
 
         // Set event listeners
-        document.getElementById("runBtn").addEventListener("click", runCode);
+        document.getElementById("runBtn").addEventListener("click", async () => {
+            await runCode(); // Run code on button click
+        });
+
         document.getElementById("editor").addEventListener("blur", () => {
             highlightCode(); // Highlight when focus leaves
             updateURL(); // Sync URL with the code
