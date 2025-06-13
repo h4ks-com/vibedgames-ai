@@ -76,7 +76,7 @@ print(run_simulation())  # Wrap with print to display in output
         </div>
         <br>
         <button id="runBtn" class="btn btn-primary btn-block">Run Script</button>
-        <button id="shareBtn" class="btn btn-secondary btn-block" onclick="copyToClipboard()">Share Code</button>
+        <button id="shareBtn" class="btn btn-secondary btn-block" onclick="shareCode()">Share Code</button>
         <h2 class="mt-4">Output:</h2>
         <pre id="output" class="border rounded p-2"></pre>
     </div>
@@ -106,17 +106,99 @@ print(run_simulation())  # Wrap with print to display in output
             sel.addRange(range); // Set the selection to the range
         }
 
-        async function loadPyodideAndRun() {
-            let pyodide = await loadPyodide();
-            return pyodide;
+        function lzwCompress(uncompressed) {
+            const dict = {};
+            const data = (uncompressed + '').split('');
+            const output = [];
+            let currChar;
+            let phrase = data[0];
+            let code = 256; // Start codes from 256
+
+            for (let i = 1; i < data.length; i++) {
+                currChar = data[i];
+                if (dict[phrase + currChar]) {
+                    phrase += currChar;
+                } else {
+                    output.push(phrase.length > 1 ? dict[phrase] : phrase.charCodeAt(0));
+                    dict[phrase + currChar] = code++;
+                    phrase = currChar;
+                }
+            }
+
+            output.push(phrase.length > 1 ? dict[phrase] : phrase.charCodeAt(0)); // Add last phrase
+            return output;
         }
 
-        let pyodideReady = loadPyodideAndRun();
+        function lzwDecompress(compressed) {
+            const dict = {};
+            let currChar;
+            let phrase;
+            let code = 256; // Start codes from 256
+            const output = String.fromCharCode(compressed[0]);
+            let oldPhrase = output;
 
-        async function runCode() {
+            for (let i = 1; i < compressed.length; i++) {
+                const currCode = compressed[i];
+
+                if (currCode < 256) {
+                    currChar = String.fromCharCode(currCode);
+                } else if (currCode in dict) {
+                    currChar = dict[currCode];
+                } else if (currCode === code) {
+                    currChar = oldPhrase + oldPhrase.charAt(0);
+                } else {
+                    throw new Error('Invalid compressed code');
+                }
+
+                output += currChar;
+                dict[code++] = oldPhrase + currChar;
+                oldPhrase = currChar;
+            }
+
+            return output;
+        }
+
+        function shareCode() {
+            // Get the current editor content
+            const editor = document.getElementById('editor');
+            const code = editor.innerText || editor.textContent; // Get the code to compress
+            const compressedCode = lzwCompress(code); // Compress the code
+            const base64 = btoa(String.fromCharCode.apply(null, new Uint8Array(compressedCode))); // Convert to base64
+            const link = window.location.origin + window.location.pathname + '?code=' + base64; // Create link
+            navigator.clipboard.writeText(link).then(() => {
+                alert('Code URL copied to clipboard: ' + link);
+            }).catch(err => {
+                console.error('Could not copy text: ', err);
+            });
+        }
+
+        function getParam(param) {
+            const params = new URLSearchParams(window.location.search);
+            return params.get(param);
+        }
+
+        // Load code from URL params if available
+        document.addEventListener("DOMContentLoaded", () => {
+            const codeParam = getParam('code');
+            if (codeParam) {
+                // Decode base64 and decompress
+                const decoded = atob(codeParam);
+                const compressedBytes = new Uint8Array(decoded.length);
+                for (let i = 0; i < decoded.length; i++) {
+                    compressedBytes[i] = decoded.charCodeAt(i);
+                }
+                const uncompressed = lzwDecompress(compressedBytes);
+                document.getElementById('editor').textContent = uncompressed;
+                highlightCode(); // Highlight loaded code
+            } else {
+                highlightCode(); // Initial highlight on load
+            }
+        });
+
+        document.getElementById("runBtn").addEventListener("click", async () => {
             const output = document.getElementById("output");
             const editorCode = document.getElementById('editor').innerText; // Get text content
-            const pyodide = await pyodideReady;
+            const pyodide = await loadPyodide();
 
             output.textContent = ""; // Clear output
             try {
@@ -138,7 +220,7 @@ output = sys.stdout.getvalue()
 sys.stdout = old_stdout
 output
                 `).then(result => {
-                    // Highlight the output and keep it scrolled to bottom
+                    // Highlight the output and scroll to bottom
                     output.innerHTML = hljs.highlight(result, { language: 'python' }).value; 
                     output.scrollTop = output.scrollHeight; // Scroll to the bottom
                 });
@@ -147,27 +229,7 @@ output
                 output.innerHTML = hljs.highlight(error.toString(), { language: 'python' }).value; 
                 output.scrollTop = output.scrollHeight; // Scroll to the bottom
             }
-        }
-
-        function copyToClipboard() {
-            const editor = document.getElementById('editor');
-            const code = editor.innerText || editor.textContent; // Get code to copy
-            navigator.clipboard.writeText(code).then(() => {
-                alert('Code copied to clipboard!');
-            }).catch(err => {
-                console.error('Could not copy text: ', err);
-            });
-        }
-
-        // Highlight on page load
-        document.addEventListener("DOMContentLoaded", () => {
-            highlightCode(); // Initial highlight
-        });
-
-        // Set event listeners
-        document.getElementById("runBtn").addEventListener("click", runCode);
-        document.getElementById("editor").addEventListener("blur", () => {
-            highlightCode(); // Highlight when focus leaves
+            highlightCode(); // Highlight the code after running
         });
     </script>
 </body>
