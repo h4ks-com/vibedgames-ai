@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Python REPL</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/base16/dracula.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/highlight.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lz-string@1.4.4/libs/lz-string.min.js"></script>
+    <style>
+        body {
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            margin: 0;
+            padding: 0;
+            background-color: #282a36;
+            color: #f8f8f2;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            padding: 20px;
+            box-sizing: border-box;
+            max-width: 1200px;
+            margin: 0 auto;
+            width: 100%;
+        }
+        .editor-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            margin-bottom: 10px;
+        }
+        .output-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background-color: #282a36;
+            border: 1px solid #44475a;
+            border-radius: 5px;
+            overflow: auto;
+        }
+        textarea {
+            flex: 1;
+            background-color: #282a36;
+            color: #f8f8f2;
+            border: 1px solid #44475a;
+            border-radius: 5px;
+            padding: 10px;
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.5;
+            resize: none;
+            outline: none;
+            margin-bottom: 10px;
+            white-space: pre;
+        }
+        textarea:focus {
+            border-color: #6272a4;
+        }
+        .hljs {
+            margin: 0;
+            padding: 10px;
+            border-radius: 5px;
+            background-color: #282a36;
+            overflow: auto;
+            flex: 1;
+        }
+        .button-container {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        button {
+            background-color: #50fa7b;
+            color: #282a36;
+            border: none;
+            border-radius: 5px;
+            padding: 8px 16px;
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        button:hover {
+            background-color: #5aff8d;
+        }
+        button:active {
+            transform: scale(0.98);
+        }
+        button.secondary {
+            background-color: #6272a4;
+            color: #f8f8f2;
+        }
+        button.secondary:hover {
+            background-color: #6a7cb0;
+        }
+        .output-title, .editor-title {
+            color: #bd93f9;
+            margin-bottom: 5px;
+            font-size: 14px;
+        }
+        .copied {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background-color: #50fa7b;
+            color: #282a36;
+            padding: 10px 15px;
+            border-radius: 5px;
+            font-weight: bold;
+            opacity: 0;
+            transition: opacity 0.3s;
+            pointer-events: none;
+        }
+        .copied.show {
+            opacity: 1;
+        }
+        #output-content {
+            padding: 10px;
+            white-space: pre-wrap;
+            overflow: auto;
+            flex: 1;
+        }
+        a {
+            color: #8be9fd;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        .loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100%;
+            color: #6272a4;
+            font-size: 24px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Python REPL <small><a href="#" id="about-link">?</a></small></h1>
+
+        <div class="editor-container">
+            <div class="editor-title">Editor</div>
+            <div id="editor-wrapper" style="flex: 1; display: flex; flex-direction: column;">
+                <textarea id="code-editor" spellcheck="false"></textarea>
+                <pre id="syntax-highlight" class="hljs language-python" style="display: none;"></pre>
+            </div>
+        </div>
+
+        <div class="button-container">
+            <button id="run-button">Run</button>
+            <button id="share-button" class="secondary">Share</button>
+        </div>
+
+        <div class="output-container">
+            <div class="output-title">Output</div>
+            <div id="output-content"></div>
+        </div>
+    </div>
+
+    <div id="copied-notification" class="copied">Copied!</div>
+
+    <div id="loading" class="loading">Loading Pyodide...</div>
+
+    <div id="about-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(40, 42, 54, 0.9); z-index: 100; justify-content: center; align-items: center;">
+        <div style="background-color: #282a36; padding: 20px; border-radius: 5px; max-width: 600px; max-height: 80vh; overflow: auto;">
+            <h2 style="margin-top: 0; color: #ff79c6;">About Python REPL</h2>
+            <p>This is a browser-based Python REPL powered by Pyodide, which runs Python in the browser using WebAssembly.</p>
+            <p><strong>Features:</strong></p>
+            <ul>
+                <li>Write and execute Python code directly in your browser</li>
+                <li>Share your code snippets via URL</li>
+                <li>Syntax highlighting for Python</li>
+                <li>Works offline after initial load</li>
+            </ul>
+            <p><strong>Limitations:</strong></p>
+            <ul>
+                <li>No filesystem access</li>
+                <li>Limited standard library (Pyodide's subset)</li>
+                <li>Slower than native Python</li>
+            </ul>
+            <p>Built with ❤️   using <a href="https://pyodide.org/" target="_blank">Pyodide</a></p>
+            <button id="close-about" style="margin-top: 20px;">Close</button>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.23.4/full/pyodide.js"></script>
+    <script>
+        // Initialize Pyodide
+        let pyodide;
+        async function main() {
+            pyodide = await loadPyodide({
+                indexURL: "https://cdn.jsdelivr.net/pyodide/v0.23.4/full/"
+            });
+            document.getElementById('loading').style.display = 'none';
+
+            // Load initial code from URL or use default
+            loadInitialCode();
+
+            // Set up event listeners
+            setupEditor();
+            setupButtons();
+        }
+
+        // Set up editor with syntax highlighting
+        function setupEditor() {
+            const editor = document.getElementById('code-editor');
+            const highlight = document.getElementById('syntax-highlight');
+
+            // Toggle between editable textarea and highlighted view
+            editor.addEventListener('focus', () => {
+                highlight.style.display = 'none';
+                editor.style.display = 'block';
+            });
+
+            editor.addEventListener('blur', () => {
+                highlight.textContent = editor.value;
+                highlight.style.display = 'block';
+                editor.style.display = 'none';
+                hljs.highlightElement(highlight);
+            });
+
+            // Trigger initial highlight
+            highlight.textContent = editor.value;
+            hljs.highlightElement(highlight);
+            highlight.style.display = 'block';
+            editor.style.display = 'none';
+        }
+
+        // Set up button event listeners
+        function setupButtons() {
+            const runButton = document.getElementById('run-button');
+            const shareButton = document.getElementById('share-button');
+            const aboutLink = document.getElementById('about-link');
+            const closeAbout = document.getElementById('close-about');
+            const aboutModal = document.getElementById('about-modal');
+
+            runButton.addEventListener('click', runCode);
+            shareButton.addEventListener('click', shareCode);
+
+            aboutLink.addEventListener('click', (e) => {
+                e.preventDefault();
+                aboutModal.style.display = 'flex';
+            });
+
+            closeAbout.addEventListener('click', () => {
+                aboutModal.style.display = 'none';
+            });
+        }
+
+        // Run the Python code
+        async function runCode() {
+            const code = document.getElementById('code-editor').value;
+            const output = document.getElementById('output-content');
+
+            output.innerHTML = '';
+
+            try {
+                // Capture print output
+                pyodide.setStdout({
+                    batched: (text) => {
+                        output.textContent += text;
+                    }
+                });
+
+                // Run the code
+                await pyodide.runPythonAsync(code);
+            } catch (e) {
+                output.textContent = e;
+            }
+        }
+
+        // Share the code by compressing it and adding to URL
+        function shareCode() {
+            const code = document.getElementById('code-editor').value;
+            const compressed = LZString.compressToEncodedURIComponent(code);
+
+            // Create new URL with code parameter
+            const url = new URL(window.location.href);
+            url.searchParams.set('code', compressed);
+
+            // Copy to clipboard
+            navigator.clipboard.writeText(url.toString())
+                .then(() => {
+                    // Show copied notification
+                    const notification = document.getElementById('copied-notification');
+                    notification.classList.add('show');
+                    setTimeout(() => {
+                        notification.classList.remove('show');
+                    }, 2000);
+                })
+                .catch(err => {
+                    console.error('Could not copy URL: ', err);
+                    alert('Could not copy URL to clipboard. Please copy it manually.');
+                });
+        }
+
+        // Load initial code from URL parameter or use default
+        function loadInitialCode() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const codeParam = urlParams.get('code');
+
+            let code;
+            if (codeParam) {
+                code = LZString.decompressFromEncodedURIComponent(codeParam);
+            } else {
+                code = 'print("Hello, World!")';
+            }
+
+            document.getElementById('code-editor').value = code;
+            document.getElementById('syntax-highlight').textContent = code;
+            hljs.highlightElement(document.getElementById('syntax-highlight'));
+        }
+
+        // Start the application
+        main();
+    </script>
+</body>
+</html>
