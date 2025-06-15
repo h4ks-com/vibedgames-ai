@@ -1,0 +1,263 @@
+const blessed = require("blessed");
+const instance = "https://shoot.doesnm.cc/api";
+const token = "";
+let activeChannel = null;
+const screen = blessed.screen({
+  smartCSR: true
+})
+const guildsList = blessed.list({
+  height: '100%',
+  width: '15%',
+  border: {
+    type: 'line'
+  },
+  tags: true,
+  keys: true,
+  style: {
+    border: {
+      fg: 'grey'
+    },
+    selected: {
+      bg: 'white',
+      fg: 'black'
+    },
+    focus: {
+      border: {
+        fg: 'white'
+      }
+    }
+  }
+})
+guildsList.on("select", data => {
+  data = data.getText();
+  channelsList.clearItems();
+  guilds.find(g => g.name == data).channels.forEach(c => {
+    channelsList.addItem(c.name)
+  })
+  screen.render();
+})
+guildsList.key('right', () => {
+  channelsList.focus();
+  screen.render();
+})
+
+const channelsList = blessed.list({
+  left: '15%',
+  height: '100%',
+  width: '15%',
+  border: {
+    type: 'line'
+  },
+  tags: true,
+  keys: true,
+  style: {
+    border: {
+      fg: 'grey'
+    },
+    focus: {
+      border: {
+        fg: 'white'
+      }
+    },
+    selected: {
+      bg: 'white',
+      fg: 'black'
+    }
+  }
+});
+channelsList.key('left', () => {
+  guildsList.focus();
+  screen.render();
+})
+channelsList.on("select", data => {
+  data = data.getText();
+  const selectedGuildName = guildsList.getItem(guildsList.selected).getText(); // Get the text of the selected guild
+  const selectedGuild = guilds.find(g => g.name === selectedGuildName);
+  const c = selectedGuild.channels.find(c => c.name == data);
+   activeChannel = `${c.id}@${c.domain}`
+   if(!c.messages){
+     c.messages = [];
+     fetch(`${instance}/channel/${c.id}@${c.domain}/messages`, {
+       headers: {
+         'Authorization': token
+       }
+     }).then(r => r.json()).then(json => {
+       c.messages = json.reverse();
+       messagesBox.clearItems()
+       messagesBox.addItem(`Messages in #${c.name}`)
+       c.messages.forEach(m => messagesBox.addItem(`${m.author_id}: ${m.content}`))
+       messagesBox.select(c.messages.length)
+       screen.render();
+     })
+   }else{
+       messagesBox.clearItems()
+       messagesBox.addItem(`Messages in #${c.name}`)
+       c.messages.forEach(m => messagesBox.addItem(`${m.author_id}: ${m.content}`))
+       messagesBox.select(c.messages.length)
+       screen.render();
+       
+   }
+})
+const messagesBox = blessed.list({
+  left: '30%',
+  height: '98%',
+  width: '55%',
+  border: {
+    type: 'line'
+  },
+  tags: true,
+  keys: true,
+  style: {
+    border: {
+      fg: 'grey'
+    },
+    focus: {
+      border: {
+        fg: 'white'
+      }
+    },
+    selected: {
+      bg: 'white',
+      fg: 'black'
+    }
+  },
+  alwaysScroll: true
+})
+
+const messagebox = blessed.textbox({
+//inputOnFocus: true,
+  height: '6%', 
+  width: '55%',
+  left: '30%',
+  top: '95%',
+  border: {
+    type: 'line'
+  },
+  style: {
+    border: {
+      fg: 'grey'
+    },
+    focus: {
+      border: {
+        fg: 'white'
+      }
+    },
+    fg: 'white',
+    bg: 'black'
+  }
+});
+//form.append(messagebox)
+channelsList.key('right', () => {
+  messagebox.focus()
+  messagebox.readInput(() => {
+    if(!activeChannel) return;
+    fetch(`${instance}/channel/${activeChannel}/messages`, {
+      method: "POST",
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': token
+      },
+      body: JSON.stringify({
+        content: messagebox.getValue()
+      })
+    }).then()
+    messagebox.clearValue()
+    screen.render()
+  })
+})
+messagebox.key('left', ()=>{
+  channelsList.focus();
+})
+
+const membersBox = blessed.box({
+  left: '85%',
+  height: '100%',
+  width: '15%',
+  border: {
+    type: 'line'
+  },
+  tags: true,
+  style: {
+    border: {
+      fg: 'grey'
+    },
+  }
+})
+screen.append(guildsList)
+screen.append(channelsList)
+screen.append(messagesBox);
+screen.append(membersBox);
+screen.append(messagebox);
+guildsList.focus();
+screen.key(['escape', 'C-c'], function(ch, key) {
+    return process.exit(0);
+});
+
+
+let seq = 0;
+let guilds = [];
+let dms = [];
+let relationships = [];
+const ws = new WebSocket(`${instance}`);
+ws.addEventListener("open", () => {
+  ws.send(JSON.stringify({
+    t: "identify",
+    token: token
+  }))
+})
+
+ws.addEventListener("message", msg => {
+  //console.log(msg.data)
+  const pack = JSON.parse(msg.data);
+  seq++;
+  if(pack.t == "READY"){
+    messagesBox.addItem(`${pack.d.user.name}@${pack.d.user.domain} is ready`)
+    guilds = pack.d.guilds;
+    guilds.forEach(g => {
+      guildsList.addItem(g.name)
+    })
+    dms = pack.d.channels;
+    relationships = pack.d.relationships;
+    setInterval(() => {
+      ws.send(JSON.stringify({
+        t: "heartbeat",
+        s: seq
+      }))
+    },8000)
+    screen.render();
+  }else if(pack.t == "MESSAGE_CREATE"){
+    const content = pack.d.message.content;
+    //console.log(pack.d.message.author_id, content)
+    messagesBox.addItem(`${pack.d.message.author_id}: ${content}`)
+     guilds.forEach(g => {
+       const c = g.channels.find(c => c.id == pack.d.message.channel_id.split("@")[0])
+       //messagesBox.addItem(pack.d.message.channel_id)
+       if(c){
+         c.messages.push(pack.d.message)
+         messagesBox.select(messagesBox.items.length)
+         screen.render()
+       }
+     })
+       screen.render();
+    if(content.startsWith('!ping')){
+      fetch(`${instance}/channel/${pack.d.message.channel_id}/messages`, {
+        method: "POST",
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': token
+        },
+        body: JSON.stringify({
+          content: "Pong!"
+        })
+      })
+    }
+  }else{
+    //console.log(pack)
+  }
+});
+ws.addEventListener("error",e=>{
+  console.error(e);
+})
+ws.addEventListener("close", e => {
+  
+})
