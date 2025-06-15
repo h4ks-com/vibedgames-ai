@@ -6,16 +6,43 @@
     <style>
         body {
             display: flex;
-            flex-direction: column;
-            font-family: Arial, sans-serif;
+            justify-content: center;
+            align-items: center;
             background-color: #222;
             color: white;
             height: 100vh;
             margin: 0;
+            font-family: Arial, sans-serif;
+        }
+        .auth-container {
+            background-color: #333;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+        }
+        input {
+            width: 100%;
+            padding: 10px;
+            margin: 5px 0;
+            border: 1px solid grey;
+            background-color: #444;
+            color: white;
+        }
+        button {
+            width: 100%;
+            padding: 10px;
+            background-color: #444;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #555;
         }
         .container {
             display: flex;
             flex: 1;
+            display: none; /* Initially hidden */
         }
         .box {
             border: 1px solid grey;
@@ -44,7 +71,7 @@
         .messageDisplay {
             flex: 1;
             overflow-y: auto;
-            padding-bottom: 10px; /* Add space for the textarea */
+            padding-bottom: 10px; 
         }
         .members {
             width: 15%;
@@ -76,7 +103,15 @@
     <title>Web TUI</title>
 </head>
 <body>
-    <div class="container">
+    <div class="auth-container" id="authContainer">
+        <h2>Login</h2>
+        <input type="text" id="instance" placeholder="Instance URL" required>
+        <input type="text" id="username" placeholder="Username" required>
+        <input type="password" id="password" placeholder="Password" required>
+        <button id="loginButton">Login</button>
+    </div>
+
+    <div class="container" id="appContainer">
         <div class="box guilds"></div>
         <div class="box channels"></div>
         <div class="box messages">
@@ -88,8 +123,7 @@
     </div>
 
     <script>
-        const instance = "https://shoot.doesnm.cc/api";
-        let token = prompt("Please enter your token:"); // Prompt for token
+        let token = null;
         let activeChannel = null;
         let seq = 0;
         let guilds = [];
@@ -98,40 +132,73 @@
         const messageDisplay = document.getElementById('messageDisplay');
         const messagebox = document.getElementById('messagebox');
         const sendMessageBtn = document.getElementById('sendMessageBtn');
+        const authContainer = document.getElementById('authContainer');
+        const appContainer = document.getElementById('appContainer');
 
-        const ws = new WebSocket(instance);
-        ws.addEventListener("open", () => {
-            ws.send(JSON.stringify({ t: "identify", token: token }));
-        });
+        document.getElementById('loginButton').onclick = function () {
+            const instance = document.getElementById('instance').value;
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
 
-        ws.addEventListener("message", msg => {
-            const pack = JSON.parse(msg.data);
-            seq++;
-            if (pack.t === "READY") {
-                guilds = pack.d.guilds;
-                guilds.forEach(g => {
-                    const item = document.createElement('div');
-                    item.textContent = g.name;
-                    item.onclick = () => selectGuild(g);
-                    guildsBox.appendChild(item);
-                });
-            } else if (pack.t === "MESSAGE_CREATE") {
-                const message = pack.d.message;
-                if (activeChannel && message.channel_id === activeChannel.split("@")[0]) {
-                    addMessage(`${message.author_id}: ${message.content}`);
+            fetch(`${instance}/auth/login`, {
+                method: "POST",
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ username, password })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Login failed');
                 }
-                if (message.content.startsWith('!ping')) {
-                    fetch(`${instance}/channel/${message.channel_id}/messages`, {
-                        method: "POST",
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': token
-                        },
-                        body: JSON.stringify({ content: "Pong!" })
+                return response.json();
+            })
+            .then(data => {
+                token = data.token; // Get the token from the response
+                authContainer.style.display = 'none'; // Hide login form
+                appContainer.style.display = 'flex'; // Show app container
+                initializeWebSocket(instance); // Initialize WebSocket connection
+            })
+            .catch(error => {
+                alert(error.message); // Show error message
+            });
+        };
+
+        function initializeWebSocket(instance) {
+            const ws = new WebSocket(instance);
+            ws.addEventListener("open", () => {
+                ws.send(JSON.stringify({ t: "identify", token: token }));
+            });
+
+            ws.addEventListener("message", msg => {
+                const pack = JSON.parse(msg.data);
+                seq++;
+                if (pack.t === "READY") {
+                    guilds = pack.d.guilds;
+                    guilds.forEach(g => {
+                        const item = document.createElement('div');
+                        item.textContent = g.name;
+                        item.onclick = () => selectGuild(g);
+                        guildsBox.appendChild(item);
                     });
+                } else if (pack.t === "MESSAGE_CREATE") {
+                    const message = pack.d.message;
+                    if (activeChannel && message.channel_id === activeChannel.split("@")[0]) {
+                        addMessage(`${message.author_id}: ${message.content}`);
+                    }
+                    if (message.content.startsWith('!ping')) {
+                        fetch(`${instance}/channel/${message.channel_id}/messages`, {
+                            method: "POST",
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': token
+                            },
+                            body: JSON.stringify({ content: "Pong!" })
+                        });
+                    }
                 }
-            }
-        });
+            });
+        }
 
         function selectGuild(guild) {
             channelsBox.innerHTML = '';
@@ -180,10 +247,6 @@
                 e.preventDefault(); // Prevents new line
                 sendMessageBtn.click();
             }
-        });
-
-        ws.addEventListener("error", e => {
-            console.error(e);
         });
     </script>
 </body>
