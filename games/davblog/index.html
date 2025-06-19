@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Decentralize microblog with WebDAV</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+    <style>
+        body {
+    font-family: 'Arial', sans-serif;
+    background-color: #f9f9f9;
+    color: #333;
+    margin: 0;
+    padding: 20px;
+}
+
+h1 {
+    text-align: center;
+    color: #2c3e50;
+    margin-bottom: 20px;
+}
+
+textarea {
+    width: 100%;
+    max-width: 600px;
+    padding: 10px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    resize: none; /* Запретить изменение размера */
+    font-size: 16px;
+    margin-bottom: 15px;
+}
+
+input[type="text"],
+input[type="password"] {
+    width: 100%;
+    max-width: 600px;
+    padding: 10px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    font-size: 16px;
+    margin-bottom: 15px;
+}
+
+button {
+    background-color: #3498db;
+    color: white;
+    padding: 10px 15px;
+    border: none;
+    border-radius: 5px;
+    font-size: 16px;
+    cursor: pointer;
+    transition: background-color 0.3s;
+}
+
+button:hover {
+    background-color: #2980b9;
+}
+
+#posts {
+    margin-top: 30px;
+}
+
+.post {
+    background-color: #fff;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    padding: 15px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+}
+
+.post p {
+    line-height: 1.6;
+}
+
+.post small {
+    display: block;
+    margin-top: 10px;
+    color: #777;
+}
+</style>
+</head>
+<body>
+    <h1>Decentralize microblog with WebDAV</h1>
+    <textarea id="postInput" rows="4" cols="50" placeholder="What are you thinking?"></textarea><br>
+    <input type="text" id="webdavUrl" placeholder="WebDAV Url"><br>
+    <input type="text" id="webdavUsername" placeholder="Login"><br>
+    <input type="password" id="webdavPassword" placeholder="Password"><br>
+    <button id="submitPost">Отправить</button>
+
+    <div id="posts"></div>
+
+    <script>
+        const postsContainer = document.getElementById('posts');
+        const postInput = document.getElementById('postInput');
+        const webdavUrlInput = document.getElementById('webdavUrl');
+        const webdavUsernameInput = document.getElementById('webdavUsername');
+        const webdavPasswordInput = document.getElementById('webdavPassword');
+        let posts = [];
+        postInput.addEventListener('input', () => {
+    localStorage.setItem('draftPost', postInput.value);
+        });
+        window.onload = () => {
+            const storedUrl = localStorage.getItem('webdavUrl');
+            const storedUsername = localStorage.getItem('webdavUsername');
+            const storedPassword = localStorage.getItem('webdavPassword');
+
+            if (storedUrl) webdavUrlInput.value = storedUrl;
+            if (storedUsername) webdavUsernameInput.value = storedUsername;
+            if (storedPassword) webdavPasswordInput.value = storedPassword;
+            const draftPost = localStorage.getItem('draftPost');
+    if (draftPost) {
+        postInput.value = draftPost;
+    }
+            loadPosts();
+        };
+
+        async function loadPosts() {
+    const webdavUrl = webdavUrlInput.value;
+    if (!webdavUrl) {
+        return;
+    }
+
+    const response = await fetch(`${webdavUrl}/posts.json`, {
+        method: 'GET',
+        headers: {
+            'Authorization': 'Basic ' + btoa(`${webdavUsernameInput.value}:${webdavPasswordInput.value}`)
+        }
+    });
+
+    if (response.ok) {
+        try {
+            const posts = await response.json();
+            displayPosts(posts.items);
+        } catch (error) {
+            console.error('JSON parsing error:', error);
+        }
+    } else {
+        console.error('Error loading posts:', response.status, response.statusText);
+        const errorText = await response.text();
+        console.error('Server respond:', errorText);
+    }
+}
+
+function displayPosts(posts) {
+    const postsContainer = document.getElementById('posts');
+    postsContainer.innerHTML = '';
+
+    if (!Array.isArray(posts)) {
+        console.error('Expected array but got:', posts);
+        return;
+    }
+    posts.forEach(post => {
+        const postDiv = document.createElement('div');
+        postDiv.className = 'post';
+        postDiv.id = post.id;
+        postDiv.innerHTML = `
+            <p>${post.content_text}</p>
+            <small>Published: ${new Date(post.date_published).toLocaleString()}</small>
+            <button class="editPost" data-id="${post.id}" onclick="editPost('${post.id}')" title="Edit">
+                <i class="fas fa-edit"></i>
+            </button>
+            <button class="deletePost" data-id="${post.id}" onclick="deletePost('${post.id}')" title="Delete">
+                <i class="fas fa-trash-alt"></i>
+            </button>
+        `;
+        postsContainer.appendChild(postDiv);
+    });
+}
+async function editPost(postId) {
+  
+const webdavUrl = webdavUrlInput.value;
+    const response = await fetch(`${webdavUrl}/posts.json`, {
+        method: 'GET',
+        headers: {
+            'Authorization': 'Basic ' + btoa(`${webdavUsernameInput.value}:${webdavPasswordInput.value}`)
+        }
+    });
+
+    let posts = [];
+    if (response.ok) {
+        const jsonData = await response.json();
+        posts = jsonData.items || [];
+    } else {
+        alert('Error loading posts: ' + response.statusText);
+        return;
+    }
+  
+    const postToEdit = posts.find(post => post.id === postId);
+    if (postToEdit) {
+        postInput.value = postToEdit.content_text;
+        // Сохраняем ID поста, который редактируем
+        postInput.dataset.editingId = postId;
+    }
+}
+async function deletePost(postId) {
+    const webdavUrl = webdavUrlInput.value;
+    const response = await fetch(`${webdavUrl}/posts.json`, {
+        method: 'GET',
+        headers: {
+            'Authorization': 'Basic ' + btoa(`${webdavUsernameInput.value}:${webdavPasswordInput.value}`)
+        }
+    });
+
+    let posts = [];
+    if (response.ok) {
+        const jsonData = await response.json();
+        posts = jsonData.items || [];
+    } else {
+        alert('Error loading posts: ' + response.statusText);
+        return;
+    }
+
+    // Фильтруем посты, исключая удаляемый
+    posts = posts.filter(post => post.id !== postId);
+
+    const jsonFeed = {
+        version: "https://jsonfeed.org/version/1",
+        title: "Мой Микроблог",
+        home_page_url: "https://example.com",
+        feed_url: `${webdavUrl}/posts.json`,
+        items: posts
+    };
+
+    const uploadResponse = await fetch(`${webdavUrl}/posts.json`, {
+        method: 'PUT',
+        headers: {
+            'Authorization': 'Basic ' + btoa(`${webdavUsernameInput.value}:${webdavPasswordInput.value}`),
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(jsonFeed)
+    });
+
+    if (uploadResponse.ok) {
+        displayPosts(posts); // Обновляем список постов
+    } else {
+        alert('Error deleting post: ' + uploadResponse.statusText);
+    }
+}
+ 
+document.getElementById('submitPost').addEventListener('click', async () => {
+    const postContent = postInput.value;
+    const webdavUrl = webdavUrlInput.value;
+
+    if (!postContent || !webdavUrl) {
+        alert('Please fill all inputs');
+        return;
+    }
+
+    localStorage.setItem('webdavUrl', webdavUrl);
+    localStorage.setItem('webdavUsername', webdavUsernameInput.value);
+    localStorage.setItem('webdavPassword', webdavPasswordInput.value);
+
+    const response = await fetch(`${webdavUrl}/posts.json`, {
+        method: 'GET',
+        headers: {
+            'Authorization': 'Basic ' + btoa(`${webdavUsernameInput.value}:${webdavPasswordInput.value}`)
+        }
+    });
+
+    let posts = [];
+    if (response.ok) {
+        const jsonData = await response.json();
+        posts = jsonData.items || [];
+    } else if (response.status === 404) {
+        posts = [];
+    } else {
+        alert('Error loading posts: ' + response.statusText);
+        return;
+    }
+    
+const editingId = postInput.dataset.editingId;
+    
+if (editingId) {
+        // Находим индекс поста, который нужно обновить
+        const postIndex = posts.findIndex(post => post.id === editingId);
+        if (postIndex !== -1) {
+            posts[postIndex].content_text = postContent; // Обновляем содержимое поста
+            //posts[postIndex].date_published = new Date().toISOString(); // Обновляем дату публикации
+        }
+        delete postInput.dataset.editingId; // Удаляем ID редактируемого поста
+    } else {
+        // Если это новый пост, создаем его
+        const newPost = {
+            id: `https://example.com/posts/${posts.length + 1}`, // Уникальный идентификатор
+            content_text: postContent,
+            date_published: new Date().toISOString()
+        };
+        posts.push(newPost);
+    }
+    
+    posts = posts.sort((a, b) => new Date(b.date_published) - new Date(a.date_published));
+    const jsonFeed = {
+        version: "https://jsonfeed.org/version/1",
+        title: "Мой Микроблог",
+        home_page_url: "https://example.com",
+        feed_url: `${webdavUrl}/posts.json`,
+        items: posts
+    };
+    const uploadResponse = await fetch(`${webdavUrl}/posts.json`, {
+        method: 'PUT',
+        headers: {
+            'Authorization': 'Basic ' + btoa(`${webdavUsernameInput.value}:${webdavPasswordInput.value}`),
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(jsonFeed)
+    });
+
+    if (uploadResponse.ok) {
+        const indexHtml = generateIndexHtml(posts);
+        
+        // Загрузка index.html на WebDAV
+        const htmlUploadResponse = await fetch(`${webdavUrl}/index.html`, {
+            method: 'PUT',
+            headers: {
+                'Authorization': 'Basic ' + btoa(`${webdavUsernameInput.value}:${webdavPasswordInput.value}`),
+                'Content-Type': 'text/html'
+            },
+            body: indexHtml
+        });
+
+        if (htmlUploadResponse.ok) {
+            postInput.value = '';
+            displayPosts(posts);
+        } else {
+            alert('Error loading index.html: ' + htmlUploadResponse.statusText);
+        }
+    } else {
+        alert('Error uploading post: ' + uploadResponse.statusText);
+    }
+});
+function generateIndexHtml(posts) {
+    const formatDate = (date) => new Date(date).toLocaleString();
+
+    const escapeHtml = (unsafe) => {
+        return unsafe
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    };
+
+    const postHtml = posts.map(post => `
+        <article class="post" id="${post.id}">
+            <p>${escapeHtml(post.content_text)}</p>
+            <small>Published: ${formatDate(post.date_published)}</small>
+        </article>
+    `).join('');
+
+    return `
+    <!DOCTYPE html>
+    <html lang="ru">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Microblog</title>
+        <link rel="stylesheet" href="styles.css"> <!-- Внешний CSS файл -->
+    </head>
+    <body>
+        <h1>Microblog</h1>
+        <div id="posts">${postHtml}</div>
+    </body>
+    </html>`;
+}
+
+    </script>
+</body>
+</html>
+
+<!--
+TODO:
+Tags
+Media uploading
+Searching
+Downloading posts.json from admin panel
+Markdown
+Dark theme
+-->
