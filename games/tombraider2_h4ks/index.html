@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Tomb Raider II Inspired Web Game</title>
+<style>
+  /* styles.css */
+
+  body {
+    margin: 0;
+    overflow: hidden;
+    background-color: #000;
+    font-family: sans-serif;
+  }
+
+  canvas {
+    display: block;
+    background-color: #222;
+  }
+
+  #ui {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    color: #fff;
+    font-family: sans-serif;
+    font-size: 14px;
+    z-index: 10;
+  }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas" width="800" height="600"></canvas>
+<div id="ui">
+  <div>Health: <span id="healthDisplay">100</span></div>
+  <div>Ammo: <span id="ammoDisplay">10</span></div>
+</div>
+<script>
+/* main.js */
+
+// --- Setup ---
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+const uiHealth = document.getElementById('healthDisplay');
+const uiAmmo = document.getElementById('ammoDisplay');
+
+const keys = {};
+
+window.addEventListener('keydown', e => {
+  keys[e.key.toLowerCase()] = true;
+});
+window.addEventListener('keyup', e => {
+  keys[e.key.toLowerCase()] = false;
+});
+
+// --- Game Entities ---
+
+class Player {
+  constructor() {
+    this.width = 40;
+    this.height = 50;
+    this.x = 100;
+    this.y = 0;
+    this.velX = 0;
+    this.velY = 0;
+    this.speed = 2.5;
+    this.jumpStrength = 6;
+    this.onGround = false;
+    this.health = 100;
+    this.ammo = 10;
+    this.facingRight = true;
+    this.isClimbing = false;
+  }
+
+  update() {
+    // Horizontal movement
+    if (keys['arrowleft'] || keys['a']) {
+      this.velX = -this.speed;
+      this.facingRight = false;
+    } else if (keys['arrowright'] || keys['d']) {
+      this.velX = this.speed;
+      this.facingRight = true;
+    } else {
+      this.velX = 0;
+    }
+
+    // Jumping
+    if ((keys[' '] || keys['space']) || (keys['w'] || keys['arrowup'])) {
+      if (this.onGround && !this.isClimbing) {
+        this.velY = -this.jumpStrength;
+        this.onGround = false;
+      }
+    }
+
+    // Climbing logic (simplified)
+    if (this.isClimbing) {
+      this.velY = 0;
+      if (keys['w'] || keys['arrowup']) {
+        this.velY = -this.speed;
+      } else if (keys['s'] || keys['arrowdown']) {
+        this.velY = this.speed;
+      }
+    } else {
+      // Gravity
+      this.velY += 0.25; // gravity
+    }
+
+    // Shooting
+    if (keys['control']) {
+      this.shoot();
+    }
+
+    // Interaction
+    if (keys['e'] || keys['enter']) {
+      // could implement interactions
+    }
+
+    // Update position
+    this.x += this.velX;
+    this.y += this.velY;
+
+    // Boundary checks
+    if (this.x < 0) this.x = 0;
+    if (this.x + this.width > level.width) this.x = level.width - this.width;
+    if (this.y + this.height > level.height) {
+      this.y = level.height - this.height;
+      this.velY = 0;
+      this.onGround = true;
+    }
+
+    // Collision
+    this.checkCollisions();
+
+    // Update UI
+    uiHealth.textContent = this.health;
+    uiAmmo.textContent = this.ammo;
+  }
+
+  checkCollisions() {
+    // Basic collision with environment tiles
+    const footX = Math.floor((this.x + this.width/2) / level.tileSize);
+    const footY = Math.floor((this.y + this.height) / level.tileSize);
+    if (level.isSolidTile(footX, footY)) {
+      this.y = (footY) * level.tileSize - this.height;
+      this.velY = 0;
+      this.onGround = true;
+    } else {
+      this.onGround = false;
+    }
+
+    // Check interaction with climbable tiles
+    const tileX = Math.floor((this.x + this.width/2) / level.tileSize);
+    const tileY = Math.floor((this.y + this.height/2) / level.tileSize);
+    if (level.isClimbableTile(tileX, tileY)) {
+      this.isClimbing = true;
+    } else {
+      this.isClimbing = false;
+    }
+  }
+
+  shoot() {
+    if (this.ammo > 0 && !this.shootingCooldown) {
+      // Fire projectile
+      projectiles.push(new Projectile(this.x + this.width/2, this.y + this.height/2, this.facingRight));
+      this.ammo--;
+      this.shootingCooldown = 20; // frames
+    }
+    if (this.shootingCooldown > 0) this.shootingCooldown--;
+  }
+
+  draw() {
+    ctx.fillStyle = 'brown';
+    ctx.fillRect(this.x - camera.x, this.y - camera.y, this.width, this.height);
+    // Simple representation; could be replaced with sprite
+  }
+}
+
+class Projectile {
+  constructor(x, y, facingRight) {
+    this.x = x;
+    this.y = y;
+    this.speed = 5;
+    this.facingRight = facingRight;
+    this.width = 10;
+    this.height = 4;
+  }
+
+  update() {
+    this.x += this.facingRight ? this.speed : -this.speed;
+    // Remove if out of bounds
+    if (this.x < 0 || this.x > level.width) {
+      this.destroyed = true;
+    }
+    // Check collision with enemies
+    for (let enemy of enemies) {
+      if (this.collidesWith(enemy)) {
+        enemy.takeDamage(25);
+        this.destroyed = true;
+        break;
+      }
+    }
+  }
+
+  collidesWith(entity) {
+    return (
+      this.x < entity.x + entity.width &&
+      this.x + this.width > entity.x &&
+      this.y < entity.y + entity.height &&
+      this.y + this.height > entity.y
+    );
+  }
+
+  draw() {
+    ctx.fillStyle = 'yellow';
+    ctx.fillRect(this.x - camera.x, this.y - camera.y, this.width, this.height);
+  }
+}
+
+class Enemy {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.width = 40;
+    this.height = 50;
+    this.health = 50;
+    this.patrolRange = [x - 100, x + 100];
+    this.patrolDirection = 1;
+    this.speed = 1;
+  }
+
+  update() {
+    // Patrol
+    this.x += this.speed * this.patrolDirection;
+    if (this.x < this.patrolRange[0] || this.x > this.patrolRange[1]) {
+      this.patrolDirection *= -1;
+    }
+
+    // Check collision with player bullets
+    if (checkCollision(this, player)) {
+      this.takeDamage(10);
+    }
+  }
+
+  takeDamage(amount) {
+    this.health -= amount;
+    if (this.health <= 0) {
+      this.dead = true;
+    }
+  }
+
+  draw() {
+    ctx.fillStyle = 'red';
+    ctx.fillRect(this.x - camera.x, this.y - camera.y, this.width, this.height);
+  }
+}
+
+const player = new Player();
+const projectiles = [];
+const enemies = [
+  new Enemy(400, 550),
+  new Enemy(700, 550),
+];
+
+// Level
+const level = {
+  width: 2000,
+  height: 1200,
+  tiles: [], // Will generate simple tiles
+  tileSize: 50,
+
+  isSolidTile: function(tx, ty) {
+    if (tx < 0 || ty < 0 || tx >= Math.floor(this.width/this.tileSize) || ty >= Math.floor(this.height/this.tileSize)) return false;
+    const index = ty * this.cols + tx;
+    return this.tiles[index] === 1; // 1 represents solid
+  },
+
+  isClimbableTile: function(tx, ty) {
+    // For simplicity, no climbable in this demo
+    return false;
+  },
+
+  generate: function() {
+    this.cols = Math.floor(this.width / this.tileSize);
+    const rows = Math.floor(this.height / this.tileSize);
+    for (let y=0; y<rows; y++) {
+      for (let x=0; x<this.cols; x++) {
+        if (y === Math.floor(this.height/this.tileSize)-1 || (x===10 && y>8 && y<12)) {
+          this.tiles.push(1); // ground or platform
+        } else {
+          this.tiles.push(0);
+        }
+      }
+    }
+  },
+
+  draw: function() {
+    ctx.fillStyle = '#555';
+    for (let y=0; y<this.height/this.tileSize; y++) {
+      for (let x=0; x<this.cols; x++) {
+        if (this.tiles[y*this.cols + x] === 1) {
+          ctx.fillRect(x*this.tileSize - camera.x, y*this.tileSize - camera.y, this.tileSize, this.tileSize);
+        }
+      }
+    }
+  }
+};
+
+level.generate();
+
+// Camera
+const camera = {
+  x: 0,
+  y: 0,
+  width: canvas.width,
+  height: canvas.height,
+  update: function() {
+    // Center camera on player
+    this.x = player.x + player.width/2 - this.width/2;
+    this.y = player.y + player.height/2 - this.height/2;
+
+    // clamp
+    if (this.x < 0) this.x=0;
+    if (this.y < 0) this.y=0;
+    if (this.x + this.width > level.width) this.x = level.width - this.width;
+    if (this.y + this.height > level.height) this.y = level.height - this.height;
+  }
+};
+
+// Check collision helper
+function checkCollision(a, b) {
+  return (
+    a.x < b.x + b.width &&
+    a.x + a.width > b.x &&
+    a.y < b.y + b.height &&
+    a.y + a.height > b.y
+  );
+}
+
+// --- Main Loop ---
+function gameLoop() {
+  update();
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+function update() {
+  player.update();
+
+  for (let proj of projectiles) {
+    proj.update();
+  }
+  // Remove destroyed projectiles
+  for (let i=projectiles.length-1; i>=0; i--) {
+    if (projectiles[i].destroyed) {
+      projectiles.splice(i,1);
+    }
+  }
+
+  for (let enemy of enemies) {
+    if (!enemy.dead) enemy.update();
+  }
+
+  // Remove dead enemies
+  for (let i=enemies.length-1; i>=0; i--) {
+    if (enemies[i].dead) {
+      enemies.splice(i,1);
+    }
+  }
+
+  camera.update();
+}
+
+function draw() {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  level.draw();
+
+  for (let enemy of enemies) {
+    enemy.draw();
+  }
+  for (let proj of projectiles) {
+    proj.draw();
+  }
+  player.draw();
+}
+
+// --- Start ---
+gameLoop();
+
+</script>
+</body>
+</html>
