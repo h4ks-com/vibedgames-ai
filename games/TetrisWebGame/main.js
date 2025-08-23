@@ -20,7 +20,7 @@ let linesCleared = 0;
 let level = 1;
 let dropSpeed = 1000; // initial speed in ms
 
-// Tetromino shapes
+// Tetromino shapes and rotations
 const shapes = {
   I: [
     [[1, 1, 1, 1]],
@@ -146,7 +146,6 @@ function rotatePiece(piece) {
   const nextIndex = (piece.rotationIndex + 1) % rotations.length;
   const nextShape = rotations[nextIndex];
   const oldShape = piece.shape;
-  const oldRotationIndex = piece.rotationIndex;
   // Temporarily set shape to next
   piece.shape = nextShape;
   if (canMove(piece, 0, 0)) {
