@@ -5,6 +5,10 @@ const linesSpan = document.getElementById('lines');
 const levelSpan = document.getElementById('level');
 const startBtn = document.getElementById('startBtn');
 
+// Add audio element for Tetris theme
+const tetrisThemeAudio = new Audio('https://www.myinstants.com/media/sounds/tetris_theme_a.mp3');
+tetrisThemeAudio.loop = false; // Play once per start
+
 const COLS = 10;
 const ROWS = 20;
 const BLOCK_SIZE = 30;
@@ -259,12 +263,15 @@ function startGame() {
   spawnNewPiece();
   draw();
   gameInterval = setInterval(gameTick, dropSpeed);
+  tetrisThemeAudio.currentTime = 0;
+  tetrisThemeAudio.play();
 }
 
 function stopGame() {
   clearInterval(gameInterval);
 }
 
+// Attach event listener for start button
 document.getElementById('startBtn').addEventListener('click', () => {
   if (gameInterval) clearInterval(gameInterval);
   score = 0;
@@ -278,6 +285,8 @@ document.getElementById('startBtn').addEventListener('click', () => {
   spawnNewPiece();
   draw();
   gameInterval = setInterval(gameTick, dropSpeed);
+  tetrisThemeAudio.currentTime = 0;
+  tetrisThemeAudio.play();
 });
 
 document.addEventListener('keydown', (e) => {
@@ -305,7 +314,7 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// initialize game state
+// Initialize game state
 createGrid();
 spawnNewPiece();
 draw();
