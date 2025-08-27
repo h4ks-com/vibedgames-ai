@@ -24,6 +24,34 @@ const educationalTips = [
   'Humor: Even astronauts have to pee, but their tanks are fancier!'
 ];
 
+// Variations of waveform signals to combine for water level simulation
+const waveformVariations = [
+  (t) => Math.sin(t),
+  (t) => Math.cos(t),
+  (t) => Math.sin(t * 0.5),
+  (t) => Math.cos(t * 0.5),
+  (t) => Math.sin(t) + 0.5 * Math.cos(t),
+  (t) => Math.sin(t) * Math.cos(t),
+  (t) => (Math.sin(t) + Math.cos(t)) / 2,
+  (t) => Math.sin(t * 2),
+  (t) => Math.cos(t * 2),
+  (t) => Math.sin(t) + Math.cos(t)
+];
+
+// Generate combined waveform variations by mixing previous waveform with new ones
+const combinedWaveforms = [];
+for (let i = 0; i < waveformVariations.length; i++) {
+  for (let j = 0; j < waveformVariations.length; j++) {
+    combinedWaveforms.push({
+      name: `Waveform ${i + 1}&${j + 1}`,
+      func: (t) => (waveformVariations[i](t) + waveformVariations[j](t)) / 2
+}
+);
+  }
+}
+
+let currentWaveformIndex = 0;
+
 function updateDisplay() {
   levelDisplay.textContent = level.toFixed(1);
   capacityDisplay.textContent = capacity;
@@ -56,6 +84,7 @@ function resetSystem() {
   leak = false;
   overflow = false;
   systemUpgradeLevel = 1;
+  currentWaveformIndex = 0;
   updateDisplay();
   clearAlert();
   statusDisplay.textContent = "Normal";
@@ -75,9 +104,16 @@ function repairLeak() {
 function updateSystem() {
   if (miniGameActive) return; // Pause main update during mini-game
   const flow = parseInt(flowRange.value);
-  let delta = (flow - Math.random() * 10);
+  const t = Date.now() / 1000;
+  // Use current waveform function
+  const waveform = combinedWaveforms[currentWaveformIndex];
+  const waveValue = waveform.func(t);
+  // Calculate delta based on waveform
+  let delta = waveValue * 0.5;
+  // Adjust delta based on flow input
+  delta += (flow - 50) / 100; // slight bias towards current flow
   // Leak effects
-  if (leak) delta -= 5 + systemUpgradeLevel * 0.5;
+  if (leak) delta -= 0.05 * systemUpgradeLevel;
   // Random leak detection trigger
   if (Math.random() < 0.01 && !leak) {
     leak = true;
@@ -155,6 +191,20 @@ startBtn.onclick = startSystem;
 pauseBtn.onclick = pauseSystem;
 resetBtn.onclick = resetSystem;
 repairBtn.onclick = repairLeak;
+
+// Initialize waveform index
+function changeWaveform() {
+  currentWaveformIndex = (currentWaveformIndex + 1) % combinedWaveforms.length;
+  showAlert('Waveform changed to ' + combinedWaveforms[currentWaveformIndex].name);
+  setTimeout(() => { clearAlert(); }, 2000);
+}
+
+// Add button to change waveform variation
+const controlsDiv = document.querySelector('.controls');
+const changeWaveformBtn = document.createElement('button');
+changeWaveformBtn.textContent = 'Change Waveform';
+changeWaveformBtn.onclick = changeWaveform;
+controlsDiv.appendChild(changeWaveformBtn);
 
 // Initialization
 updateDisplay();
