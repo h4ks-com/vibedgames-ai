@@ -96,12 +96,14 @@ function spawnObject() {
 function checkCollision(obj) {
     const basketCenterX = basket.x + basket.width / 2;
     const basketCenterY = basket.y + basket.height / 2;
+    // Approximate collision detection
     if (obj.shape === 'circle') {
         const dx = obj.x - (basketCenterX);
         const dy = obj.y - (basketCenterY);
         const distance = Math.sqrt(dx * dx + dy * dy);
         return distance < obj.size / 2 + Math.min(basket.width, basket.height) / 2;
     } else {
+        // For rect and triangle, approximate with bounding box
         const left = basket.x;
         const right = basket.x + basket.width;
         const top = basket.y;
@@ -155,7 +157,7 @@ function gameLoop(timestamp) {
     for (let i = objects.length - 1; i >= 0; i--) {
         let obj = objects[i];
         obj.update(deltaTime);
-        if (checkCollision(obj)) {
+        if (checkCollision(obj)){
             score += 10;
             objects.splice(i, 1);
         } else if (obj.y > canvas.height + obj.size) {
