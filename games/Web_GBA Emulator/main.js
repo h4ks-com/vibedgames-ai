@@ -1,4 +1,6 @@
 // js/app.js
+
+// =================== DOM Elements ===================
 const powerBtn = document.getElementById('powerBtn');
 const resetBtn = document.getElementById('resetBtn');
 const loadROMBtn = document.getElementById('loadRomBtn');
@@ -21,76 +23,124 @@ const controls = {
   start: document.getElementById('buttonStart'),
   select: document.getElementById('buttonSelect')
 };
-let emulator = null; // Placeholder for emulator core instance
+
+// =================== Emulator State Variables ===================
+let emulator = null; // Placeholder for the emulator core instance
 let isRunning = false;
 let lastFrameTime = 0;
 let fps = 0;
 const fpsHistory = [];
-// Initialize event listeners
-powerBtn.onclick = () => {
+
+// =================== Power Toggle ===================
+const powerToggleBtn = document.getElementById('powerToggle');
+const powerIndicator = document.getElementById('powerIndicator');
+
+powerToggleBtn.onclick = () => {
+  togglePower();
+};
+
+function togglePower() {
   if (!emulator) {
-    log('No ROM loaded');
+    updateStatus('No ROM loaded');
     return;
   }
-  if (!isRunning) {
-    startEmulator();
+  // Switch power state
+  if (emulator.isPowered) {
+    emulator.isPowered = false;
+    isRunning = false;
+    updateStatus('Powered OFF');
   } else {
-    togglePower();
+    emulator.isPowered = true;
+    startEmulator();
+    updateStatus('Powered ON & Running');
+  }
+  updatePowerIndicator();
+}
+
+function updatePowerIndicator() {
+  if (emulator && emulator.isPowered) {
+    powerIndicator.classList.add('on');
+  } else {
+    powerIndicator.classList.remove('on');
+  }
+}
+
+// =================== Load ROM ===================
+const loadRomBtn = document.getElementById('loadRomBtn');
+const romFileInput = document.getElementById('romFileInput');
+loadRomBtn.onclick = () => {
+  romFileInput.click();
+};
+
+romFileInput.onchange = () => {
+  const file = romFileInput.files[0];
+  if (file) {
+    loadROM(file);
   }
 };
-resetBtn.onclick = () => {
-  if (emulator) resetEmulator();
-};
-loadROMBtn.onclick = () => {
-  romInput.click();
-};
-romInput.onchange = () => {
-  const file = romInput.files[0];
-  if (file) loadROM(file);
-};
-// Load ROM
+
 function loadROM(file) {
   const reader = new FileReader();
   reader.onload = () => {
     const arrayBuffer = reader.result;
     initializeEmulator(arrayBuffer);
-    log(`Loaded ROM: ${file.name}`);
+    updateStatus(`Loaded ROM: ${file.name}`);
   };
   reader.readAsArrayBuffer(file);
 }
-// Initialize Emulator
+
+// =================== Emulator Initialization ===================
 function initializeEmulator(romBuffer) {
   // Placeholder: instantiate your emulator core with ROM data
-  // For demo, replace with real emulator initialization
-  emulator = new EmulatorCore(romBuffer);
-  // Attach input handling
-  setupInputListeners();
+  emulator = {
+    isPowered: true,
+    romData: new Uint8Array(romBuffer),
+    reset: function() { /* Reset emulator core state here */ },
+    // Additional core initialization
+  };
+  // Start the emulation
   startEmulator();
 }
-// Start emulation
+
+// =================== Start Emulator Loop ===================
 function startEmulator() {
+  if (!emulator || !emulator.isPowered) return;
   isRunning = true;
-  updateStatus('Running');
+  updateStatus('Emulation Started');
   requestAnimationFrame(emulationLoop);
 }
-// Power toggle
-function togglePower() {
-  isRunning = !isRunning;
-  updateStatus(isRunning ? 'Running' : 'Stopped');
-}
-// Reset emulator
+
+// =================== Power Control ===================
+// (handled with togglePower above)
+
+// =================== Reset Functionality ===================
+const resetBtn = document.getElementById('resetBtn');
+resetBtn.onclick = () => {
+  resetEmulator();
+};
+
 function resetEmulator() {
-  if (emulator) emulator.reset();
-  log('Emulator reset');
+  if (emulator) {
+    emulator.reset();
+    updateStatus('Emulator Reset');
+  } else {
+    updateStatus('No ROM loaded');
+  }
 }
-// Main emulation loop
+
+// =================== Main Emulation Loop ===================
 function emulationLoop(timestamp) {
-  if (!isRunning || !emulator) return;
-  // Run emulator cycle
-  emulator.step();
-  // Render frame
-  const frameData = emulator.getFrame(); // returns ImageData or similar
-  ctx.putImageData(frameData, 0, 0);
+  if (!isRunning || !emulator || !emulator.isPowered) {
+    requestAnimationFrame(emulationLoop);
+    return;
+  }
+  // Placeholder: perform CPU, GPU, Audio updates here
+  ctx.fillStyle = '#222';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Placeholder for rendering emulator frame - replace with real rendering
+  // e.g., draw emulator framebuffer to canvas
+
   // Calculate FPS
   fpsHistory.push(timestamp);
   while (fpsHistory.length > 60) fpsHistory.shift();
@@ -101,112 +151,86 @@ function emulationLoop(timestamp) {
   }
   requestAnimationFrame(emulationLoop);
 }
-// Utility functions
-function log(msg) {
-  console.log(msg);
+
+// =================== Input Handling ===================
+// Map emulator input state (e.g., keypad register) here
+const inputState = {
+  up: false,
+  down: false,
+  left: false,
+  right: false,
+  a: false,
+  b: false,
+  l: false,
+  r: false,
+  start: false,
+  select: false
+};
+
+// Helper function to set input state
+function setInput(button, pressed) {
+  inputState[button] = pressed;
+  // Send input state to emulator core here
+  // e.g., emulator.setButtonState(button, pressed);
 }
-function updateStatus(status) {
-  statusText.textContent = `Status: ${status}`;
-}
-// Input handling setup
-function setupInputListeners() {
-  // Map hardware keys to emulator
-  window.addEventListener('keydown', handleKeyDown);
-  window.addEventListener('keyup', handleKeyUp);
-  // Setup control overlay buttons
-  for (const key in controls) {
-    controls[key].onmousedown = () => { emulator.setButton(key, true); };
-    controls[key].onmouseup = () => { emulator.setButton(key, false); };
-    controls[key].ontouchstart = () => { emulator.setButton(key, true); };
-    controls[key].ontouchend = () => { emulator.setButton(key, false); };
+
+// Add event listeners to control buttons
+Object.keys(controls).forEach(key => {
+  const btn = controls[key];
+  btn.onmousedown = () => setInput(key, true);
+  btn.onmouseup = () => setInput(key, false);
+  btn.ontouchstart = () => setInput(key, true);
+  btn.ontouchend = () => setInput(key, false);
+});
+
+// Optional: Keyboard fallback for testing
+window.addEventListener('keydown', (e) => {
+  switch (e.key) {
+    case 'ArrowUp': setInput('up', true); break;
+    case 'ArrowDown': setInput('down', true); break;
+    case 'ArrowLeft': setInput('left', true); break;
+    case 'ArrowRight': setInput('right', true); break;
+    case 'a': case 'A': setInput('a', true); break;
+    case 'b': case 'B': setInput('b', true); break;
+    case 'l': case 'L': setInput('l', true); break;
+    case 'r': case 'R': setInput('r', true); break;
+    case 'Enter': setInput('start', true); break;
+    case 'Shift': setInput('select', true); break;
   }
-}
-// Placeholder key code mapping
-function handleKeyDown(e) {
-  const keyMap = {
-    'ArrowUp': 'up',
-    'ArrowDown': 'down',
-    'ArrowLeft': 'left',
-    'ArrowRight': 'right',
-    'KeyZ': 'a', // Example mapping
-    'KeyX': 'b',
-    'KeyA': 'l',
-    'KeyS': 'r',
-    'Enter': 'start',
-    'ShiftLeft': 'select'
-  };
-  const button = keyMap[e.code];
-  if (button && emulator) {
-    emulator.setButton(button, true);
-    e.preventDefault();
+});
+window.addEventListener('keyup', (e) => {
+  switch (e.key) {
+    case 'ArrowUp': setInput('up', false); break;
+    case 'ArrowDown': setInput('down', false); break;
+    case 'ArrowLeft': setInput('left', false); break;
+    case 'ArrowRight': setInput('right', false); break;
+    case 'a': case 'A': setInput('a', false); break;
+    case 'b': case 'B': setInput('b', false); break;
+    case 'l': case 'L': setInput('l', false); break;
+    case 'r': case 'R': setInput('r', false); break;
+    case 'Enter': setInput('start', false); break;
+    case 'Shift': setInput('select', false); break;
   }
-}
-function handleKeyUp(e) {
-  const keyMap = {
-    'ArrowUp': 'up',
-    'ArrowDown': 'down',
-    'ArrowLeft': 'left',
-    'ArrowRight': 'right',
-    'KeyZ': 'a',
-    'KeyX': 'b',
-    'KeyA': 'l',
-    'KeyS': 'r',
-    'Enter': 'start',
-    'ShiftLeft': 'select'
-  };
-  const button = keyMap[e.code];
-  if (button && emulator) {
-    emulator.setButton(button, false);
-    e.preventDefault();
-  }
-}
-// Screen scaling
+});
+
+// =================== Responsive display scaling ===================
 scaleSelect.onchange = () => {
-  const scale = parseInt(scaleSelect.value);
+  const scale = parseInt(scaleSelect.value, 10);
   ctx.canvas.style.transform = `scale(${scale})`;
 };
-// Volume control
+
+// =================== Volume control ===================
 volumeRange.oninput = () => {
   const volume = parseFloat(volumeRange.value);
   // Apply volume to emulator audio system
-  if (emulator) {
-    emulator.setVolume(volume);
-  }
-  log(`Volume set to ${volume}`);
+  // e.g., emulator.setVolume(volume);
+  updateStatus(`Volume: ${volume}`);
 };
-// Placeholder EmulatorCore class
-class EmulatorCore {
-  constructor(romBuffer) {
-    this.romData = romBuffer;
-    this.state = {};
-    // Initialize emulator core (CPU, GPU, Audio)
-  }
-  reset() {
-    // Reset internal CPU and PPU states
-  }
-  step() {
-    // Run one CPU cycle or frame
-  }
-  getFrame() {
-    // Return ImageData of current frame
-    // For demo, fill with static color
-    const imageData = ctx.createImageData(canvas.width, canvas.height);
-    for (let i = 0; i < imageData.data.length; i += 4) {
-      imageData.data[i] = 34;   // R
-      imageData.data[i + 1] = 34; // G
-      imageData.data[i + 2] = 34; // B
-      imageData.data[i + 3] = 255; // A
-    }
-    return imageData;
-  }
-  setButton(button, pressed) {
-    // Map button name to internal input state
-    // Example: this.inputs[button] = pressed;
-    // For debugging, you can log changes
-    // console.log(`Button ${button} set to ${pressed}`);
-  }
-  setVolume(volume) {
-    // Adjust audio volume
-  }
+
+// =================== Utility functions ===================
+function updateStatus(msg) {
+  statusText.textContent = `Status: ${msg}`;
 }
-// Additional features like save states, debugging hooks, and error handling can be added as needed.
+
+// Initialize power indicator
+updatePowerIndicator();
