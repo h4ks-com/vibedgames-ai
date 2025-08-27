@@ -1,99 +1,112 @@
-// Import Three.js
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.152.0/build/three.module.js';
-import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.152.0/examples/js/controls/OrbitControls.js';
+import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.152.0/examples/jsm/controls/OrbitControls.js';
 
-// Scene setup
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x87ceeb); // Sky color
+let scene, camera, renderer, controls, bird;
+let clock = new THREE.Clock();
 
-// Camera setup
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 3000);
-camera.position.set(0, 50, 150);
+function init() {
+  // Scene setup with fog for atmospheric depth
+  scene = new THREE.Scene();
+  scene.fog = new THREE.Fog(0xaabbbb, 10, 100);
 
-// Renderer setup
-const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('gameCanvas'), antialias: true });
-renderer.setSize(window.innerWidth, window.innerHeight);
+  // Camera setup with adjustable FOV and perspective
+  camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 200);
+  camera.position.set(0, 15, 30);
 
-// Controls for camera manipulation
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.dampingFactor = 0.05;
-controls.target.set(0,50,0);
+  // Renderer setup for WebGL with anti-aliasing for smoother visuals
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  document.body.appendChild(renderer.domElement);
 
-// Add ambient light
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-scene.add(ambientLight);
+  // Lighting system: ambient for general illumination and directional for shadows and highlights
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+  scene.add(ambientLight);
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+  directionalLight.position.set(50, 50, 25);
+  scene.add(directionalLight);
 
-// Add directional sun light
-const sunLight = new THREE.DirectionalLight(0xffffff, 0.8);
-sunLight.position.set(100, 200, 100);
-scene.add(sunLight);
+  // Procedural terrain with texture, using a repeating pattern for expansive landscape
+  const loader = new THREE.TextureLoader();
+  const texture = loader.load('https://images.unsplash.com/photo-1506744038136-46273834b3fb?ixlib=rb-4.0.1&auto=format&fit=crop&w=1600&q=80');
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(8, 8);
 
-// Generate dynamic landscape (terrain)
-const terrainSize = 2000;
-const terrainSegments = 256;
-const terrainGeometry = new THREE.PlaneBufferGeometry(terrainSize, terrainSize, terrainSegments, terrainSegments);
-const positionAttribute = terrainGeometry.attributes.position;
+  const terrainGeometry = new THREE.PlaneGeometry(100, 100, 50, 50);
+  const terrainMaterial = new THREE.MeshLambertMaterial({ map: texture });
+  const terrain = new THREE.Mesh(terrainGeometry, terrainMaterial);
+  terrain.rotation.x = -Math.PI / 2;
+  scene.add(terrain);
 
-// Displace vertices for terrain elevation
-for (let i = 0; i < positionAttribute.count; i++) {
-  let x = positionAttribute.getX(i);
-  let y = positionAttribute.getY(i);
-  // Use Perlin noise or sine functions for realistic terrain
-  const elevation = Math.sin(x * 0.1) + Math.cos(y * 0.1) + Math.random() * 0.5;
-  positionAttribute.setZ(i, elevation * 20);
-}
-terrainGeometry.computeVertexNormals();
+  // Bird model: simplified high-poly inspired sphere with potential for detailed feathers
+ const birdTextureLoader = new THREE.TextureLoader();
+  const birdTexture = birdTextureLoader.load('https://images.unsplash.com/photo-1549924231-f129b911e442?ixlib=rb-4.0.1&auto=format&fit=crop&w=800&q=80');
+  const birdGeometry = new THREE.SphereGeometry(0.5, 16, 16);
+  const birdMaterial = new THREE.MeshStandardMaterial({ map: birdTexture });
+  bird = new THREE.Mesh(birdGeometry, birdMaterial);
+  bird.position.set(0, 10, 0);
+  scene.add(bird);
 
-const terrainMaterial = new THREE.MeshLambertMaterial({ color: 0x228B22 });
-const terrainMesh = new THREE.Mesh(terrainGeometry, terrainMaterial);
-terrainMesh.rotation.x = -Math.PI / 2;
-scene.add(terrainMesh);
+  // Controls: orbit controls for camera, user can switch to custom controls for flight
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.05;
+  controls.target.copy(bird.position);
 
-// Create a flying bird (placeholder)
-const birdGeometry = new THREE.SphereGeometry(2, 16, 16);
-const birdMaterial = new THREE.MeshStandardMaterial({ color: 0xffd700 });
-const bird = new THREE.Mesh(birdGeometry, birdMaterial);
-bird.position.set(0, 50, 0);
-scene.add(bird);
-
-// Add simple scenic elements (trees/rocks)
-function createTree(x, y, z) {
-  const trunkGeom = new THREE.CylinderGeometry(0.5, 0.5, 4, 8);
-  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
-  const trunk = new THREE.Mesh(trunkGeom, trunkMat);
-  trunk.position.set(x, y + 2, z);
-  scene.add(trunk);
-
-  const leavesGeom = new THREE.SphereGeometry(2, 12, 12);
-  const leavesMat = new THREE.MeshStandardMaterial({ color: 0x006400 });
-  const leaves = new THREE.Mesh(leavesGeom, leavesMat);
-  leaves.position.set(x, y + 5, z);
-  scene.add(leaves);
+  window.addEventListener('resize', onWindowResize, false);
 }
 
-// Scatter some trees across landscape
-for (let i = 0; i < 50; i++) {
-  const x = (Math.random() - 0.5) * terrainSize;
-  const y = 0; // rough estimate for ground height
-  const z = (Math.random() - 0.5) * terrainSize;
-  createTree(x, y, z);
-}
-
-// Animate scene
-function animate() {
-  requestAnimationFrame(animate);
-  controls.update();
-  renderer.render(scene, camera);
-  // Optional: animate bird or add flying mechanics
-}
-
-// Handle window resize
-window.addEventListener('resize', () => {
+function onWindowResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
-});
+}
 
-// Start animation
+// Flight control parameters for natural bird flight mechanics
+const flightSpeed = 0.1;
+const rotationSpeed = 0.02;
+let keyStates = {};
+
+window.addEventListener('keydown', (event) => { keyStates[event.code] = true; });
+window.addEventListener('keyup', (event) => { keyStates[event.code] = false; });
+
+function handleInput() {
+  if (keyStates['KeyW']) {
+    // move forward with flight physics
+    bird.translateZ(-flightSpeed);
+  }
+  if (keyStates['KeyS']) {
+    // move backward
+    bird.translateZ(flightSpeed);
+  }
+  if (keyStates['KeyA']) {
+    // yaw left
+    bird.rotation.y += rotationSpeed;
+  }
+  if (keyStates['KeyD']) {
+    // yaw right
+    bird.rotation.y -= rotationSpeed;
+  }
+  if (keyStates['Space']) {
+    // ascend
+    bird.position.y += flightSpeed;
+  }
+  if (keyStates['ShiftLeft']) {
+    // descend
+    bird.position.y -= flightSpeed;
+  }
+  // Prevent bird from going underground or underwater
+  if (bird.position.y < 1) bird.position.y = 1;
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  handleInput();
+  controls.target.copy(bird.position);
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+init();
+
 animate();
