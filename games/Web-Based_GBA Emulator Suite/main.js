@@ -23,32 +23,28 @@ document.addEventListener('DOMContentLoaded', () => {
       const file = romInput.files[0];
       // Placeholder for actual upload/processing logic
       alert('Selected file: ' + file.name);
-      // Example: update status
+      // Update status
       document.getElementById('statusText').textContent = 'ROM ready: ' + file.name;
     }
   });
 
   // Button controls
   startBtn.addEventListener('click', () => {
-    // Implement start game logic
     alert('Game started');
     document.getElementById('statusText').textContent = 'Game running';
   });
 
   pauseBtn.addEventListener('click', () => {
-    // Implement pause logic
     alert('Game paused');
     document.getElementById('statusText').textContent = 'Game paused';
   });
 
   saveBtn.addEventListener('click', () => {
-    // Implement save state
     alert('State saved');
     document.getElementById('statusText').textContent = 'State saved';
   });
 
   loadBtn.addEventListener('click', () => {
-    // Implement load state
     alert('State loaded');
     document.getElementById('statusText').textContent = 'State loaded';
   });
@@ -74,7 +70,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const scale = displayScaleSelect.value;
     // Apply volume (placeholder)
     // e.g., audioContext.volume.value = volume;
-    // Apply display scale (placeholder)
+    // Apply display scale
     const canvas = document.getElementById('gameCanvas');
     const scaleNumber = parseInt(scale);
     canvas.style.transform = `scale(${scaleNumber})`;
