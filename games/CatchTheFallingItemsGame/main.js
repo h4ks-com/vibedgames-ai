@@ -131,20 +131,29 @@ function gameLoop(timestamp) {
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Draw clouds with reduced speed
+    // Draw clouds with shifted left
     ctx.fillStyle = 'white';
+    ctx.globalAlpha = 0.7;
     for (let i = 0; i < 5; i++) {
-        const cloudX = Math.random() * canvas.width;
+        // Maintain a persistent cloud offset for each cloud
+        if (!window.cloudOffsets) {
+            window.cloudOffsets = Array(5).fill(0);
+        }
+        // Shift each cloud by 1 or 2 pixels to the left, wrapping around
+        window.cloudOffsets[i] -= Math.random() < 0.5 ? 1 : 2;
+        if (window.cloudOffsets[i] < - (canvas.width + 100)) {
+            window.cloudOffsets[i] = 0;
+        }
+        const cloudX = (Math.random() * canvas.width) + window.cloudOffsets[i];
         const cloudY = Math.random() * canvas.height / 3;
         const cloudSize = 50 + Math.random() * 50;
-        ctx.globalAlpha = 0.7;
         ctx.beginPath();
         ctx.arc(cloudX, cloudY, cloudSize / 2, 0, Math.PI * 2);
         ctx.arc(cloudX + cloudSize / 2, cloudY, cloudSize / 2, 0, Math.PI * 2);
         ctx.arc(cloudX + cloudSize * 0.25, cloudY - cloudSize / 3, cloudSize / 2, 0, Math.PI * 2);
         ctx.fill();
-        ctx.globalAlpha = 1.0;
     }
+    ctx.globalAlpha = 1.0;
 
     // Draw basket
     ctx.fillStyle = 'saddleBrown';
