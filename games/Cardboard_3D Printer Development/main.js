@@ -12,6 +12,7 @@ startBtn.addEventListener('click', () => {
     return;
   }
   isPrinting = true;
+  startBtn.disabled = true;
   statusDiv.textContent = 'Initializing cardboard layer feeding...';
 
   // Simulate feeding layer
@@ -25,6 +26,7 @@ startBtn.addEventListener('click', () => {
         statusDiv.textContent = 'Layer completed, preparing next layer...';
         // Reset or proceed to next step as needed
         isPrinting = false;
+        startBtn.disabled = false;
       }, 3000); // Laser etch duration
     }, 2000); // Flattening duration
   }, 1000); // Feeding duration
@@ -46,5 +48,3 @@ function readSensorData() {
 function safetyCheck() {
   // Perform safety interlock checks
 }
-
-// Future implementation: communication with microcontrollers or hardware APIs for real control and feedback.
