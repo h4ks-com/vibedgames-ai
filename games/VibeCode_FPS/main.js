@@ -72,6 +72,7 @@ function gameLoop(timestamp) {
     requestAnimationFrame(gameLoop);
 }
 
+// Adjusted update function to slow down cloud movement for smoother visuals
 function update(delta) {
     // Player movement
     if (gameState.keys['w']) gameState.player.y -= 0.3 * delta;
@@ -96,8 +97,9 @@ function update(delta) {
         const dy = gameState.player.y - enemy.y;
         const dist = Math.hypot(dx, dy);
         if (dist > 1) {
-            enemy.x += (dx / dist) * 0.1 * delta;
-            enemy.y += (dy / dist) * 0.1 * delta;
+            // Reduced movement speed for smoother enemy approach
+            enemy.x += (dx / dist) * 0.05 * delta; // previously 0.1
+            enemy.y += (dy / dist) * 0.05 * delta;
         }
         // Check for collisions with bullets
         for (let j = gameState.bullets.length - 1; j >= 0; j--) {
