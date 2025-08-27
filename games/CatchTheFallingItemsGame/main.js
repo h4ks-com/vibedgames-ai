@@ -10,44 +10,32 @@ resizeCanvas();
 
 let gameRunning = false;
 let score = 0;
-let level = 1;
-let spawnInterval = 2000;
+let spawnInterval = 1500;
 let lastSpawnTime = 0;
 let objects = [];
 
-const basket = {
-    width: 120,
-    height: 60,
+const player = {
     x: 0,
     y: 0,
-    speed: 20,
-    draw: function() {
-        ctx.fillStyle = 'saddleBrown';
-        ctx.fillRect(this.x, this.y, this.width, this.height);
-        ctx.strokeStyle = 'darkred';
-        ctx.lineWidth = 4;
-        ctx.strokeRect(this.x, this.y, this.width, this.height);
-    }
+    radius: 20
 };
 
-function initBasket() {
-    basket.x = (canvas.width - basket.width) / 2;
-    basket.y = canvas.height - basket.height - 10;
+function initPlayer() {
+    player.x = canvas.width / 2;
+    player.y = canvas.height - 30;
 }
 
-window.addEventListener('resize', initBasket);
-
-canvas.addEventListener('mousemove', (e) => {
-    basket.x = e.clientX - basket.width / 2;
-    if (basket.x < 0) basket.x = 0;
-    if (basket.x + basket.width > canvas.width) basket.x = canvas.width - basket.width;
+window.addEventListener('mousemove', (e) => {
+    player.x = e.clientX;
+    if (player.x < player.radius) player.x = player.radius;
+    if (player.x > canvas.width - player.radius) player.x = canvas.width - player.radius;
 });
 
-canvas.addEventListener('touchmove', (e) => {
+window.addEventListener('touchmove', (e) => {
     if (e.touches.length > 0) {
-        basket.x = e.touches[0].clientX - basket.width / 2;
-        if (basket.x < 0) basket.x = 0;
-        if (basket.x + basket.width > canvas.width) basket.x = canvas.width - basket.width;
+        player.x = e.touches[0].clientX;
+        if (player.x < player.radius) player.x = player.radius;
+        if (player.x > canvas.width - player.radius) player.x = canvas.width - player.radius;
     }
 });
 
@@ -56,7 +44,6 @@ function FallingObject(x, y, speed) {
     this.y = y;
     this.size = 30;
     this.speed = speed;
-    this.caught = false;
 }
 
 FallingObject.prototype.update = function(deltaTime) {
@@ -66,7 +53,7 @@ FallingObject.prototype.update = function(deltaTime) {
 FallingObject.prototype.draw = function() {
     ctx.fillStyle = 'tomato';
     ctx.beginPath();
-    ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+    ctx.arc(this.x, this.y, this.size / 2, 0, Math.PI * 2);
     ctx.fill();
 };
 
@@ -77,53 +64,64 @@ function spawnObject() {
 }
 
 function checkCollision(obj) {
-    const basketCenterX = basket.x + basket.width / 2;
-    const basketCenterY = basket.y + basket.height / 2;
-    const distX = Math.abs(obj.x - basketCenterX); 
-    const distY = Math.abs(obj.y - basketCenterY); 
-    return (distX < obj.size + basket.width / 2) && (distY < obj.size + basket.height / 2); 
+    // Check collision with circular player (approximated as circle)
+    const dx = obj.x - player.x;
+    const dy = obj.y - player.y;
+    const distance = Math.sqrt(dx*dx + dy*dy);
+    return distance < (player.radius + obj.size / 2);
 }
 
 let lastTime = 0;
+const levelThreshold = 100;
+let level = 1;
 function gameLoop(timestamp) {
     if (!lastTime) lastTime = timestamp;
     const deltaTime = (timestamp - lastTime) / 1000;
     lastTime = timestamp;
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
+    // Background
     const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
     gradient.addColorStop(0, '#87CEFA');
     gradient.addColorStop(1, '#E0FFFF');
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    basket.draw();
+    initPlayer();
+    ctx.fillStyle = "#00FF00";
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+    ctx.fill();
 
-    for (let i = objects.length - 1; i >= 0; i--) {
-        let obj = objects[i];
+    for (let i = objects.length -1; i >=0; i--) {
+        const obj = objects[i];
         obj.update(deltaTime);
+        // Check for collision
         if (checkCollision(obj)) {
             score += 10;
-            objects.splice(i, 1);
-        } else if (obj.y > canvas.height) {
-            objects.splice(i, 1);
-            score -= 5;
+            objects.splice(i,1);
+        } else if (obj.y > canvas.height + obj.size) {
+            // Missed object
+            score = Math.max(0, score - 5);
+            objects.splice(i,1);
         } else {
             obj.draw();
         }
     }
 
-    if ((performance.now() - lastSpawnTime) > spawnInterval) {
+    // Spawn objects
+    if (performance.now() - lastSpawnTime > spawnInterval) {
         spawnObject();
         lastSpawnTime = performance.now();
     }
 
+    // Draw score
     ctx.fillStyle = "black";
     ctx.font = "24px 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif";
     ctx.fillText("Score: " + score, 20, 30);
 
-    if (score > level * 100) {
+    // Level up
+    if (score >= level * levelThreshold) {
         level += 1;
         spawnInterval = Math.max(500, spawnInterval - 200);
     }
@@ -131,6 +129,7 @@ function gameLoop(timestamp) {
     if (gameRunning) {
         requestAnimationFrame(gameLoop);
     } else {
+        // Show game over message
         ctx.fillStyle = 'rgba(0,0,0,0.5)';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.fillStyle = 'white';
@@ -144,11 +143,11 @@ function gameLoop(timestamp) {
 function startGame() {
     score = 0;
     level = 1;
-    spawnInterval = 2000;
+    spawnInterval = 1500;
     objects = [];
     gameRunning = true;
-    lastSpawnTime = performance.now();
-    initBasket();
+    lastSpawnTime = 0;
+    initPlayer();
     requestAnimationFrame(gameLoop);
 }
 
@@ -157,6 +156,9 @@ window.addEventListener('keydown', (e) => {
         startGame();
     }
 });
-
-initBasket();
+// Initialize player
+initPlayer();
 startGame();
+</script>
+</body>
+</html>
