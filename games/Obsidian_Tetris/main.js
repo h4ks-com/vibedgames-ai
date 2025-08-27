@@ -1,12 +1,12 @@
-// Initialize canvas and context
-const canvas = document.getElementById('gameCanvas') || document.createElement('canvas');
-document.body.appendChild(canvas);
-const ctx = canvas.getContext('2d');
+// Define larger grid size and block size
+const COLS = 20;
+const ROWS = 40;
+const blockSize = 30; // Keep block size same, scale grid
 
-// Define grid and block size
-const COLS = 10;
-const ROWS = 20;
-const blockSize = 30;
+// Initialize canvas and context
+const canvas = document.createElement('canvas');
+document.getElementById('gameContainer').appendChild(canvas);
+const ctx = canvas.getContext('2d');
 
 // Colors and aesthetic inspired by obsidian textures
 const backgroundColor = '#000'; // Deep black
@@ -31,7 +31,7 @@ const colors = {
   O: "#ffff00",
   S: "#00ff00",
   T: "#a020f0",
-  Z: "#ff0000"
+  Z: '#ff0000'
 };
 
 // Game state variables
