@@ -86,7 +86,7 @@ function update() {
   for (let i = objects.length - 1; i >= 0; i--) {
     const obj = objects[i];
     obj.y += obj.speed;
-    // Draw objects with realistic textures
+    // Draw objects with gradient
     const gradient = ctx.createRadialGradient(obj.x, obj.y, 0, obj.x, obj.y, obj.size / 2);
     gradient.addColorStop(0, '#FFFFFF');
     gradient.addColorStop(1, obj.color);
@@ -114,8 +114,7 @@ function update() {
 
 function spawnObject() {
   const sizes = [15, 20, 25];
-  const sizeIdx = Math.floor(Math.random() * sizes.length);
-  const size = sizes[sizeIdx];
+  const size = sizes[Math.floor(Math.random() * sizes.length)];
   const x = Math.random() * (canvas.width - size) + size / 2;
   const colors = ['#FFA500', '#FF4500', '#FFD700', '#ADFF2F', '#00CED1'];
   const color = colors[Math.floor(Math.random() * colors.length)];
