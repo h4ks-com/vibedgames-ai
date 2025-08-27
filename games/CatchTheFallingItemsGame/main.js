@@ -95,12 +95,24 @@ function spawnObject() {
 
 function checkCollision(obj) {
     const basketCenterX = basket.x + basket.width / 2;
-    const basketY = basket.y;
-    // Check if object is within horizontal bounds of basket
-    if (obj.x + obj.size / 2 > basket.x && obj.x - obj.size / 2 < basket.x + basket.width && obj.y + obj.size / 2 > basket.y && obj.y - obj.size / 2 < basket.y + basket.height) {
-        return true;
+    const basketCenterY = basket.y + basket.height / 2;
+    if (obj.shape === 'circle') {
+        const dx = obj.x - (basketCenterX);
+        const dy = obj.y - (basketCenterY);
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        return distance < obj.size / 2 + Math.min(basket.width, basket.height) / 2;
+    } else {
+        const left = basket.x;
+        const right = basket.x + basket.width;
+        const top = basket.y;
+        const bottom = basket.y + basket.height;
+        return (
+            obj.x + obj.size / 2 > left &&
+            obj.x - obj.size / 2 < right &&
+            obj.y + obj.size / 2 > top &&
+            obj.y - obj.size / 2 < bottom
+        );
     }
-    return false;
 }
 
 let lastTime = 0;
@@ -117,7 +129,7 @@ function gameLoop(timestamp) {
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Draw clouds
+    // Draw clouds with reduced speed
     ctx.fillStyle = 'white';
     for (let i = 0; i < 5; i++) {
         const cloudX = Math.random() * canvas.width;
