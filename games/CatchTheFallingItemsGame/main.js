@@ -51,9 +51,11 @@ canvas.addEventListener('touchmove', (e) => {
     }
 });
 
-function FallingObject(x, y, speed) {
+function FallingObject(x, y, speed, shape, color) {
     this.x = x;
     this.y = y;
+    this.shape = shape; // 'circle', 'rect', or 'triangle'
+    this.color = color;
     this.size = 30;
     this.speed = speed;
     this.caught = false;
@@ -64,24 +66,55 @@ FallingObject.prototype.update = function(deltaTime) {
 };
 
 FallingObject.prototype.draw = function() {
-    ctx.fillStyle = 'tomato';
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.fillStyle = this.color;
+    if (this.shape === 'circle') {
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size / 2, 0, Math.PI * 2);
+        ctx.fill();
+    } else if (this.shape === 'rect') {
+        ctx.fillRect(this.x - this.size / 2, this.y - this.size / 2, this.size, this.size);
+    } else if (this.shape === 'triangle') {
+        ctx.beginPath();
+        ctx.moveTo(this.x, this.y - this.size / 2);
+        ctx.lineTo(this.x - this.size / 2, this.y + this.size / 2);
+        ctx.lineTo(this.x + this.size / 2, this.y + this.size / 2);
+        ctx.closePath();
+        ctx.fill();
+    }
 };
 
 function spawnObject() {
-    const x = Math.random() * (canvas.width - 30);
+    const x = Math.random() * (canvas.width - 30) + 15;
     const speed = 100 + (level - 1) * 20;
-    objects.push(new FallingObject(x, -30, speed));
+    const shapes = ['circle', 'rect', 'triangle'];
+    const shape = shapes[Math.floor(Math.random() * shapes.length)];
+    const colors = ['tomato', 'orange', 'yellowgreen', 'purple', 'cyan', 'magenta', 'lime', 'pink'];
+    const color = colors[Math.floor(Math.random() * colors.length)];
+    objects.push(new FallingObject(x, -30, speed, shape, color));
 }
 
 function checkCollision(obj) {
     const basketCenterX = basket.x + basket.width / 2;
     const basketCenterY = basket.y + basket.height / 2;
-    const distX = Math.abs(obj.x - basketCenterX);
-    const distY = Math.abs(obj.y - basketCenterY);
-    return (distX < obj.size + basket.width / 2) && (distY < obj.size + basket.height / 2);
+    // Approximate collision detection
+    if (obj.shape === 'circle') {
+        const dx = obj.x - (basketCenterX);
+        const dy = obj.y - (basketCenterY);
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        return distance < obj.size / 2 + Math.min(basket.width, basket.height) / 2;
+    } else {
+        // For rect and triangle, approximate with bounding box
+        const left = basket.x;
+        const right = basket.x + basket.width;
+        const top = basket.y;
+        const bottom = basket.y + basket.height;
+        return (
+            obj.x + obj.size / 2 > left &&
+            obj.x - obj.size / 2 < right &&
+            obj.y + obj.size / 2 > top &&
+            obj.y - obj.size / 2 < bottom
+        );
+    }
 }
 
 let lastTime = 0;
@@ -92,46 +125,61 @@ function gameLoop(timestamp) {
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Draw background gradient resembling sky
     const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
-    gradient.addColorStop(0, '#87CEFA'); // Sky Blue
-    gradient.addColorStop(1, '#E0FFFF'); // Light Cyan
+    gradient.addColorStop(0, '#87CEFA');
+    gradient.addColorStop(1, '#E0FFFF');
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+    // Draw clouds
+    ctx.fillStyle = 'white';
+    for (let i = 0; i < 5; i++) {
+        const cloudX = Math.random() * canvas.width;
+        const cloudY = Math.random() * canvas.height / 3;
+        const cloudSize = 50 + Math.random() * 50;
+        ctx.globalAlpha = 0.7;
+        ctx.beginPath();
+        ctx.arc(cloudX, cloudY, cloudSize / 2, 0, Math.PI * 2);
+        ctx.arc(cloudX + cloudSize / 2, cloudY, cloudSize / 2, 0, Math.PI * 2);
+        ctx.arc(cloudX + cloudSize * 0.25, cloudY - cloudSize / 3, cloudSize / 2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1.0;
+    }
+
     // Draw basket
-    ctx.fillStyle = "saddleBrown";
+    ctx.fillStyle = 'saddleBrown';
     ctx.fillRect(basket.x, basket.y, basket.width, basket.height);
-    ctx.strokeStyle = "darkred";
+    ctx.strokeStyle = 'darkred';
     ctx.lineWidth = 4;
     ctx.strokeRect(basket.x, basket.y, basket.width, basket.height);
 
+    // Update and draw objects
     for (let i = objects.length - 1; i >= 0; i--) {
         let obj = objects[i];
         obj.update(deltaTime);
         if (checkCollision(obj)) {
             score += 10;
             objects.splice(i, 1);
-        } else if (obj.y > canvas.height) {
+        } else if (obj.y > canvas.height + obj.size) {
             objects.splice(i, 1);
-            score -= 5;
+            score = Math.max(0, score - 5);
         } else {
-            ctx.fillStyle = 'tomato';
-            ctx.beginPath();
-            ctx.arc(obj.x, obj.y, obj.size, 0, Math.PI * 2);
-            ctx.fill();
+            obj.draw();
         }
     }
 
+    // Spawn new object
     if ((performance.now() - lastSpawnTime) > spawnInterval) {
         spawnObject();
         lastSpawnTime = performance.now();
     }
 
+    // Draw score
     ctx.fillStyle = "black";
     ctx.font = "24px 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif";
     ctx.fillText("Score: " + score, 20, 30);
 
+    // Level up
     if (score > level * 100) {
         level += 1;
         spawnInterval = Math.max(500, spawnInterval - 200);
@@ -167,8 +215,11 @@ window.addEventListener('keydown', (e) => {
     }
 });
 
+// Initialize basket position
+function initBasket() {
+    basket.x = (canvas.width - basket.width) / 2;
+    basket.y = canvas.height - basket.height - 10;
+}
+
 initBasket();
 startGame();
-</script>
-</body>
-</html>
