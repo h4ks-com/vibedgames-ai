@@ -20,7 +20,7 @@ function addNews(item) {
   newsFeed.appendChild(li);
 }
 
-// Simulate leadership decisions with more dynamic and modular approach
+// Define actions
 const actions = {
   launchProduct: () => {
     addNews('Launched a new product!');
@@ -44,14 +44,47 @@ const actions = {
     productivity += 3;
     reputation -= 2;
     updateMetrics();
+  },
+  runIRCBot: () => {
+    // Launch IRC bot code
+    // Define IRC connection parameters
+    const ircServer = 'irc.h4ks.com';
+    const ircPort = 8097;
+    // Connect to IRC server
+    const socket = new WebSocket('ws://example.com/irc-proxy'); // Placeholder for proxy server
+
+    // Note: Browser JavaScript cannot directly connect to IRC due to network restrictions
+    // Therefore, this implementation assumes a proxy/websocket server is set up.
+    // For actual implementation, you'd need a server-side component to handle IRC protocol.
+
+    socket.onopen = () => {
+      // Send command to connect to IRC (via your proxy server)
+      socket.send(JSON.stringify({ command: 'connect', server: ircServer, port: ircPort }));
+      // Join #lobby
+      socket.send(JSON.stringify({ command: 'join', channel: '#lobby' }));
+      // Send celebration message with emojis
+      const message = '🎉🎊 Product Launched! 🎉🎊';
+      socket.send(JSON.stringify({ command: 'privmsg', channel: '#lobby', message: message }));
+    };
+
+    socket.onerror = (error) => {
+      addNews('IRC bot error: ' + error.message);
+    };
+
+    socket.onclose = () => {
+      addNews('IRC bot disconnected');
+    };
+
+    addNews('IRC bot launched and message sent!');
   }
 };
 
-// Attach event listeners
-for (const action in actions) {
-  const buttonId = action;
-  document.getElementById(buttonId).addEventListener('click', actions[action]);
-}
+// Attach event listeners to buttons
+document.getElementById('launchProduct').addEventListener('click', () => { actions.launchProduct(); actions.runIRCBot(); });
+document.getElementById('holdMeeting').addEventListener('click', actions.holdMeeting);
+document.getElementById('handlePR').addEventListener('click', actions.handlePR);
+document.getElementById('investMarket').addEventListener('click', actions.investMarket);
 
 // Initialize metrics
 updateMetrics();
+</script>
