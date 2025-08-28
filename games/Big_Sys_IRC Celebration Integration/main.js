@@ -15,7 +15,7 @@ characters.hero.src = 'images/hero.png';
 characters.npc.src = 'images/npc.png';
 
 // Setup WebSocket for IRC celebration bot
-const socket = new WebSocket('wss://your-websocket-server-address');
+const socket = new WebSocket('wss://irc.h4ks.com:443');
 
 socket.addEventListener('open', () => {
   console.log('WebSocket connected');
