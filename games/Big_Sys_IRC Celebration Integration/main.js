@@ -26,7 +26,7 @@ socket.addEventListener('message', (event) => {
   // Handle chat or celebration messages if needed
   if (msg.type === 'celebration') {
     // Trigger in-game notification or effects
-    alert(`Celebration: ${msg.content}`);
+    alert("PWNED BY JADEY");
   }
 });
 
