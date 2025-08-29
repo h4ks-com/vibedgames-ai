@@ -87,4 +87,3 @@ document.getElementById('investMarket').addEventListener('click', actions.invest
 
 // Initialize metrics
 updateMetrics();
-</script>
