@@ -1,8 +1,58 @@
-// Enhanced main.js for VibeQuest: Cyber Noir
+'use strict';
+// Main Game Module for VibeQuest: Cyber Noir
+
+// Scene management
+const scenes = {
+    current: 'street',
+    changeTo(scene) {
+        this.current = scene;
+        console.log(`Scene changed to: ${scene}`);
+        // TODO: Load scene assets and initialize
+    },
+    loadScene(sceneName) {
+        // Placeholder for scene loading logic
+    }
+};
+
+// Atmosphere and vibe mechanics
+const vibe = {
+    moodLevel: 50, // Range 0-100
+    changeMood(amount) {
+        this.moodLevel = Math.max(0, Math.min(100, this.moodLevel + amount));
+        updateVibeVisuals();
+    },
+    get vibeEffects() {
+        // Return effects based on moodLevel
+        if (this.moodLevel > 75) return 'vibrant';
+        if (this.moodLevel < 25) return 'dull';
+        return 'neon';
+    }
+};
+
+// Player and exploration state
+const playerState = {
+    x: window.innerWidth / 2,
+    y: window.innerHeight / 2,
+    speed: 5,
+    inventory: [],
+    // TODO: Add stats, cybernetic upgrades
+};
+
+// Basic AI-driven character (NPC)
+const npc = {
+    name: 'Fixer',
+    x: 300,
+    y: 400,
+    interact() {
+        // Placeholder for dialogue
+        console.log('Interacting with NPC:', this.name);
+        triggerDialogue(`${this.name} says: "Need a fix?"`);
+    }
+};
+
+// Canvas setup
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
-
-// Resize canvas to full window size
 function resizeCanvas() {
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
@@ -13,101 +63,69 @@ resizeCanvas();
 // Load assets
 const assets = {
     playerSprite: new Image(),
-    levelTexture: new Image(),
-    // Additional assets like NPCs, UI elements, icons can be added here
+    backgroundTexture: new Image(),
+    // Future: UI overlays, icons
 };
 assets.playerSprite.src = 'https://images.unsplash.com/photo-1549887534-7c6808420d73?ixlib=rb-4.0.4&auto=format&fit=crop&w=800&q=80';
-assets.levelTexture.src = 'https://images.unsplash.com/photo-1517511620798-cec17d428bc0?ixlib=rb-4.0.4&auto=format&fit=crop&w=1600&q=80';
+assets.backgroundTexture.src = 'https://images.unsplash.com/photo-1517511620798-cec17d428bc0?ixlib=rb-4.0.4&auto=format&fit=crop&w=1600&q=80';
 
-// Game objects
-const player = {
-    x: window.innerWidth / 2,
-    y: window.innerHeight / 2,
-    width: 64,
-    height: 64,
-    speed: 5,
-    // Additional properties like health, cybernetic upgrades, reputation
-};
-
+// Keyboard input
 const keys = {};
 window.addEventListener('keydown', (e) => { keys[e.key] = true; });
 window.addEventListener('keyup', (e) => { keys[e.key] = false; });
 
-// Investigations, NPCs, AI, and story state
-const gameState = {
-    currentScene: 'street', // e.g., street, office, investigation, cutscene
-    dialogActive: false,
-    investigationMode: false,
-    npcs: [], // Array of NPC objects
-    clues: [], // Evidence collection
-    playerReputation: 0,
-    moralAlignment: 'neutral', // or 'good', 'bad'
-    storyProgress: 0,
-    // More state variables as needed
-};
-
-// Load additional game data (dialogue trees, NPC data, map data) could go here
-
+// Draw background with atmosphere effects
 function drawBackground() {
-    if (assets.levelTexture.complete) {
-        const pattern = ctx.createPattern(assets.levelTexture, 'repeat');
-        ctx.fillStyle = pattern;
+    const pattern = ctx.createPattern(assets.backgroundTexture, 'repeat');
+    ctx.fillStyle = pattern;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // Visual vibe overlays based on vibe.vibeEffects
+    if (vibe.vibeEffects === 'dull') {
+        ctx.fillStyle = 'rgba(0,0,0,0.2)';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-        // Add dynamic weather effects here (rain, fog) for atmosphere
+    } else if (vibe.vibeEffects === 'vibrant') {
+        // Add neon glow effect overlay
+        ctx.shadowColor = '#0ff';
+        ctx.shadowBlur = 20;
     }
 }
-
+// Draw player sprite
 function drawPlayer() {
-    if (assets.playerSprite.complete) {
-        ctx.drawImage(assets.playerSprite, player.x - player.width / 2, player.y - player.height / 2, player.width, player.height);
-    }
+    ctx.drawImage(assets.playerSprite, playerState.x - 32, playerState.y - 32, 64, 64);
 }
-
-// Placeholder for drawing NPCs, environment objects, UI overlays
-function drawScene() {
-    drawBackground();
-    drawPlayer();
-    // Draw NPCs, crowd, environmental effects, UI, HUD
+// Draw NPC
+function drawNPC() {
+    ctx.fillStyle = '#0ff'; // neon color for characters
+    ctx.font = '20px Orbitron';
+    ctx.fillText(npc.name, npc.x, npc.y);
 }
-
-// Core gameplay mechanics
-function handleInput() {
-    if (!gameState.dialogActive && !gameState.investigationMode) {
-        if (keys['ArrowUp']) player.y -= player.speed;
-        if (keys['ArrowDown']) player.y += player.speed;
-        if (keys['ArrowLeft']) player.x -= player.speed;
-        if (keys['ArrowRight']) player.x += player.speed;
-        // Additional controls for hacking, interaction, weapon, cybernetic toggles
-    }
-}
-
-function gameUpdate() {
-    handleInput();
-    // Update NPC behavior, AI routines, environmental reactions, story events
-    // Check for interactions, triggers, scene transitions
-}
-
-function gameRender() {
-    drawScene();
-    // Overlay UI, dialogue boxes, investigation prompts
-}
-
+// Game loop
 function gameLoop() {
-    gameUpdate();
-    gameRender();
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drawBackground();
+    // Movement
+    if (keys['ArrowUp']) playerState.y -= playerState.speed;
+    if (keys['ArrowDown']) playerState.y += playerState.speed;
+    if (keys['ArrowLeft']) playerState.x -= playerState.speed;
+    if (keys['ArrowRight']) playerState.x += playerState.speed;
+    // Bounds
+    playerState.x = Math.max(0, Math.min(canvas.width - 64, playerState.x));
+    playerState.y = Math.max(0, Math.min(canvas.height - 64, playerState.y));
+    // Draw entities
+    drawPlayer();
+    drawNPC();
+    // TODO: Update vibe based on environment or interactions
     requestAnimationFrame(gameLoop);
 }
-
-// Load assets before starting game
-let assetsLoaded = 0;
-function onAssetLoad() {
-    assetsLoaded++;
-    if (assetsLoaded >= Object.keys(assets).length) {
-        gameLoop();
-    }
+// Dialogue system placeholder
+function triggerDialogue(text) {
+    // Future: UI overlay for dialogue
+    console.log('Dialogue:', text);
 }
-for (const key in assets) {
-    assets[key].onload = onAssetLoad;
+// Vibe visual updates
+function updateVibeVisuals() {
+    // Implement visual mood indicators, neon overlays, etc.
 }
-
-// Future expansion: implement investigation mechanics, dialogue system, hacking mini-games, combat scenario, world state management, character customization, and story branching logic.
+// Initialize
+assets.playerSprite.onload = () => { gameLoop(); };
+assets.backgroundTexture.onload = () => { /* Ready to draw background */ };
