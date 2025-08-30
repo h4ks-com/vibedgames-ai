@@ -12,19 +12,19 @@ let gameState = {
 
 // ASCII art assets for the bear with animated variants
 const asciiBear = [
-`ʕ•ᴥ•ʔ`,
-`/|\`,
-`/ \`
+"ʕ•ᴥ•ʔ",
+"/|\\",
+"/ \\" 
 ];
 // You can add more variants for walking, sitting, etc.
 
 // Environment tiles with symbols and colors
 const envTiles = {
-  "tree": { symbol: `🌳`, color: `#2e7d32` },
-  "mountain": { symbol: `⛰️`, color: `#555` },
-  "cave": { symbol: `🕳️`, color: `#8d6e63` },
-  "water": { symbol: `💧`, color: `#2196f3` },
-  "treasure": { symbol: `💰`, color: `#ffd700` }
+  "tree": { symbol: "🌳", color: "#2e7d32" },
+  "mountain": { symbol: "⛰️", color: "#555" },
+  "cave": { symbol: "🕳️", color: "#8d6e63" },
+  "water": { symbol: "💧", color: "#2196f3" },
+  "treasure": { symbol: "💰", color: "#ffd700" }
 };
 
 // Initialize environment grid with textures and objects
