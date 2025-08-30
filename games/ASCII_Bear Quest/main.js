@@ -64,7 +64,7 @@ function render() {
     }
     output += '\n';
   }
-  // Optional: Show Health and Inventory
+  // Show Player Stats and messages
   output += `\nHealth: ${gameState.player.health}`;
   output += `\nInventory: ${gameState.inventory.join(', ')}`;
   output += `\nQuest Log: ${gameState.questLog.join('; ')}`;
@@ -113,7 +113,7 @@ document.addEventListener('keydown', (e) => {
     default:
       gameState.msg = 'Use arrow keys to move, a to attack, s to save, l to load.';
   }
-  // Check collisions (walls)
+  // Check collisions against walls
   if (gameState.environment[newY][newX].symbol !== '#') {
     gameState.player.x = newX;
     gameState.player.y = newY;
@@ -121,7 +121,6 @@ document.addEventListener('keydown', (e) => {
     const currentTile = gameState.environment[newY][newX];
     if (currentTile.symbol === envTiles['treasure'].symbol) {
       gameState.msg = 'You found a treasure!';
-      // Add to inventory or trigger quest
       gameState.inventory.push('Treasure');
       // Remove treasure from environment
       gameState.environment[newY][newX] = { symbol: '.', color: '#cccccc' };
