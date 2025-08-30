@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mobile Hacker Simulator</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono&display=swap');
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    margin: 0; padding: 0;
+    font-family: 'Roboto Mono', monospace;
+    background: #0a0a0a;
+    color: #33ff33;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+  header {
+    background: #111;
+    padding: 10px 15px;
+    text-align: center;
+    font-size: 1.3rem;
+    border-bottom: 1px solid #0f0;
+    user-select: none;
+  }
+  main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 15px;
+    gap: 10px;
+  }
+  #screen {
+    background: #020202;
+    border: 2px solid #0f0;
+    border-radius: 8px;
+    padding: 15px;
+    height: 370px;
+    overflow-y: auto;
+    font-size: 0.95rem;
+    line-height: 1.3rem;
+    white-space: pre-wrap;
+  }
+  #input-area {
+    display: flex;
+    gap: 10px;
+  }
+  #command {
+    flex: 1;
+    background: #111;
+    border: 2px solid #0f0;
+    border-radius: 5px;
+    padding: 10px;
+    font-family: 'Roboto Mono', monospace;
+    font-size: 1rem;
+    color: #33ff33;
+    outline: none;
+  }
+  #command::placeholder {
+    color: #0f0;
+  }
+  button {
+    background: #0f0;
+    border: none;
+    color: #000;
+    font-weight: 700;
+    padding: 0 15px;
+    border-radius: 5px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.3s;
+  }
+  button:disabled {
+    background: #055005;
+    cursor: not-allowed;
+  }
+  button:hover:not(:disabled) {
+    background: #2f2;
+  }
+  footer {
+    font-size: 0.8rem;
+    color: #0f0;
+    text-align: center;
+    padding: 8px;
+    border-top: 1px solid #0f0;
+  }
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #0f0;
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #020202;
+  }
+</style>
+</head>
+<body>
+<header>
+  Mobile Hacker Simulator
+</header>
+<main>
+  <div id="screen" aria-live="polite" aria-label="Game output"></div>
+  <form id="input-area" autocomplete="off">
+    <input type="text" id="command" placeholder="Enter command..." aria-label="Command input" spellcheck="false" autofocus />
+    <button type="submit" id="submitBtn">Run</button>
+  </form>
+</main>
+<footer>
+  Use commands like <code>install &lt;software&gt;</code>, <code>hack &lt;target&gt;</code>, <code>status</code>.
+</footer>
+<script>
+(() => {
+  const screen = document.getElementById('screen');
+  const form = document.getElementById('input-area');
+  const commandInput = document.getElementById('command');
+  const submitBtn = document.getElementById('submitBtn');
+
+  // Game state
+  let installedSoftware = {};
+  let hackedTargets = {};
+  let money = 5000;
+  let rank = 1;
+  let experience = 0;
+
+  // Software library
+  const softwareLibrary = {
+    'scanner': { cost: 1000, desc: 'Scans network for vulnerabilities.' },
+    'exploit-kits': { cost: 3000, desc: 'Contains exploits to hack targets.' },
+    'proxy': { cost: 2000, desc: 'Masks your identity during hacks.' },
+    'botnet': { cost: 7000, desc: 'Leverage bots to increase hack power.' },
+    'encryption': { cost: 2500, desc: 'Encrypt your communications to avoid detection.' },
+    'decrypter': { cost: 1500, desc: 'Decrypt encrypted data from targets.' },
+    'firewall-bypass': { cost: 4000, desc: 'Bypass firewalls of government & corp targets.' }
+  };
+
+  // Targets - companies and governments, each requires some software level
+  const targets = {
+    'smallcorp': {
+      security: 2,
+      money: 8000,
+      exp: 1200,
+      desc: 'Small Corporation with basic security systems.'
+    },
+    'medcorp': {
+      security: 4,
+      money: 16000,
+      exp: 2500,
+      desc: 'Medium Corporation with moderate defenses.'
+    },
+    'bigcorp': {
+      security: 7,
+      money: 40000,
+      exp: 6000,
+      desc: 'Large Corporation with advanced security protocols.'
+    },
+    'gov-local': {
+      security: 6,
+      money: 25000,
+      exp: 5000,
+      desc: 'Local Government Department with strong defenses.'
+    },
+    'gov-national': {
+      security: 9,
+      money: 70000,
+      exp: 12000,
+      desc: 'National Government with top-tier security.'
+    },
+    'military': {
+      security: 10,
+      money: 100000,
+      exp: 18000,
+      desc: 'Military government sector. Extremely secure.'
+    }
+  };
+
+  // Help message
+  const helpMessage = `
+Commands:
+  help                     - Show this help message
+  status                   - Show your status and installed software
+  shop                     - Show available software to install
+  install <software>       - Install software from shop (costs money)
+  uninstall <software>     - Uninstall software you have installed
+  hack <target>            - Attempt to hack target company/government
+  targets                  - List all possible hack targets with descriptions
+  clear                    - Clear screen
+  exit                     - Restart game`;
+
+  // Utility to append lines to screen
+  function print(text = '') {
+    screen.textContent += text + '\n';
+    screen.scrollTop = screen.scrollHeight;
+  }
+
+  // Utility to print error lines with some style
+  function printError(text) {
+    print(`[Error] ${text}`);
+  }
+
+  // Reset game
+  function resetGame() {
+    installedSoftware = {};
+    hackedTargets = {};
+    money = 5000;
+    rank = 1;
+    experience = 0;
+    screen.textContent = '';
+    print("Welcome to Mobile Hacker Simulator!");
+    print("You're a hacker with only a mobile phone and some crazy skills.");
+    print("Use 'help' to see commands.");
+    updatePrompt();
+  }
+
+  // Check if player has required software to hack target security level
+  function hasRequiredSoftware(securityLevel) {
+    // Sum of security bypass power from installed software
+    // Some software add to hack power:
+    // E.g. scanner(1), exploit-kits(3), proxy(2), botnet(4), encryption(2), decrypter(1), firewall-bypass(5)
+
+    const softwarePowerMap = {
+      'scanner': 1,
+      'exploit-kits': 3,
+      'proxy': 2,
+      'botnet': 4,
+      'encryption': 2,
+      'decrypter': 1,
+      'firewall-bypass': 5
+    };
+
+    let totalPower = 0;
+    for (const s in installedSoftware) {
+      if (softwarePowerMap[s]) totalPower += softwarePowerMap[s];
+    }
+    return totalPower >= securityLevel;
+  }
+
+  // Attempt hack procedure
+  function attemptHack(target) {
+    if (!targets[target]) {
+      printError(`Target '${target}' unknown.`);
+      return;
+    }
+    if (hackedTargets[target]) {
+      print(`You already took down '${target}'.`);
+      return;
+    }
+
+    const t = targets[target];
+
+    print(`Attempting hack on '${target}': ${t.desc}`);
+
+    // Must have the exploit-kits software installed for any hack
+    if (!installedSoftware['exploit-kits']) {
+      printError("Hack failed: You need 'exploit-kits' installed to hack targets.");
+      return;
+    }
+
+    if (!hasRequiredSoftware(t.security)) {
+      printError(`Hack failed: Your software power is insufficient (need level ${t.security}).`);
+      print(`Try installing more or stronger software.`);
+      return;
+    }
+
+    // Chance of success depends on rank and software
+    // Base chance: 30%, add 5% per rank, 3% per total software power above security level
+
+    const softwarePower = Object.keys(installedSoftware).reduce((acc, s) => {
+      const mp = {
+        'scanner': 1,
+        'exploit-kits': 3,
+        'proxy': 2,
+        'botnet': 4,
+        'encryption': 2,
+        'decrypter': 1,
+        'firewall-bypass': 5
+      };
+      return acc + (mp[s] || 0);
+    }, 0);
+
+    let chance = 0.3 + (0.05 * rank) + (0.03 * (softwarePower - t.security));
+    if (chance > 0.95) chance = 0.95;
+
+    // Random success
+    if (Math.random() < chance) {
+      print(`Successfully hacked '${target}'!`);
+      hackedTargets[target] = true;
+
+      money += t.money;
+      experience += t.exp;
+      print(`You stole $${t.money.toLocaleString()} and gained ${t.exp.toLocaleString()} EXP.`);
+
+      // Rank up for every 10k exp
+      const newRank = Math.floor(experience / 10000) + 1;
+      if (newRank > rank) {
+        rank = newRank;
+        print(`*** Congratulations! You ranked up to Level ${rank}! ***`);
+      }
+      updatePrompt();
+    } else {
+      printError('Hack failed! The system detected your attempt and is tracing you...');
+      // Penalty: lose some money or software?
+
+      const penalty = Math.min(2000, money);
+      money -= penalty;
+      print(`You lost $${penalty.toLocaleString()} while covering your tracks.`);
+      updatePrompt();
+    }
+  }
+
+  // Install software
+  function installSoftware(soft) {
+    if (!softwareLibrary[soft]) {
+      printError(`Software '${soft}' not found in shop.`);
+      return;
+    }
+    if (installedSoftware[soft]) {
+      print(`You already have '${soft}' installed.`);
+      return;
+    }
+    const cost = softwareLibrary[soft].cost;
+    if (money < cost) {
+      printError(`Not enough money to install '${soft}'. You need $${cost.toLocaleString()}.`);
+      return;
+    }
+    money -= cost;
+    installedSoftware[soft] = true;
+    print(`Installed '${soft}'. (-$${cost.toLocaleString()})`);
+    updatePrompt();
+  }
+  // Uninstall software
+  function uninstallSoftware(soft) {
+    if (!installedSoftware[soft]) {
+      printError(`You do not have '${soft}' installed.`);
+      return;
+    }
+    delete installedSoftware[soft];
+    print(`Uninstalled '${soft}'.`);
+    updatePrompt();
+  }
+
+  // Show status
+  function showStatus() {
+    print("=== STATUS ===");
+    print(`Money: $${money.toLocaleString()}`);
+    print(`Level: ${rank}`);
+    print(`Experience: ${experience.toLocaleString()}`);
+    print("Installed Software:");
+    if (Object.keys(installedSoftware).length === 0) {
+      print("  (none)");
+    } else {
+      for (const s in installedSoftware) {
+        print(`  - ${s} : ${softwareLibrary[s].desc}`);
+      }
+    }
+  }
+
+  // Show shop software list
+  function showShop() {
+    print("=== SOFTWARE SHOP ===");
+    for (const s in softwareLibrary) {
+      print(`  ${s.padEnd(15)} $${softwareLibrary[s].cost.toLocaleString()}  - ${softwareLibrary[s].desc}`);
+    }
+    print("Use 'install <software>' to buy and install.");
+  }
+
+  // Show targets list
+  function showTargets() {
+    print("=== HACK TARGETS ===");
+    for (const t in targets) {
+      print(`  ${t.padEnd(12)} Security:${targets[t].security}  - ${targets[t].desc}`);
+    }
+    print("Use 'hack <target>' to attempt a hack.");
+  }
+
+  // Clear screen
+  function clearScreen() {
+    screen.textContent = '';
+  }
+
+  // Update prompt (just example for future features)
+  function updatePrompt() {
+    // For now, no prompt change, but can show status summary in footer or elsewhere
+  }
+
+  // Process user commands
+  function processCommand(input) {
+    if (!input.trim()) return;
+
+    print(`> ${input}`);
+
+    const args = input.trim().toLowerCase().split(/\s+/);
+    const cmd = args[0];
+
+    switch (cmd) {
+      case 'help':
+        print(helpMessage);
+        break;
+      case 'status':
+        showStatus();
+        break;
+      case 'shop':
+        showShop();
+        break;
+      case 'install':
+        if (args.length < 2) {
+          printError("You must specify software to install. Usage: install <software>");
+          break;
+        }
+        installSoftware(args[1]);
+        break;
+      case 'uninstall':
+        if (args.length < 2) {
+          printError("You must specify software to uninstall. Usage: uninstall <software>");
+          break;
+        }
+        uninstallSoftware(args[1]);
+        break;
+      case 'hack':
+        if (args.length < 2) {
+          printError("You must specify target to hack. Usage: hack <target>");
+          break;
+        }
+        attemptHack(args[1]);
+        break;
+      case 'targets':
+        showTargets();
+        break;
+      case 'clear':
+        clearScreen();
+        break;
+      case 'exit':
+        resetGame();
+        break;
+      default:
+        printError(`Unknown command: '${cmd}'. Type 'help' for commands.`);
+    }
+  }
+
+  // Handle form submission
+  form.addEventListener('submit', e => {
+    e.preventDefault();
+    const val = commandInput.value;
+    processCommand(val);
+    commandInput.value = '';
+  });
+
+  // Initialize game
+  resetGame();
+})();
+</script>
+</body>
+</html>
