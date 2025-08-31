@@ -132,12 +132,13 @@ function spawnNewPiece() {
 }
 
 function checkCollision(piece, dx=0, dy=0, rotation=null) {
-  const shape = rotation !== null ? shapeAtRotation(piece, rotation) : piece.currentShape;
+  const shape = rotation !== null ? shapeAtRotation(piece, rotation) : currentPiece.currentShape;
   for(let y=0; y<shape.length; y++) {
     for(let x=0; x<shape[y].length; x++) {
       if (shape[y][x]) {
         let newX = piece.x + x + dx;
         let newY = piece.y + y + dy;
+  
         if (newX<0 || newX>=10 || newY>=20 || (newY>=0 && grid[newY][newX])) {
           return true;
         }
