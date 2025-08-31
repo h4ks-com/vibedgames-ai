@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Super Mario Level Builder</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    background: #5c94fc;
+    font-family: 'Press Start 2P', cursive, monospace;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    color: #fff;
+  }
+
+  h1 {
+    margin: 0.5em 0;
+    text-align: center;
+    text-shadow: 2px 2px 0 #0008;
+  }
+
+  #app {
+    display: flex;
+    flex: 1 1 auto;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  #palette {
+    width: 120px;
+    background: #324b8a;
+    border-right: 3px solid #192b50;
+    padding: 0.5em;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75em;
+  }
+
+  #palette h2 {
+    font-size: 0.7rem;
+    margin: 0 0 0.5em 0;
+    text-align: center;
+  }
+
+  .tile {
+    cursor: pointer;
+    border: 3px solid transparent;
+    border-radius: 6px;
+    background: #7eb6ff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 50px;
+    transition: border-color 0.2s;
+    user-select: none;
+  }
+  .tile.selected {
+    border-color: yellow;
+    box-shadow: 0 0 8px 2px yellow;
+  }
+
+  .tile canvas {
+    pointer-events: none;
+  }
+
+  #boardContainer {
+    flex: 1 1 auto;
+    background: #8adcff;
+    padding: 10px;
+    overflow: auto;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+
+  #board {
+    image-rendering: pixelated;
+    background: linear-gradient(0deg, #3aa60b 0%, #3aa60b 70%, #484848 70%, #484848 100%);
+    border: 3px solid #183000;
+    display: grid;
+    grid-template-columns: repeat(20, 32px);
+    grid-template-rows: repeat(15, 32px);
+    gap: 0;
+    user-select: none;
+  }
+
+  .cell {
+    width: 32px;
+    height: 32px;
+    background: transparent;
+    border: 1px solid #00000020;
+    position: relative;
+    cursor: pointer;
+  }
+
+  .cell:hover {
+    outline: 2px solid #fff9;
+  }
+
+  #controls {
+    background: #192b50;
+    padding: 0.6em;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  button {
+    cursor: pointer;
+    border: none;
+    background: #3a5bbf;
+    color: white;
+    font-family: 'Press Start 2P', monospace;
+    font-size: 0.65rem;
+    padding: 0.7em 1em;
+    border-radius: 8px;
+    box-shadow: 0 3px 0 #2c468b;
+    transition: background-color 0.2s;
+  }
+
+  button:hover {
+    background: #5882e6;
+  }
+
+  button:active {
+    box-shadow: inset 0 3px 0 #2c468b;
+  }
+
+  #exportArea {
+    width: 100%;
+    height: 80px;
+    margin-top: 0.5em;
+    font-family: monospace;
+    font-size: 0.7rem;
+    resize: none;
+    border-radius: 6px;
+    border: 2px solid #888;
+    padding: 0.5em;
+    background: #222e5b;
+    color: #a8b9e5;
+  }
+
+  @media (max-width: 600px) {
+    #app {
+      flex-direction: column;
+    }
+    #palette {
+      width: 100%;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 0.5em;
+      padding: 0.5em 0.5em 0.5em 0.5em;
+      border-right: none;
+      border-bottom: 3px solid #192b50;
+    }
+    #palette h2 {
+      grid-column: 1 / -1;
+      text-align: left;
+      margin-left: 0.5em;
+    }
+    #boardContainer {
+      flex: 1 1 auto;
+      padding: 0.5em;
+      height: 350px;
+      overflow: auto;
+    }
+    #board {
+      grid-template-columns: repeat(20, 24px);
+      grid-template-rows: repeat(15, 24px);
+      width: max-content;
+      height: max-content;
+    }
+    .cell {
+      width: 24px;
+      height: 24px;
+    }
+  }
+</style>
+</head>
+<body>
+  <h1>Super Mario Level Builder</h1>
+  <div id="app">
+    <nav id="palette" aria-label="Tile Palette">
+      <h2>Tiles</h2>
+      <!-- Tiles inserted by JS -->
+    </nav>
+    <main id="boardContainer" aria-label="Level Board">
+      <div id="board" role="grid" aria-rowcount="15" aria-colcount="20" tabindex="0">
+        <!-- Cells inserted by JS -->
+      </div>
+    </main>
+  </div>
+  <section id="controls">
+    <button id="clearBtn" title="Clear Level">Clear</button>
+    <button id="fillGroundBtn" title="Fill Bottom Ground">Fill Ground</button>
+    <button id="undoBtn" title="Undo">Undo</button>
+    <button id="redoBtn" title="Redo">Redo</button>
+    <button id="exportBtn" title="Export Level JSON">Export JSON</button>
+    <button id="importBtn" title="Import Level JSON">Import JSON</button>
+    <input type="file" id="fileInput" accept="application/json" style="display:none" />
+  </section>
+  <textarea id="exportArea" readonly placeholder="Exported level JSON appears here..."></textarea>
+
+<script>
+(() => {
+  // Constants
+  const ROWS = 15;
+  const COLS = 20;
+  const CELL_SIZE = 32;
+
+  // Tile definitions
+  // Each tile has an "id" and a "draw" function that paints onto a canvas given context and size.
+  const TILE_DEFS = [
+    {
+      id: 'empty',
+      name: 'Empty',
+      draw: (ctx, size) => {
+        ctx.clearRect(0, 0, size, size);
+        // Optional: draw a transparent grid or nothing
+      }
+    },
+    {
+      id: 'ground',
+      name: 'Ground',
+      draw: (ctx, size) => {
+        ctx.fillStyle = '#8B4513'; // brown block
+        ctx.fillRect(0, 0, size, size);
+        // Draw texture pattern
+        ctx.fillStyle = '#6F3E03';
+        for(let y=4; y<size; y+=6){
+          for(let x=0; x<size; x+=4){
+            ctx.fillRect(x, y, 2, 2);
+          }
+        }
+        // Dark edges
+        ctx.strokeStyle = '#562e02';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(1, 1, size-2, size-2);
+      }
+    },
+    {
+      id: 'block',
+      name: 'Brick Block',
+      draw: (ctx, size) => {
+        ctx.fillStyle = '#c1440e';
+        ctx.fillRect(0, 0, size, size);
+        ctx.strokeStyle = '#6b2b03';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(2, 2, size - 4, size - 4);
+        ctx.strokeStyle = '#a0420e';
+        ctx.lineWidth = 1;
+        for(let i=5; i<size; i+=6){
+          ctx.beginPath();
+          ctx.moveTo(i, 2);
+          ctx.lineTo(i, size-2);
+          ctx.moveTo(2, i);
+          ctx.lineTo(size-2, i);
+          ctx.stroke();
+        }
+      }
+    },
+    {
+      id: 'question',
+      name: 'Question Block',
+      draw: (ctx, size) => {
+        ctx.fillStyle = '#ffd33a';
+        ctx.fillRect(0, 0, size, size);
+        ctx.strokeStyle = '#b2a523';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(1, 1, size - 2, size - 2);
+        // question mark
+        ctx.fillStyle = '#7d6200';
+        ctx.font = `${size * 0.7}px monospace`;
+        ctx.textBaseline = 'middle';
+        ctx.textAlign = 'center';
+        ctx.fillText('?', size / 2, size / 2+2);
+      }
+    },
+    {
+      id: 'pipeTop',
+      name: 'Pipe Top',
+      draw: (ctx, size) => {
+        // Green pipe top shape, pill-shaped
+        let w = size;
+        let h = size;
+        ctx.fillStyle = '#2ecc40'; // pipe green
+        ctx.strokeStyle = '#176619';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.ellipse(w/2, h/2, w/2 - 4, h/4 - 1, 0, 0, Math.PI*2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Pipe body bottom half - just a darker band to help visually
+        ctx.fillStyle = '#268c33';
+        ctx.fillRect(w*0.15, h*0.7, w*0.7, h*0.3);
+        ctx.strokeRect(w*0.15, h*0.7, w*0.7, h*0.3);
+      }
+    },
+    {
+      id: 'pipeBody',
+      name: 'Pipe Body',
+      draw: (ctx, size) => {
+        ctx.fillStyle = '#27ae34';
+        ctx.fillRect(0, 0, size, size);
+        ctx.strokeStyle = '#176619';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(1, 1, size - 2, size - 2);
+        // Horizontal lines for pipe detail
+        ctx.strokeStyle = '#1d4e14';
+        ctx.lineWidth = 1.5;
+        for(let y = 6; y < size; y += 8){
+          ctx.beginPath();
+          ctx.moveTo(4, y);
+          ctx.lineTo(size - 4, y);
+          ctx.stroke();
+        }
+      }
+    },
+    {
+      id: 'coin',
+      name: 'Coin',
+      draw: (ctx, size) => {
+        ctx.clearRect(0, 0, size, size);
+        let centerX = size / 2;
+        let centerY = size / 2;
+        let radius = size * 0.4;
+        let grad = ctx.createRadialGradient(centerX, centerY, radius*0.3, centerX, centerY, radius);
+        grad.addColorStop(0, '#fff3a4');
+        grad.addColorStop(1, '#f2b500');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.ellipse(centerX, centerY, radius * 0.6, radius, 0, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.strokeStyle = '#c18c00';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+    },
+    {
+      id: 'mushroom',
+      name: 'Mushroom',
+      draw: (ctx, size) => {
+        ctx.clearRect(0, 0, size, size);
+        let centerX = size / 2;
+        let centerY = size / 2.5;
+        // Cap red
+        ctx.fillStyle = '#d22f27';
+        ctx.beginPath();
+        ctx.ellipse(centerX, centerY, size*0.4, size*0.35, 0, 0, Math.PI, true);
+        ctx.fill();
+        // White spots
+        ctx.fillStyle = '#fff';
+        let spots = [
+          {x: centerX - 10, y: centerY - 5, r: 5},
+          {x: centerX, y: centerY - 10, r: 6},
+          {x: centerX + 8, y: centerY - 5, r: 4},
+        ];
+        spots.forEach(s => {
+          ctx.beginPath();
+          ctx.ellipse(s.x, s.y, s.r, s.r*0.6, 0, 0, 2*Math.PI);
+          ctx.fill();
+        });
+
+        // Stem
+        ctx.fillStyle = '#fff5e0';
+        ctx.beginPath();
+        ctx.moveTo(centerX - size*0.2, centerY);
+        ctx.lineTo(centerX + size*0.2, centerY);
+        ctx.lineTo(centerX + size*0.15, size);
+        ctx.lineTo(centerX - size*0.15, size);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = '#d1d1d1';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // Eyes
+        ctx.fillStyle = '#000';
+        ctx.beginPath();
+        ctx.ellipse(centerX - 5, centerY + 15, 3, 5, 0, 0, 2*Math.PI);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(centerX + 5, centerY + 15, 3, 5, 0, 0, 2*Math.PI);
+        ctx.fill();
+      }
+    },
+    {
+      id: 'goomba',
+      name: 'Goomba',
+      draw: (ctx, size) => {
+        ctx.clearRect(0, 0, size, size);
+        let centerX = size / 2;
+        let baseY = size * 0.75;
+        // Body oval
+        ctx.fillStyle = '#a0522d';
+        ctx.beginPath();
+        ctx.ellipse(centerX, baseY - 5, size * 0.37, size * 0.5, 0, 0, 2 * Math.PI);
+        ctx.fill();
+
+        // Eyes
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.ellipse(centerX - 7, baseY - 25, 7, 9, 0, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(centerX + 7, baseY - 25, 7, 9, 0, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.fillStyle = '#000';
+        ctx.beginPath();
+        ctx.ellipse(centerX - 7, baseY - 25, 3, 5, 0, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(centerX + 7, baseY - 25, 3, 5, 0, 0, 2 * Math.PI);
+        ctx.fill();
+
+        // Mouth
+        ctx.strokeStyle = '#581f10';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(centerX - 10, baseY - 5);
+        ctx.quadraticCurveTo(centerX, baseY + 15, centerX + 10, baseY - 5);
+        ctx.stroke();
+
+        // Eyebrows
+        ctx.strokeStyle = '#3e1a0e';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(centerX - 14, baseY - 35);
+        ctx.lineTo(centerX - 4, baseY - 29);
+        ctx.moveTo(centerX + 14, baseY - 35);
+        ctx.lineTo(centerX + 4, baseY - 29);
+        ctx.stroke();
+      }
+    },
+    {
+      id: 'flagPole',
+      name: 'Flag Pole',
+      draw: (ctx, size) => {
+        ctx.clearRect(0, 0, size, size);
+        // Pole
+        ctx.fillStyle = '#331a00';
+        ctx.fillRect(size*0.4, 0, size*0.2, size);
+
+        // Flag
+        ctx.fillStyle = '#dc3522';
+        ctx.strokeStyle = '#b22a1a';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(size*0.6, size*0.15);
+        ctx.lineTo(size*0.95, size*0.1);
+        ctx.lineTo(size*0.95, size*0.3);
+        ctx.lineTo(size*0.6, size*0.35);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      }
+    },
+  ];
+
+  // State
+  let selectedTileId = 'ground';
+  let boardData = new Array(ROWS * COLS).fill('empty');
+
+  // Undo/Redo stacks
+  let undoStack = [];
+  let redoStack = [];
+
+  // DOM elements
+  const paletteEl = document.getElementById('palette');
+  const boardEl = document.getElementById('board');
+  const exportArea = document.getElementById('exportArea');
+  const clearBtn = document.getElementById('clearBtn');
+  const fillGroundBtn = document.getElementById('fillGroundBtn');
+  const undoBtn = document.getElementById('undoBtn');
+  const redoBtn = document.getElementById('redoBtn');
+  const exportBtn = document.getElementById('exportBtn');
+  const importBtn = document.getElementById('importBtn');
+  const fileInput = document.getElementById('fileInput');
+
+  // Create a tile canvas for palette and cells
+  function createTileCanvas(tileId, size = CELL_SIZE) {
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    canvas.setAttribute('aria-label', TILE_DEFS.find(t=>t.id===tileId)?.name || tileId);
+    const ctx = canvas.getContext('2d');
+
+    let tileDef = TILE_DEFS.find(t => t.id === tileId);
+    if (!tileDef) return canvas;
+
+    tileDef.draw(ctx, size);
+    return canvas;
+  }
+
+  // Create palette UI
+  function buildPalette() {
+    // Clear existing tiles except h2
+    while (paletteEl.children.length > 1) paletteEl.removeChild(paletteEl.lastChild);
+
+    // Add tiles
+    TILE_DEFS.forEach(tile => {
+      const div = document.createElement('div');
+      div.className = 'tile';
+      div.dataset.tileId = tile.id;
+      div.tabIndex = 0;
+      div.title = tile.name;
+
+      const canvas = createTileCanvas(tile.id);
+      div.appendChild(canvas);
+      paletteEl.appendChild(div);
+
+      div.addEventListener('click', () => {
+        selectTile(tile.id);
+      });
+      div.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          selectTile(tile.id);
+        }
+      });
+    });
+
+    selectTile(selectedTileId);
+  }
+
+  function selectTile(tileId) {
+    selectedTileId = tileId;
+    paletteEl.querySelectorAll('.tile').forEach(tileDiv => {
+      if (tileDiv.dataset.tileId === tileId) {
+        tileDiv.classList.add('selected');
+        tileDiv.setAttribute('aria-pressed', 'true');
+      } else {
+        tileDiv.classList.remove('selected');
+        tileDiv.setAttribute('aria-pressed', 'false');
+      }
+    });
+  }
+
+  // Build board grid
+  function buildBoard() {
+    // Clear board
+    boardEl.innerHTML = '';
+    boardEl.style.gridTemplateColumns = `repeat(${COLS}, ${CELL_SIZE}px)`;
+    boardEl.style.gridTemplateRows = `repeat(${ROWS}, ${CELL_SIZE}px)`;
+
+    for(let r=0; r<ROWS; r++) {
+      for(let c=0; c<COLS; c++) {
+        const cell = document.createElement('div');
+        cell.className = 'cell';
+        cell.dataset.row = r;
+        cell.dataset.col = c;
+        cell.setAttribute('role', 'gridcell');
+        cell.tabIndex = -1;
+
+        // fill tile canvas inside cell
+        updateCell(cell, r, c);
+
+        cell.addEventListener('click', () => {
+          setCell(r, c, selectedTileId);
+        });
+
+        cell.addEventListener('keydown', e => {
+          // Allow keyboard editing
+          if (e.key === 'Enter' || e.key === ' ') {
+            setCell(r, c, selectedTileId);
+            e.preventDefault();
+          } else if (e.key === 'ArrowRight') {
+            // Navigate right
+            let nr = r;
+            let nc = c + 1;
+            if (nc >= COLS) {
+              nr = (r + 1) % ROWS;
+              nc = 0;
+            }
+            focusCell(nr, nc);
+            e.preventDefault();
+          } else if (e.key === 'ArrowLeft') {
+            let nr = r;
+            let nc = c - 1;
+            if (nc < 0) {
+              nr = (r - 1 + ROWS) % ROWS;
+              nc = COLS -1;
+            }
+            focusCell(nr, nc);
+            e.preventDefault();
+          } else if (e.key === 'ArrowDown') {
+            let nr = (r + 1) % ROWS;
+            focusCell(nr, c);
+            e.preventDefault();
+          } else if (e.key === 'ArrowUp') {
+            let nr = (r - 1 + ROWS) % ROWS;
+            focusCell(nr, c);
+            e.preventDefault();
+          }
+        });
+
+        boardEl.appendChild(cell);
+      }
+    }
+  }
+  function focusCell(row, col) {
+    const idx = row * COLS + col;
+    const cell = boardEl.children[idx];
+    if (cell) {
+      cell.focus();
+    }
+  }
+  // Update a single cell tile graphics
+  function updateCell(cell, row, col) {
+    let idx = row * COLS + col;
+    let tileId = boardData[idx];
+    // Remove old canvas if any
+    while(cell.firstChild) cell.removeChild(cell.firstChild);
+    if (tileId !== 'empty') {
+      const canvas = createTileCanvas(tileId);
+      cell.appendChild(canvas);
+    } else {
+      // Just empty cell with border
+    }
+  }
+
+  // Set the tile of a cell and push the change for undo
+  function setCell(row, col, tileId) {
+    const idx = row * COLS + col;
+    const oldTile = boardData[idx];
+    if (oldTile !== tileId) {
+      pushUndo([{row, col, oldTile, newTile: tileId}]);
+      boardData[idx] = tileId;
+      const cell = boardEl.children[idx];
+      updateCell(cell, row, col);
+      redoStack.length = 0; // clear redo stack after new action
+    }
+  }
+
+  // Clear entire board and push undo
+  function clearBoard() {
+    const changes = [];
+    for(let i=0; i<boardData.length; i++) {
+      if (boardData[i] !== 'empty') {
+        changes.push({
+          row: Math.floor(i / COLS),
+          col: i % COLS,
+          oldTile: boardData[i],
+          newTile: 'empty'
+        });
+        boardData[i] = 'empty';
+      }
+    }
+    if(changes.length > 0) {
+      pushUndo(changes);
+      renderBoard();
+      redoStack.length = 0;
+    }
+  }
+
+  // Fill bottom row(s) ground blocks and push undo
+  // Usually ground is the bottom 2-3 rows of the level
+  function fillGround() {
+    const changes = [];
+    const rowsToFill = [ROWS-1, ROWS-2];
+    rowsToFill.forEach(r => {
+      for(let c=0; c<COLS; c++) {
+        let idx = r * COLS + c;
+        if (boardData[idx] !== 'ground') {
+          changes.push({row: r, col: c, oldTile: boardData[idx], newTile: 'ground'});
+          boardData[idx] = 'ground';
+        }
+      }
+    });
+    if (changes.length > 0) {
+      pushUndo(changes);
+      renderBoard();
+      redoStack.length = 0;
+    }
+  }
+
+  // Render entire board (update all cells)
+  function renderBoard() {
+    for(let r=0; r<ROWS; r++) {
+      for(let c=0; c<COLS; c++) {
+        let cell = boardEl.children[r * COLS + c];
+        updateCell(cell, r, c);
+      }
+    }
+  }
+
+  // Undo/Redo
+
+  function pushUndo(changes) {
+    undoStack.push(changes);
+    if(undoStack.length > 100) undoStack.shift(); // keep max 100
+    updateUndoRedoButtons();
+  }
+
+  function undo() {
+    if(undoStack.length === 0) return;
+    const changes = undoStack.pop();
+    const redoChanges = [];
+    changes.forEach(({row, col, oldTile, newTile}) => {
+      let idx = row * COLS + col;
+      redoChanges.push({row, col, oldTile: boardData[idx], newTile: oldTile});
+      boardData[idx] = oldTile;
+    });
+    redoStack.push(redoChanges);
+    renderBoard();
+    updateUndoRedoButtons();
+  }
+
+  function redo() {
+    if(redoStack.length === 0) return;
+    const changes = redoStack.pop();
+    const undoChanges = [];
+    changes.forEach(({row, col, oldTile, newTile}) => {
+      let idx = row * COLS + col;
+      undoChanges.push({row, col, oldTile: boardData[idx], newTile: newTile});
+      boardData[idx] = newTile;
+    });
+    undoStack.push(undoChanges);
+    renderBoard();
+    updateUndoRedoButtons();
+  }
+
+  function updateUndoRedoButtons() {
+    undoBtn.disabled = undoStack.length === 0;
+    redoBtn.disabled = redoStack.length === 0;
+  }
+
+  // Export level to JSON string
+  function exportLevel() {
+    const exportObj = {
+      rows: ROWS,
+      cols: COLS,
+      tiles: boardData
+    };
+    return JSON.stringify(exportObj, null, 2);
+  }
+
+  // Import level JSON string
+  function importLevel(jsonStr) {
+    try {
+      const obj = JSON.parse(jsonStr);
+      if (typeof obj !== 'object' || !Array.isArray(obj.tiles)) {
+        alert('Invalid level format.');
+        return false;
+      }
+      if (obj.rows !== ROWS || obj.cols !== COLS) {
+        alert(`Level size mismatch. Expected ${COLS}x${ROWS}.`);
+        return false;
+      }
+      // Validate tiles are known ids
+      for(let t of obj.tiles) {
+        if (!TILE_DEFS.some(tile => tile.id === t)) {
+          alert(`Unknown tile id in level: ${t}`);
+          return false;
+        }
+      }
+      return obj.tiles;
+    } catch(e) {
+      alert('Failed to parse JSON: ' + e.message);
+      return false;
+    }
+  }
+
+  // Set board data and refresh
+  function loadBoard(tiles) {
+    pushUndo(boardData.map((oldTile, i) => {
+      return { row: Math.floor(i / COLS), col: i % COLS, oldTile, newTile: tiles[i] };
+    }));
+    boardData = tiles.slice();
+    renderBoard();
+    redoStack.length = 0;
+    updateUndoRedoButtons();
+  }
+
+  // Initialize app
+  function init() {
+    buildPalette();
+    buildBoard();
+    updateUndoRedoButtons();
+
+    clearBtn.addEventListener('click', () => {
+      clearBoard();
+    });
+    fillGroundBtn.addEventListener('click', () => {
+      fillGround();
+    });
+    undoBtn.addEventListener('click', () => {
+      undo();
+    });
+    redoBtn.addEventListener('click', () => {
+      redo();
+    });
+    exportBtn.addEventListener('click', () => {
+      const json = exportLevel();
+      exportArea.value = json;
+      exportArea.focus();
+      exportArea.select();
+    });
+    importBtn.addEventListener('click', () => {
+      fileInput.click();
+    });
+    fileInput.addEventListener('change', e => {
+      if (fileInput.files.length === 0) return;
+      const file = fileInput.files[0];
+      const reader = new FileReader();
+      reader.onload = () => {
+        let tiles = importLevel(reader.result);
+        if (tiles) {
+          loadBoard(tiles);
+          exportArea.value = "";
+        }
+      };
+      reader.readAsText(file);
+      fileInput.value = '';
+    });
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>
