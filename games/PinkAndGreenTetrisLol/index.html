@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pink & Green Tetris</title>
+<style>
+  /* Reset and base */
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    background: #111;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    min-height: 100vh;
+    margin: 0;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    color: #eee;
+    user-select: none;
+  }
+
+  h1 {
+    margin: 0 0 10px 0;
+    color: #FF69B4; /* hotpink */
+    text-shadow: 0 0 6px #FF69B4;
+  }
+
+  #container {
+    margin-top: 20px;
+    display: flex;
+    gap: 20px;
+  }
+
+  /* Canvas for the tetris grid */
+  #tetris {
+    background: #155214; /* dark green background */
+    box-shadow: 0 0 15px #4ade80;
+    border: 5px solid #4ade80; /* vivid green border */
+    image-rendering: pixelated;
+  }
+
+  /* Next piece preview */
+  #next-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  #next-container h2 {
+    color: #FF69B4;
+    margin-bottom: 8px;
+  }
+  canvas#next {
+    background: #155214;
+    border: 3px solid #4ade80;
+    image-rendering: pixelated;
+  }
+
+  /* Info panel with score and controls */
+  #info {
+    margin-top: 15px;
+    color: #eee;
+    max-width: 200px;
+    font-size: 14px;
+    line-height: 1.4;
+  }
+  #score {
+    font-size: 1.2rem;
+    margin-bottom: 12px;
+    color: #FF69B4;
+    text-shadow: 0 0 5px #FF69B4;
+  }
+  #controls {
+    user-select: none;
+  }
+  #start-button {
+    display: inline-block;
+    margin-top: 10px;
+    padding: 10px 18px;
+    background: #FF69B4;
+    border: none;
+    border-radius: 4px;
+    color: #111;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.3s ease;
+    box-shadow: 0 0 8px #FF69B4;
+  }
+  #start-button:hover {
+    background: #ff85c1;
+  }
+  #start-button:disabled {
+    background: #cc6699;
+    cursor: default;
+    box-shadow: none;
+  }
+  small {
+    display: block;
+    margin-top: 12px;
+    color: #88cc88;
+  }
+</style>
+</head>
+<body>
+  <div>
+    <h1>Pink &amp; Green Tetris</h1>
+    <div id="container">
+      <canvas id="tetris" width="240" height="400"></canvas>
+      <div id="next-container">
+        <h2>Next</h2>
+        <canvas id="next" width="80" height="80"></canvas>
+        <div id="info">
+          <div id="score">Score: 0</div>
+          <button id="start-button">Start Game</button>
+          <small>Controls:</small>
+          <small>← Move Left</small>
+          <small>→ Move Right</small>
+          <small>↑ Rotate</small>
+          <small>↓ Soft Drop</small>
+          <small>Space Hard Drop</small>
+          <small>P Pause / Resume</small>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('tetris');
+  const context = canvas.getContext('2d');
+  context.scale(20, 20);
+
+  const nextCanvas = document.getElementById('next');
+  const nextCtx = nextCanvas.getContext('2d');
+  nextCtx.scale(20, 20);
+
+  const scoreElement = document.getElementById('score');
+  const startButton = document.getElementById('start-button');
+
+  const ROWS = 20;
+  const COLS = 12;
+
+  // Colors for pieces - pink and green themed
+  // We'll blend pink and green shades for each piece
+  const colors = [
+    null,
+    '#FF66B2', // Pink - I - Cyan usually, but pink here
+    '#33CC66', // Green - S
+    '#FF3399', // Pink - Z
+    '#4ADE80', // Green - L
+    '#FF85C1', // Pink - J
+    '#22AA44', // Green - O
+    '#FF007F'  // Pink - T
+  ];
+
+  // Tetrominoes 4x4 matrices
+  const pieces = {
+    I: [
+      [0,0,0,0,
+       1,1,1,1,
+       0,0,0,0,
+       0,0,0,0],
+      [0,0,1,0,
+       0,0,1,0,
+       0,0,1,0,
+       0,0,1,0],
+    ],
+    J: [
+      [2,0,0,
+       2,2,2,
+       0,0,0],
+      [0,2,2,
+       0,2,0,
+       0,2,0],
+      [0,0,0,
+       2,2,2,
+       0,0,2],
+      [0,2,0,
+       0,2,0,
+       2,2,0],
+    ],
+    L: [
+      [0,0,3,
+       3,3,3,
+       0,0,0],
+      [0,3,0,
+       0,3,0,
+       0,3,3],
+      [0,0,0,
+       3,3,3,
+       3,0,0],
+      [3,3,0,
+       0,3,0,
+       0,3,0],
+    ],
+    O: [
+      [4,4,
+       4,4],
+    ],
+    S: [
+      [0,5,5,
+       5,5,0,
+       0,0,0],
+      [0,5,0,
+       0,5,5,
+       0,0,5],
+    ],
+    T: [
+      [0,6,0,
+       6,6,6,
+       0,0,0],
+      [0,6,0,
+       0,6,6,
+       0,6,0],
+      [0,0,0,
+       6,6,6,
+       0,6,0],
+      [0,6,0,
+       6,6,0,
+       0,6,0],
+    ],
+    Z: [
+      [7,7,0,
+       0,7,7,
+       0,0,0],
+      [0,0,7,
+       0,7,7,
+       0,7,0],
+    ]
+  };
+
+  // We'll keep arrays for each piece with just one rotation expanded into 2D
+  // For rotations, to simplify, we generate the 2D arrays on the fly
+  // but to save effort: store arrays as 2d arrays now
+
+  // Convert the raw arrays of 1D into 2D arrays by size:
+  // For simplicity, do that now for pieces with different rotations.
+
+  function to2D(array, width) {
+    let result = [];
+    for (let y=0; y<array.length/width; y++) {
+      result[y] = array.slice(y*width, y*width+width);
+    }
+    return result;
+  }
+
+  // Will redefine pieces with 2D arrays
+  const PIECES = {
+    I: [
+      to2D([0,0,0,0,
+           1,1,1,1,
+           0,0,0,0,
+           0,0,0,0],4),
+      to2D([0,0,1,0,
+           0,0,1,0,
+           0,0,1,0,
+           0,0,1,0],4),
+    ],
+    J: [
+      to2D([2,0,0,
+           2,2,2,
+           0,0,0],3),
+      to2D([0,2,2,
+           0,2,0,
+           0,2,0],3),
+      to2D([0,0,0,
+           2,2,2,
+           0,0,2],3),
+      to2D([0,2,0,
+           0,2,0,
+           2,2,0],3),
+    ],
+    L: [
+      to2D([0,0,3,
+           3,3,3,
+           0,0,0],3),
+      to2D([0,3,0,
+           0,3,0,
+           0,3,3],3),
+      to2D([0,0,0,
+           3,3,3,
+           3,0,0],3),
+      to2D([3,3,0,
+           0,3,0,
+           0,3,0],3),
+    ],
+    O: [
+      to2D([4,4,
+           4,4],2),
+    ],
+    S: [
+      to2D([0,5,5,
+           5,5,0,
+           0,0,0],3),
+      to2D([0,5,0,
+           0,5,5,
+           0,0,5],3),
+    ],
+    T: [
+      to2D([0,6,0,
+           6,6,6,
+           0,0,0],3),
+      to2D([0,6,0,
+           0,6,6,
+           0,6,0],3),
+      to2D([0,0,0,
+           6,6,6,
+           0,6,0],3),
+      to2D([0,6,0,
+           6,6,0,
+           0,6,0],3),
+    ],
+    Z: [
+      to2D([7,7,0,
+           0,7,7,
+           0,0,0],3),
+      to2D([0,0,7,
+           0,7,7,
+           0,7,0],3),
+    ],
+  };
+
+  // Choose order of pieces in array form for picking randomly
+  const pieceKeys = Object.keys(PIECES);
+
+  // Game Board (field)
+  function createMatrix(w, h) {
+    const matrix = [];
+    for (let i=0; i<h; i++) {
+      matrix.push(new Array(w).fill(0));
+    }
+    return matrix;
+  }
+
+  // Check collision of piece and board
+  function collide(board, piece) {
+    const [matrix, pos] = piece;
+    for (let y=0; y<matrix.length; y++) {
+      for (let x=0; x<matrix[y].length; x++) {
+        if (
+          matrix[y][x] !== 0 &&
+          (board[y + pos.y] && board[y + pos.y][x + pos.x]) !== 0
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // Merge piece into board
+  function merge(board, piece) {
+    const [matrix, pos] = piece;
+    for (let y=0; y<matrix.length; y++) {
+      for (let x=0; x<matrix[y].length; x++) {
+        if (matrix[y][x] !== 0) {
+          board[y + pos.y][x + pos.x] = matrix[y][x];
+        }
+      }
+    }
+  }
+
+  // Clear full lines and return number cleared
+  function sweep() {
+    let rowCount = 0;
+    outer: for (let y = board.length -1; y >= 0; y--) {
+      for (let x = 0; x < board[y].length; x++) {
+        if (board[y][x] === 0) {
+          continue outer;
+        }
+      }
+      // Remove row y
+      const row = board.splice(y,1)[0].fill(0);
+      board.unshift(row);
+      y++;
+      rowCount++;
+    }
+    return rowCount;
+  }
+
+  // Draw a matrix to context at offset
+  function drawMatrix(matrix, offset, ctx= context) {
+    for (let y=0; y<matrix.length; y++) {
+      for (let x=0; x<matrix[y].length; x++) {
+        const val = matrix[y][x];
+        if (val !== 0) {
+          ctx.fillStyle = colors[val];
+          ctx.shadowColor = colors[val];
+          ctx.shadowBlur = 8;
+          ctx.fillRect(x + offset.x, y + offset.y, 1, 1);
+          ctx.shadowBlur = 0;
+        }
+      }
+    }
+  }
+
+  // Clear entire canvas
+  function clearCanvas(ctx, width, height) {
+    ctx.clearRect(0, 0, width, height);
+  }
+
+  // Rotate matrix (clockwise)
+  function rotate(matrix, dir=1) {
+    const N = matrix.length;
+    const result = [];
+    for (let y=0; y<N; y++) {
+      result.push(new Array(N).fill(0));
+    }
+
+    for (let y=0; y<N; y++) {
+      for (let x=0; x<N; x++) {
+        if (dir > 0) {
+          result[x][N-1-y] = matrix[y][x];
+        } else {
+          result[N-1-x][y] = matrix[y][x];
+        }
+      }
+    }
+    return result;
+  }
+
+  // Player Object holds current piece
+  const player = {
+    pos: {x:0,y:0},
+    matrix: null,
+    rotationIndex: 0,
+    pieceKey: null,
+  };
+
+  // Next piece info
+  let nextPieceKey = null;
+  let nextRotationIndex = 0;
+
+  // Board variable
+  let board = createMatrix(COLS, ROWS);
+
+  // Score variable
+  let score = 0;
+
+  // Game state
+  let dropCounter = 0;
+  let dropInterval = 800; // ms - speed increases as levels advance
+  let lastTime = 0;
+  let gameOver = false;
+  let paused = false;
+
+  // Holds the current animation frame ID
+  let animationFrameId = null;
+
+  // Functions to reset and pick piece
+  function resetPlayer() {
+    player.pieceKey = nextPieceKey || pieceKeys[randomPieceIndex()];
+    player.rotationIndex = 0;
+    player.matrix = PIECES[player.pieceKey][player.rotationIndex];
+    player.pos.y = 0;
+    player.pos.x = Math.floor((COLS - player.matrix[0].length) /2);
+    nextPieceKey = pieceKeys[randomPieceIndex()];
+    nextRotationIndex = 0;
+  }
+
+  // Random index helper
+  function randomPieceIndex() {
+    return Math.floor(Math.random() * pieceKeys.length);
+  }
+
+  // Drop piece by 1 or lock it if collides
+  function playerDrop() {
+    player.pos.y++;
+    if (collide(board, [player.matrix, player.pos])) {
+      player.pos.y--;
+      merge(board, [player.matrix, player.pos]);
+      const cleared = sweep();
+      if (cleared > 0) {
+        updateScore(cleared);
+      }
+      resetPlayer();
+      if (collide(board, [player.matrix, player.pos])) {
+        // Game Over
+        endGame();
+      }
+    }
+    dropCounter = 0;
+  }
+
+  // Move piece left or right
+  function playerMove(dir) {
+    player.pos.x += dir;
+    if (collide(board, [player.matrix, player.pos])) {
+      player.pos.x -= dir;
+    }
+  }
+
+  // Rotate piece
+  function playerRotate(dir) {
+    const prevRotation = player.rotationIndex;
+    let newRotation = (player.rotationIndex + dir);
+    const pieceVariants = PIECES[player.pieceKey];
+    if (newRotation < 0) newRotation = pieceVariants.length - 1;
+    else if (newRotation >= pieceVariants.length) newRotation = 0;
+    const rotatedMatrix = pieceVariants[newRotation];
+    const posX = player.pos.x;
+    let offset = 0;
+    player.matrix = rotatedMatrix;
+    player.rotationIndex = newRotation;
+
+    // Wall kick logic - try shifting left/right if collides
+    while (collide(board, [player.matrix, player.pos])) {
+      offset = (offset === 0) ? 1 : -(offset + (offset > 0 ? 1 : -1));
+      player.pos.x += offset;
+      if (Math.abs(offset) > player.matrix[0].length) {
+        // Can't rotate, revert
+        player.pos.x = posX;
+        player.matrix = pieceVariants[prevRotation];
+        player.rotationIndex = prevRotation;
+        return;
+      }
+    }
+  }
+
+  // Hard drop piece instantly
+  function playerHardDrop() {
+    while (!collide(board, [player.matrix, {x: player.pos.x, y: player.pos.y + 1}])) {
+      player.pos.y++;
+    }
+    playerDrop();
+  }
+
+  // Update score according to number of lines cleared
+  // Scoring: single=40, double=100, triple=300, tetris=1200 (classic scoring, multiplied by level)
+  // Level increases every 10 lines cleared
+  let totalLines = 0;
+  let level = 0;
+
+  function updateScore(clearedLines){
+    const lineScores = [0, 40, 100, 300, 1200];
+    score += lineScores[clearedLines]*(level+1);
+    totalLines += clearedLines;
+    const newLevel = Math.floor(totalLines / 10);
+    if (newLevel > level) {
+      level = newLevel;
+      dropInterval = Math.max(100, 800 - level*70);
+    }
+    scoreElement.textContent = `Score: ${score}`;
+  }
+
+  // Draw game state
+  function draw() {
+    clearCanvas(context, canvas.width, canvas.height);
+    drawMatrix(board, {x:0,y:0});
+    drawMatrix(player.matrix, player.pos);
+
+    // Draw next piece preview
+    clearCanvas(nextCtx, nextCanvas.width, nextCanvas.height);
+    if(nextPieceKey){
+      const pieceVariants = PIECES[nextPieceKey];
+      const nextMatrix = pieceVariants[nextRotationIndex];
+      // Offset so next piece centered in next canvas: 4x4 or 3x3 or 2x2
+      let offsetX = 0;
+      let offsetY = 0;
+      if(nextMatrix.length === 4){
+        offsetX = 0;
+        offsetY = 0;
+      } else if(nextMatrix.length === 3){
+        offsetX = 0.5;
+        offsetY = 0.5;
+      } else if(nextMatrix.length ===2){
+        offsetX = 1;
+        offsetY = 1;
+      }
+      drawMatrix(nextMatrix, {x: offsetX, y: offsetY}, nextCtx);
+    }
+  }
+
+  // Game loop
+  function update(time = 0) {
+    if(gameOver || paused){
+      animationFrameId = requestAnimationFrame(update);
+      return;
+    }
+    const deltaTime = time - lastTime;
+    lastTime = time;
+
+    dropCounter += deltaTime;
+    if(dropCounter > dropInterval){
+      playerDrop();
+    }
+
+    draw();
+    animationFrameId = requestAnimationFrame(update);
+  }
+
+  // Reset everything
+  function resetGame() {
+    board = createMatrix(COLS, ROWS);
+    score = 0;
+    level = 0;
+    totalLines = 0;
+    dropInterval = 800;
+    scoreElement.textContent = `Score: ${score}`;
+    gameOver = false;
+    paused = false;
+    nextPieceKey = pieceKeys[randomPieceIndex()];
+    resetPlayer();
+  }
+
+  // End game state
+  function endGame() {
+    gameOver = true;
+    paused = false;
+    alert(`Game Over!\nYour score: ${score}`);
+    startButton.disabled = false;
+  }
+
+  // Pause toggle
+  function togglePause() {
+    if(gameOver) return;
+    paused = !paused;
+    if(!paused){
+      lastTime = performance.now();
+    }
+  }
+
+  // Event handlers
+
+  document.addEventListener('keydown', event => {
+    if(gameOver || paused) {
+      if(event.key === 'p' || event.key === 'P'){
+        togglePause();
+      }
+      return;
+    }
+    switch(event.key){
+      case 'ArrowLeft':
+        event.preventDefault();
+        playerMove(-1);
+        break;
+      case 'ArrowRight':
+        event.preventDefault();
+        playerMove(1);
+        break;
+      case 'ArrowDown':
+        event.preventDefault();
+        playerDrop();
+        break;
+      case 'ArrowUp':
+        event.preventDefault();
+        playerRotate(1);
+        break;
+      case ' ':
+        event.preventDefault();
+        playerHardDrop();
+        break;
+      case 'p':
+      case 'P':
+        event.preventDefault();
+        togglePause();
+        break;
+    }
+    draw();
+  });
+
+  startButton.addEventListener('click', () => {
+    resetGame();
+    startButton.disabled = true;
+    lastTime = performance.now();
+    if(animationFrameId) cancelAnimationFrame(animationFrameId);
+    animationFrameId = requestAnimationFrame(update);
+  });
+
+  // Draw startup screen with instructions
+  function startupScreen() {
+    clearCanvas(context, canvas.width, canvas.height);
+    context.fillStyle = '#4ADE80';
+    context.font = '1rem monospace';
+    context.textAlign = 'center';
+    const lines = [
+      'Pink & Green Tetris',
+      '',
+      'Press "Start Game" to play',
+      'Controls:',
+      '← Move Left',
+      '→ Move Right',
+      '↑ Rotate',
+      '↓ Soft Drop',
+      'Space Hard Drop',
+      'P Pause / Resume'
+    ];
+    lines.forEach((line, i) => {
+      context.fillText(line, COLS/2, ROWS/2 - 5 + i * 1.2);
+    });
+  }
+
+  // Init
+  startupScreen();
+
+})();
+</script>
+</body>
+</html>
