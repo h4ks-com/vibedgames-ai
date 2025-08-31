@@ -5,6 +5,7 @@ const gameScreen = document.querySelector('.game-screen');
 const settingsBtn = document.getElementById('settingsBtn');
 const highScoresBtn = document.getElementById('highScoresBtn');
 const exitBtn = document.getElementById('exitBtn');
+const pauseBtn = document.getElementById('pauseBtn');
 const resumeBtn = document.getElementById('resumeBtn');
 const restartBtn = document.getElementById('restartBtn');
 const mainMenuBtn = document.getElementById('mainMenuBtn');
@@ -27,10 +28,10 @@ const linesDisplay = document.getElementById('linesDisplay');
 const highScoreList = document.getElementById('highScoreList');
 
 // Buttons
-const pauseBtn = document.getElementById('pauseBtn');
-const resumeBtn = document.getElementById('resumeBtn');
-const restartBtnGame = document.getElementById('restartBtn');
-const mainMenuBtnGame = document.getElementById('mainMenuBtn');
+const pauseBtnDom = document.getElementById('pauseBtn');
+const resumeBtnDom = document.getElementById('resumeBtn');
+const restartBtnDom = document.getElementById('restartBtn');
+const mainMenuBtnDom = document.getElementById('mainMenuBtn');
 
 // Settings
 const soundToggle = document.getElementById('soundToggle');
@@ -138,7 +139,6 @@ function checkCollision(piece, dx=0, dy=0, rotation=null) {
       if (shape[y][x]) {
         let newX = piece.x + x + dx;
         let newY = piece.y + y + dy;
-  
         if (newX<0 || newX>=10 || newY>=20 || (newY>=0 && grid[newY][newX])) {
           return true;
         }
