@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang='en'>
+<head>
+  <meta charset='UTF-8'>
+  <meta name='viewport' content='width=device-width, initial-scale=1'>
+  <title>Mini Platformer - Canvas</title>
+  <style>
+    :root {
+      --bg: #1e1e1e;
+      --platform: #7a5230;
+      --coin: #f7d046;
+      --player: #2e7bd6;
+      --enemy: #e74c3c;
+      --flag: #2ecc71;
+      --text: #eaeaea;
+      --shadow: rgba(0,0,0,0.4);
+    }
+    html, body { height: 100%; margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: system-ui, Arial, sans-serif; }
+    .game-shell {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      width: 100%; height: 100%; position: relative; overflow: hidden;
+    }
+    canvas { background: linear-gradient(#87ceeb 0%, #87ceeb 60%, #6bd56b 60%, #6bd56b 100%); border: 1px solid #555; border-radius: 6px; display: block; }
+    .hud { position: absolute; top: 8px; left: 8px; right: 8px; display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; pointer-events: none; }
+    .hud span { background: rgba(0,0,0,0.5); padding: 6px 10px; border-radius: 6px; font-size: 14px; color: #fff; box-shadow: 0 2px 6px rgba(0,0,0,0.3); }
+    .controls-overlay { position: absolute; left: 10px; bottom: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; max-width: 320px; }
+    .touch-btn { width: 64px; height: 64px; border-radius: 12px; border: 2px solid #fff; background: rgba(0,0,0,0.25); color: #fff; font-size: 20px; }
+    #kbToggle { position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,0.5); border:1px solid #444; color:#fff; padding:6px 10px; border-radius:6px; }
+    .overlay { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); color: #fff; font-size: 20px; }
+    .overlay.active { display: flex; flex-direction: column; gap: 12px; }
+    .overlay button { padding: 8px 14px; font-size: 16px; border-radius: 6px; border: none; cursor: pointer; }
+    .parallax { position: absolute; width: 200%; height: 100%; left: -50%; top: 0; background: linear-gradient(#9bd3ff 0%, #e0f0ff 60%, #9bd3ff 100%); z-index: 0; opacity: 0.5; }
+    /* Accessibility: high-contrast toggle (optional) */
+    .high-contrast { filter: contrast(1.1) saturate(1.1); }
+    @media (max-width: 800px) {
+      canvas { width: 100%; height: auto; }
+      .hud { font-size: 12px; padding: 4px; }
+    }
+  </style>
+</head>
+<body>
+  <div class='game-shell'>
+    <div class='parallax' aria-hidden='true'></div>
+    <canvas id='game' width='960' height='540' aria-label='Platformer game canvas'></canvas>
+    <div class='hud' aria-label='hud'>
+      <span id='coins'>Coins: 0</span>
+      <span id='time'>Time: 0</span>
+      <span id='levelInfo'>Level: 1</span>
+    </div>
+    <button id='kbToggle' aria-label='Keyboard accessibility toggle'>Keyboard: On</button>
+    <div class='controls-overlay' id='touchControls' aria-label='touch controls'>
+      <button class='touch-btn' id='btn-left' title='Move left'>&larr;</button>
+      <button class='touch-btn' id='btn-right' title='Move right'>&rarr;</button>
+      <button class='touch-btn' id='btn-jump' title='Jump'>↑</button>
+      <div></div>
+    </div>
+    <div class='overlay' id='pauseOverlay'>
+      <div>Paused</div>
+      <div>
+        <button id='resumeBtn'>Resume</button>
+        <button id='restartBtn'>Restart</button>
+      </div>
+    </div>
+  </div>
+  <script>
+    /* Mini Mario-like Canvas Platformer - single-file implementation
+       Core: 2D canvas, fixed-step physics, AABB collision, data-driven level, keyboard + touch input
+    */
+    (() => {
+      // Canvas setup
+      const canvas = document.getElementById('game');
+      const ctx = canvas.getContext('2d');
+      let dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+      function resizeCanvas() {
+        // Keep logical size consistent; scale for DPR
+        const logicalW = 960;
+        const logicalH = 540;
+        canvas.style.width = logicalW + 'px';
+        canvas.style.height = logicalH + 'px';
+        canvas.width = Math.floor(logicalW * dpr);
+        canvas.height = Math.floor(logicalH * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // scale drawing to DPR
+      }
+      window.addEventListener('resize', () => { dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2)); resizeCanvas(); });
+      resizeCanvas();
+
+      // Input handling
+      const input = {
+        left: false, right: false, jump: false
+      };
+      let kbOnly = false;
+      const keyMap = {
+        ArrowLeft: 'left', ArrowRight: 'right', KeyA: 'left', KeyD: 'right',
+        Space: 'jump', KeyW: 'jump'
+      };
+      window.addEventListener('keydown', (e) => {
+        const k = keyMap[e.code] || (e.key === 'ArrowLeft' ? 'left' : e.key === 'ArrowRight' ? 'right' : '' );
+        if (e.code in keyMap) {
+          input[keyMap[e.code]] = true;
+          e.preventDefault();
+        } else if (e.code === 'KeyK' && (e.shiftKey || e.metaKey)) {
+          // quick toggle for accessibility
+        }
+      });
+      window.addEventListener('keyup', (e) => {
+        if (e.code in keyMap) {
+          input[keyMap[e.code]] = false;
+          e.preventDefault();
+        }
+      });
+
+      // Touch controls
+      const touchBtns = {
+        left: document.getElementById('btn-left'),
+        right: document.getElementById('btn-right'),
+        jump: document.getElementById('btn-jump')
+      };
+      function bindTouch(btn, action) {
+        if (!btn) return;
+        btn.addEventListener('touchstart', (e) => { input[action] = true; e.preventDefault(); }, {passive:false});
+        btn.addEventListener('touchend', (e) => { input[action] = false; e.preventDefault(); }, {passive:false});
+        btn.addEventListener('mousedown', () => { input[action] = true; }, {passive:true});
+        btn.addEventListener('mouseup', () => { input[action] = false; }, {passive:true});
+        btn.addEventListener('mouseleave', () => { input[action] = false; }, {passive:true});
+      }
+      bindTouch(touchBtns.left, 'left');
+      bindTouch(touchBtns.right, 'right');
+      bindTouch(touchBtns.jump, 'jump');
+
+      // Accessibility toggle
+      const kbBtn = document.getElementById('kbToggle');
+      kbBtn.addEventListener('click', () => {
+        kbOnly = !kbOnly; // toggle keyboard-only mode
+        document.querySelectorAll('.touch-btn').forEach(b => b.style.display = kbOnly ? 'none' : 'inline-block');
+        kbBtn.textContent = 'Keyboard: ' + (kbOnly ? 'Off' : 'On');
+      });
+
+      // Debug and UI elements
+      const coinsView = document.getElementById('coins');
+      const timeView  = document.getElementById('time');
+      const levelView = document.getElementById('levelInfo');
+      const pauseOverlay = document.getElementById('pauseOverlay');
+      const resumeBtn = document.getElementById('resumeBtn');
+      const restartBtn = document.getElementById('restartBtn');
+      const canvasWrap = document.querySelector('.game-shell');
+
+      // World/time helpers
+      const GRAVITY = 1000; // px/s^2
+      const MOVE_ACCEL = 1200; // px/s^2
+      const MAX_SPEED = 260; // px/s
+      const JUMP_IMPULSE = 420; // px/s initial velocity
+      const FRICTION = 0.85; // ground friction per frame-ish (tighten in update)
+      const MAX_FALL = 600; // terminal velocity
+
+      // Fixed time step
+      const dt = 1/60;
+
+      // Helpers: AABB
+      function aabb(a, b) {
+        return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+      }
+
+      // Level data (single level for now)
+      class Platform { constructor(x,y,w,h){ this.x=x; this.y=y; this.w=w; this.h=h; } render(ctx, offsetX){ ctx.fillStyle = '#7a5230'; ctx.fillRect(this.x - offsetX, this.y, this.w, this.h); } }
+      class Coin { constructor(x,y,r){ this.x=x; this.y=y; this.r=r; this.collected=false; } render(ctx, offsetX){ if(this.collected) return; ctx.save(); ctx.fillStyle = '#f5d742'; ctx.beginPath(); ctx.arc(this.x - offsetX, this.y, this.r, 0, Math.PI*2); ctx.fill(); ctx.restore(); }
+        tryCollect(px, py, pw, ph){ // simple center distance
+          const cx = px + pw/2; const cy = py; // player's top center
+          const dx = (this.x) - cx; const dy = (this.y) - cy; const dist = Math.sqrt(dx*dx + dy*dy);
+          if (!this.collected && dist < this.r + Math.min(pw, ph)/2) {
+            this.collected = true; return true;
+          }
+          return false;
+        }
+      }
+      class Enemy { constructor(x,y,w,h,pl,pr){ this.x=x; this.y=y; this.w=w; this.h=h; this.patrolMinX=pl; this.patrolMaxX=pr; this.vx=60; } update(dt){ // simple patrol
+          this.x += this.vx * dt; if(this.x < this.patrolMinX){ this.x = this.patrolMinX; this.vx = Math.abs(this.vx); } else if (this.x + this.w > this.patrolMaxX){ this.x = this.patrolMaxX - this.w; this.vx = -Math.abs(this.vx); }
+        } render(ctx, offsetX){ ctx.fillStyle = '#e74c3c'; ctx.fillRect(this.x - offsetX, this.y, this.w, this.h); }
+      }
+      class Flag { constructor(x,y,w,h){ this.x=x; this.y=y; this.w=w; this.h=h; this.reached=false; } render(ctx, offsetX){ ctx.fillStyle = '#2ecc71'; // pole
+        ctx.fillRect(this.x - offsetX + this.w/2 - 2, this.y - this.h, 4, this.h); // simple pole
+        ctx.fillStyle = '#2ecc71'; // flag
+        ctx.fillRect(this.x - offsetX + this.w/2, this.y - this.h, this.w, 6);
+      } intersects(px, py, pw, ph){ const a = {x: this.x - offsetX, y: this.y - this.h, w: this.w, h: this.h}; // not used; left for future
+        return false; }
+      }
+
+      // Level data
+      const levelData = {
+        name: 'Level 1', width: 2000, height: 600,
+        start: {x: 50, y: 520},
+        platforms: [
+          {x: 0, y: 540, w: 2000, h: 20}, // ground
+          {x: 150, y: 480, w: 180, h: 20},
+          {x: 420, y: 420, w: 180, h: 20},
+          {x: 700, y: 360, w: 200, h: 20},
+          {x: 970, y: 420, w: 240, h: 20},
+          {x: 1250, y: 480, w: 260, h: 20},
+          {x: 1600, y: 400, w: 200, h: 20},
+          {x: 1850, y: 480, w: 120, h: 20}
+        ],
+        coins: [ {x:180, y:500, r:8}, {x:460, y:440, r:8}, {x:600, y:400, r:8}, {x:900, y:420, r:8}, {x:1100, y:480, r:8}, {x:1400, y:460, r:8}, {x:1800, y:420, r:8} ],
+        enemy: {x:520, y:420, w:40, h:40, patrolMinX:520, patrolMaxX:760},
+        flag: {x:1900, y: 420, w: 40, h: 60}
+      };
+
+      // Game state
+      let level = {
+        width: levelData.width,
+        height: levelData.height,
+        platforms: levelData.platforms.map(p => new Platform(p.x, p.y, p.w, p.h)),
+        coins: levelData.coins.map(c => new Coin(c.x, c.y, c.r)),
+        enemy: new Enemy(levelData.enemy.x, levelData.enemy.y, levelData.enemy.w, levelData.enemy.h, levelData.enemy.patrolMinX, levelData.enemy.patrolMaxX),
+        flag: new Flag(levelData.flag.x, levelData.flag.y, levelData.flag.w, levelData.flag.h)
+      };
+
+      let player = {
+        x: levelData.start.x, y: levelData.start.y,
+        w: 40, h: 60,
+        vx: 0, vy: 0,
+        onGround: false,
+        startX: levelData.start.x, startY: levelData.start.y
+      };
+
+      // World rendering helpers
+      let cameraX = 0;
+      function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+
+      // Game state variables
+      let coinsCollected = 0;
+      let timeElapsed = 0; let paused = false; let debug = false;
+      let levelIndex = 0; // single level for now
+
+      // Reusable rect for AABB
+      function playerRect(){ return { x: player.x, y: player.y, w: player.w, h: player.h }; }
+
+      // Collision with platforms (AABB) resolver for the player
+      function resolvePlatformCollisions(dt){
+        // Move along X and resolve with platforms first
+        // Horizontal movement
+        player.x += player.vx * dt;
+        let maybeCollision = level.platforms.find(pl => aabb({x: player.x, y: player.y, w: player.w, h: player.h}, pl));
+        if (maybeCollision){
+          // push out based on velocity direction
+          if (player.vx > 0){ // moving right
+            player.x = maybeCollision.x - player.w;
+          } else if (player.vx < 0){ // moving left
+            player.x = maybeCollision.x + maybeCollision.w;
+          }
+          player.vx = 0;
+        }
+
+        // Vertical movement
+        player.y += player.vy * dt;
+        player.onGround = false;
+        for (let plat of level.platforms){
+          if (aabb(player, plat)){
+            if (player.vy > 0){ // falling
+              player.y = plat.y - player.h;
+              player.vy = 0;
+              player.onGround = true;
+            } else if (player.vy < 0){ // jumping up
+              player.y = plat.y + plat.h;
+              player.vy = 0;
+            }
+          }
+        }
+
+        // Boundaries
+        if (player.x < 0) { player.x = 0; player.vx = 0; }
+        if (player.x + player.w > level.width) { player.x = level.width - player.w; player.vx = 0; }
+        if (player.y < 0) { player.y = 0; player.vy = 0; }
+        if (player.y + player.h > level.height) {
+          // fell off - reset to start (simple fail state)
+          player.x = levelData.start.x; player.y = levelData.start.y; player.vx = 0; player.vy = 0; timeElapsed = 0; coinsCollected = 0; // reset progress for simplicity
+          // also reset coins/level objects
+          level.coins.forEach(c => c.collected = false);
+        }
+      }
+
+      // Initialize objects
+      function resetLevel(){
+        level.platforms = levelData.platforms ? levelData.platforms.map(p => new Platform(p.x, p.y, p.w, p.h)) : level.platforms;
+        // Recreate coins and enemy/flag
+        level.coins = levelData.coins.map(c => new Coin(c.x, c.y, c.r));
+        level.enemy = new Enemy(levelData.enemy.x, levelData.enemy.y, levelData.enemy.w, levelData.enemy.h, levelData.enemy.patrolMinX, levelData.enemy.patrolMaxX);
+        level.flag = new Flag(levelData.flag.x, levelData.flag.y, levelData.flag.w, levelData.flag.h);
+        player.x = levelData.start.x; player.y = levelData.start.y; player.vx = 0; player.vy = 0; 
+        timeElapsed = 0; coinsCollected = 0;
+      }
+
+      // Render
+      function render(){
+        // Clear
+        ctx.clearRect(0,0, canvas.clientWidth, canvas.clientHeight);
+        // Camera follows player
+        cameraX = player.x - canvas.clientWidth/2;
+        cameraX = clamp(cameraX, 0, level.width - canvas.clientWidth);
+        // Background gradient layers for parallax feel
+        const bgGrad = ctx.createLinearGradient(0, 0, 0, level.height);
+        bgGrad.addColorStop(0, '#87ceeb');
+        bgGrad.addColorStop(0.6, '#87ceeb');
+        bgGrad.addColorStop(1, '#6bd56b');
+        ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, level.width, level.height);
+        // Parallax decorative ground shadow
+        ctx.fillStyle = '#2d2d2d';
+        ctx.fillRect(-cameraX, level.height - 20, level.width, 20);
+
+        // Draw platforms
+        for (let p of level.platforms){ p.render(ctx, cameraX); }
+        // Draw coins
+        level.coins.forEach(c => c.render(ctx, cameraX));
+        // Draw enemy and flag
+        level.enemy.update(0); // no-op for rendering order; actual move in update
+        level.enemy.render(ctx, cameraX);
+        level.flag.render(ctx, cameraX);
+        // Draw player
+        ctx.fillStyle = '#2e7bd6';
+        ctx.fillRect(player.x - cameraX, player.y, player.w, player.h);
+        // Optional hitboxes for debug
+        if (debug){ ctx.strokeStyle = 'red'; ctx.lineWidth = 1; ctx.strokeRect(player.x - cameraX, player.y, player.w, player.h);
+          level.platforms.forEach(pl => { ctx.strokeStyle = '#ff0'; ctx.strokeRect(pl.x - cameraX, pl.y, pl.w, pl.h); });
+        }
+      }
+
+      // Update loop
+      function update(dtActual){
+        if (paused) return;
+        // Clamp dt to avoid big jumps
+        const dtClamp = Math.min(0.033, dtActual);
+        // Input smoothing
+        let moveDir = 0;
+        if (input.left) moveDir -= 1; if (input.right) moveDir += 1;
+        // Horizontal acceleration
+        if (moveDir !== 0){ player.vx += moveDir * MOVE_ACCEL * dtClamp; }
+        else { // friction when on ground
+          if (player.onGround){ player.vx *= 0.9; if (Math.abs(player.vx) < 5) player.vx = 0; } }
+        // Cap speed
+        if (player.vx > MAX_SPEED) player.vx = MAX_SPEED; if (player.vx < -MAX_SPEED) player.vx = -MAX_SPEED;
+
+        // Jumping (simple jump when pressed, no buffering for simplicity)
+        if (input.jump && player.onGround){ player.vy = -JUMP_IMPULSE; player.onGround = false; input.jump = false; }
+        // Gravity
+        player.vy += GRAVITY * dtClamp; if (player.vy > MAX_FALL) player.vy = MAX_FALL;
+
+        // Move & collisions
+        resolvePlatformCollisions(dtClamp);
+
+        // Enemy update (simple patrol; gravity already in collisions if it had platforms)
+        level.enemy.update(dtClamp);
+        // Boundary collision with enemy against platforms (very simple: if player intersects enemy, reset level)
+        if (aabb(player, level.enemy)) {
+          // reset to start for simplicity
+          player.x = levelData.start.x; player.y = levelData.start.y; player.vx = 0; player.vy = 0; timeElapsed = 0; coinsCollected = 0; level.coins.forEach(c => c.collected = false);
+        }
+        // Coin collection
+        for (let c of level.coins){ if (!c.collected && c.tryCollect) {} }
+        // Our simple collection: distance check
+        for (let c of level.coins){ if (!c.collected){ const dist = Math.hypot((player.x + player.w/2) - c.x, (player.y + player.h/2) - c.y); if (dist < c.r + Math.max(player.w, player.h)/2){ c.collected = true; coinsCollected++; } } }
+
+        // Flag check
+        if (aabb(player, { x: level.flag.x, y: level.flag.y, w: level.flag.w, h: level.flag.h })) {
+          // Level complete; show overlay
+          paused = true; document.getElementById('pauseOverlay').classList.add('active');
+          document.getElementById('resumeBtn').style.display = 'none';
+          timeElapsed = Math.floor(timeElapsed);
+        }
+
+        // Time and UI
+        timeElapsed += dtClamp;
+        coinsView.textContent = 'Coins: ' + coinsCollected;
+        timeView.textContent = 'Time: ' + Math.floor(timeElapsed);
+        levelView.textContent = 'Level: ' + (levelIndex + 1);
+      }
+
+      // Main loop with fixed-step accumulator
+      let lastTime = performance.now();
+      let acc = 0;
+      function frame(now){
+        const dtNow = Math.min(0.05, (now - lastTime) / 1000);
+        lastTime = now; acc += dtNow;
+        while (acc >= dt){ update(dt); acc -= dt; }
+        render();
+        requestAnimationFrame(frame);
+      }
+      requestAnimationFrame(frame);
+
+      // Pause/resume controls
+      window.addEventListener('keydown', (e)=>{ if (e.code === 'KeyP'){ paused = !paused; document.getElementById('pauseOverlay').classList.toggle('active', paused); } });
+      resumeBtn?.addEventListener('click', ()=>{ paused = false; document.getElementById('pauseOverlay').classList.remove('active'); });
+      restartBtn?.addEventListener('click', ()=>{ // simple reset
+        player.x = levelData.start.x; player.y = levelData.start.y; player.vx = 0; player.vy = 0; timeElapsed = 0; coinsCollected = 0; level.coins.forEach(c => c.collected = false); paused = false; document.getElementById('pauseOverlay').classList.remove('active');
+      });
+
+      // Initialize visuals
+      function init(){
+        // Start with visible controls
+        document.getElementById('pauseOverlay').classList.remove('active');
+      }
+      init();
+
+      // Simple AABB collision helper redefined for player vs enemy and flag
+      function aabb(a, b){ return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y; }
+
+      // Start the game
+      // Ensure coins are not collected initially
+      level.coins.forEach(c => c.collected = false);
+
+      // Accessibility and debugging toggles (optional)
+      window.addEventListener('keydown', (e)=>{ if (e.code === 'KeyD' && (e.ctrlKey || e.metaKey)) { debug = !debug; }});
+
+    })();
+  </script>
+</body>
+</html>
