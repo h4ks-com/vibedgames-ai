@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pulse Grid</title>
+  <meta name="description" content="Pulse Grid — a fast-paced color sequence game. Watch the flash sequence and tap colors in order." />
+  <style>
+    /* Pulse Grid — self-contained HTML/CSS/JS inspired by the task list
+       Implemented to be accessible, responsive, and lobby-friendly with minimal external deps. */
+
+    :root {
+      --bg: #0b0b14;
+      --panel: rgba(20, 20, 28, 0.9);
+      --tile-size: 110px;
+      --tile-gap: 14px;
+      --text: #e9e9f7;
+      --muted: #a6a6b8;
+      --shadow: 0 6px 18px rgba(0,0,0,.35);
+    }
+    html, body {
+      height: 100%;
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, Arial;
+      background: radial-gradient(circle at 20% -10%, rgba(0,255,255,0.08), transparent 40%),
+                  radial-gradient(circle at 100% 0%, rgba(0,255,128,0.08), transparent 40%),
+                  var(--bg);
+      color: var(--text);
+      overflow: hidden;
+    }
+    .scene {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      height: 100vh;
+      width: 100vw;
+      padding: 16px;
+      box-sizing: border-box;
+    }
+    /* Header / lobby vibe */
+    header.hud {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 16px;
+      border-radius: 14px;
+      backdrop-filter: blur(2px);
+      background: rgba(8,8,12,0.6);
+      border: 1px solid rgba(255,255,255,0.08);
+      box-shadow: var(--shadow);
+    }
+    .brand {
+      font-weight: 800;
+      letter-spacing: .5px;
+      font-size: 1.25rem;
+    }
+    .subtitle {
+      color: var(--muted);
+      font-size: .9rem;
+    }
+    .controls { display: flex; gap: 8px; align-items: center; }
+    .btn {
+      appearance: none; border: none; border-radius: 999px;
+      padding: 10px 14px; font-weight: 600; cursor: pointer;
+      color: #111; background: #9eff95; box-shadow: 0 3px 0 #6bd16f; transition: transform .15s ease;
+    }
+    .btn.secondary { background: #5c5c9e; color: white; box-shadow: 0 3px 0 #3b3b6c; }
+    .btn:active { transform: translateY(1px) scale(0.99); }
+
+    main.game-area {
+      display: grid; grid-template-columns: 1fr; align-items: center; justify-items: center;
+      gap: 16px; padding: 12px; flex: 1; min-height: 0;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 14px; padding: 16px; width: min(100%, 880px);
+      box-shadow: var(--shadow);
+    }
+    .scoreboard { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 6px 0; color: var(--muted); }
+    .scoreboard .value { font-weight: 700; color: #fff; }
+    #tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: var(--tile-gap); width: min(100%, 860px); justify-items: center; }
+    .tile {
+      width: 100px; height: 100px; border-radius: 18px; position: relative; cursor: pointer;
+      outline: none; border: 0; transition: transform .15s ease, box-shadow .15s ease, filter .15s ease;
+      display: inline-flex; align-items: center; justify-content: center;
+      box-shadow: inset 0 0 0 rgba(0,0,0,0.0), 0 10px 24px rgba(0,0,0,.25);
+      transform: translateZ(0);
+    }
+    .tile:focus { outline: 3px solid #fff; outline-offset: 2px; }
+    .tile-label { font-size: 12px; font-weight: 700; color: rgba(0,0,0,.6); }
+    /* Flash / glow when highlighted or correct taps */
+    .tile.flash { filter: brightness(1.15); transform: scale(1.03); box-shadow: 0 0 0.8rem currentColor; }
+    .tile.correct { animation: correctPulse 360ms ease-in-out; }
+    @keyframes correctPulse {
+      0% { transform: scale(1); box-shadow: 0 0 0 rgba(0,0,0,0); }
+      40% { transform: scale(1.08); box-shadow: 0 0 12px currentColor; }
+      100% { transform: scale(1); box-shadow: 0 0 0 rgba(0,0,0,0); }
+    }
+
+    /* Tutorial / overlay */
+    .overlay { position: relative; text-align: center; padding: 8px; }
+    .tutorial {
+      position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,.75); padding: 12px 14px; border-radius: 12px; color: #fff; max-width: 90vw;
+      border: 1px solid rgba(255,255,255,.15); z-index: 2;
+    }
+    .hidden { display: none; }
+
+    /* Settings panel */
+    #settingsPanel { position: fixed; right: 12px; bottom: 12px; width: min(420px, 95%); max-width: 420px; }
+    .setting { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+    label { font-weight: 600; }
+    select, input[type="range"] { width: 100%; padding: 8px; border-radius: 8px; border: 1px solid #333; background: #111; color: #fff; }
+    input[type="checkbox"] { transform: scale(1.1); }
+
+    /* Visual ambiance (neon glow) */
+    .scene { position: relative; }
+    .scene:before {
+      content: ""; position: absolute; inset: -20px; pointer-events: none;
+      background: radial-gradient(circle at 50% 0%, rgba(0, 180, 255, .25), transparent 40%),
+                  radial-gradient(circle at 0% 100%, rgba(255, 120, 0, .15), transparent 40%);
+      filter: blur(40px); z-index: 0; mix-blend-mode: screen;
+    }
+    .grid-layer { position: relative; z-index: 1; }
+    .panel, .tiles { position: relative; z-index: 1; }
+
+    /* Accessibility preferences */
+    @media (prefers-reduced-motion: reduce) {
+      .tile { transition: none; }
+      .tile.flash { animation: none; }
+    }
+
+    /* Responsive tweaks */
+    @media (max-width: 700px) {
+      :root { --tile-size: 88px; }
+      .tile { width: 88px; height: 88px; border-radius: 14px; }
+      header.hud { flex-direction: column; align-items: flex-start; gap: 8px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="scene" aria-label="Pulse Grid scene">
+    <!-- Header / lobby bar -->
+    <header class="hud" aria-label="Pulse Grid header">
+      <div class="brand" style="font-family:inherit; font-size:1.25rem;">Pulse Grid</div>
+      <div class="subtitle" aria-hidden="true">Watch the flashes and tap in order</div>
+      <div class="controls" aria-label="Main controls">
+        <button id="startBtn" class="btn" aria-label="Start game">Start</button>
+        <button id="settingsBtn" class="btn secondary" aria-label="Open settings">Settings</button>
+      </div>
+    </header>
+
+    <!-- Game Area -->
+    <main class="game-area" role="main">
+      <section class="panel" aria-label="Score and status">
+        <div class="scoreboard" aria-label="Scoreboard">
+          <span>Score: <span id="scoreValue" class="value">0</span></span>
+          <span>Round: <span id="roundValue" class="value">0</span></span>
+          <span>Accuracy: <span id="accValue" class="value">0%</span></span>
+        </div>
+        <div id="liveStatus" aria-live="polite" class="sr-only" style="position:absolute;height:1px;width:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path: inset(50%);"></div>
+      </section>
+
+      <section class="panel" aria-label="Color tiles" id="tilesPanel">
+        <div id="tiles" role="group" aria-label="Color sequence grid"></div>
+      </section>
+
+      <section class="panel overlay tutorial" id="tutorialOverlay" aria-label="Tutorial" hidden>
+        <p>Tutorial: Watch the color flashes and press the corresponding tiles in order. Use keys 1-6 for quick access. Press Start to begin.</p>
+        <button id="tutorialSkip" class="btn" aria-label="Skip tutorial">Skip</button>
+      </section>
+    </main>
+
+    <!-- End/Stats modal (hidden by default) -->
+    <div id="endModal" class="panel overlay" role="dialog" aria-label="Round result" hidden>
+      <div id="endSummary"></div>
+      <button id="playAgain" class="btn" aria-label="Play again">Play Again</button>
+      <button id="closeEnd" class="btn secondary" aria-label="Close">Close</button>
+    </div>
+
+    <!-- Settings Panel (floating) -->
+    <section id="settingsPanel" aria-label="Settings" hidden>
+      <h3 style="margin:0 0 8px;">Settings</h3>
+      <div class="setting">
+        <label for="themeSelect">Visual Theme</label>
+        <select id="themeSelect" aria-label="Visual Theme selector">
+          <option value="neon">Neon</option>
+          <option value="warm">Warm Ambient</option>
+          <option value="cool">Cool Lagoon</option>
+        </select>
+      </div>
+      <div class="setting">
+        <label for="tileDensity">Tile density</label>
+        <input type="range" id="tileDensity" min="0" max="2" step="1" value="1" aria-valuetext="Medium">
+      </div>
+      <div class="setting">
+        <label><input type="checkbox" id="muteSfx"> SFX On/Off</label>
+      </div>
+      <div class="setting">
+        <label><input type="checkbox" id="highContrast"> High contrast</label>
+      </div>
+      <div class="setting">
+        <label><input type="checkbox" id="reduceMotion"> Reduced motion</label>
+      </div>
+      <div class="setting" style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px;">
+        <button id="applySettings" class="btn" aria-label="Apply settings">Apply</button>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    // Pulse Grid core (self-contained) - minimal, accessible, and responsive.
+    // Implements: sequence presentation, input phase, scoring, progression, and persistence (localStorage).
+
+    // 1) Vision, scope, success criteria (as comments and code-friendly):
+    // Core mechanic: watch a color sequence flash and tap matching colors in order.
+    // Web-based, responsive. Quick rounds, lobby-friendly. Local high scores.
+
+    // 2) Platform/Tech: HTML5, CSS3, JS (embedded). Lightweight state machine.
+
+
+    // Color palette (4–6 colors)
+    const colorDefs = [
+      { name: 'Red',    hex: '#ff3b30' }, // 1
+      { name: 'Green',  hex: '#34c759' }, // 2
+      { name: 'Blue',   hex: '#007aff' }, // 3
+      { name: 'Yellow', hex: '#ffd400' }, // 4
+      { name: 'Purple', hex: '#8e44ad' }, // 5
+      { name: 'Cyan',   hex: '#00d0ff' }, // 6
+    ];
+
+    // UI references
+    const tilesEl = document.getElementById('tiles');
+    const scoreValue = document.getElementById('scoreValue');
+    const roundValue = document.getElementById('roundValue');
+    const accValue = document.getElementById('accValue');
+    const liveStatus = document.getElementById('liveStatus');
+    const startBtn = document.getElementById('startBtn');
+    const settingsBtn = document.getElementById('settingsBtn');
+    const settingsPanel = document.getElementById('settingsPanel');
+    const themeSelect = document.getElementById('themeSelect');
+    const tileDensity = document.getElementById('tileDensity');
+    const muteSfx = document.getElementById('muteSfx');
+    const highContrast = document.getElementById('highContrast');
+    const reduceMotion = document.getElementById('reduceMotion');
+    const applySettings = document.getElementById('applySettings');
+
+    const endModal = document.getElementById('endModal');
+    const endSummary = document.getElementById('endSummary');
+    const playAgain = document.getElementById('playAgain');
+    const closeEnd = document.getElementById('closeEnd');
+
+    const tutorialOverlay = document.getElementById('tutorialOverlay');
+    const tutorialSkip = document.getElementById('tutorialSkip');
+
+    // Game state
+    let sequence = [];
+    let playerIndex = 0;
+    let currentRound = 0;
+    let currentScore = 0;
+    let inputLocked = true; // while showing sequence or paused
+    let totalInputs = 0;
+    let correctInputs = 0;
+    let perfectRoundFlag = false;
+
+    // Audio (Web Audio API) basic palette
+    let audioCtx = null;
+    let sfxOn = true;
+    let frequencies = [261.63, 329.63, 392.00, 523.25, 659.25, 783.99]; // C4, E4, G4, C5, E5, G5
+
+    function initAudio() {
+      if (audioCtx) return;
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AC();
+      } catch(e) {
+        audioCtx = null;
+      }
+    }
+
+    function playTone(index, duration = 150) {
+      if (!audioCtx || !sfxOn) return;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = frequencies[index % frequencies.length];
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      gain.gain.value = 0.0;
+      osc.start();
+      // simple ADSR
+      const now = audioCtx.currentTime;
+      gain.gain.linearRampToValueAtTime(0.25, now + 0.01);
+      gain.gain.linearRampToValueAtTime(0.0, now + duration/1000);
+      osc.stop(now + duration/1000);
+    }
+
+    // Build color tiles in DOM
+    function buildTiles() {
+      tilesEl.innerHTML = '';
+      colorDefs.forEach((c, idx) => {
+        const tile = document.createElement('button');
+        tile.className = 'tile';
+        tile.style.background = c.hex;
+        tile.style.color = '#111';
+        tile.setAttribute('aria-label', c.name + ' tile');
+        tile.setAttribute('data-index', idx.toString());
+        tile.style.width = 'clamp(90px, 16vw, 120px)';
+        tile.style.height = 'clamp(90px, 16vw, 120px)';
+        tile.style.borderRadius = '16px';
+        tile.style.border = '0';
+        tile.addEventListener('click', () => onTileTap(idx));
+        tile.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); onTileTap(idx);} 
+        });
+        tilesEl.appendChild(tile);
+      });
+    }
+
+    function updateHUD() {
+      scoreValue.textContent = currentScore.toString();
+      roundValue.textContent = currentRound.toString();
+      const total = sequence.length || 1;
+      const acc = totalInputs === 0 ? 0 : Math.round((correctInputs / totalInputs) * 100);
+      accValue.textContent = acc + '%';
+      // announce
+      liveStatus.textContent = `Round ${currentRound}, score ${currentScore}, accuracy ${acc}%`;
+    }
+
+    function flashSequence(indexes, index = 0, delay = 400) {
+      inputLocked = true;
+      if (index >= indexes.length) {
+        // End flashing
+        inputLocked = false;
+        highlightActive(null);
+        // enable input prompt
+        announce('Your turn: tap the tiles in order.');
+        return;
+      }
+      const idx = indexes[index];
+      // flash this tile
+      highlightActive(idx);
+      playTone(idx, 180);
+      setTimeout(() => {
+        highlightActive(null);
+        setTimeout(() => flashSequence(indexes, index + 1, delay), delay);
+      }, 180);
+    }
+
+    // Visual feedback helper
+    function highlightActive(index) {
+      Array.from(tilesEl.children).forEach((el, i) => {
+        if (index === i) {
+          el.classList.add('flash');
+        } else {
+          el.classList.remove('flash');
+        }
+      });
+    }
+
+    function announce(text) {
+      if (liveStatus) liveStatus.textContent = text;
+    }
+
+    function resetRound() {
+      sequence = [];
+      playerIndex = 0;
+      currentRound = 0;
+      currentScore = 0;
+      totalInputs = 0;
+      correctInputs = 0;
+      perfectRoundFlag = false;
+      updateHUD();
+    }
+
+    function startGame() {
+      initAudio();
+      sfxOn = !muteSfx.checked;
+      // Initialize state
+      buildTiles();
+      resetRound();
+      // First round
+      nextRound();
+    }
+
+    function nextRound() {
+      currentRound += 1;
+      // Add a new color to the sequence
+      const nextColor = Math.floor(Math.random() * colorDefs.length);
+      sequence.push(nextColor);
+      correctInputs = 0;
+      totalInputs = 0;
+      perfectRoundFlag = true; // assume perfect until a miss
+      updateHUD();
+      announce(`Round ${currentRound}. Watch the sequence.`);
+      // Show sequence after a tiny delay
+      inputLocked = true;
+      setTimeout(() => flashSequence(sequence, 0, 550), 350);
+    }
+
+    function onTileTap(index) {
+      if (inputLocked) return;
+      if (index !== sequence[playerIndex]) {
+        // miss
+        perfectRoundFlag = false;
+        totalInputs += 1;
+        // wrong feedback
+        playTone(index, 200); // mismatch cue
+        announce('Incorrect. Round over.');
+        endRound(false);
+        return;
+      }
+      // correct tap
+      playTone(index, 140);
+      totalInputs += 1;
+      correctInputs += 1;
+      // visual feedback
+      const tile = tilesEl.children[index];
+      tile.classList.add('correct');
+      setTimeout(() => tile.classList.remove('correct'), 180);
+      playerIndex += 1;
+      if (playerIndex >= sequence.length) {
+        // round success
+        currentScore += 10 * sequence.length; // base points per tap
+        if (perfectRoundFlag && totalInputs === sequence.length) {
+          currentScore += 20; // perfect round bonus
+        }
+        updateHUD();
+        announce('Round complete. Next round.');
+        endRound(true);
+      }
+    }
+
+    function endRound(success) {
+      inputLocked = true;
+      // small delay before next round or end modal
+      setTimeout(() => {
+        if (success) {
+          // proceed to next round if not too long
+          // End a round by initiating next round implicitly after short delay
+          nextRound();
+      } else {
+          // Game over: show end modal with stats and high score
+          saveGameState();
+          showEndModal();
+        }
+      }, 600);
+    }
+
+    function showEndModal() {
+      const hs = Number(localStorage.getItem('pulsegrid_highscore') || '0');
+      const winner = currentScore > hs;
+      endSummary.innerHTML = `Game over! Final score: <strong>${currentScore}</strong>. High score: <strong>${Math.max(hs, currentScore)}</strong>.`;
+      if (winner) endSummary.innerHTML += '<br/>New personal best!';
+      endModal.hidden = false;
+    }
+
+    function saveGameState() {
+      const hs = Number(localStorage.getItem('pulsegrid_highscore') || '0');
+      if (currentScore > hs) {
+        localStorage.setItem('pulsegrid_highscore', String(currentScore));
+      }
+    }
+
+    // Keyboard support (numbers 1-6). Map to colors as 1-6.
+    function handleKeyInput(e) {
+      const key = e.key;
+      if (!/^[1-6]$/.test(key)) return;
+      const idx = parseInt(key, 10) - 1;
+      onTileTap(idx);
+    }
+
+    // Settings management
+    function applyTheme(theme) {
+      // simple 3-theme switchers via CSS class on html
+      document.documentElement.classList.remove('theme-neon','theme-warm','theme-cool');
+      if (theme === 'neon') document.documentElement.classList.add('theme-neon');
+      else if (theme === 'warm') document.documentElement.classList.add('theme-warm');
+      else if (theme === 'cool') document.documentElement.classList.add('theme-cool');
+    }
+
+    // Init: build tiles and attach handlers
+    function bindEvents() {
+      startBtn.addEventListener('click', () => {
+        // Start fresh game
+        resetRound();
+        sequence = [];
+        currentRound = 0; currentScore = 0; totalInputs = 0; correctInputs = 0;
+        updateHUD();
+        nextRound();
+      });
+      settingsBtn.addEventListener('click', () => {
+        const isHidden = settingsPanel.hasAttribute('hidden');
+        settingsPanel.hidden = !isHidden;
+      });
+      tutorialSkip.addEventListener('click', () => {
+        tutorialOverlay.hidden = true;
+        // start game if user wishes
+      });
+      playAgain.addEventListener('click', () => {
+        resetRound();
+        endModal.hidden = true;
+        sequence = [];
+        currentRound = 0; currentScore = 0; totalInputs = 0; correctInputs = 0;
+        updateHUD();
+        nextRound();
+      });
+      closeEnd.addEventListener('click', () => { endModal.hidden = true; });
+      applySettings.addEventListener('click', () => {
+        applyTheme(themeSelect.value);
+        // density affects tile size indirectly
+        document.documentElement.style.setProperty('--tile-size', (Math.max(60, 110 - Number(tileDensity.value)*20)) + 'px');
+        settingsPanel.hidden = true;
+      });
+
+      // Input keyboard support
+      document.addEventListener('keydown', handleKeyInput);
+    }
+
+    // Local storage helpers
+    function loadHighScore() {
+      const v = localStorage.getItem('pulsegrid_highscore');
+      return v ? Number(v) : 0;
+    }
+
+    // Initialize
+    function init() {
+      buildTiles();
+      updateHUD();
+      bindEvents();
+      applyTheme('neon');
+      // If reduced motion is enabled, toggle classes accordingly
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        document.documentElement.style.setProperty('scroll-behavior', 'auto');
+      }
+    }
+
+    // Kick off
+    init();
+  </script>
+</body>
+</html>
