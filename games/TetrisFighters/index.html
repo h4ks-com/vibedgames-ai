@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dual Tetris - Play Both or Lose Both</title>
+<style>
+  /* Reset */
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    background: #111;
+    color: #eee;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    user-select: none;
+    margin: 0;
+    padding: 0;
+    display:flex;
+    min-height:100vh;
+    justify-content: center;
+    align-items: center;
+  }
+  h1 {
+    text-align: center;
+  }
+  #container {
+    display: flex;
+    gap: 40px;
+  }
+  .tetris-game {
+    background: #222;
+    padding: 10px;
+    border-radius: 8px;
+    box-shadow: 0 0 15px #0ff ease-in-out;
+  }
+
+  canvas {
+    background-color: #111;
+    display: block;
+    margin: 0 auto;
+    image-rendering: pixelated;
+    border: 2px solid #0ff;
+  }
+  #leftGame canvas {
+    border-color: #0f0;
+  }
+  #rightGame canvas {
+    border-color: #0af;
+  }
+
+  .title {
+    font-weight: bold;
+    text-align: center;
+    margin-bottom: 6px;
+    font-size: 1.2rem;
+    color: #0ff;
+  }
+
+  .instructions {
+    font-size: 0.8rem;
+    color: #666;
+    margin-top: 8px;
+    text-align: center;
+    line-height: 1.2;
+    max-width: 240px;
+  }
+  #gameOverMsg {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(20, 20, 20, 0.95);
+    padding: 30px 40px;
+    border-radius: 12px;
+    box-shadow: 0 0 20px #f00;
+    font-size: 2rem;
+    text-align: center;
+    z-index: 2000;
+    color: #f00;
+    user-select:none;
+  }
+  #restartBtn {
+    margin-top: 18px;
+    background-color: #f00;
+    color: #111;
+    border: none;
+    font-size: 1rem;
+    padding: 10px 20px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  #restartBtn:hover {
+    background-color: #b30000;
+  }
+</style>
+</head>
+<body>
+
+<div id="container">
+  <div class="tetris-game" id="leftGame">
+    <div class="title">Left Tetris<br><small>(WSAD Controls)</small></div>
+    <canvas width="240" height="400"></canvas>
+    <div class="instructions">
+      <b>Controls:</b><br>
+      W - Rotate<br>
+      A - Move Left<br>
+      S - Soft Drop<br>
+      D - Move Right
+    </div>
+  </div>
+  <div class="tetris-game" id="rightGame">
+    <div class="title">Right Tetris<br><small>(Arrow Keys Controls)</small></div>
+    <canvas width="240" height="400"></canvas>
+    <div class="instructions">
+      <b>Controls:</b><br>
+      ↑ - Rotate<br>
+      ← - Move Left<br>
+      ↓ - Soft Drop<br>
+      → - Move Right
+    </div>
+  </div>
+</div>
+
+<div id="gameOverMsg" style="display:none;">
+  <div id="gameOverText"></div>
+  <button id="restartBtn">Restart</button>
+</div>
+
+<script>
+(() => {
+  // Constants
+  const COLS = 10;
+  const ROWS = 20;
+  const BLOCK_SIZE = 20;
+  const DROP_INTERVAL = 800;
+  const SOFT_DROP_INTERVAL = 40;
+
+  // Tetromino shapes and colors
+  const SHAPES = {
+    I: [
+      [[0,1], [1,1], [2,1], [3,1]],
+      [[2,0], [2,1], [2,2], [2,3]],
+      [[0,2], [1,2], [2,2], [3,2]],
+      [[1,0], [1,1], [1,2], [1,3]]
+    ],
+    J: [
+      [[0,0],[0,1],[1,1],[2,1]],
+      [[1,0],[2,0],[1,1],[1,2]],
+      [[0,1],[1,1],[2,1],[2,2]],
+      [[1,0],[1,1],[0,2],[1,2]]
+    ],
+    L: [
+      [[2,0],[0,1],[1,1],[2,1]],
+      [[1,0],[1,1],[1,2],[2,2]],
+      [[0,1],[1,1],[2,1],[0,2]],
+      [[0,0],[1,0],[1,1],[1,2]]
+    ],
+    O: [
+      [[1,0],[2,0],[1,1],[2,1]],
+      [[1,0],[2,0],[1,1],[2,1]],
+      [[1,0],[2,0],[1,1],[2,1]],
+      [[1,0],[2,0],[1,1],[2,1]]
+    ],
+    S: [
+      [[1,0],[2,0],[0,1],[1,1]],
+      [[1,0],[1,1],[2,1],[2,2]],
+      [[1,1],[2,1],[0,2],[1,2]],
+      [[0,0],[0,1],[1,1],[1,2]]
+    ],
+    T: [
+      [[1,0],[0,1],[1,1],[2,1]],
+      [[1,0],[1,1],[2,1],[1,2]],
+      [[0,1],[1,1],[2,1],[1,2]],
+      [[1,0],[0,1],[1,1],[1,2]]
+    ],
+    Z: [
+      [[0,0],[1,0],[1,1],[2,1]],
+      [[2,0],[1,1],[2,1],[1,2]],
+      [[0,1],[1,1],[1,2],[2,2]],
+      [[1,0],[0,1],[1,1],[0,2]]
+    ]
+  };
+
+  const COLORS = {
+    I: '#00ffff',
+    J: '#0000ff',
+    L: '#ff7f00',
+    O: '#ffff00',
+    S: '#00ff00',
+    T: '#800080',
+    Z: '#ff0000'
+  };
+
+  // Utilities
+  function createMatrix(w, h) {
+    const matrix = [];
+    while(h--) {
+      matrix.push(new Array(w).fill(null));
+    }
+    return matrix;
+  }
+
+  // Tetromino Class
+  class Tetromino {
+    constructor(type) {
+      this.type = type;
+      this.color = COLORS[type];
+      this.shapeIndex = 0;
+      this.blocks = SHAPES[type];
+      this.position = { x: 3, y: 0 }; // spawn position
+    }
+    get coords() {
+      return this.blocks[this.shapeIndex];
+    }
+    rotate(dir = 1) {
+      this.shapeIndex = (this.shapeIndex + dir + 4) % 4;
+    }
+  }
+
+  // Game Class
+  class TetrisGame {
+    constructor(canvas, controls, name) {
+      this.name = name;
+      this.canvas = canvas;
+      this.ctx = canvas.getContext('2d');
+      this.ctx.scale(BLOCK_SIZE, BLOCK_SIZE);
+      this.grid = createMatrix(COLS, ROWS);
+      this.score = 0;
+      this.level = 1;
+      this.lines = 0;
+      this.dropCounter = 0;
+      this.dropInterval = DROP_INTERVAL;
+      this.lastTime = 0;
+      this.gameOver = false;
+
+      this.controls = controls;
+
+      this.currentPiece = this.randomTetromino();
+
+      this.nextPiece = this.randomTetromino();
+
+      // Bind input handler
+      this.keyStates = new Set();
+
+      this.inputMap = controls;
+
+      this.softDropping = false;
+
+      this.init();
+    }
+
+    init() {
+      this.grid = createMatrix(COLS, ROWS);
+      this.score = 0;
+      this.level = 1;
+      this.lines = 0;
+      this.dropCounter = 0;
+      this.dropInterval = DROP_INTERVAL;
+      this.gameOver = false;
+      this.currentPiece = this.randomTetromino();
+      this.nextPiece = this.randomTetromino();
+      this.softDropping = false;
+    }
+
+    randomTetromino() {
+      const types = Object.keys(SHAPES);
+      const randType = types[Math.floor(Math.random() * types.length)];
+      return new Tetromino(randType);
+    }
+
+    collide(grid, piece) {
+      for (const [x, y] of piece.coords) {
+        const px = piece.position.x + x;
+        const py = piece.position.y + y;
+        if (px < 0 || px >= COLS || py >= ROWS) return true;
+        if (py < 0) continue; // above visible field allowed
+        if (grid[py][px] !== null) return true;
+      }
+      return false;
+    }
+
+    merge(grid, piece) {
+      for (const [x, y] of piece.coords) {
+        const px = piece.position.x + x;
+        const py = piece.position.y + y;
+        if(py>=0)
+          grid[py][px] = piece.color;
+      }
+    }
+
+    clearLines() {
+      let linesCleared = 0;
+      outer: for (let y=ROWS-1; y>=0; y--) {
+        for (let x=0; x<COLS; x++) {
+          if (this.grid[y][x] === null) {
+            continue outer;
+          }
+        }
+        // line full - remove it
+        const row = this.grid.splice(y,1)[0].fill(null);
+        this.grid.unshift(row);
+        y++;
+        linesCleared++;
+      }
+
+      if(linesCleared > 0) {
+        // Score: Standard tetris scoring per lines cleared at once
+        const lineScores = [0, 40, 100, 300, 1200];
+        this.score += lineScores[linesCleared] * this.level;
+
+        this.lines += linesCleared;
+
+        // Level up every 10 lines
+        if (this.lines >= this.level * 10) {
+          this.level++;
+          this.dropInterval = Math.max(100, DROP_INTERVAL - (this.level-1)*70);
+        }
+      }
+    }
+
+    rotate(dir = 1) {
+      const piece = this.currentPiece;
+      piece.rotate(dir);
+      // Wall kick attempts
+      const pos = piece.position.x;
+      let offset = 1;
+      while (this.collide(this.grid, piece)) {
+        piece.position.x += offset;
+        offset = -(offset + (offset > 0 ? 1 : -1));
+        if (offset > piece.coords.length) {
+          piece.rotate(-dir);
+          piece.position.x = pos;
+          return;
+        }
+      }
+    }
+
+    drop() {
+      this.currentPiece.position.y++;
+      if (this.collide(this.grid, this.currentPiece)) {
+        this.currentPiece.position.y--;
+        // merge piece into the grid before switching
+        this.merge(this.grid, this.currentPiece);
+        this.clearLines();
+        this.currentPiece = this.nextPiece;
+        this.nextPiece = this.randomTetromino();
+        if(this.collide(this.grid, this.currentPiece)) {
+          // Game over
+          this.gameOver = true;
+        }
+      }
+      this.dropCounter = 0;
+    }
+
+    move(dir) {
+      this.currentPiece.position.x += dir;
+      if(this.collide(this.grid, this.currentPiece)) {
+        this.currentPiece.position.x -= dir;
+      }
+    }
+
+    softDrop(on) {
+      this.softDropping = on;
+    }
+
+    update(deltaTime) {
+      if(this.gameOver) return;
+
+      const interval = this.softDropping ? SOFT_DROP_INTERVAL : this.dropInterval;
+
+      this.dropCounter += deltaTime;
+      if(this.dropCounter > interval) {
+        this.drop();
+        this.dropCounter = 0;
+      }
+    }
+
+    drawBlock(x, y, color) {
+      this.ctx.fillStyle = color;
+      this.ctx.fillRect(x, y, 1, 1);
+      this.ctx.strokeStyle = '#0008';
+      this.ctx.lineWidth = 0.08;
+      this.ctx.strokeRect(x + 0.02, y + 0.02, 0.96, 0.96);
+    }
+
+    clear() {
+      this.ctx.fillStyle = '#111';
+      this.ctx.fillRect(0, 0, COLS, ROWS);
+    }
+
+    draw() {
+      this.clear();
+
+      // Draw grid
+      for (let y=0; y<ROWS; y++) {
+        for (let x=0; x<COLS; x++) {
+          const cell = this.grid[y][x];
+          if(cell !== null) {
+            this.drawBlock(x, y, cell);
+          }
+        }
+      }
+
+      // Draw current piece
+      const piece = this.currentPiece;
+      for (const [x, y] of piece.coords) {
+        const px = piece.position.x + x;
+        const py = piece.position.y + y;
+        if(py < 0) continue; // above visible 
+        this.drawBlock(px, py, piece.color);
+      }
+    }
+  }
+
+  // Set up left and right games
+  const leftCanvas = document.querySelector('#leftGame canvas');
+  const rightCanvas = document.querySelector('#rightGame canvas');
+
+  // Controls mapping for left and right
+  // Values are functions to run on the specific game instance
+  const leftControls = {
+    'KeyW': 'rotate',
+    'KeyA': 'left',
+    'KeyS': 'softDrop',
+    'KeyD': 'right',
+  };
+
+  const rightControls = {
+    'ArrowUp': 'rotate',
+    'ArrowLeft': 'left',
+    'ArrowDown': 'softDrop',
+    'ArrowRight': 'right',
+  };
+
+  const leftGame = new TetrisGame(leftCanvas, leftControls, 'Left');
+  const rightGame = new TetrisGame(rightCanvas, rightControls, 'Right');
+
+  // Input handling
+  // Maintain sets of keys currently pressed for soft drop 
+  const activeKeys = { left: new Set(), right: new Set() };
+
+  function handleKeyDown(e) {
+    if(e.repeat) return; // prevent repeat
+
+    const leftAction = leftGame.controls[e.code];
+    if(leftAction) {
+      e.preventDefault();
+      if(leftAction === 'rotate') {
+        if(!leftGame.gameOver) leftGame.rotate(1);
+      } else if(leftAction === 'left') {
+        if(!leftGame.gameOver) leftGame.move(-1);
+      } else if(leftAction === 'right') {
+        if(!leftGame.gameOver) leftGame.move(1);
+      } else if(leftAction === 'softDrop') {
+        if(!leftGame.gameOver) leftGame.softDrop(true);
+        activeKeys.left.add(e.code);
+      }
+    }
+
+    const rightAction = rightGame.controls[e.code];
+    if(rightAction) {
+      e.preventDefault();
+      if(rightAction === 'rotate') {
+        if(!rightGame.gameOver) rightGame.rotate(1);
+      } else if(rightAction === 'left') {
+        if(!rightGame.gameOver) rightGame.move(-1);
+      } else if(rightAction === 'right') {
+        if(!rightGame.gameOver) rightGame.move(1);
+      } else if(rightAction === 'softDrop') {
+        if(!rightGame.gameOver) rightGame.softDrop(true);
+        activeKeys.right.add(e.code);
+      }
+    }
+  }
+
+  function handleKeyUp(e) {
+    const leftAction = leftGame.controls[e.code];
+    if(leftAction === 'softDrop') {
+      activeKeys.left.delete(e.code);
+      if(activeKeys.left.size === 0) {
+        leftGame.softDrop(false);
+      }
+    }
+    const rightAction = rightGame.controls[e.code];
+    if(rightAction === 'softDrop') {
+      activeKeys.right.delete(e.code);
+      if(activeKeys.right.size === 0) {
+        rightGame.softDrop(false);
+      }
+    }
+  }
+
+  window.addEventListener('keydown', handleKeyDown);
+  window.addEventListener('keyup', handleKeyUp);
+
+  // Game loop
+  let lastTime = 0;
+  function update(time=0) {
+    const deltaTime = time - lastTime;
+    lastTime = time;
+
+    leftGame.update(deltaTime);
+    rightGame.update(deltaTime);
+
+    leftGame.draw();
+    rightGame.draw();
+
+    // Check game over condition - if either died => both lose
+    if(leftGame.gameOver || rightGame.gameOver) {
+      showGameOver();
+      return;
+    }
+
+    requestAnimationFrame(update);
+  }
+
+  // Game Over screen
+  const gameOverMsg = document.getElementById('gameOverMsg');
+  const gameOverText = document.getElementById('gameOverText');
+  const restartBtn = document.getElementById('restartBtn');
+
+  function showGameOver() {
+    let msg = '';
+    if(leftGame.gameOver && rightGame.gameOver) {
+      msg = 'Both games lost!';
+    } else if(leftGame.gameOver) {
+      msg = 'Left game lost! Both lose!';
+    } else if(rightGame.gameOver) {
+      msg = 'Right game lost! Both lose!';
+    } else {
+      msg = 'Game Over!';
+    }
+    gameOverText.textContent = msg;
+    gameOverMsg.style.display = 'block';
+  }
+
+  restartBtn.addEventListener('click', () => {
+    gameOverMsg.style.display = 'none';
+    leftGame.init();
+    rightGame.init();
+    lastTime = 0;
+    requestAnimationFrame(update);
+  });
+
+  // Start the game loop
+  requestAnimationFrame(update);
+})();
+</script>
+
+</body>
+</html>
