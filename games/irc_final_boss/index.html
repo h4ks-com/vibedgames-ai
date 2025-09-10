@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>IRC Final Boss - Terminal JRPG</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+  body {
+    background: black;
+    color: #33ff33;
+    font-family: 'Share Tech Mono', monospace;
+    margin: 0; padding: 0;
+    user-select: none;
+  }
+  #container {
+    max-width: 720px;
+    margin: 1em auto;
+  }
+  #terminal {
+    border: 2px solid #33ff33;
+    height: 400px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    padding: 1em;
+    box-sizing: border-box;
+  }
+  #status {
+    border: 2px solid #33ff33;
+    padding: 0.5em 1em;
+    margin: 0.5em 0;
+    font-size: 1em;
+    display: flex;
+    justify-content: space-between;
+    user-select: text;
+  }
+  #player-status, #boss-status {
+    flex: 1 1 50%;
+  }
+  .status-title {
+    font-weight: bold;
+    color: #44ffff;
+  }
+  .status-title.boss {
+    color: #ff4444;
+  }
+  #input-area {
+    max-width: 720px;
+    margin: 0 auto;
+  }
+  #command {
+    width: 100%;
+    background: black;
+    border: 2px solid #33ff33;
+    color: #33ff33;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 1.2em;
+    padding: 0.5em;
+    outline: none;
+    box-sizing: border-box;
+  }
+  ::-webkit-scrollbar {
+    width: 8px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #33ff33;
+  }
+  .red { color: #ff4444 }
+  .yellow { color: #ffff44 }
+  .cyan { color: #44ffff }
+  .bold { font-weight: bold; }
+  .bar {
+    display: inline-block;
+    height: 12px;
+    background-color: #33ff33;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  .bar-empty {
+    display: inline-block;
+    height: 12px;
+    background-color: #104010;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+</style>
+</head>
+<body>
+<div id="container">
+  <div id="status" aria-live="polite" aria-atomic="true">
+    <div id="player-status" role="region" aria-label="Player status">
+      <div class="status-title">Your Status</div>
+      <div id="player-hp"></div>
+      <div id="player-mp"></div>
+      <div id="player-items"></div>
+    </div>
+    <div id="boss-status" role="region" aria-label="Boss status">
+      <div class="status-title boss" id="boss-name"></div>
+      <div id="boss-hp"></div>
+    </div>
+  </div>
+  <div id="terminal" aria-live="polite" aria-atomic="true" role="log" tabindex="0"></div>
+  <div id="input-area">
+    <input type="text" id="command" autocomplete="off" autofocus aria-label="Type your action" placeholder="Type command... (attack, defend, special, heal, item, help)" />
+  </div>
+</div>
+
+<script>
+(() => {
+  const terminal = document.getElementById('terminal');
+  const input = document.getElementById('command');
+
+  const playerHpEl = document.getElementById('player-hp');
+  const playerMpEl = document.getElementById('player-mp');
+  const playerItemsEl = document.getElementById('player-items');
+  const bossNameEl = document.getElementById('boss-name');
+  const bossHpEl = document.getElementById('boss-hp');
+
+  // Scroll terminal to bottom
+  function scrollToBottom() {
+    terminal.scrollTop = terminal.scrollHeight;
+  }
+
+  // Colors for text
+  function colorText(text, colorClass) {
+    return `<span class="${colorClass}">${text}</span>`;
+  }
+
+  // Render bar element (HP/MP bars)
+  function renderBar(current, max, length = 20, color = '#33ff33') {
+    const filledLength = Math.floor((current / max) * length);
+    let bar = '';
+    for (let i = 0; i < filledLength; i++) {
+      bar += `<span class="bar" style="width:${100/length}%;background-color:${color}"></span>`;
+    }
+    for (let i = filledLength; i < length; i++) {
+      bar += `<span class="bar-empty" style="width:${100/length}%;"></span>`;
+    }
+    return bar;
+  }
+
+  // Game State
+  const player = {
+    maxHp: 100,
+    hp: 100,
+    maxMp: 50,
+    mp: 50,
+    attack: 15,
+    defense: 8,
+    specialCost: 15,
+    specialName: "Firewall Blast",
+    specialHealCost: 20,
+    defending: false,
+    items: {
+      'Healing Potion': 3
+    },
+    healAmount: 40
+  };
+
+  const boss = {
+    name: "IRC Final Boss - Eris",
+    maxHp: 150,
+    hp: 150,
+    attack: 18,
+    defense: 6,
+    specialChance: 0.3,
+  };
+
+  let turn = 1;
+  let gameOver = false;
+
+  function updateStatus() {
+    playerHpEl.innerHTML = `HP: ${player.hp} / ${player.maxHp} ` + renderBar(player.hp, player.maxHp, 20, '#33ff33');
+    playerMpEl.innerHTML = `MP: ${player.mp} / ${player.maxMp} ` + renderBar(player.mp, player.maxMp, 20, '#44ffff');
+    bossNameEl.textContent = boss.name;
+    bossHpEl.innerHTML = `HP: ${boss.hp} / ${boss.maxHp} ` + renderBar(boss.hp, boss.maxHp, 20, '#ff4444');
+    playerItemsEl.innerHTML = `Items: ` + Object.entries(player.items).map(([item, count]) => `${item} x${count}`).join(', ');
+  }
+
+  // Output message to terminal with a slight delay
+  function printLine(text = '', callback = null) {
+    terminal.innerHTML += text + '\n';
+    scrollToBottom();
+    if (callback) setTimeout(callback, 300);
+  }
+
+  function printColor(text, colorClass = '') {
+    printLine(colorText(text, colorClass));
+  }
+
+  // Help command output
+  function printHelp() {
+    printLine('');
+    printLine(colorText("Commands:", 'yellow'));
+    printLine(" - attack : Physical attack on the boss.");
+    printLine(" - defend : Raise defense for one turn (reduces damage).");
+    printLine(" - special: Use special attack (" + player.specialName + ") costing " + player.specialCost + " MP.");
+    printLine(" - heal   : Use special to heal yourself (Firewall Patch) costing " + player.specialHealCost + " MP.");
+    printLine(" - item   : Use a Healing Potion to restore HP.");
+    printLine(" - help   : Show this help message.");
+    printLine('');
+  }
+
+  // Calculate damage with defense taken into account
+  function calculateDamage(attackerAtk, defenderDef, ignoreDef = false) {
+    if (ignoreDef) return attackerAtk + Math.floor(Math.random() * 10);
+    let base = attackerAtk - defenderDef;
+    if (base < 0) base = 1;
+    // add some variance
+    return base + Math.floor(Math.random()*5);
+  }
+
+  // Boss AI chooses action
+  function bossTurn() {
+    if (gameOver) return;
+
+    // 30% chance for special (Spam Flood)
+    const willSpecial = Math.random() < boss.specialChance;
+
+    if (willSpecial) {
+      printColor(`${boss.name} used ${colorText("Spam Flood", "bold")}!`, "red");
+      let dmg = calculateDamage(boss.attack + 10, player.defense, true);
+      if (player.defending) {
+        dmg = Math.floor(dmg / 2);
+      }
+      player.hp -= dmg;
+      if (player.hp < 0) player.hp = 0;
+      printColor(`You take ${dmg} damage (ignores defense)!`, "red");
+    } else {
+      printColor(`${boss.name} attacks!`, "red");
+      let dmg = calculateDamage(boss.attack, player.defense);
+      if (player.defending) {
+        dmg = Math.floor(dmg / 2);
+      }
+      player.hp -= dmg;
+      if (player.hp < 0) player.hp = 0;
+      printColor(`You take ${dmg} damage.`, "red");
+    }
+
+    updateStatus();
+
+    if (player.hp <= 0) {
+      printColor("You have been defeated by the IRC Final Boss...", "red");
+      printColor("Game Over.", "red");
+      gameOver = true;
+      promptInput(false);
+      return;
+    }
+
+    player.defending = false; // defense lasts one boss turn only
+    turn++;
+    promptInput(true);
+  }
+
+  // Player attack action
+  function playerAttack() {
+    let dmg = calculateDamage(player.attack, boss.defense);
+    boss.hp -= dmg;
+    if (boss.hp < 0) boss.hp = 0;
+    printColor(`You attack the ${boss.name} dealing ${dmg} damage!`, "cyan");
+  }
+
+  // Player defend action
+  function playerDefend() {
+    player.defending = true;
+    printColor("You brace yourself to reduce incoming damage on the next enemy attack.", "cyan");
+  }
+
+  // Player special attack action
+  function playerSpecialAttack() {
+    if (player.mp < player.specialCost) {
+      printColor("Not enough MP to use your special attack!", "yellow");
+      return false;
+    }
+    player.mp -= player.specialCost;
+    let dmg = calculateDamage(player.attack + 20, Math.floor(boss.defense / 2));
+    boss.hp -= dmg;
+    if (boss.hp < 0) boss.hp = 0;
+    printColor(`You unleash your special attack, ${player.specialName}, dealing ${dmg} damage!`, "cyan");
+    return true;
+  }
+
+  // Player heal special action
+  function playerSpecialHeal() {
+    if (player.mp < player.specialHealCost) {
+      printColor("Not enough MP to use Firewall Patch to heal!", "yellow");
+      return false;
+    }
+    player.mp -= player.specialHealCost;
+    const healAmount = player.healAmount;
+    let healed = Math.min(healAmount, player.maxHp - player.hp);
+    player.hp += healed;
+    printColor(`You used Firewall Patch to heal yourself for ${healed} HP!`, "cyan");
+    return true;
+  }
+
+  // Player use item (Healing Potion)
+  function playerUseItem() {
+    if (player.items['Healing Potion'] > 0) {
+      const healAmount = 50;
+      let healed = Math.min(healAmount, player.maxHp - player.hp);
+      if(healed === 0) {
+        printColor("You are already at full HP. Using potion wasted!", "yellow");
+      } else {
+        player.hp += healed;
+        player.items['Healing Potion']--;
+        printColor(`You used a Healing Potion and restored ${healed} HP!`, "cyan");
+      }
+      return true;
+    } else {
+      printColor("You have no Healing Potions left!", "yellow");
+      return false;
+    }
+  }
+
+  // Process player's command
+  function processCommand(cmd) {
+    if (gameOver) return;
+
+    cmd = cmd.trim().toLowerCase();
+    if (!cmd) {
+      printLine('');
+      printColor("You must enter a command. Type 'help' for commands.", "yellow");
+      promptInput(true);
+      return;
+    }
+
+    switch (cmd) {
+      case "attack":
+        playerAttack();
+        break;
+      case "defend":
+        playerDefend();
+        break;
+      case "special":
+        if (!playerSpecialAttack()) {
+          promptInput(true);
+          return;
+        }
+        break;
+      case "heal":
+        if (!playerSpecialHeal()) {
+          promptInput(true);
+          return;
+        }
+        break;
+      case "item":
+        if (!playerUseItem()) {
+          promptInput(true);
+          return;
+        }
+        break;
+      case "help":
+        printHelp();
+        promptInput(true);
+        return;
+      default:
+        printColor("Unknown command. Type 'help' for commands.", "yellow");
+        promptInput(true);
+        return;
+    }
+
+    updateStatus();
+
+    if (boss.hp <= 0) {
+      printColor(`You have defeated the ${boss.name}! Congratulations, you saved the IRC!`, "cyan");
+      printColor("=== YOU WIN! ===", "cyan");
+      gameOver = true;
+      promptInput(false);
+      return;
+    }
+
+    // Boss turn, delay for dramatic effect
+    setTimeout(bossTurn, 800);
+  }
+
+  // Prompt input or disable it if game over
+  function promptInput(enable) {
+    input.disabled = !enable;
+    if (enable) {
+      input.value = '';
+      input.focus();
+    } else {
+      input.blur();
+    }
+  }
+
+  // Game start script
+  function startGame() {
+    printLine(colorText("Welcome to IRC Final Boss Terminal JRPG!\n", "yellow"));
+    printLine("You face the dreaded " + colorText(boss.name, "red") + "!");
+    printLine("Commands: attack, defend, special, heal, item, help\n");
+    updateStatus();
+    promptInput(true);
+  }
+
+  // Input event
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      let val = input.value;
+      printLine(`> ${val}`);
+      processCommand(val);
+    }
+  });
+
+  // Initialize
+  startGame();
+
+})();
+</script>
+</body>
+</html>
