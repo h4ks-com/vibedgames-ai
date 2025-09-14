@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Chaotic Volume Slider 2.0</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root{
+      --bg: #0b0b14;
+      --panel: rgba(20,20,30,.8);
+      --panelBorder: rgba(120,120,180,.45);
+      --text: #e9e7ff;
+      --muted: #a0a0a0;
+      --accent: #7afcff;
+      --glow: 0 18px 60px rgba(0,0,0,.5);
+    }
+    * { box-sizing: border-box; }
+    html, body { height:100%; margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto; color: var(--text); background: #0a0a0f; overflow:hidden; }
+    body {
+      background: radial-gradient(circle at 20% 0%, rgba(60,0,120,.25), transparent 40%), 
+                  radial-gradient(circle at 100% 100%, rgba(0,200,150,.25), transparent 40%), 
+                  linear-gradient(#141622, #0b0b12 60%, #0a0a12);
+    }
+    #wrapper {
+      position: absolute; inset: 0;
+      display: grid; place-items: center;
+      padding: 20px;
+      overflow: hidden;
+    }
+    canvas#viz {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      filter: saturate(1.05) contrast(1.05);
+      opacity: 0.96;
+      pointer-events: none;
+    }
+    #panel {
+      position: relative;
+      width: min(920px, 94vw);
+      background: linear-gradient(135deg, rgba(20,20,34,.92), rgba(10,10,20,.92));
+      border: 1px solid var(--panelBorder);
+      border-radius: 14px;
+      padding: 18px 20px;
+      box-shadow: var(--glow);
+      backdrop-filter: blur(3px);
+      z-index: 2;
+      overflow: hidden;
+    }
+    h1 {
+      text-align: center;
+      font-size: 1.6rem;
+      margin: 6px 0 14px;
+      letter-spacing: .4px;
+      text-shadow: 0 2px 10px rgba(0,0,0,.4);
+    }
+    .row { display:flex; align-items:center; justify-content: space-between; gap:12px; padding: 6px 0; }
+    #sliderLabel {
+      font-weight: 700;
+      font-size: 0.95rem;
+      padding: 8px 12px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, rgba(120,60,160,.8), rgba(60,120,200,.6));
+      border: 1px solid rgba(180,180,255,.6);
+      color: #f9fbff;
+      user-select: none;
+      min-width: 180px;
+      text-align: center;
+    }
+    #chaosSlider {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%; height: 30px; border-radius: 15px;
+      background: linear-gradient(90deg, rgba(100,100,255,.25), rgba(100,255,150,.25));
+      border: 1px solid rgba(200,200,240,.5); outline: none;
+      box-shadow: inset 0 2px 8px rgba(0,0,0,.25);
+    }
+    #chaosSlider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 34px; height: 34px; border-radius: 50%;
+      background: radial-gradient(circle at 30% 30%, #fff, #ddd 40%, #aaa 100%);
+      border: 1px solid #888;
+      box-shadow: 0 4px 12px rgba(0,0,0,.5);
+      cursor: pointer;
+    }
+    #chaosSlider::-moz-range-thumb {
+      width: 34px; height: 34px; border-radius: 50%;
+      background: #ddd; border: 1px solid #888; cursor: pointer;
+    }
+    button, select {
+      font-weight: 700;
+      padding: 10px 14px;
+      border-radius: 9px;
+      border: 1px solid rgba(200,200,240,.6);
+      background: linear-gradient(135deg, rgba(100,180,255,.9), rgba(100,255,180,.9));
+      color: #021018;
+      cursor: pointer;
+      transition: transform .08s ease;
+    }
+    button:active { transform: scale(0.98); }
+    #startBtn { background: linear-gradient(135deg, rgba(80,240,180,.95), rgba(80,170,240,.95)); }
+    #pauseBtn { background: linear-gradient(135deg, rgba(250,250,255,.95), rgba(200,200,230,.95)); color: #041018; }
+    #advance { margin-left: 8px; background: linear-gradient(135deg, rgba(255,200,0,.95), rgba(255,100,0,.95)); color: #061018; }
+    #status {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      padding: 12px 0 6px;
+      font-size: 0.84rem;
+    }
+    .stat {
+      padding: 8px 10px; border-radius: 8px;
+      background: rgba(255,255,255,.04);
+      border: 1px solid rgba(160,160,200,.25);
+    }
+    .stat strong { display: block; font-size: 1.05rem; margin-top: 4px; }
+    .muted { color: var(--muted); font-size: 0.8rem; }
+
+    /* Advanced panel */
+    #advanced { display: none; margin-top: 8px; padding: 8px; border-radius: 8px; border: 1px dashed rgba(180,180,260,.5); background: rgba(15,15,28,.6); }
+    .advRow { display:flex; gap:12px; align-items:center; padding:6px 0; }
+    .advRow label { min-width: 180px; font-weight:600; font-size: .92rem; }
+    .toggle { width: 48px; height: 28px; border-radius: 16px; background: #333; position: relative; cursor: pointer; display: inline-block; }
+    .toggle::after { content:''; position:absolute; width:20px; height:20px; border-radius:50%; left:4px; top:4px; background:#fff; transition: transform .2s; }
+    .toggle.on { background: #4cd964; }
+    .toggle.on::after { transform: translateX(20px); }
+
+    /* Tooltip for slider */
+    #tooltipBox {
+      position: fixed; pointer-events: none;
+      padding: 8px 10px; border-radius: 6px;
+      background: rgba(20,20,40,.92); border: 1px solid rgba(180,180,240,.6);
+      font-size: 12px; color: #e9e7ff; display:none; z-index: 10;
+      box-shadow: 0 6px 18px rgba(0,0,0,.4);
+    }
+
+    @keyframes glowPulse {
+      0% { box-shadow: 0 0 0 rgba(120,180,255,.0); }
+      50% { box-shadow: 0 0 40px rgba(120,180,255,.6); }
+      100% { box-shadow: 0 0 0 rgba(120,180,255,.0); }
+    }
+    #sliderLabel.pulsing {
+      animation: glowPulse 2s ease-in-out infinite;
+    }
+
+  </style>
+</head>
+<body>
+  <div id="wrapper">
+    <canvas id="viz"></canvas>
+
+    <section id="panel" aria-label="Chaotic Volume Slider Panel">
+      <h1>Chaotic Volume Slider 2.0</h1>
+
+      <div class="row" style="align-items:center;">
+        <div id="sliderLabel" title="Obscure label for the knob">Quibble Controller</div>
+        <div style="display:flex; gap:8px;">
+          <button id="startBtn" title="Initialize audio and begin the chaos">Start</button>
+          <button id="pauseBtn" title="Pause/Resume visuals" style="display:none;">Pause</button>
+          <button id="advance" title="Randomize chaos now">Surprise</button>
+        </div>
+      </div>
+
+      <div class="row" style="align-items:center;">
+        <input type="range" id="chaosSlider" min="0" max="1000" value="500" aria-label="Chaotic volume slider" />
+      </div>
+
+      <div id="tooltipBox" role="tooltip" aria-hidden="true"></div>
+
+      <div id="status" aria-label="Status panel">
+        <div class="stat" id="invStat">Inversion: <strong id="invState">OFF</strong></div>
+        <div class="stat" id="freqStat">Frequency: <strong id="freqLabel">440 Hz</strong></div>
+        <div class="stat" id="surfStat">Mode: <strong id="modeLabel">Smooth-ish</strong></div>
+      </div>
+
+      <div id="advanced" aria-label="Advanced options">
+        <div class="advRow">
+          <label for="chaosPower">Chaos Power</label>
+          <input id="chaosPower" type="range" min="0" max="100" value="60" />
+          <span id="chaosPowerVal" style="font-weight:700; width:40px; display:inline-block; text-align:right;">60</span>
+        </div>
+        <div class="advRow">
+          <label for="sensitivity">Sensitivity</label>
+          <input id="sensitivity" type="range" min="0" max="100" value="50" />
+          <span id="sensitivityVal" style="font-weight:700; width:40px; display:inline-block; text-align:right;">50</span>
+        </div>
+        <div class="advRow">
+          <label for="preset">Presets</label>
+          <select id="preset" aria-label="Presets">
+            <option value="calm">Calm Echo</option>
+            <option value="maddening" selected>Maddening Pulse</option>
+            <option value="neon">Neon Dream</option>
+            <option value="chaotic">Pure Chaos</option>
+          </select>
+        </div>
+        <div class="advRow" style="justify-content:flex-end;">
+          <button id="toggleAdv" title="Hide advanced options">Hide Advanced</button>
+        </div>
+      </div>
+      <div style="text-align:right; padding-top:6px;">
+        <button id="toggleAdvancedBtn" title="Show advanced options">Advanced</button>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    // Chaotic Volume Slider 2.0 - Vanilla JS
+    // Canvas setup
+    const canvas = document.getElementById('viz');
+    const ctx = canvas.getContext('2d');
+    let W = 0, H = 0, DPR = Math.max(1, window.devicePixelRatio || 1);
+
+    function resize() {
+      W = window.innerWidth;
+      H = window.innerHeight;
+      canvas.width = Math.floor(W * DPR);
+      canvas.height = Math.floor(H * DPR);
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // Panel elements
+    const slider = document.getElementById('chaosSlider');
+    const labelEl = document.getElementById('sliderLabel');
+    const startBtn = document.getElementById('startBtn');
+    const pauseBtn = document.getElementById('pauseBtn');
+    const freqLabelEl = document.getElementById('freqLabel');
+    const modeLabelEl = document.getElementById('modeLabel');
+    const invStateEl = document.getElementById('invState');
+    const tooltipBox = document.getElementById('tooltipBox');
+    const advancedPanel = document.getElementById('advanced');
+    const toggleAdvancedBtn = document.getElementById('toggleAdvancedBtn');
+    const toggleAdv = document.getElementById('toggleAdv');
+    const chaosPower = document.getElementById('chaosPower');
+    const chaosPowerVal = document.getElementById('chaosPowerVal');
+    const sensitivity = document.getElementById('sensitivity');
+    const sensitivityVal = document.getElementById('sensitivityVal');
+    const presetSel = document.getElementById('preset');
+    const surpriseBtn = document.getElementById('advance');
+
+    // Audio
+    let ctxAudio = null;
+    let osc = null;
+    let gainNode = null;
+    let started = false;
+    let inverted = false;
+    let currentFreq = 440;
+
+    // Chaos state
+    let sliderRaw = 0.5; // 0..1
+    let jitterOffset = 0;
+    let jitterTimer = 0;
+    let jitterInterval = 0.28;
+    let volTarget = Math.random();
+    let volTargetTimer = 0;
+    let volTargetInterval = 1.5;
+    let invertedToggled = false;
+
+    // Visuals
+    const particles = [];
+    const MAX_PARTICLES = 240;
+    class Particle {
+      constructor() {
+        this.reset(true);
+      }
+      reset(init = false) {
+        this.x = Math.random() * W;
+        this.y = Math.random() * H;
+        const ang = Math.random() * Math.PI * 2;
+        const speed = (Math.random() * 0.6 + 0.4) * (init ? 1.0 : 0.9);
+        this.vx = Math.cos(ang) * speed;
+        this.vy = Math.sin(ang) * speed;
+        this.size = Math.random() * 2.8 + 0.8;
+        this.col = [
+          Math.floor(180 + Math.random() * 60),
+          Math.floor(200 + Math.random() * 60),
+          Math.floor(220 + Math.random() * 30)
+        ];
+        this.life = Math.random() * 2 + 1;
+        this.rotate = Math.random() * Math.PI;
+      }
+      update(dt, forceX, forceY) {
+        // Tiny swirl towards center and outward drift
+        const cx = W * 0.5, cy = H * 0.5;
+        const dx = cx - this.x;
+        const dy = cy - this.y;
+        const dist = Math.hypot(dx, dy) + 0.0001;
+        const curl = (dx / dist) * 0.05 + (dy / dist) * 0.05;
+
+        this.vx += curl * dt * 0.6;
+        this.vy += curl * dt * 0.6;
+
+        // Apply external chaotic force
+        this.vx += forceX * dt;
+        this.vy += forceY * dt;
+
+        // Gentle damping
+        this.vx *= 0.995;
+        this.vy *= 0.995;
+
+        this.x += this.vx * dt * 60;
+        this.y += this.vy * dt * 60;
+
+        // Screen wrap
+        if (this.x < -10) this.x = W + 10;
+        if (this.x > W + 10) this.x = -10;
+        if (this.y < -10) this.y = H + 10;
+        if (this.y > H + 10) this.y = -10;
+
+        this.life -= dt;
+        if (this.life <= 0) this.reset();
+      }
+      draw(ctx) {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.rotate);
+        const g = ctx.createRadialGradient(0,0,0,0,0,this.size*2.5);
+        g.addColorStop(0, `rgba(${this.col[0]},${this.col[1]},${this.col[2]},0.8)`);
+        g.addColorStop(1, `rgba(${this.col[0]},${this.col[1]},${this.col[2]},0)`);
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(0, 0, this.size * 2.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    function randomFromArray(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+
+    // Initialize particles
+    function resetParticles() {
+      particles.length = 0;
+      const count = MAX_PARTICLES;
+      for (let i = 0; i < count; i++) particles.push(new Particle());
+    }
+
+    // Audio setup
+    function ensureAudio() {
+      if (ctxAudio) return;
+      ctxAudio = new (window.AudioContext || window.webkitAudioContext)();
+      osc = ctxAudio.createOscillator();
+      gainNode = ctxAudio.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = 440;
+      gainNode.gain.value = 0.0;
+      osc.connect(gainNode).connect(ctxAudio.destination);
+      osc.start();
+    }
+
+    function startAudioIfNeeded() {
+      if (!ctxAudio) {
+        ensureAudio();
+        started = true;
+        startBtn.style.display = 'none';
+        pauseBtn.style.display = 'inline-block';
+      }
+    }
+
+    // Mapping with non-linear, jitter, inversion
+    function mapSlider(raw) {
+      const t = performance.now();
+      const exp = 1.15 + 0.65 * Math.sin(t * 0.0005);
+      let v = Math.pow(raw, exp);
+      v += jitterOffset;
+      v = Math.max(0, Math.min(1, v));
+      if (inverted) v = 1 - v;
+      v = v * 0.75 + volTarget * 0.25;
+      v = Math.max(0, Math.min(1, v));
+      return v;
+    }
+
+    // Update audio params from slider
+    function updateAudioFromSlider(smoothedVolume) {
+      if (!ctxAudio || !gainNode || !osc) return;
+      const now = ctxAudio.currentTime;
+      const target = smoothedVolume;
+      gainNode.gain.setTargetAtTime(target, now, 0.08);
+    }
+
+    // Periodic updates
+    let lastTime = performance.now();
+
+    function update(dt) {
+      // Jitter
+      jitterTimer += dt;
+      if (jitterTimer > jitterInterval) {
+        jitterTimer = 0;
+        jitterOffset = (Math.random() - 0.5) * 0.08; // +/-0.04
+        jitterInterval = 0.2 + Math.random() * 0.6; // seconds
+      }
+
+      // Vol target random walk
+      volTargetTimer += dt;
+      if (volTargetTimer > volTargetInterval) {
+        volTargetTimer = 0;
+        volTargetInterval = 1.0 + Math.random() * 2.2;
+        volTarget = Math.random();
+      }
+
+      // Inversion timing
+      if (typeof window._inversionTimer === 'undefined') window._inversionTimer = 0;
+      window._inversionTimer += dt;
+      if (window._inversionTimer > 7.5 + Math.random() * 7.5) {
+        window._inversionTimer = 0;
+        inverted = !inverted;
+        invStateEl.textContent = inverted ? 'ON' : 'OFF';
+        // Visually "kick" particles on inversion
+        for (let i = 0; i < 8; i++) {
+          if (particles[i]) {
+            particles[i].vx += (Math.random() - 0.5) * 2;
+            particles[i].vy += (Math.random() - 0.5) * 2;
+          }
+        }
+        // Brief frequency poke
+        if (osc) {
+          const newF = 220 + Math.random() * 880;
+          osc.frequency.setTargetAtTime(newF, ctxAudio.currentTime, 0.15);
+          updateFreqLabel(newF);
+        }
+      }
+
+      // Update particles with an external force from slider
+      const raw = parseInt(slider.value, 10) / 1000;
+      sliderRaw = raw;
+      const mapped = mapSlider(raw);
+      // Force vector
+      const forceMag = (mapped - 0.5) * (0.8 + chaosPower.value/150);
+      const angle = inverted ? Math.PI : 0;
+      const fx = Math.cos(angle) * forceMag;
+      const fy = Math.sin(angle) * forceMag;
+
+      // Update particle physics
+      for (let p of particles) {
+        p.update(dt, fx, fy);
+      }
+
+      // Audio updates
+      const vol = mapped;
+      updateAudioFromSlider(vol);
+
+      // Frequency changes slowly based on mapped value
+      const baseF = 180 + mapped * 880;
+      if (osc) {
+        currentFreq += ((baseF - currentFreq) * 0.04);
+        osc.frequency.setTargetAtTime(currentFreq, ctxAudio.currentTime, 0.15);
+        updateFreqLabel(currentFreq);
+      }
+    }
+
+    function updateFreqLabel(freq) {
+      freqLabelEl.textContent = Math.round(freq) + ' Hz';
+      // Small color cue
+      const hue = Math.max(180, Math.min(260, Math.floor((freq / 1000) * 360)));
+      freqLabelEl.style.color = `hsl(${hue}, 90%, 70%)`;
+    }
+
+    // Render
+    function render() {
+      // Clear with translucent gradient to leave trails
+      const w = W, h = H;
+      ctx.globalCompositeOperation = 'source-over';
+      const grd = ctx.createLinearGradient(0,0, w, h);
+      grd.addColorStop(0, 'rgba(20,20,40,0.25)');
+      grd.addColorStop(1, 'rgba(10,10,20,0.25)');
+      ctx.fillStyle = grd;
+      ctx.fillRect(0,0,w,h);
+
+      // Ambient glow based on slider
+      const t = performance.now() * 0.001;
+      const glow = 0.5 + 0.5 * Math.sin(t * 0.5);
+      ctx.fillStyle = `rgba(60,150,255,${0.04 + glow*0.04})`;
+      ctx.fillRect(0,0,w,h);
+
+      // Draw particles
+      for (let p of particles) p.draw(ctx);
+
+      // Subtle HUD overlay: sine waves
+      ctx.save();
+      ctx.translate(0, H - 110);
+      const len = Math.max(20, W / 40);
+      ctx.lineWidth = 2;
+      for (let i = 0; i < len; i++) {
+        const x = i * (W / len);
+        const y = Math.sin((performance.now()/50) + i * 0.7) * 8;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, y);
+        ctx.strokeStyle = `rgba(120,180,255,${0.25 + (i/len)*0.25})`;
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // Tooltip interactions
+    function showTooltip(e) {
+      tooltipBox.style.display = 'block';
+      tooltipBox.textContent = randomFromArray([
+        "Whisper of the dial.",
+        "Momentum in motion.",
+        "Noise with intent.",
+        "Turn the chaos handle.",
+        "Shadows hum softly.",
+        "Reality blinks here."
+      ]);
+      positionTooltip(e);
+      tooltipBox.setAttribute('aria-hidden','false');
+      tooltipBox.style.opacity = '0.95';
+      tooltipBox.style.animation = 'pulse 2s ease-in-out infinite';
+    }
+    function hideTooltip() {
+      tooltipBox.style.display = 'none';
+      tooltipBox.setAttribute('aria-hidden','true');
+      tooltipBox.style.animation = '';
+    }
+    function positionTooltip(e) {
+      const pad = 12;
+      const x = e.clientX;
+      const y = e.clientY;
+      tooltipBox.style.left = (x + pad) + 'px';
+      tooltipBox.style.top = (y + pad) + 'px';
+    }
+
+    // Initialization
+    function init() {
+      // Init particles
+      resetParticles();
+      // Advanced: show/hide
+      toggleAdvancedBtn.addEventListener('click', () => {
+        const isVisible = advancedPanel.style.display === 'block';
+        advancedPanel.style.display = isVisible ? 'none' : 'block';
+        toggleAdvancedBtn.textContent = isVisible ? 'Advanced' : 'Hide Advanced';
+      });
+      toggleAdv.addEventListener('click', () => {
+        advancedPanel.style.display = 'block';
+      });
+
+      // Slider tooltip
+      const advPanelRect = advancedPanel.getBoundingClientRect;
+      slider.addEventListener('mouseenter', showTooltip);
+      slider.addEventListener('mousemove', (e)=> positionTooltip(e));
+      slider.addEventListener('mouseleave', hideTooltip);
+
+      // Start/pause
+      startBtn.addEventListener('click', () => {
+        startAudioIfNeeded();
+        // Begin animation loop if not started
+        started = true;
+        startBtn.style.display = 'none';
+        pauseBtn.style.display = 'inline-block';
+        // reveal advanced options
+        advancedPanel.style.display = 'block';
+      });
+
+      pauseBtn.addEventListener('click', () => {
+        // Pause visuals by stopping requestAnimationFrame externally via flag
+        paused = !paused;
+        pauseBtn.textContent = paused ? 'Resume' : 'Pause';
+      });
+
+      // Surprise button
+      surpriseBtn.addEventListener('click', () => {
+        // Randomize mapping a bit
+        labelEl.textContent = randomFromArray([
+          "Quibble Controller","Flux Valve","Nebula Dial","Chaotic Knob",
+          "Quasar Tuner","Liminal Knob","Eclipse Dial","Mnemosyne Knob","Vortex Sliders"
+        ]);
+        // Random slider offset
+        slider.value = Math.floor(Math.random() * 1000);
+        // Some immediate visual nudges
+        for (let i=0;i<8;i++){
+          if (particles[i]) {
+            particles[i].vx += (Math.random() - 0.5) * 3;
+            particles[i].vy += (Math.random() - 0.5) * 3;
+          }
+        }
+      });
+
+      // Presets
+      presetSel.addEventListener('change', () => {
+        const v = presetSel.value;
+        applyPreset(v);
+      });
+
+      // Power & sensitivity labels
+      chaosPower.addEventListener('input', () => {
+        chaosPowerVal.textContent = chaosPower.value;
+      });
+      sensitivity.addEventListener('input', () => {
+        sensitivityVal.textContent = sensitivity.value;
+      });
+
+      // Slider interaction
+      slider.addEventListener('input', (e) => {
+        sliderRaw = parseInt(slider.value, 10) / 1000;
+        if (Math.random() < 0.04) {
+          labelEl.textContent = randomFromArray([
+            "Quibble Controller","Flux Valve","Nebula Dial","Chaotic Knob",
+            "Quasar Tuner","Liminal Knob","Eclipse Dial","Mnemosyne Knob","Vortex Sliders"
+          ]);
+        }
+      });
+
+      // Initialize labels
+      invStateEl.textContent = 'OFF';
+      updateFreqLabel(440);
+      modeLabelEl.textContent = 'Chaotic-Rate';
+
+      // Start animation
+      requestAnimationFrame(loop);
+    }
+
+    let paused = false;
+    function loop(now) {
+      // compute dt
+      if (!lastTime) lastTime = now;
+      const dt = Math.min(0.033, (now - lastTime) / 1000);
+      lastTime = now;
+
+      // Draw visuals
+      render();
+      // Update logic
+      update(dt);
+
+      if (!paused) requestAnimationFrame(loop);
+    }
+
+    let lastTime = 0;
+
+    // Preset application
+    function applyPreset(key) {
+      switch (key) {
+        case 'calm':
+          slider.value = 250;
+          sliderRaw = 0.25;
+          inverted = false;
+          invStateEl.textContent = 'OFF';
+          updateFreqLabel(240);
+          modeLabelEl.textContent = 'Calm Echo';
+          break;
+        case 'maddening':
+          slider.value = 500;
+          sliderRaw = 0.5;
+          inverted = false;
+          invStateEl.textContent = 'OFF';
+          updateFreqLabel(440);
+          modeLabelEl.textContent = 'Maddening Pulse';
+          break;
+        case 'neon':
+          slider.value = 800;
+          sliderRaw = 0.8;
+          inverted = true;
+          invStateEl.textContent = 'ON';
+          updateFreqLabel(660);
+          modeLabelEl.textContent = 'Neon Flux';
+          break;
+        case 'chaotic':
+          slider.value = 999;
+          sliderRaw = 0.999;
+          inverted = Math.random() < 0.5;
+          invStateEl.textContent = inverted ? 'ON' : 'OFF';
+          updateFreqLabel(980);
+          modeLabelEl.textContent = 'Pure Chaos';
+          break;
+      }
+    }
+
+    // Initialize on load
+    window.addEventListener('load', init);
+
+    // Utility: create gradient background in loop for extra depth
+    function gradientBackground(ctx, w, h, t) {
+      const g = ctx.createLinearGradient(0,0, w, h);
+      g.addColorStop(0, `rgba(40,60,180,${0.08 + 0.08*Math.abs(Math.sin(t*0.0005))})`);
+      g.addColorStop(1, `rgba(180,60,120,${0.05 + 0.05*Math.abs(Math.cos(t*0.0004))})`);
+      ctx.fillStyle = g;
+      ctx.fillRect(0,0,w,h);
+    }
+
+    // Initialize audio on first user gesture
+    document.addEventListener('keydown', (e) => {
+      if (e.key === ' ' || e.code === 'Space') {
+        if (!ctxAudio) {
+          ensureAudio();
+          started = true;
+          startBtn.style.display = 'none';
+          pauseBtn.style.display = 'inline-block';
+        }
+      }
+    });
+
+    // Hover tooltip for slider
+    slider.addEventListener('mouseenter', (e) => {
+      tooltipBox.style.display = 'block';
+      tooltipBox.textContent = "Chaos dial. Move it. Breathe.";
+      positionTooltip(e);
+      tooltipBox.setAttribute('aria-hidden','false');
+    });
+    slider.addEventListener('mousemove', (e) => positionTooltip(e));
+    slider.addEventListener('mouseleave', () => {
+      tooltipBox.style.display = 'none';
+      tooltipBox.setAttribute('aria-hidden','true');
+    });
+  </script>
+</body>
+</html>
