@@ -1,0 +1,991 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>AR_PokemonGo_Clone - Expanded Vanilla JS</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root{
+      --bg: #0a0f1f;
+      --panel: rgba(0,0,0,0.55);
+      --panel2: rgba(255,255,255,0.08);
+      --muted: #9fb3c8;
+      --accent: #4cc9f0;
+      --gold: #ffd700;
+    }
+    html, body { margin:0; padding:0; height:100%; font-family: Inter, Arial, sans-serif; background:#111; color:#eee; }
+    #app { height:100vh; display:flex; flex-direction:column; overflow:hidden; }
+    header {
+      display:flex; align-items:center; justify-content:space-between;
+      padding:12px; background:#141a2a; border-bottom:1px solid #2a3243;
+      position:sticky; top:0; z-index:20;
+    }
+    header h1 { font-size:14px; margin:0; letter-spacing:0.4px; }
+    .controls { display:flex; gap:8px; align-items:center; }
+    button, .btn { background:#2a2a2a; color:#fff; border:1px solid #555; border-radius:8px; padding:8px 12px; cursor:pointer; transition: transform 0.15s ease, background 0.2s; }
+    button.primary { background:#3a7bd5; border-color:#2b5fa8; }
+    button.secondary { background:#2f2f2f; }
+    button:hover { transform: translateY(-1px); }
+    #content { flex:1; display:flex; position:relative; }
+    canvas { width:100%; height:100%; display:block; }
+    #mapView, #arView, #inventoryView, #gymView, #tradeView, #questsView { position:absolute; top:0; bottom:0; left:0; right:0; display:none; }
+    #mapView.active, #arView.active, #inventoryView.active, #gymView.active, #tradeView.active, #questsView.active { display:block; }
+    #mapCanvas { background:#0b0f1a; }
+    #arContainer { position:relative; width:100%; height:100%; overflow:hidden; }
+    #video { position:absolute; width:100%; height:100%; object-fit:cover; z-index:0; filter: saturate(1.05); }
+    #arCanvas { position:absolute; left:0; top:0; width:100%; height:100%; z-index:1; }
+    .hud { position:absolute; left:0; right:0; bottom:0; padding:8px; display:flex; justify-content:space-between; align-items:flex-end; pointer-events:none; }
+    .hud .panel { background: var(--panel); padding:8px 12px; border-radius:10px; display:flex; gap:8px; align-items:center; pointer-events:auto; box-shadow:0 6px 20px rgba(0,0,0,0.25); }
+    .pill { padding:6px 10px; background: rgba(255,255,255,0.08); border-radius:999px; border:1px solid rgba(255,255,255,0.25); font-size:12px; }
+    #encounterPanel { position:absolute; left:50%; transform:translateX(-50%); bottom:110px; width:min(92%, 500px); padding:14px; background: rgba(0,0,0,0.75); border-radius:12px; border:1px solid rgba(255,255,255,0.25); z-index:5; display:none; }
+    #encounterPanel.visible { display:block; }
+    #encounterPanel h3 { margin:0 0 8px 0; font-size:14px; }
+    #envBadge { font-size:11px; padding:3px 6px; border-radius:6px; background:#222; border:1px solid #555; }
+    #inventoryPanel, #questsPanel { position:absolute; top:60px; right:10px; width:320px; max-height:70vh; overflow:auto; padding:12px; background: rgba(0,0,0,0.75); border-radius:8px; border:1px solid #555; display:none; z-index:15; }
+    #inventoryPanel.active, #questsPanel.active { display:block; }
+    #gymStatus { position:absolute; left:50%; transform:translateX(-50%); top:60px; width:420px; background: rgba(0,0,0,0.75); padding:10px; border-radius:8px; border:1px solid #555; display:none; z-index:15; }
+    #toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background: rgba(0,0,0,0.9); padding:8px 12px; border-radius:6px; display:none; z-index:50; }
+    .card { background: rgba(0,0,0,0.5); padding:8px; border-radius:6px; border:1px solid #555; }
+    .grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap:8px; }
+    .creature { display:flex; align-items:center; gap:8px; padding:6px; border-radius:6px; border:1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.04); }
+    .badge { padding:2px 6px; border-radius:999px; font-size:11px; }
+    .rarity-common { background:#8e9e8e; }
+    .rarity-uncommon { background:#3ba5a9; }
+    .rarity-rare { background:#7b5bd8; color:#fff; }
+    .rarity-epic { background:#e67e22; color:#fff; }
+    .settingsPanel { position:fixed; right:14px; bottom:14px; width:340px; max-width:94%; padding:12px; background: rgba(0,0,0,0.75); border-radius:10px; border:1px solid #555; z-index:40; display:none; }
+    .settingsPanel h4 { margin:0 0 8px 0; font-size:14px; color:#ffd; }
+    .row { display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px dashed rgba(255,255,255,0.15); }
+    .row:last-child { border-bottom:none; }
+    .toggle { width:44px; height:26px; background:#333; border-radius:999px; position:relative; cursor:pointer; }
+    .toggle input { display:none; }
+    .knob { position:absolute; top:2px; left:2px; width:22px; height:22px; border-radius:50%; background:#fff; transition: left 0.2s ease; }
+    .toggle.active { background:#4cd56e; }
+    .toggle.active .knob { left:20px; }
+    @keyframes float { from { transform: translateY(0);} 50% { transform: translateY(-6px);} to { transform: translateY(0);} }
+    .pulse { animation: float 2s ease-in-out infinite; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button id="btnMap" class="btn" title="Show Map">Map</button>
+      <button id="btnAR" class="btn" title="AR View">AR</button>
+      <button id="btnGym" class="btn" title="Gym battles">Gym</button>
+      <button id="btnTrade" class="btn" title="Nearby trades">Trade</button>
+    </div>
+    <h1>AR_PokemonGo_Clone - Expanded</h1>
+    <div class="controls">
+      <button id="btnInventory" class="btn" title="Inventory">Inventory</button>
+      <button id="btnQuests" class="btn" title="Quests">Quests</button>
+      <button id="btnSettings" class="btn" title="Settings">Settings</button>
+    </div>
+  </header>
+
+  <div id="content">
+    <!-- Map View -->
+    <div id="mapView" class="active">
+      <canvas id="mapCanvas"></canvas>
+      <div class="hud">
+        <div class="panel" id="mapStats">
+          <span class="pill" id="pillLocation">Loc: --</span>
+          <span class="pill" id="pillSeen">Nearby: 0</span>
+        </div>
+        <div class="panel">
+          <span class="pill" id="pillXP">XP: 0</span>
+          <span class="pill" id="pillLevel" style="margin-left:6px;">Lvl: 1</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- AR View -->
+    <div id="arView">
+      <div id="arContainer">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="arCanvas"></canvas>
+        <div class="hud">
+          <div class="panel">
+            <span class="pill" id="pillARStatus">AR: Connecting</span>
+          </div>
+          <div class="panel">
+            <span class="pill" id="pillBalls">Balls: 0</span>
+          </div>
+        </div>
+      </div>
+      <div id="encounterPanel" class="">
+        <h3>Encounter</h3>
+        <div id="encDetail" style="font-size:13px; margin-bottom:6px; color:#fff;">Creature</div>
+        <div class="row">
+          <button id="btnCapture" class="btn" style="flex:1; background:#29d; border-color:#0a5;">Throw Capture</button>
+          <button id="btnHideEncounter" class="btn" style="flex:1; margin-left:8px;">Hide</button>
+        </div>
+        <div class="row" style="margin-top:6px;">
+          <canvas id="throwGuide" width="0" height="0" style="width:100%; height:60px; display:block; opacity:0.85;"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- Inventory -->
+    <div id="inventoryView">
+      <div class="card" style="padding:12px;">
+        <h3>Inventory</h3>
+        <div id="inventoryList" class="grid"></div>
+        <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="btn" data-item="pokeball">Poke Ball</button>
+          <button class="btn" data-item="greatball">Great Ball</button>
+          <button class="btn" data-item="ultraball">Ultra Ball</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Quests -->
+    <div id="questsView">
+      <div class="card" style="padding:12px;">
+        <h3>Quests</h3>
+        <div id="questProgress" style="display:flex; flex-direction:column; gap:8px;"></div>
+      </div>
+    </div>
+
+    <!-- Gym View -->
+    <div id="gymView">
+      <div id="gymStatus" class="card" style="text-align:left;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <strong>Gym Battle</strong>
+          <span id="gymClose" style="cursor:pointer; color:#bbb;">[Close]</span>
+        </div>
+        <div style="margin-top:8px;">
+          <div>Opponent: <b>Wild Gymster</b> (HP 100)</div>
+          <div>Your Pokemon: <span id="playerMon">PokeMon</span> (HP 100)</div>
+        </div>
+        <div style="margin-top:8px;">
+          <button id="btnAttack" class="btn" style="margin-right:6px;">Attack</button>
+          <button id="btnCharge" class="btn" style="margin-right:6px;" disabled>Charge</button>
+          <button id="btnHeal" class="btn" disabled>Heal</button>
+        </div>
+        <div id="gymLog" style="margin-top:8px; height:120px; overflow:auto; font-family:monospace; font-size:12px; color:#cde;">
+        </div>
+      </div>
+    </div>
+
+    <!-- Trade View -->
+    <div id="tradeView">
+      <div class="card" style="padding:12px;">
+        <h3>Nearby Trades (Local)</h3>
+        <div id="tradeList" style="max-height:48vh; overflow:auto;"></div>
+        <div style="margin-top:8px;">
+          <button id="btnPostTrade" class="btn">Post Trade Offer</button>
+          <button id="btnCloseTrade" class="btn" style="margin-left:6px;">Close</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div id="toast"></div>
+  <div class="settingsPanel" id="settingsPanel" aria-label="Settings"></div>
+</div>
+
+<script>
+(function(){
+  // Core state
+  const state = {
+    mode: 'map', // map, ar, gym, trade, inventory, quests
+    settings: {
+      autoSpawn: true,
+      showGrid: true,
+      particles: true,
+      sound: true,
+      difficulty: 'normal'
+    },
+    player: {
+      id: 'you',
+      name: 'You',
+      lat: null,
+      lon: null,
+      heading: 0,
+      xp: 0,
+      level: 1,
+      balls: { pokeball: 6, greatball: 3, ultraball: 1 },
+      pokemons: [],
+      quests: [],
+      distanceTraveled: 0
+    },
+    creatures: [], // on-map monsters
+    tick: 0,
+    cameraReady: false,
+    watchId: null,
+    spawnRadiusM: 1200,
+    lastMoveLat: null,
+    lastMoveLon: null
+  };
+
+  // UI elements
+  const mapView = document.getElementById('mapView');
+  const arView = document.getElementById('arView');
+  const inventoryView = document.getElementById('inventoryView');
+  const questsView = document.getElementById('questsView');
+  const gymView = document.getElementById('gymView');
+  const tradeView = document.getElementById('tradeView');
+  const mapCanvas = document.getElementById('mapCanvas');
+  const arCanvas = document.getElementById('arCanvas');
+  const video = document.getElementById('video');
+  const pillLocation = document.getElementById('pillLocation');
+  const pillSeen = document.getElementById('pillSeen');
+  const pillXP = document.getElementById('pillXP');
+  const pillARStatus = document.getElementById('pillARStatus');
+  const pillBalls = document.getElementById('pillBalls');
+  const encounterPanel = document.getElementById('encounterPanel');
+  const encDetail = document.getElementById('encDetail');
+  const btnCapture = document.getElementById('btnCapture');
+  const btnHideEncounter = document.getElementById('btnHideEncounter');
+  const throwGuide = document.getElementById('throwGuide');
+  const inventoryPanel = document.getElementById('inventoryPanel');
+  const inventoryList = document.getElementById('inventoryList');
+  const btnInventory = document.getElementById('btnInventory');
+  const btnQuests = document.getElementById('btnQuests');
+  const btnMap = document.getElementById('btnMap');
+  const btnAR = document.getElementById('btnAR');
+  const btnGym = document.getElementById('btnGym');
+  const btnTrade = document.getElementById('btnTrade');
+  const btnPostTrade = document.getElementById('btnPostTrade');
+  const btnCloseTrade = document.getElementById('btnCloseTrade');
+  const tradeList = document.getElementById('tradeList');
+  const gymStatus = document.getElementById('gymStatus');
+  const gymLog = document.getElementById('gymLog');
+  const playerMon = document.getElementById('playerMon');
+  const btnAttack = document.getElementById('btnAttack');
+  const btnCharge = document.getElementById('btnCharge');
+  const btnHeal = document.getElementById('btnHeal');
+  const gymClose = document.getElementById('gymClose');
+  const questProgress = document.getElementById('questProgress');
+  const questList = document.getElementById('questList');
+  const inventoryButtonSelector = document.querySelectorAll('button[data-item]');
+  const settingsBtn = document.getElementById('btnSettings');
+  const settingsPanel = document.getElementById('settingsPanel');
+  const pillLevel = document.getElementById('pillLevel');
+  const mapStats = document.getElementById('mapStats');
+  const craftKeys = ['pokeball','greatball','ultraball'];
+  // Init small helpers
+  function logToast(msg){
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.style.display = 'block';
+    clearTimeout(t._t);
+    t._t = setTimeout(()=>{ t.style.display='none'; }, 1800);
+  }
+  function toRad(d){ return d * Math.PI / 180; }
+  function haversine(a, b){
+    const R = 6371e3;
+    const dLat = toRad(b.lat - a.lat);
+    const dLon = toRad(b.lon - a.lon);
+    const lat1 = toRad(a.lat);
+    const lat2 = toRad(b.lat);
+    const sinDLat = Math.sin(dLat/2);
+    const sinDLon = Math.sin(dLon/2);
+    const aVal = sinDLat*sinDLat + Math.cos(lat1)*Math.cos(lat2)*sinDLon*sinDLon;
+    const c = 2 * Math.atan2(Math.sqrt(aVal), Math.sqrt(1-aVal));
+    return R * c; // meters
+  }
+  function bearing(a,b){
+    const lat1 = toRad(a.lat), lon1 = toRad(a.lon);
+    const lat2 = toRad(b.lat), lon2 = toRad(b.lon);
+    const y = Math.sin(lon2-lon1) * Math.cos(lat2);
+    const x = Math.cos(lat1)*Math.sin(lat2) - Math.sin(lat1)*Math.cos(lat2)*Math.cos(lon2-lon1);
+    const brng = Math.atan2(y, x);
+    return (brng*180/Math.PI + 360) % 360;
+  }
+  function clamp(n,a,b){ return Math.max(a, Math.min(b, n)); }
+  function rand(min,max){ return Math.random()*(max-min)+min; }
+  function randChoice(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+
+  // Creature data
+  const rarityList = [
+    {id:'common', name:'Common', color:'#8e9e8e', multiplier:1},
+    {id:'uncommon', name:'Uncommon', color:'#3ba5a9', multiplier:1.5},
+    {id:'rare', name:'Rare', color:'#7b5bd8', multiplier:2},
+    {id:'epic', name:'Epic', color:'#e67e22', multiplier:3}
+  ];
+  function rarityColor(r){ return rarityList.find(x=>x.id===r)?.color || '#fff'; }
+
+  const speciesPool = [
+    {name:'Flareon', id:'flareon', rarity:'common', cp: ()=>Math.floor(rand(10,60))},
+    {name:'Aquaido', id:'aqua', rarity:'uncommon', cp: ()=>Math.floor(rand(40,110))},
+    {name:'Terranox', id:'terra', rarity:'rare', cp: ()=>Math.floor(rand(80,180))},
+    {name:'Lumika', id:'lumi', rarity:'epic', cp: ()=>Math.floor(rand(120,260))}
+  ];
+
+  function createCreature(lat, lon){
+    const s = randChoice(speciesPool);
+    return {
+      id: 'c_' + Math.random().toString(36).slice(2,9),
+      name: s.name,
+      rarity: s.rarity,
+      cp: s.cp(),
+      iv: Math.floor(rand(0,31)),
+      lat, lon,
+      seenAt: Date.now(),
+      captured:false
+    };
+  }
+
+  // Init map view
+  function resizeCanvas(c){
+    const w = c.clientWidth || window.innerWidth;
+    const h = c.clientHeight || window.innerHeight;
+    c.width = w;
+    c.height = h;
+  }
+
+  function drawMap(){
+    const c = mapCanvas;
+    const ctx = c.getContext('2d');
+    resizeCanvas(c);
+    ctx.clearRect(0,0,c.width,c.height);
+    const w = c.width, h = c.height;
+    // background
+    ctx.fillStyle = '#0b0f1a';
+    ctx.fillRect(0,0,w,h);
+    // grid
+    const showGrid = state.settings.showGrid;
+    if(showGrid){
+      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+      const gap = 40;
+      for(let x=0; x<w; x+=gap){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); }
+      for(let y=0; y<h; y+=gap){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
+    }
+    // Player anchor
+    const px = w/2, py = h/2;
+    // glow around player
+    const grd = ctx.createRadialGradient(px, py, 2, px, py, 40);
+    grd.addColorStop(0, 'rgba(52, 199, 89, 0.9)');
+    grd.addColorStop(1, 'rgba(52, 199, 89, 0.0)');
+    ctx.fillStyle = grd;
+    ctx.beginPath(); ctx.arc(px, py, 40, 0, Math.PI*2); ctx.fill();
+    // Player symbol
+    ctx.fillStyle = '#00ff88';
+    ctx.beginPath(); ctx.arc(px, py, 6, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.fillText('You', px+9, py+3);
+
+    // Creatures
+    state.creatures.forEach((c) => {
+      const dist = haversine(state.player, c);
+      const scale = Math.max(0.4, 1 - dist/2500);
+      const angle = bearing(state.player, c) - state.player.heading;
+      const radius = Math.min(180, dist/40);
+      const dx = Math.cos(toRad(angle)) * radius;
+      const dy = Math.sin(toRad(angle)) * radius;
+      const ex = px + dx, ey = py + dy;
+      ctx.fillStyle = rarityColor(c.rarity);
+      ctx.beginPath(); ctx.arc(ex, ey, 6*scale, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.font = '12px sans-serif';
+      ctx.fillText(c.name, ex + 8, ey - 8);
+      // border glow
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+      ctx.stroke();
+    });
+  }
+
+  // AR overlay
+  function initCamera(){
+    if(navigator.mediaDevices && navigator.mediaDevices.getUserMedia){
+      navigator.mediaDevices.getUserMedia({video: { facingMode: 'environment' }, audio:false})
+        .then(stream => { video.srcObject = stream; state.cameraReady = true; pillARStatus.textContent = 'AR: Ready'; })
+        .catch(err => { pillARStatus.textContent = 'AR: Camera denied'; console.error(err); });
+    } else {
+      pillARStatus.textContent = 'AR: Unavailable';
+    }
+  }
+
+  function arDraw(){
+    if(!state.cameraReady) return;
+    const w = arCanvas.clientWidth, h = arCanvas.clientHeight;
+    arCanvas.width = w; arCanvas.height = h;
+    const ctx = arCanvas.getContext('2d');
+    ctx.clearRect(0,0,w,h);
+
+    // simple AR markers
+    const centerX = w/2, centerY = h/2;
+    const sorted = state.creatures.slice().sort((a,b)=> haversine(state.player,a) - haversine(state.player,b));
+    sorted.forEach((c, idx) => {
+      const dist = haversine(state.player, c);
+      const bearingToC = bearing(state.player, c);
+      const hd = ((bearingToC - state.player.heading) + 360) % 360;
+      const fov = 60;
+      if(Math.abs(hd) > fov/2) return;
+      const offsetX = (hd / (fov/2)) * (w/2);
+      const x = centerX + offsetX;
+      const scale = Math.max(0.6, 1 - dist/4000);
+      const y = centerY - (dist/800) + (idx%3);
+      ctx.fillStyle = rarityColor(c.rarity);
+      ctx.beginPath(); ctx.arc(x, y, 14*scale, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.font = '12px sans-serif';
+      ctx.fillText(c.name, x+16, y+4);
+      // glow
+      ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    });
+  }
+
+  function ensureSpawn(lat, lon){
+    const nb = 5;
+    for(let i=0;i<nb;i++){
+      const angle = rand(0, Math.PI*2);
+      const dMeters = rand(600, state.spawnRadiusM);
+      const dLat = (dMeters * Math.cos(angle)) / 111111;
+      const dLon = (dMeters * Math.sin(angle)) / (111111 * Math.cos(state.player.lat * Math.PI/180) );
+      const cLat = lat + dLat;
+      const cLon = lon + dLon;
+      const cre = createCreature(cLat, cLon);
+      // rarity tint
+      const r = Math.random();
+      if(r>0.92) cre.rarity = 'epic';
+      else if(r>0.75) cre.rarity = 'rare';
+      else if(r>0.4) cre.rarity = 'uncommon';
+      state.creatures.push(cre);
+    }
+  }
+
+  // Orientation
+  function initOrientation(){
+    if(window.DeviceOrientationEvent){
+      window.addEventListener('deviceorientation', (ev) => {
+        if(typeof ev.alpha === 'number'){
+          const heading = (360 - ev.alpha) % 360;
+          state.player.heading = heading;
+        }
+      }, true);
+    } else {
+      state.player.heading = 0;
+    }
+  }
+
+  // Drag throw mechanics
+  let isDragging = false;
+  let dragStart = {x:0,y:0};
+  let dragCurrent = {x:0,y:0};
+  let lastThrow = 0;
+  let throwPathCanvas;
+
+  function initThrowMechanics(){
+    const c = arCanvas;
+    c.addEventListener('mousedown', (e)=>{ if(state.player.balls.pokeball>0){ isDragging = true; dragStart = {x:e.clientX, y:e.clientY}; dragCurrent = dragStart; showThrowPath(dragStart, dragCurrent); } });
+    window.addEventListener('mousemove', (e)=>{ if(isDragging){ dragCurrent = {x:e.clientX, y:e.clientY}; showThrowPath(dragStart, dragCurrent); } });
+    window.addEventListener('mouseup', ()=>{ if(isDragging){ isDragging = false; performThrow(dragStart, dragCurrent); hideThrowPath(); } });
+  }
+
+  function pathToScreenPoints(start, end){
+    const pts = [];
+    const steps = 22;
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    for(let i=0;i<=steps;i++){
+      const t = i/steps;
+      const x = start.x + dx * t;
+      const y = start.y + dy * t - (40 * Math.sin(Math.PI * t));
+      pts.push({x,y});
+    }
+    return pts;
+  }
+
+  function showThrowPath(start, current){
+    if(!throwPathCanvas){
+      throwPathCanvas = document.createElement('canvas');
+      throwPathCanvas.style.position = 'absolute';
+      throwPathCanvas.style.left = '0';
+      throwPathCanvas.style.top = '0';
+      throwPathCanvas.style.width = '100%';
+      throwPathCanvas.style.height = '100%';
+      throwPathCanvas.style.pointerEvents = 'none';
+      arCanvas.parentElement.appendChild(throwPathCanvas);
+    }
+    const w = arCanvas.clientWidth, h = arCanvas.clientHeight;
+    throwPathCanvas.width = w; throwPathCanvas.height = h;
+    const ctx = throwPathCanvas.getContext('2d');
+    ctx.clearRect(0,0,w,h);
+    ctx.strokeStyle = '#ffd36b';
+    ctx.lineWidth = 2;
+    const pts = pathToScreenPoints(start, current);
+    ctx.beginPath();
+    pts.forEach((p, idx) => { if(idx===0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
+    ctx.stroke();
+  }
+
+  function hideThrowPath(){
+    if(throwPathCanvas){
+      throwPathCanvas.remove();
+      throwPathCanvas = null;
+    }
+  }
+
+  function performThrow(start, end){
+    if(state.player.balls.pokeball>0){
+      state.player.balls.pokeball--;
+      updateInventoryUI();
+      const pts = pathToScreenPoints(start, end);
+      // hit test
+      let target = null, minDist = Infinity;
+      state.creatures.forEach((c)=>{
+        const dist = creatureScreenDistance(c, pts);
+        if(dist < 50 && dist < minDist){ minDist = dist; target = c; }
+      });
+      if(target){
+        const base = 0.25;
+        const rarityMult = rarityList.find(r=> r.id===target.rarity)?.multiplier ?? 1;
+        const distFactor = 1 - clamp(minDist/50, 0, 1);
+        const catchChance = base * rarityMult * (0.5 + distFactor*0.5);
+        const roll = Math.random();
+        if(roll < catchChance){
+          target.captured = true;
+          state.player.xp += 20;
+          state.creatures = state.creatures.filter(c=>!c.captured);
+          showEncounterResult(true, target);
+        } else {
+          showEncounterResult(false, target);
+        }
+        updateXPUI();
+      } else {
+        logToast('Missed! No creature in path.');
+      }
+    }
+  }
+
+  function creatureScreenDistance(creature, pts){
+    const w = arCanvas.clientWidth, h = arCanvas.clientHeight;
+    const centerX = w/2, centerY = h/2;
+    const bearingToC = bearing(state.player, creature);
+    const hd = ((bearingToC - state.player.heading) + 360) % 360;
+    const fov = 60;
+    if(Math.abs(hd) > fov/2) return 9999;
+    const offsetX = (hd / (fov/2)) * (w/2);
+    const x = centerX + offsetX;
+    const dist = haversine(state.player, creature);
+    const y = centerY - (dist/800);
+    // nearest path point
+    let dmin = 9999;
+    for(let i=0;i<pts.length;i++){ const p=pts[i]; const dx=p.x-x, dy=p.y-y; const d = Math.hypot(dx,dy); if(d<dmin) dmin=d; }
+    return dmin;
+  }
+
+  function rarityCh(rarity){
+    switch(rarity){
+      case 'common': return 1.0;
+      case 'uncommon': return 1.5;
+      case 'rare': return 2.0;
+      case 'epic': return 3.0;
+      default: return 1.0;
+    }
+  }
+
+  function showEncounterResult(success, creature){
+    if(success){
+      logToast('Captured '+ (creature?.name || 'creature') +'!');
+      state.player.xp += 10;
+      state.creatures = state.creatures.filter(c=>c.id!==creature.id);
+    } else {
+      logToast('Ball missed '+(creature?.name||'creature')+'!');
+    }
+    encDetail.textContent = creature?.name || 'Unknown';
+    updateXPUI();
+    // small particle burst when captured
+    if(state.settings.particles){
+      spawnCaptureBurst(creature?.lat, creature?.lon);
+    }
+  }
+
+  // Simple particle burst at world coordinates (in AR overlay)
+  function spawnCaptureBurst(targetLat, targetLon){
+    // Fake particles in AR overlay using canvas overlay on arCanvas
+    const count = 18;
+    const ctx = arCanvas.getContext('2d');
+    const w = arCanvas.clientWidth, h = arCanvas.clientHeight;
+    for(let i=0;i<count;i++){
+      const t = i / count;
+      const ang = Math.random()*Math.PI*2;
+      const r = 20 * (1 - t) + Math.random()*6;
+      const x = w/2 + Math.cos(ang)*r;
+      const y = h/2 + Math.sin(ang)*r;
+      const col = '#'+Math.floor(Math.random()*0xffffff).toString(16).padStart(6,'0');
+      // simple animation using requestAnimationFrame on a small drawn dot
+      let life = 40;
+      function draw(){
+        if(life<=0){ return; }
+        ctx.fillStyle = col;
+        ctx.globalAlpha = life/40;
+        ctx.beginPath(); ctx.arc(x, y, 2, 0, Math.PI*2); ctx.fill();
+        life--;
+        requestAnimationFrame(draw);
+      }
+      draw();
+    }
+  }
+
+  function updateXPUI(){
+    pillXP.textContent = 'XP: ' + state.player.xp;
+    const lvl = 1 + Math.floor(state.player.xp/100);
+    state.player.level = lvl;
+    pillLevel.textContent = 'Lvl: ' + lvl;
+  }
+
+  // Inventory and UI
+  function initInventoryUI(){
+    updateInventoryUI();
+  }
+  function updateInventoryUI(){
+    inventoryList.innerHTML = '';
+    craftKeys.forEach((k)=>{
+      const v = state.player.balls[k] ?? 0;
+      const el = document.createElement('div');
+      el.className = 'card';
+      el.style.display = 'flex'; el.style.justifyContent='space-between'; el.style.alignItems='center';
+      el.style.padding = '8px';
+      el.style.width = '100%';
+      el.innerHTML = `<span>${capitalize(k)}</span><span>${v}</span>`;
+      inventoryList.appendChild(el);
+    });
+  }
+
+  function capitalize(s){ return s.charAt(0).toUpperCase() + s.slice(1); }
+
+  // Quests
+  function initQuests(){
+    const q1 = {id:'q1', title:'Catch 5 Pokemon', progress:0, goal:5, reward:50, done:false};
+    const q2 = {id:'q2', title:'Travel 1 km', progress:0, goal:1000, reward:60, done:false}; // meters
+    const q3 = {id:'q3', title:'Open 3 Pokestops', progress:0, goal:3, reward:40, done:false};
+    state.player.quests = [q1,q2,q3];
+    renderQuests();
+  }
+  function renderQuests(){
+    questProgress.innerHTML = '';
+    state.player.quests.forEach(q=>{
+      const bar = document.createElement('div');
+      bar.className = 'card';
+      bar.style.padding = '8px';
+      bar.style.marginBottom = '6px';
+      const pct = Math.min(100, Math.floor((q.progress / q.goal) * 100));
+      bar.innerHTML = `<div style="display:flex; justify-content:space-between;"><strong>${q.title}</strong><span>${pct}%</span></div><div style="height:8px; background:#333; border-radius:6px; overflow:hidden; margin-top:6px;"><div style="width:${pct}%; height:100%; background: linear-gradient(90deg, #4cc9f0, #1e90ff);"></div></div>`;
+      questProgress.appendChild(bar);
+    });
+  }
+
+  // Gym
+  let gymActive = false;
+  let gymOpponent = {name:'Wild Gymster', hp:100};
+  let gymPlayerMon = {name:'PokeMon', hp:100, energy:100};
+  function openGym(){
+    gymActive = true;
+    gymStatus.style.display = 'block';
+    gymLog.innerHTML = '';
+    playerMon.textContent = gymPlayerMon.name;
+  }
+  function closeGym(){
+    gymActive = false;
+    gymStatus.style.display = 'none';
+  }
+  function logGym(s){
+    gymLog.innerHTML += s + '<br/>';
+    gymLog.scrollTop = gymLog.scrollHeight;
+  }
+
+  // Trades
+  function initTradeSystem(){
+    function broadcast(){
+      const data = {
+        t: Date.now(),
+        player: {
+          lat: state.player.lat,
+          lon: state.player.lon,
+          name: state.player.name,
+          pokemons: state.player.pokemons.map(p=>({name:p.name, cp:p.cp, iv:p.iv}))
+        }
+      };
+      localStorage.setItem('arpokego_broadcast_'+state.player.id, JSON.stringify(data));
+      // cleanup older
+    }
+    setInterval(broadcast, 5000);
+    function loadTrades(){
+      tradeList.innerHTML = '';
+      for(let key in localStorage){
+        if(key.startsWith('arpokego_broadcast_')){
+          try{
+            const d = JSON.parse(localStorage.getItem(key));
+            const el = document.createElement('div');
+            el.className = 'card';
+            el.style.marginBottom = '6px';
+            el.innerHTML = `<strong>${d.player.name}</strong><div style="font-size:12px; color:#ccc;">Pos: ${d.player.lat?.toFixed(5) || 'n/a'}, ${d.player.lon?.toFixed(5) || 'n/a'}</div>`;
+            tradeList.appendChild(el);
+          }catch(e){}
+        }
+      }
+    }
+    setInterval(loadTrades, 7000);
+  }
+
+  function switchMode(mode){
+    state.mode = mode;
+    [mapView, arView, inventoryView, gymView, tradeView, questsView].forEach(el=>{
+      el.classList.remove('active');
+    });
+    if(mode==='map'){ mapView.classList.add('active'); }
+    else if(mode==='ar'){ arView.classList.add('active'); }
+    else if(mode==='inventory'){ inventoryView.classList.add('active'); }
+    else if(mode==='gym'){ gymView.classList.add('active'); gymStatus.style.display='block'; }
+    else if(mode==='trade'){ tradeView.classList.add('active'); }
+    else if(mode==='quests'){ questsView.classList.add('active'); }
+  }
+
+  // Initialize
+  function init(){
+    // Map
+    resizeCanvas(mapCanvas);
+    initCamera();
+    initOrientation();
+    initThrowMechanics();
+
+    // GPS
+    if('geolocation' in navigator){
+      navigator.geolocation.getCurrentPosition(pos=>{
+        state.player.lat = pos.coords.latitude;
+        state.player.lon = pos.coords.longitude;
+        state.lastMoveLat = state.player.lat;
+        state.lastMoveLon = state.player.lon;
+        ensureSpawn(state.player.lat, state.player.lon);
+        drawMap();
+        pillLocation.textContent = `Loc: ${state.player.lat.toFixed(5)}, ${state.player.lon.toFixed(5)}`;
+      }, ()=>{ logToast('Location access denied.'); });
+      state.watchId = navigator.geolocation.watchPosition(pos=>{
+        const newLat = pos.coords.latitude;
+        const newLon = pos.coords.longitude;
+        const distMoved = haversine({lat: state.player.lat, lon: state.player.lon}, {lat:newLat, lon:newLon});
+        state.player.lat = newLat;
+        state.player.lon = newLon;
+        if(distMoved>5){
+          state.player.distanceTraveled += distMoved;
+        }
+        pillLocation.textContent = `Loc: ${state.player.lat.toFixed(5)}, ${state.player.lon.toFixed(5)}`;
+        if(state.creatures.length < 8 && state.settings.autoSpawn){
+          ensureSpawn(state.player.lat, state.player.lon);
+        }
+        drawMap();
+        arDraw();
+        // quest progress
+        state.player.quests.forEach(q=>{
+          if(q.id==='q2'){ q.progress += Math.round(distMoved); }
+        });
+        renderQuests();
+        updateXPUI();
+      }, ()=>{});
+    }
+
+    // AR
+    initCamera();
+    initOrientation();
+    initThrowMechanics();
+
+    // UI
+    document.getElementById('btnMap').addEventListener('click', ()=>switchMode('map'));
+    document.getElementById('btnAR').addEventListener('click', ()=>switchMode('ar'));
+    document.getElementById('btnGym').addEventListener('click', ()=>switchMode('gym'));
+    document.getElementById('btnTrade').addEventListener('click', ()=>switchMode('trade'));
+    document.getElementById('btnInventory').addEventListener('click', ()=>switchMode('inventory'));
+    document.getElementById('btnQuests').addEventListener('click', ()=>switchMode('quests'));
+    document.getElementById('btnSettings').addEventListener('click', ()=>toggleSettings());
+
+    // Inventory actions
+    inventoryButtonSelector.forEach(btn => {
+      btn.addEventListener('click', ()=> {
+        const item = btn.getAttribute('data-item');
+        if(state.player.balls[item] !== undefined){
+          if(state.settings.sound){
+            playPing();
+          }
+          logToast(item + ' ready.');
+        }
+      });
+    });
+    document.getElementById('btnPostTrade').addEventListener('click', ()=>{ logToast('Trade offer posted (local)'); });
+    btnCloseTrade.addEventListener('click', ()=> switchMode('trade'));
+
+    // Capture buttons
+    btnCapture.addEventListener('click', ()=>{ /* manual trigger if keyboard slow */ });
+    btnHideEncounter.addEventListener('click', ()=>{ encounterPanel.classList.remove('visible'); });
+
+    btnAttack.addEventListener('click', ()=>{
+      if(!gymActive) return;
+      gymPlayerMon.hp -= 20;
+      logGym('Your Pokemon used Attack! (-20 HP)');
+      if(gymPlayerMon.hp<=0){
+        logGym('You defeated the Gym!');
+        closeGym();
+      }
+      gymOpponent.hp -= 12;
+      logGym('Gymster attacks. (-12 HP)');
+      if(gymOpponent.hp<=0){
+        logGym('Gym defeated!');
+        closeGym();
+      }
+      playerMon.textContent = gymPlayerMon.name;
+    });
+    btnCharge.addEventListener('click', ()=>{ logGym('Charge not implemented in prototype'); });
+    btnHeal.addEventListener('click', ()=>{ logGym('Healed to full (prototype)'); gymPlayerMon.hp = 100; });
+    gymClose.addEventListener('click', ()=> closeGym());
+    btnGym.addEventListener('click', ()=> openGym());
+
+    // Trade UI
+    btnTrade.addEventListener('click', ()=> switchMode('trade'));
+
+    // Quests
+    initQuests();
+    renderQuests();
+    updateXPUI();
+
+    // Settings
+    window.addEventListener('resize', ()=>{ resizeCanvas(mapCanvas); arDraw(); });
+
+    // Start
+    switchMode('map');
+    initTradeSystem();
+
+    // Global keyboard shortcuts
+    window.addEventListener('keydown', (e)=>{
+      if(e.key.toLowerCase() === 'm') switchMode('map');
+      if(e.key.toLowerCase() === 'a') switchMode('ar');
+      if(e.key.toLowerCase() === 'g') switchMode('gym');
+    });
+  }
+
+  // Visibility toggle for Settings panel
+  function toggleSettings(){
+    if(settingsPanel.style.display === 'block'){
+      settingsPanel.style.display = 'none';
+    } else {
+      renderSettingsPanel();
+      settingsPanel.style.display = 'block';
+    }
+  }
+
+  function renderSettingsPanel(){
+    settingsPanel.innerHTML = '';
+    const title = document.createElement('h4');
+    title.textContent = 'Game Settings';
+    settingsPanel.appendChild(title);
+
+    // Render toggles
+    const rows = [
+      {label:'Auto Spawn', key:'autoSpawn'},
+      {label:'Show Grid (Map)', key:'showGrid'},
+      {label:'Particle Trails', key:'particles'},
+      {label:'Game Sound', key:'sound'},
+    ];
+    rows.forEach(r=>{
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.style.alignItems = 'center';
+      const left = document.createElement('div');
+      left.textContent = r.label;
+      const toggle = document.createElement('div');
+      toggle.className = 'toggle' + (state.settings[r.key] ? ' active' : '');
+      toggle.style.display = 'inline-flex';
+      toggle.style.alignItems = 'center';
+      toggle.style.cursor = 'pointer';
+      const knob = document.createElement('div');
+      knob.className = 'knob';
+      toggle.appendChild(knob);
+      toggle.addEventListener('click', ()=>{
+        state.settings[r.key] = !state.settings[r.key];
+        if(state.settings[r.key]) toggle.classList.add('active');
+        else toggle.classList.remove('active');
+        if(r.key==='sound'){
+          logToast('Sound '+(state.settings.sound?'enabled':'disabled'));
+        }
+        // immediate effects
+        if(r.key==='showGrid') drawMap();
+      });
+      row.appendChild(left);
+      row.appendChild(toggle);
+      settingsPanel.appendChild(row);
+    });
+
+    // Difficulty
+    const diffRow = document.createElement('div');
+    diffRow.className = 'row';
+    diffRow.style.alignItems = 'center';
+    diffRow.innerHTML = `<div>Difficulty</div><div><select id="selDifficulty" style="padding:4px; border-radius:6px;"><option value="easy">Easy</option><option value="normal" selected>Normal</option><option value="hard">Hard</option></select></div>`;
+    settingsPanel.appendChild(diffRow);
+    document.getElementById('selDifficulty').addEventListener('change', (e)=>{
+      state.settings.difficulty = e.target.value;
+      logToast('Difficulty: '+state.settings.difficulty);
+      // adjust game scale
+    });
+
+    // Quick actions
+    const actions = document.createElement('div');
+    actions.className = 'row';
+    actions.style.justifyContent = 'space-between';
+    actions.style.alignItems = 'center';
+    actions.innerHTML = `<button class="btn" id="btnReset">Reset Progress</button><button class="btn" id="btnHideSettings" style="margin-left:6px;">Close</button>`;
+    settingsPanel.appendChild(actions);
+    document.getElementById('btnReset').addEventListener('click', ()=>{
+      state.player.xp = 0; state.player.level = 1; state.creatures = []; state.player.quests.forEach(q=>{q.progress=0;});
+      updateXPUI(); renderQuests(); logToast('Progress reset.');
+    });
+    document.getElementById('btnHideSettings').addEventListener('click', ()=>{ settingsPanel.style.display='none'; });
+  }
+
+  // Initialize
+  init();
+
+  // AR drawing loop
+  function mainLoop(){
+    requestAnimationFrame(mainLoop);
+    arDraw();
+  }
+  mainLoop();
+
+  // Simple helper - inventory ping sound using WebAudio
+  function playPing(){
+    try{
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = 'triangle';
+      o.frequency.value = 880;
+      o.connect(g);
+      g.connect(ctx.destination);
+      o.start();
+      g.gain.value = 0.0001;
+      const t0 = ctx.currentTime;
+      g.gain.exponentialRampToValueAtTime(0.3, t0+0.01);
+      g.gain.exponentialRampToValueAtTime(0.00001, t0+0.25);
+      o.stop(t0+0.25);
+      setTimeout(()=>{ ctx.close(); }, 260);
+    }catch(e){}
+  }
+
+  // Helpers to create initial UI
+  // - Mutation: Add some visuals to map initially
+  function seed(){
+    if(!state.player.lat || !state.player.lon){
+      state.player.lat = 37.7749;
+      state.player.lon = -122.4194;
+    }
+    for(let i=0;i<6;i++) state.creatures.push(createCreature(state.player.lat, state.player.lon));
+  }
+
+  // On load
+  seed();
+  // Render initial UI
+  updateXPUI();
+  initInventoryUI();
+  renderQuests();
+  // Mount event: map drag to navigate not implemented to keep simple
+
+})();
+</script>
+</body>
+</html>
