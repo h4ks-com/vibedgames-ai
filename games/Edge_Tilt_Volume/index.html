@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Edge Tilt Volume - Enhanced</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #0b1020;
+      --fg: #e9f0ff;
+      --muted: #aab4d6;
+      --accent: #6bd3ff;
+      --panel: rgba(255,255,255,0.08);
+      --shadow: rgba(0,0,0,0.25);
+      --glow: rgba(107,211,255,0.75);
+      --panel2: rgba(0,0,0,0.55);
+    }
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: radial-gradient(circle at 20% 10%, rgba(107,211,255,0.12), transparent 40%),
+                  radial-gradient(circle at 100% 0%, rgba(255,107,255,0.08), transparent 40%),
+                  linear-gradient(#0b1020, #0b1020);
+      color: var(--fg);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto;
+      overflow: hidden;
+    }
+    #app {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      align-items: center;
+      justify-items: center;
+      user-select: none;
+      overflow: hidden;
+    }
+
+    /* Background canvas (visualizations) */
+    #viz {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+      z-index: 0;
+    }
+
+    /* Subtle movement gradient overlay */
+    #bgOverlay {
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(circle at 50% 50%, rgba(70,180,255,0.08), transparent 40%),
+                  radial-gradient(circle at 50% 50%, rgba(255,0,180,0.04), transparent 40%);
+      mix-blend-mode: screen;
+      z-index: 0;
+      pointer-events: none;
+      animation: drift 20s linear infinite;
+    }
+    @keyframes drift {
+      0% { transform: translate3d(0,0,0); opacity: 0.9; }
+      50% { transform: translate3d(-6px, 4px, 0); opacity: 0.6; }
+      100% { transform: translate3d(0,0,0); opacity: 0.9; }
+    }
+
+    /* Volume indicator (unobtrusive) */
+    #volumeIndicator {
+      position: fixed;
+      left: 50%;
+      bottom: 14px;
+      transform: translateX(-50%);
+      width: 260px;
+      height: 14px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.08);
+      box-shadow: 0 2px 10px rgba(0,0,0,0.25) inset;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.15);
+      z-index: 3;
+    }
+    #volumeFill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #55e3ff, #6bffb1);
+      box-shadow: 0 0 12px rgba(86,227,255,0.9);
+      transition: width 0.05s linear;
+      display: block;
+    }
+
+    /* Edge glow elements (subtle) */
+    #edgeGlow {
+      position: fixed;
+      left: 0; right: 0; top: 0; bottom: 0;
+      pointer-events: none;
+      z-index: 0;
+    }
+    .glow {
+      position: fixed;
+      width: 120px; height: 40px;
+      background: radial-gradient(circle at center, rgba(107,211,255,0.35), transparent 60%);
+      filter: blur(18px);
+      opacity: 0;
+      transition: opacity 0.2s linear;
+      border-radius: 8px;
+      z-index: 0;
+    }
+    #leftGlow { left: 12px; top: 50%; transform: translateY(-50%); }
+    #rightGlow { right: 12px; top: 50%; transform: translateY(-50%); }
+    #topGlow { left: 50%; top: 12px; transform: translateX(-50%); width: 60px; height: 28px; border-radius: 6px; }
+    #bottomGlow { left: 50%; bottom: 12px; transform: translateX(-50%); width: 60px; height: 28px; border-radius: 6px; }
+
+    /* Settings panel (accessible, toggleable) */
+    #settingsPanel {
+      position: fixed;
+      right: 14px;
+      bottom: 50px;
+      width: 360px;
+      max-width: calc(100vw - 28px);
+      background: linear-gradient(180deg, rgba(0,0,0,0.65), rgba(0,0,0,0.5));
+      border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 14px;
+      padding: 12px 14px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+      color: var(--fg);
+      z-index: 5;
+      display: none;
+      backdrop-filter: blur(2px);
+    }
+    #settingsPanel.active { display: block; }
+    #settingsPanel h3 { margin: 6px 0 8px 0; font-size: 14px; color: #dbe6ff; letter-spacing: .4px; }
+    .row { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.08); }
+    .row:last-child { border-bottom: none; }
+    label { font-size: 12px; color: #d9e2ff; }
+    input[type="range"] { width: 180px; }
+    input[type="checkbox"] { transform: translateY(1px); }
+    #settingsBtn {
+      position: fixed;
+      left: 14px;
+      bottom: 14px;
+      padding: 10px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.25);
+      background: rgba(0,0,0,0.5);
+      color: #e8f4ff;
+      cursor: pointer;
+      z-index: 4;
+    }
+
+    /* Screen-reader/text cues */
+    .sr-only {
+      position: absolute;
+      width: 1px; height: 1px;
+      padding:0; margin:-1px; overflow:hidden;
+      clip: rect(0,0,0,0); border:0;
+    }
+
+    /* Minimal aesthetic elements */
+    #hint {
+      position: fixed;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 12px;
+      color: var(--muted);
+      background: rgba(0,0,0,0.25);
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.15);
+      z-index: 3;
+      user-select: none;
+    }
+
+    /* Header/wadge badge */
+    #badge {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(0,0,0,0.45);
+      color: #d9e6ff;
+      font-size: 12px;
+      border: 1px solid rgba(255,255,255,0.2);
+      z-index: 4;
+    }
+
+  </style>
+</head>
+<body>
+  <div id="app" aria-label="Edge Tilt Volume - Enhanced">
+    <div id="hint" aria-hidden="true">
+      Move cursor toward edges to tilt. Settings adjust sensitivity, smoothing, and visuals.
+    </div>
+
+    <canvas id="viz" aria-label="Visualization canvas"></canvas>
+
+    <div id="bgOverlay" aria-hidden="true"></div>
+
+    <!-- Edge glow overlays -->
+    <div id="edgeGlow" aria-hidden="true">
+      <div id="leftGlow" class="glow"></div>
+      <div id="rightGlow" class="glow"></div>
+      <div id="topGlow" class="glow"></div>
+      <div id="bottomGlow" class="glow"></div>
+    </div>
+
+    <div id="volumeIndicator" aria-label="Volume indicator" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+      <span id="volumeFill"></span>
+    </div>
+
+    <button id="settingsBtn" aria-label="Open settings" title="Settings">Settings</button>
+
+    <div id="settingsPanel" aria-label="Settings panel" role="region" class="panel" aria-live="off" tabindex="0">
+      <h3>Edge Tilt Settings</h3>
+      <div class="row">
+        <label for="sens">Sensitivity</label>
+        <input type="range" id="sens" min="0.2" max="3" step="0.01" value="1">
+      </div>
+      <div class="row">
+        <label for="smooth">Smoothing</label>
+        <input type="range" id="smooth" min="0" max="1" step="0.01" value="0.15">
+      </div>
+      <div class="row">
+        <label for="dead">Dead Zone</label>
+        <input type="range" id="dead" min="0" max="0.5" step="0.01" value="0.05">
+      </div>
+      <div class="row" style="align-items: center;">
+        <span>Keyboard tilt fallback</span>
+        <input type="checkbox" id="kbTilt" checked aria-label="Enable keyboard tilt fallback">
+      </div>
+
+      <div class="row" style="align-items:center;">
+        <span>Particle density</span>
+        <input type="range" id="density" min="5" max="400" step="1" value="120" style="width: 180px;">
+      </div>
+
+      <div class="row" style="align-items:center;">
+        <span>Trail fade</span>
+        <input type="range" id="trail" min="0.02" max="0.3" step="0.01" value="0.08" style="width: 180px;">
+      </div>
+
+      <div class="row" style="align-items:center;">
+        <span>Hue shift</span>
+        <input type="range" id="hue" min="0" max="360" step="1" value="210" style="width: 180px;">
+      </div>
+
+      <div class="row" style="align-items:center;">
+        <span>Background animation</span>
+        <input type="checkbox" id="bgAnim" checked aria-label="Enable background animation">
+      </div>
+
+      <div class="row" style="justify-content:flex-end;">
+        <button id="resetBtn" aria-label="Reset settings to defaults">Reset</button>
+      </div>
+    </div>
+
+    <div id="badge" aria-hidden="true">Edge Tilt v2</div>
+
+    <div class="sr-only" id="sr" aria-live="polite" aria-atomic="true"></div>
+  </div>
+
+  <script>
+    // Defaults with extended features
+    const DEFAULTS = {
+      sensitivity: 1.0,
+      smoothing: 0.15,
+      deadZone: 0.05,
+      useKeyboardTilt: true,
+      particleDensity: 120,
+      trailFade: 0.08,
+      hueShift: 210,
+      backgroundAnim: true
+    };
+
+    // State
+    let settings = loadSettings();
+    let width = window.innerWidth;
+    let height = window.innerHeight;
+
+    let cursorX = width / 2;
+    let cursorY = height / 2;
+
+    let kbActive = false;
+    let kbTiltX = 0;
+    let kbTiltY = 0;
+    let keyboardTiltEnabled = settings.useKeyboardTilt;
+
+    // Audio
+    let audioCtx = null;
+    let oscillator = null;
+    let gainNode = null;
+    let pannerNode = null;
+    let audioStarted = false;
+
+    let volume = 0.0; // 0..1 smoothed
+    let panValue = 0.0;
+
+    // Visuals
+    const canvas = document.getElementById('viz');
+    const ctx = canvas.getContext('2d');
+    const volumeIndicator = document.getElementById('volumeIndicator');
+    const volumeFill = document.getElementById('volumeFill');
+    const leftGlow = document.getElementById('leftGlow');
+    const rightGlow = document.getElementById('rightGlow');
+    const topGlow = document.getElementById('topGlow');
+    const bottomGlow = document.getElementById('bottomGlow');
+    const settingsBtn = document.getElementById('settingsBtn');
+    const settingsPanel = document.getElementById('settingsPanel');
+    const resetBtn = document.getElementById('resetBtn');
+    const srRegion = document.getElementById('sr');
+
+    // Inputs
+    const sensInput = document.getElementById('sens');
+    const smoothInput = document.getElementById('smooth');
+    const deadInput = document.getElementById('dead');
+    const kbTiltInput = document.getElementById('kbTilt');
+    const densityInput = document.getElementById('density');
+    const trailInput = document.getElementById('trail');
+    const hueInput = document.getElementById('hue');
+    const bgAnimInput = document.getElementById('bgAnim');
+    const density = () => parseInt(densityInput.value, 10);
+    const trail = () => parseFloat(trailInput.value);
+
+    // Particles
+    const particles = [];
+
+    // Background hue
+    let hue = settings.hueShift || 210;
+    // Gradient noise seed
+    let hueBase = hue;
+
+    function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+
+    // Persistence
+    function loadSettings() {
+      try {
+        const s = sessionStorage.getItem('edgeTiltVolume_settings');
+        if (s) return Object.assign({}, DEFAULTS, JSON.parse(s));
+      } catch (e) {}
+      return Object.assign({}, DEFAULTS);
+    }
+    function saveSettings() {
+      try {
+        sessionStorage.setItem('edgeTiltVolume_settings', JSON.stringify(settings));
+      } catch (e) {}
+    }
+
+    // Initialize UI with settings
+    function applySettingsToUI() {
+      sensInput.value = settings.sensitivity;
+      smoothInput.value = settings.smoothing;
+      deadInput.value = settings.deadZone;
+      kbTiltInput.checked = settings.useKeyboardTilt;
+      densityInput.value = settings.particleDensity;
+      trailInput.value = settings.trailFade;
+      hueInput.value = settings.hueShift || 210;
+      bgAnimInput.checked = settings.backgroundAnim;
+    }
+
+    // Ensure canvas fills screen
+    function resize() {
+      width = window.innerWidth;
+      height = window.innerHeight;
+      canvas.width = width;
+      canvas.height = height;
+      // ensure scale for HiDPI
+      const dpr = Math.max(1, window.devicePixelRatio || 1);
+      if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
+        canvas.width = width * dpr;
+        canvas.height = height * dpr;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
+    }
+
+    // Initialize audio context with gesture
+    function ensureAudio() {
+      if (audioStarted) return;
+      audioStarted = true;
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) {
+          console.warn('Web Audio API not supported.');
+          return;
+        }
+        audioCtx = new AudioCtx();
+        oscillator = audioCtx.createOscillator();
+        gainNode = audioCtx.createGain();
+        pannerNode = audioCtx.createStereoPanner();
+
+        oscillator.type = 'sine';
+        oscillator.frequency.value = 440;
+        gainNode.gain.value = 0.0;
+
+        oscillator.connect(gainNode);
+        gainNode.connect(pannerNode);
+        pannerNode.connect(audioCtx.destination);
+        oscillator.start();
+
+        panValue = 0;
+      } catch (e) {
+        console.error('Audio init failed', e);
+      }
+    }
+
+    // Particles helpers
+    function spawnParticle(x, y, vX, vY, life, color) {
+      particles.push({ x, y, vx: vX, vy: vY, life, age: 0, size: Math.random() * 2 + 0.5, color });
+    }
+
+    function randRange(a,b){ return a + Math.random()*(b-a); }
+
+    function addParticlesFromTilt(mag, dirX, dirY) {
+      // spawn several particles in the direction of tilt
+      const n = Math.floor(clamp(mag * settings.particleDensity * 0.4, 2, 60));
+      for (let i = 0; i < n; i++) {
+        const ang = Math.atan2(dirY, dirX) + randRange(-0.8, 0.8);
+        const speed = randRange(40, 180);
+        const vx = Math.cos(ang) * speed;
+        const vy = Math.sin(ang) * speed;
+        const life = randRange(0.8, 2.2);
+        const hueShift = (hue + randRange(-40, 40)) % 360;
+        spawnParticle(width/2, height/2, vx, vy, life, `hsl(${hueShift}, 100%, ${randRange(50,70)}%)`);
+      }
+    }
+
+    // Update loop
+    const dtTarget = 1 / 60;
+    let lastTime = performance.now();
+
+    // Edge glow base alpha to animate
+    function glowAlphaFromVolume(vol) {
+      return clamp(vol, 0, 1) * 0.85;
+    }
+
+    // Screen-reader updates
+    function announceVolume(v) {
+      const pct = Math.round(v * 100);
+      srRegion.textContent = `Volume ${pct} percent.`;
+      // also update aria
+      volumeIndicator.setAttribute('aria-valuenow', String(pct));
+      volumeFill.style.width = pct + '%';
+    }
+
+    // Update and render
+    function update(now) {
+      const dt = Math.min(0.033, (now - lastTime) / 1000);
+      lastTime = now;
+
+      // Tilt calculation
+      let tiltX = 0;
+      let tiltY = 0;
+      if (keyboardTiltEnabled && kbActive) {
+        tiltX = kbTiltX;
+        tiltY = kbTiltY;
+      } else {
+        const nx = clamp(cursorX / width, 0, 1);
+        const ny = clamp(cursorY / height, 0, 1);
+        tiltX = (nx * 2) - 1;
+        tiltY = (ny * 2) - 1;
+      }
+
+      // Normalize magnitude
+      const tiltMag = Math.sqrt(tiltX*tiltX + tiltY*tiltY);
+      let tiltDirX = tiltMag > 0 ? tiltX / tiltMag : 0;
+      let tiltDirY = tiltMag > 0 ? tiltY / tiltMag : 0;
+
+      // Apply sensitivity and dead zone
+      let tiltVal = tiltMag > settings.deadZone ? (tiltMag - settings.deadZone) / (1 - settings.deadZone) : 0;
+      tiltVal = clamp(tiltVal * settings.sensitivity, -1, 1);
+
+      // Volume and pan targets
+      const volTarget = tiltVal >= 0 ? tiltVal : -tiltVal;
+      volume += (volTarget - volume) * settings.smoothing;
+      panValue += (clamp(tiltVal, -1, 1) - panValue) * settings.smoothing;
+
+      // Audio
+      if (gainNode) gainNode.gain.value = volume;
+      if (pannerNode) pannerNode.pan.value = panValue;
+
+      // Spawn particles based on tilt magnitude
+      if (settings.backgroundAnim) {
+        const spawnMag = tiltMag;
+        if (spawnMag > 0.01) {
+          addParticlesFromTilt(spawnMag, tiltDirX, tiltDirY);
+        }
+      }
+
+      // Update particles
+      const gravity = 0; // not gravity-driven for simplicity; could be decorative
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.vy += gravity * dt;
+        p.age += dt;
+        // slight fading
+        if (p.age > p.life) {
+          particles.splice(i, 1);
+        }
+      }
+
+      // Clear canvas with trail
+      const trailFade = settings.trailFade; // 0..1
+      ctx.fillStyle = `rgba(0,0,0,${trailFade * 0.25})`;
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillRect(0, 0, width, height);
+
+      // Draw gradient background tinted by hue
+      const g = ctx.createRadialGradient(width/2, height/2, Math.min(width,height)*0.1, width/2, height/2, Math.max(width,height)*0.7);
+      const hueNow = (hue + settings.hueShift - settings.hueShift) % 360;
+      g.addColorStop(0, `hsla(${hueNow}, 100%, 60%, 0.08)`);
+      g.addColorStop(1, `hsla(${(hueNow+60)%360}, 100%, 50%, 0.0)`);
+      ctx.fillStyle = g;
+      ctx.fillRect(0,0,width,height);
+
+      // Draw particles
+      for (let i = 0; i < particles.length; i++) {
+        const p = particles[i];
+        const lifeRatio = clamp(p.age / p.life, 0, 1);
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * (1.0 - lifeRatio * 0.4), 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Draw tilt vector
+      ctx.globalCompositeOperation = 'overlay';
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = `hsla(${(hue + 180) % 360}, 100%, 80%, 0.9)`;
+      ctx.beginPath();
+      ctx.moveTo(width/2, height/2);
+      const vecLen = Math.min(width, height) * 0.25;
+      ctx.lineTo(width/2 + tiltDirX * vecLen, height/2 + tiltDirY * vecLen);
+      ctx.stroke();
+
+      // Edge glow intensities
+      const glowA = glowAlphaFromVolume(volume);
+      leftGlow.style.opacity = glowA;
+      rightGlow.style.opacity = glowA;
+      topGlow.style.opacity = glowA;
+      bottomGlow.style.opacity = glowA;
+
+      // Position glow pulses by proximity (edge hints)
+      const nx = clamp(cursorX / width, 0, 1);
+      const ny = clamp(cursorY / height, 0, 1);
+      leftGlow.style.filter = `brightness(${1 + (1 - nx) * 0.6})`;
+      rightGlow.style.filter = `brightness(${1 + nx * 0.6})`;
+      topGlow.style.filter = `brightness(${1 + (1 - ny) * 0.6})`;
+      bottomGlow.style.filter = `brightness(${1 + ny * 0.6})`;
+
+      // Volume indicator
+      const volPct = Math.round(volume * 100);
+      volumeFill.style.width = volPct + '%';
+      volumeIndicator.setAttribute('aria-valuenow', String(volPct));
+      srRegion.setAttribute('aria-valuenow', String(volPct));
+
+      // Screen reader announce
+      if (typeof update.announceLast === 'undefined') update.announceLast = -1;
+      if (Math.abs(volume - update.announceLast) > 0.01) {
+        update.announceLast = volume;
+        announceVolume(volume);
+      }
+    }
+
+    // Pointer handlers
+    function onMove(e) {
+      cursorX = e.clientX;
+      cursorY = e.clientY;
+      ensureAudio();
+    }
+    function onTouchMove(e) {
+      const t = e.touches[0];
+      if (t) {
+        cursorX = t.clientX;
+        cursorY = t.clientY;
+        ensureAudio();
+      }
+    }
+
+    // Keyboard tilt
+    function keyDown(e) {
+      if (!settings.useKeyboardTilt) return;
+      if (['ArrowLeft','a','A'].includes(e.key)) { kbActive = true; kbTiltX = -1; }
+      else if (['ArrowRight','d','D'].includes(e.key)) { kbActive = true; kbTiltX = 1; }
+      else if (['ArrowUp','w','W'].includes(e.key)) { kbActive = true; kbTiltY = -1; }
+      else if (['ArrowDown','s','S'].includes(e.key)) { kbActive = true; kbTiltY = 1; }
+
+      ensureAudio();
+    }
+    function keyUp(e) {
+      if (!settings.useKeyboardTilt) return;
+      if (['ArrowLeft','a','A','ArrowRight','d','D'].includes(e.key)) { kbTiltX = 0; }
+      if (['ArrowUp','w','W','ArrowDown','s','S'].includes(e.key)) { kbTiltY = 0; }
+      if (kbTiltX === 0 && kbTiltY === 0) kbActive = false;
+    }
+
+    // Settings helpers
+    function openSettings() {
+      settingsPanel.classList.toggle('active');
+    }
+    function resetSettings() {
+      settings = Object.assign({}, DEFAULTS);
+      applySettingsToUI();
+      saveSettings();
+      // reflect in UI elements
+      sensInput.value = settings.sensitivity;
+      smoothInput.value = settings.smoothing;
+      deadInput.value = settings.deadZone;
+      kbTiltInput.checked = settings.useKeyboardTilt;
+    }
+
+    // Init
+    function initUI() {
+      // init sizes
+      resize();
+      // graphically fill
+      ctx.clearRect(0,0,width,height);
+      // Bind events
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('touchmove', onTouchMove, { passive: true });
+      window.addEventListener('resize', () => { resize(); });
+
+      settingsBtn.addEventListener('click', () => { openSettings(); });
+      resetBtn.addEventListener('click', resetSettings);
+
+      // Settings controls
+      sensInput.addEventListener('input', (e) => {
+        settings.sensitivity = parseFloat(e.target.value);
+        saveSettings();
+      });
+      smoothInput.addEventListener('input', (e) => {
+        settings.smoothing = parseFloat(e.target.value);
+        saveSettings();
+      });
+      deadInput.addEventListener('input', (e) => {
+        settings.deadZone = parseFloat(e.target.value);
+        saveSettings();
+      });
+      kbTiltInput.addEventListener('change', (e) => {
+        settings.useKeyboardTilt = e.target.checked;
+        keyboardTiltEnabled = settings.useKeyboardTilt;
+        saveSettings();
+      });
+
+      densityInput.addEventListener('input', () => {
+        // update in real-time: adjust density pipe
+        // no explicit immediate action; used when spawning
+      });
+      trailInput.addEventListener('input', () => {
+        // trail changes affect render in next frames
+      });
+      hueInput.addEventListener('input', (e) => {
+        hue = parseFloat(e.target.value);
+      });
+
+      bgAnimInput.addEventListener('change', (e) => {
+        settings.backgroundAnim = e.target.checked;
+      });
+
+      // Keyboard
+      window.addEventListener('keydown', keyDown);
+      window.addEventListener('keyup', keyUp);
+
+      // gesture first touch to enable audio
+      const trigger = () => { ensureAudio(); };
+      window.addEventListener('mousedown', trigger, { once: true });
+      window.addEventListener('touchstart', trigger, { passive: true, once: true });
+
+      lastTime = performance.now();
+      requestAnimationFrame(loop);
+    }
+
+    // Loop
+    function loop(now) {
+      update(now);
+      requestAnimationFrame(loop);
+    }
+
+    // Update wrapper
+    function update(now) {
+      // background animation toggle
+      if (settings.backgroundAnim) {
+        // gently shift hue over time for background glow
+        hue += 0.05;
+        if (hue >= 360) hue -= 360;
+      }
+
+      // Update viewport
+      // Spawn and render
+      updateCanvas(now);
+    }
+
+    // Rendering pass
+    function updateCanvas(now) {
+      // Clear and draw
+      // We use a transparent fill to achieve trails
+      const fade = clamp(settings.trailFade, 0.01, 0.3);
+      ctx.fillStyle = `rgba(0,0,0,${fade})`;
+      ctx.fillRect(0, 0, width, height);
+
+      // apply tilt-based draw (already drawn in update loop for particles)
+
+      // Recompute and render with tilt
+      // We redraw particles here to ensure frame-aligned visuals
+      // but the actual particles are drawn in update() above after their positions update.
+      // To keep structure simple, we call a function to render all current particles and vector line.
+
+      // The particles are drawn in update() to keep coherent age.
+
+      // We also adjust volume UI
+      const volPct = Math.round(volume * 100);
+      volumeFill.style.width = volPct + '%';
+      volumeIndicator.setAttribute('aria-valuenow', String(volPct));
+      srRegion.setAttribute('aria-valuenow', String(volPct));
+
+      // Edge glow pulse intensity
+      const glowA = glowAlphaFromVolume(volume);
+      [leftGlow, rightGlow, topGlow, bottomGlow].forEach(g => g.style.opacity = glowA);
+
+      // Render particles and tilt vector visually
+      // We'll re-run a mini render for particles if any (they were added in update loop earlier)
+      // Since we already draw particles in update(), nothing further here.
+    }
+
+    function glowAlphaFromVolume(vol) {
+      return clamp(vol, 0, 1) * 0.85;
+    }
+
+    // Init
+    function init() {
+      // init sizes
+      resize();
+      applySettingsToUI();
+      // Reset paths
+      leftGlow.style.opacity = 0;
+      rightGlow.style.opacity = 0;
+      topGlow.style.opacity = 0;
+      bottomGlow.style.opacity = 0;
+
+      // Start
+      audioStarted = false;
+      // Bind events
+      canvas.addEventListener('click', () => ensureAudio(), { once: true });
+      // Listen for color hue shifts on runtime if user changes hue
+      // Initialize UI
+      initUI();
+    }
+
+    // Start up sequence
+    resize();
+    applySettingsToUI();
+    // Initially spawn with slight particles (empty until movement)
+    init();
+
+    // Keyboard and pointer handling for tilt
+    document.addEventListener('mousemove', (e) => {
+      cursorX = e.clientX;
+      cursorY = e.clientY;
+      ensureAudio();
+    });
+    document.addEventListener('touchmove', (e) => {
+      const t = e.touches[0];
+      if (t) {
+        cursorX = t.clientX;
+        cursorY = t.clientY;
+        ensureAudio();
+      }
+    });
+
+  </script>
+</body>
+</html>
