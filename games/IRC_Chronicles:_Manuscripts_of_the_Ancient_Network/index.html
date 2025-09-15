@@ -1,0 +1,927 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>IRC Chronicles: Manuscripts of the Ancient Network</title>
+<style>
+  :root {
+    --paper: #f4ecd0;
+    --ink: #1a1a16;
+    --accent: #8b5e1b;
+    --muted: #5a4a2f;
+    --glow: rgba(139,94,27,0.5);
+  }
+  html, body {
+    height: 100%;
+    margin: 0;
+    font-family: "Times New Roman", Times, serif;
+    color: #2b2b21;
+    background: #e9d8a8;
+  }
+  /* parchment-like texture via layered gradients */
+  body::before {
+    content: "";
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: radial-gradient(circle at 50% 0%, rgba(255,255,255,0.25), transparent 20%),
+                linear-gradient(135deg, #f4ecd0 0%, #e7d6b8 40%, #e9d8a8 100%);
+    opacity: 0.95;
+    z-index: -2;
+  }
+  body {
+    background: #f0e6cc;
+    color: var(--ink);
+  }
+  #app {
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    height: 100vh;
+    width: 100%;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 20px;
+    border-bottom: 2px solid #c09d57;
+    background: rgba(255, 255, 255, 0.75);
+    backdrop-filter: saturate(1.2);
+    position: sticky; top: 0;
+    z-index: 10;
+  }
+  header h1 {
+    margin: 0;
+    font-family: "Georgia", serif;
+    font-size: 1.6rem;
+    letter-spacing: 0.5px;
+  }
+  .badge {
+    padding: 6px 12px;
+    border: 1px solid #b08e3e;
+    border-radius: 6px;
+    background: #f4e6b7;
+    font-size: 0.95rem;
+  }
+  #controls {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+  button, .button {
+    border: 1px solid #5a4a2f;
+    background: #f3e7c4;
+    color: #2b2b21;
+    padding: 8px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+  button:hover { filter: brightness(0.98); transform: translateY(-1px); box-shadow: 0 4px 8px rgba(0,0,0,0.08); }
+  main {
+    display: grid;
+    grid-template-columns: 1.1fr 0.9fr;
+    gap: 12px;
+    padding: 14px 20px;
+    height: calc(100vh - 120px);
+  }
+  #map {
+    position: relative;
+    background: linear-gradient(#f7f0da, #e8d7a3);
+    border: 2px solid #b38d3a;
+    border-radius: 12px;
+    padding: 12px;
+    overflow: auto;
+  }
+  .mapFrame {
+    display: grid;
+    grid-template-columns: repeat(var(--w), 40px);
+    grid-auto-rows: 40px;
+    gap: 6px;
+    align-content: start;
+  }
+  .tile {
+    width: 40px;
+    height: 40px;
+    background: rgba(230,204,140,0.95);
+    border: 1px solid #8a6a2f;
+    border-radius: 6px;
+    position: relative;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.6);
+    transform: scale(1);
+    transition: transform 0.15s ease;
+  }
+  .tile:hover { transform: scale(1.04); z-index: 1; }
+  .tile.passable { background: rgba(230,204,140,0.95); }
+  .tile.trigger { background: rgba(210,180,90,0.95); border-color: #7a5930; animation: pulse 2s infinite; }
+  .tile.npc { background: rgba(224,196,150,0.95); }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(139,94,27,0.0); }
+    50% { box-shadow: 0 0 0 6px rgba(139,94,27,0.25); }
+    100% { box-shadow: 0 0 0 0 rgba(139,94,27,0.0); }
+  }
+  .player {
+    position: absolute;
+    width: 34px; height: 34px;
+    left: 3px; top: 3px;
+    border-radius: 6px;
+    background: radial-gradient(circle at 30% 30%, #fff, #d4a35f 40%, #9c6c1b 100%);
+    box-shadow: inset 0 0 6px rgba(0,0,0,0.25);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px;
+    color: #3a2a12;
+  }
+  .hint {
+    position: absolute;
+    bottom: -18px;
+    left: 0;
+    font-size: 10px;
+    color: #5b4622;
+  }
+  aside.sidebar {
+    display: grid;
+    grid-template-rows: auto auto 1fr;
+    gap: 12px;
+    min-width: 320px;
+  }
+  section.panel {
+    padding: 12px;
+    border: 2px solid #b38d3a;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.92);
+    box-shadow: 0 6px 16px rgba(0,0,0,0.05);
+  }
+  #logList, #glossaryList, #marginaliaList {
+    list-style: none;
+    padding: 0;
+    margin: 6px 0 0 0;
+    max-height: 210px;
+    overflow: auto;
+  }
+  #logList li, #glossaryList li, #marginaliaList li {
+    padding: 6px;
+    border-bottom: 1px dashed #d0c09b;
+    cursor: pointer;
+  }
+  #logList li:hover, #glossaryList li:hover, #marginaliaList li:hover {
+    background: #f2e8d0;
+  }
+  .logTag {
+    font-size: 0.9em;
+    color: #6b4f1e;
+  }
+  #reader {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    width: min(760px, 92vw);
+    max-height: 60vh;
+    overflow: auto;
+    background: rgba(255,255,255,0.97);
+    border: 2px solid #b38d3a;
+    border-radius: 12px;
+    padding: 14px;
+    box-shadow: 0 12px 28px rgba(0,0,0,0.25);
+    transform: translateY(12px);
+    opacity: 0;
+    pointer-events: none;
+    transition: all 0.2s ease;
+  }
+  #reader.open {
+    transform: translateY(0);
+    opacity: 1;
+    pointer-events: auto;
+  }
+  #reader h3 { margin: 0 0 6px 0; font-family: "Georgia", serif; }
+  #readerContent { line-height: 1.6; white-space: pre-wrap; }
+  #footnotes { font-size: 0.9em; color: #5a4a2f; margin-top: 6px; }
+  .marginalia {
+    display: flex; align-items: center; gap: 12px;
+  }
+  .glyph {
+    width: 28px; height: 28px; display: inline-block;
+    border-radius: 6px;
+    background: #efe5c8;
+    border: 1px solid #7f6a29;
+    text-align: center; line-height: 28px;
+    font-family: "Trebuchet MS", sans-serif;
+    font-weight: bold;
+    transform: rotate(-8deg);
+    cursor: pointer;
+    transition: transform 0.2s ease;
+  }
+  .glyph:hover { background: #f7e9bd; transform: scale(1.05) rotate(-6deg); }
+  .glyph.active { outline: 2px solid #2c6d2f; outline-offset: 2px; background: #d7e9d3; }
+  .footerNote {
+    text-align: center;
+    padding: 6px 0 12px 0;
+    font-family: "Georgia", serif;
+    color: var(--muted);
+  }
+  .skillTree { display: grid; grid-template-columns: 1fr; gap: 8px; }
+  .skillNode {
+    padding: 8px;
+    border: 1px solid #7a6a2a;
+    border-radius: 6px;
+    background: #f7f1d9;
+  }
+  .skillNode.locked { opacity: 0.6; }
+  .skillNode .name { font-weight: bold; }
+  .skillNode .cost { font-size: 0.85em; color: #5b4a2f; }
+  .skillNode .unlock {
+    margin-top: 6px;
+    padding: 6px 10px; border-radius: 6px;
+    border: 1px solid #7a6a2a;
+    background: #e6d3a7; cursor: pointer;
+  }
+  .skillNode.unlocked { background: #d0f0d7; }
+  #conflictMeter {
+    display: inline-block;
+    width: 120px; height: 12px;
+    border-radius: 6px;
+    background: #e8e0c0;
+    border: 1px solid #b08e3e;
+    overflow: hidden;
+    vertical-align: middle;
+    margin-left: 6px;
+  }
+  #conflictMeter > span {
+    display: block; height: 100%; background: linear-gradient(90deg, #ff6b6b, #feca57);
+    width: 0%;
+    transition: width 0.25s ease;
+  }
+  .hidden { display: none; }
+
+  @media (max-width: 1000px) {
+    main { grid-template-columns: 1fr; height: auto; }
+    #reader { position: fixed; right: 12px; left: 12px; bottom: 12px; width: auto; max-height: 60vh; }
+  }
+
+  /* Subtle sparkles when moving */
+  .spark {
+    position: absolute;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.9);
+    box-shadow: 0 0 8px rgba(255,255,255,0.9);
+    animation: sparkle 600ms ease forwards;
+  }
+  @keyframes sparkle {
+    0% { transform: translate(0,0) scale(0.5); opacity: 1; }
+    100% { transform: translate(0,0) scale(2); opacity: 0; }
+  }
+  /* subtle parchment scan lines behind content */
+  body.parchment {
+    background-image: linear-gradient(#00000010 1px, transparent 1px);
+    background-size: 100% 2px;
+  }
+</style>
+</head>
+<body>
+<div id="app" class="parchment">
+  <header>
+    <h1>IRC Chronicles: Manuscripts of the Ancient Network</h1>
+    <div id="controls">
+      <button id="toggleTranslate" class="button" title="Toggle translation between archaic and gloss">Translate: Off</button>
+      <span class="badge" id="chapterBadge">Epoch I</span>
+      <div id="conflictContainer" class="badge" title="Faction Flux" style="display:inline-flex; align-items:center; gap:8px;">
+        Faction Flux:
+        <span id="conflictMeter" aria-label="Conflict Meter"><span></span></span>
+      </div>
+      <button id="settingsBtn" class="button" title="Open advanced settings">Settings</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="map" aria-label="World Map" role="region">
+      <!-- Map is generated by JS -->
+    </section>
+
+    <aside class="sidebar" aria-label="Lore Sidebar">
+      <section class="panel" id="logsPanel">
+        <h2>Log-Scrolls</h2>
+        <ul id="logList"></ul>
+      </section>
+
+      <section class="panel" id="glossaryPanel" style="display:none;">
+        <h2>Glossary</h2>
+        <ul id="glossaryList"></ul>
+      </section>
+
+      <section class="panel" id="skillsPanel">
+        <h2>Skill Tree</h2>
+        <div id="skillsTree" class="skillTree"></div>
+        <div style="margin-top:8px; font-size:0.85em; color:#6b4f1e;">
+          Points earned: <span id="pointsCount">0</span>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <div class="footerNote" aria-live="polite">
+    The Marginalia and Glyphs mark verses of forgotten servers; tread wisely, for doors of knowledge swing on the hinges of patience.
+  </div>
+
+  <div id="reader" aria-label="Log Reader" class="reader" style="display:none;">
+     <h3 id="readerTitle" style="margin:0 0 6px 0;"></h3>
+     <div id="readerContent" style="white-space:pre-wrap;"></div>
+     <div id="footnotes" style="margin-top:6px; font-size:0.9em; color:#5a4a2f;"></div>
+     <button id="readerClose" class="button" style="margin-top:8px;">Close</button>
+  </div>
+
+  <div id="marginaliaPanel" class="hidden" style="position: fixed; bottom: 16px; left: 16px;">
+    <div class="marginalia" aria-label="Marginalia">
+      <span class="glyph" data-note="gn1" title="Glyph I">ᚠ</span>
+      <span class="glyph" data-note="gn2" title="Glyph II">ᚢ</span>
+      <span class="glyph" data-note="gn3" title="Glyph III">ᚲ</span>
+      <span class="glyph" data-note="gn4" title="Glyph IV">ᚱ</span>
+    </div>
+  </div>
+  <!-- Hidden settings modal -->
+  <div id="settingsModal" class="hidden" style="position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+       background: rgba(255,255,255,0.98); border: 2px solid #b38d3a; border-radius: 12px;
+       padding: 14px; z-index: 50;">
+    <h3 style="margin: 0 0 8px 0;">Advanced Settings</h3>
+    <label><input type="checkbox" id="optAutoTranslate" checked> Auto-translate logs on open</label><br/>
+    <label><input type="checkbox" id="optShowNPCs" checked> Show NPCs on map</label><br/>
+    <label><input type="checkbox" id="optParchmentGlow" checked> Parchement glow night mode</label><br/>
+    <button id="settingsClose" class="button" style="margin-top:6px;">Close</button>
+  </div>
+  <div id="settingsBackdrop" class="hidden" style="position: fixed; inset:0; background: rgba(0,0,0,0.25);
+       z-index:40;"></div>
+</div>
+
+<script>
+(function(){
+  // Core data structures
+  const GRID_W = 14;
+  const GRID_H = 10;
+
+  const CHAPTERS = [
+    {
+      id: 'chap1',
+      title: 'Epoch I: The First Spark',
+      epoch: 'Epoch I',
+      trigger: { x: 2, y: 2 },
+      logs: [
+        { id: 'l1', archaic: "Lo, the ember riseth in the quiet loom of the Channel, when voices gather as starlit cords.",
+          gloss: "Lo, the spark is born in the quiet network where voices gather like many threads." },
+        { id: 'l2', archaic: "Marginalia singeth: in ping of the moon, timbre of threads become kin.",
+          gloss: "Footnotes murmur: in the ping of the night, the threads become kin." }
+      ],
+    },
+    {
+      id: 'chap2',
+      title: 'Epoch II: The Gatekeepers',
+      epoch: 'Epoch II',
+      trigger: { x: 6, y: 7 },
+      logs: [
+        { id: 'l3', archaic: "The Gatekeepers rise: Operators with sigils of command, bots as minds of the chamber.",
+          gloss: "Operators command with sigils, bots act as minds within the chamber." },
+        { id: 'l4', archaic: "Banishment falls on violators, yet mercy may be wrought by the Keeper’s edict.",
+          gloss: "Ban is laid upon violators; mercy may be granted by the Keeper's edict." }
+      ],
+    },
+    {
+      id: 'chap3',
+      title: 'Epoch III: The Banished Scribes',
+      epoch: 'Epoch III',
+      trigger: { x: 11, y: 4 },
+      logs: [
+        { id: 'l5', archaic: "Thus the Manuscripts drift through margins, preserved in ink that outlasts the current of fires.",
+          gloss: "Thus the scrolls drift through margins, preserved in ink that endures beyond fires." },
+        { id: 'l6', archaic: "A covenant of channels binds factions: The Loom and the Scribes, contesting, yet resembling kin.",
+          gloss: "A covenant among channels binds factions: the Loom and the Scribes, contesting yet kin." }
+      ],
+    }
+  ];
+
+  // Global state
+  const state = {
+    player: { x: 0, y: 0 },
+    unlockedChapters: new Set(),
+    logs: [], // { id, archaic, gloss, chapterId, title }
+    points: 0,
+    translationOn: false,
+    autoTranslate: true,
+    showNPCs: true,
+    parchmentGlow: true
+  };
+
+  // DOM references
+  const mapEl = document.getElementById('map');
+  const logListEl = document.getElementById('logList');
+  const glossaryPanelEl = document.getElementById('glossaryPanel');
+  const glossaryListEl = document.getElementById('glossaryList');
+  const chapterBadgeEl = document.getElementById('chapterBadge');
+  const conflictMeterEl = document.getElementById('conflictMeter').firstElementChild;
+  const pointsCountEl = document.getElementById('pointsCount');
+  const toggleTranslateBtn = document.getElementById('toggleTranslate');
+  const readerEl = document.getElementById('reader');
+  const readerTitleEl = document.getElementById('readerTitle');
+  const readerContentEl = document.getElementById('readerContent');
+  const readerFootnotesEl = document.getElementById('footnotes');
+  const readerCloseBtn = document.getElementById('readerClose');
+  const settingsBtn = document.getElementById('settingsBtn');
+  const settingsModal = document.getElementById('settingsModal');
+  const settingsBackdrop = document.getElementById('settingsBackdrop');
+  const optAutoTranslate = document.getElementById('optAutoTranslate');
+  const optShowNPCs = document.getElementById('optShowNPCs');
+  const optParchmentGlow = document.getElementById('optParchmentGlow');
+  const settingsClose = document.getElementById('settingsClose');
+  const settingsOpenBtn = document.getElementById('settingsBtn');
+  const skillsTreeEl = document.getElementById('skillsTree');
+
+  // Marginalia
+  const marginaliaPanel = document.getElementById('marginaliaPanel');
+  const marginaliaNotes = [
+    { id: 'gn1', label: 'Glyph I', text: 'Glyph of Ping: signals across the ether.' },
+    { id: 'gn2', label: 'Glyph II', text: 'Glyph of Gate: a hinge between domains.' },
+    { id: 'gn3', label: 'Glyph III', text: 'Glyph of Runic Margin: footnotes awaken.' },
+    { id: 'gn4', label: 'Glyph IV', text: 'Glyph of Banish: a warning to the insurrection of noise.' }
+  ];
+
+  // Local storage helpers
+  function saveState() {
+    const payload = {
+      player: state.player,
+      unlockedChapters: Array.from(state.unlockedChapters),
+      logs: state.logs,
+      points: state.points,
+      translationOn: state.translationOn,
+      autoTranslate: state.autoTranslate,
+      showNPCs: state.showNPCs,
+      parchmentGlow: state.parchmentGlow
+    };
+    localStorage.setItem('irc Chronicles save', JSON.stringify(payload));
+  }
+  function loadState() {
+    const raw = localStorage.getItem('irc Chronicles save');
+    if (!raw) return;
+    try {
+      const data = JSON.parse(raw);
+      state.player = data.player || state.player;
+      state.unlockedChapters = new Set(data.unlockedChapters || []);
+      state.logs = data.logs || [];
+      state.points = data.points || 0;
+      state.translationOn = data.translationOn ?? false;
+      state.autoTranslate = data.autoTranslate ?? true;
+      state.showNPCs = data.showNPCs ?? true;
+      state.parchmentGlow = data.parchmentGlow ?? true;
+      // reflect UI
+      updateChapterBadge();
+      renderPlayer();
+      refreshLogs();
+      toggleTranslateBtn.textContent = state.translationOn ? 'Translate: On' : 'Translate: Off';
+      pointsCountEl.textContent = String(state.points);
+      // apply glow
+      if (!state.parchmentGlow) document.body.classList.remove('parchment');
+    } catch(e) {
+      console.warn('Failed to load save', e);
+    }
+  }
+
+  // Build Map
+  function buildMap() {
+    // clear map
+    mapEl.innerHTML = '';
+    // initialize grid
+    for (let y = 0; y < GRID_H; y++) {
+      for (let x = 0; x < GRID_W; x++) {
+        const tile = document.createElement('div');
+        tile.className = 'tile passable';
+        tile.dataset.x = x;
+        tile.dataset.y = y;
+        // trigger tiles for chapters
+        let isTrigger = false;
+        CHAPTERS.forEach(ch => {
+          if (ch.trigger.x === x && ch.trigger.y === y) {
+            isTrigger = true;
+          }
+        });
+        if (isTrigger) tile.classList.add('trigger');
+        // NPC at 1,0
+        if (x === 1 && y === 0) tile.classList.add('npc');
+        mapEl.appendChild(tile);
+      }
+    }
+    // CSS grid sizing
+    mapEl.style.gridTemplateColumns = `repeat(${GRID_W}, 46px)`;
+    // optional: add an overlay canvas for particles (we'll just append spark elements)
+  }
+
+  // Place player
+  function renderPlayer() {
+    // remove any existing players
+    const existing = mapEl.querySelector('.player');
+    if (existing) existing.remove();
+
+    const posX = state.player.x;
+    const posY = state.player.y;
+    // find the corresponding tile
+    const index = posY * GRID_W + posX;
+    const tile = mapEl.children[index];
+    if (!tile) return;
+    const el = document.createElement('div');
+    el.className = 'player';
+    el.textContent = ' IRC';
+    tile.appendChild(el);
+    // slight highlight
+    tile.style.outline = '2px solid #8b5e1b';
+  }
+
+  // Sparkle effect on move
+  function spawnSpark(x, y) {
+    const tileIndex = y * GRID_W + x;
+    const tile = mapEl.children[tileIndex];
+    if (!tile) return;
+    const s = document.createElement('span');
+    s.className = 'spark';
+    // center on tile
+    s.style.position = 'absolute';
+    s.style.left = '50%';
+    s.style.top = '50%';
+    s.style.transform = 'translate(-50%, -50%)';
+    tile.appendChild(s);
+    setTimeout(() => s.remove(), 700);
+  }
+
+  // Initialize
+  function init() {
+    buildMap();
+    // set starting position
+    state.player = { x: 0, y: 0 };
+    renderPlayer();
+    updateChapterBadge();
+    // Load initial marginalia
+    loadMarginalia();
+    // Setup log tree with initial chapters none unlocked
+    refreshLogs();
+    // Load saved state
+    loadState();
+    // Setup keyboard controls
+    window.addEventListener('keydown', handleKey);
+  }
+
+  // Move and interactions
+  function canMove(nx, ny) {
+    if (nx < 0 || ny < 0 || nx >= GRID_W || ny >= GRID_H) return false;
+    //Walls not yet implemented; future: walls from map
+    return true;
+  }
+
+  function handleKey(e) {
+    const k = e.key.toLowerCase();
+    let dx = 0, dy = 0;
+    if (k === 'arrowup' || k === 'w') dy = -1;
+    else if (k === 'arrowdown' || k === 's') dy = 1;
+    else if (k === 'arrowleft' || k === 'a') dx = -1;
+    else if (k === 'arrowright' || k === 'd') dx = 1;
+    else if (k === ' ' || k === 'enter') {
+      // interact on current tile
+      triggerInteraction();
+      return;
+    } else {
+      return;
+    }
+    e.preventDefault();
+    const nx = state.player.x + dx;
+    const ny = state.player.y + dy;
+    if (canMove(nx, ny)) {
+      state.player.x = nx;
+      state.player.y = ny;
+      renderPlayer();
+      spawnSpark(state.player.x, state.player.y);
+      onEnterTile(nx, ny);
+    }
+  }
+
+  function onEnterTile(x, y) {
+    // Check triggers for chapters
+    CHAPTERS.forEach(ch => {
+      if (ch.trigger.x === x && ch.trigger.y === y && !state.unlockedChapters.has(ch.id)) {
+        unlockChapter(ch.id);
+      }
+    });
+  }
+
+  function triggerInteraction() {
+    // If standing on an NPC tile
+    const x = state.player.x, y = state.player.y;
+    const index = y * GRID_W + x;
+    const tile = mapEl.children[index];
+    if (tile && tile.classList.contains('npc')) {
+      startDialogue();
+      return;
+    }
+    // Otherwise, open the reader for any unlocked log under this tile if exists
+    CHAPTERS.forEach(ch => {
+      if (state.unlockedChapters.has(ch.id)) {
+        if (ch.trigger.x === x && ch.trigger.y === y) {
+          const log = ch.logs[0];
+          if (log) showLog(log, ch.id);
+        }
+      }
+    });
+  }
+
+  // Chapter management
+  function unlockChapter(chId) {
+    const ch = CHAPTERS.find(c => c.id === chId);
+    if (!ch) return;
+    state.unlockedChapters.add(chId);
+    updateChapterBadge();
+    // add logs to pool
+    ch.logs.forEach(l => {
+      state.logs.push({ id: l.id, archaic: l.archaic, gloss: l.gloss, chapterId: chId, title: ch.title });
+    });
+    // reward a point
+    addPoint();
+    refreshLogs();
+    showToast(`New scrolls emerge from ${ch.title}.`);
+  }
+
+  function updateChapterBadge() {
+    const current = Array.from(state.unlockedChapters);
+    if (current.length === 0) {
+      chapterBadgeEl.textContent = 'Epoch I';
+    } else {
+      const last = CHAPTERS.find(ch => ch.id === current[current.length - 1]);
+      chapterBadgeEl.textContent = last ? last.epoch : 'Epoch';
+    }
+  }
+
+  // Logs UI
+  function refreshLogs() {
+    // clear
+    logListEl.innerHTML = '';
+    // collect logs from unlocked chapters in order
+    const logsToShow = state.logs.filter(l => state.unlockedChapters.has(l.chapterId));
+    // sort by their chapter order
+    logsToShow.forEach(log => {
+      const li = document.createElement('li');
+      li.style.opacity = '0';
+      li.style.transition = 'opacity 0.25s ease';
+      li.innerHTML = `<span class="logTag">${log.title || 'Log'}</span>: ${state.translationOn ? log.gloss : log.archaic}`;
+      li.addEventListener('click', () => showLog(log, log.chapterId));
+      logListEl.appendChild(li);
+      // trigger fade-in
+      requestAnimationFrame(() => li.style.opacity = '1');
+    });
+    // glossaries
+    loadGlossary();
+  }
+
+  // Glossary
+  const GLOSSARY = {
+    'Channel': 'A discourse space within a network where voices converge.',
+    'Operator': 'A moderator who guides the flow of speech within a channel.',
+    'Bot': 'A creature of logic and clockwork, a mind bound to rules.',
+    'Ban': 'A curse that bars a voice from the chamber.',
+    'Marginalia': 'Notes tucked in the margins of the scrolls, often glossed with hints.'
+  };
+
+  function loadGlossary() {
+    glossaryListEl.innerHTML = '';
+    for (let term in GLOSSARY) {
+      const li = document.createElement('li');
+      li.innerHTML = `<strong>${term}:</strong> ${GLOSSARY[term]}`;
+      glossaryListEl.appendChild(li);
+    }
+  }
+
+  // Reader
+  function showLog(log, chapterId) {
+    readerTitleEl.textContent = log.title || 'Log';
+    readerContentEl.textContent = state.translationOn ? log.gloss : log.archaic;
+    readerFootnotesEl.textContent = "Footnotes: Marginalia hint at forgotten protocols. Translate to reveal deeper truths.";
+    readerEl.style.display = 'block';
+    readerEl.classList.add('open');
+  }
+
+  readerCloseBtn.addEventListener('click', () => { readerEl.style.display = 'none'; readerEl.classList.remove('open'); });
+
+  // Dialogues
+  function startDialogue() {
+    const options = [
+      { text: "Ask of mercy for the fallen voices.", effect: () => adjustConflict(-2) },
+      { text: "Demand stricter sutures on the threads.", effect: () => adjustConflict(+1) }
+    ];
+    const dialogue = {
+      title: "Gatekeeper's Echo",
+      lines: [
+        "Hush, wanderer. Speak softly: what seek ye among margins?",
+        "You stand where channels converge; your words may bend the Tide."
+      ],
+      options
+    };
+    openDialogue(dialogue);
+  }
+
+  function openDialogue(d) {
+    // Simple modal prompt replacement
+    let content = d.title + "\n";
+    d.lines.forEach(l => content += l + "\n");
+    content += "\nChoose:";
+    d.options.forEach((op, idx) => {
+      content += ` [${idx+1}] ${op.text}\n`;
+    });
+    const answer = prompt(content, "1");
+    const idx = Number(answer) - 1;
+    if (idx >= 0 && idx < d.options.length) {
+      d.options[idx].effect();
+      showToast("The Gatekeeper acknowledges your vow.");
+    } else {
+      showToast("You hesitate, voices murmur and fade.");
+    }
+  }
+
+  function adjustConflict(delta) {
+    // conflict meter width from 0-100
+    const current = parseInt(conflictMeterEl.style.width || '0');
+    const newVal = Math.max(0, Math.min(100, current + delta * 5));
+    conflictMeterEl.style.width = newVal + '%';
+  }
+
+  // Marginal glyphs
+  function loadMarginalia() {
+    marginaliaPanel.style.display = 'block';
+    const list = document.getElementById('marginaliaList');
+    if (list) list.remove();
+    const ul = document.createElement('ul');
+    ul.id = 'marginaliaList';
+    CHAPTERS.forEach((ch, idx) => {
+      const li = document.createElement('li');
+      li.textContent = `Marginalia of ${ch.title}: ${idx === 0 ? 'First whispers etched.' : 'Subsequent whisperings.'}`;
+      ul.appendChild(li);
+    });
+    marginaliaPanel.appendChild(ul);
+  }
+
+  document.querySelectorAll('.glyph').forEach(g => {
+    g.addEventListener('click', () => {
+      const noteId = g.getAttribute('data-note');
+      const note = marginaliaNotes.find(n => n.id === noteId);
+      if (note) showMarginal(note);
+    });
+  });
+
+  function showMarginal(n) {
+    alert(n.label + ": " + n.text);
+  }
+
+  function showToast(text) {
+    const t = document.createElement('div');
+    t.textContent = text;
+    t.style.position = 'fixed';
+    t.style.bottom = '20px';
+    t.style.left = '50%';
+    t.style.transform = 'translateX(-50%)';
+    t.style.padding = '8px 12px';
+    t.style.background = 'rgba(0,0,0,0.75)';
+    t.style.color = '#fff';
+    t.style.borderRadius = '6px';
+    t.style.zIndex = 9999;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 1800);
+  }
+
+  // Translation toggle
+  function toggleTranslation() {
+    state.translationOn = !state.translationOn;
+    toggleTranslateBtn.textContent = state.translationOn ? 'Translate: On' : 'Translate: Off';
+    // Re-render lists to reflect translation state
+    refreshLogs();
+  }
+
+  toggleTranslateBtn.addEventListener('click', toggleTranslation);
+
+  // Points and skills
+  function addPoint() {
+    state.points += 1;
+    pointsCountEl.textContent = String(state.points);
+    updateSkills();
+  }
+
+  // Simple skill tree
+  const SKILLS = [
+    { id: 's1', name: 'Channel Lore', cost: 1, unlocked: false },
+    { id: 's2', name: 'Operator’s Decree', cost: 2, unlocked: false },
+    { id: 's3', name: 'Botsmithing', cost: 3, unlocked: false },
+    { id: 's4', name: 'Banishment Analects', cost: 4, unlocked: false }
+  ];
+
+  function updateSkills() {
+    // render tree based on points
+    if (!skillsTreeEl) return;
+    skillsTreeEl.innerHTML = '';
+    SKILLS.forEach(skill => {
+      const node = document.createElement('div');
+      node.className = 'skillNode';
+      if (skill.unlocked) node.classList.add('unlocked');
+      if (state.points < skill.cost) node.classList.add('locked');
+      node.innerHTML = `
+        <div class="name">${skill.name}</div>
+        <div class="cost">Cost: ${skill.cost} pts</div>
+        ${skill.unlocked ? '' : `<button class="unlock" data-id="${skill.id}" ${state.points < skill.cost ? 'disabled' : ''}>Unlock</button>`}
+      `;
+      if (!skill.unlocked) {
+        const btn = node.querySelector('button.unlock');
+        if (btn) btn.addEventListener('click', () => unlockSkill(skill.id));
+      }
+      skillsTreeEl.appendChild(node);
+    });
+  }
+
+  function unlockSkill(id) {
+    const s = SKILLS.find(x => x.id === id);
+    if (!s || s.unlocked) return;
+    if (state.points >= s.cost) {
+      s.unlocked = true;
+      state.points -= s.cost;
+      updateSkills();
+      showToast(`Skill '${s.name}' unlocked.`);
+      applySkillEffect(s.id);
+    }
+  }
+
+  function applySkillEffect(id) {
+    if (id === 's1') {
+      // unlock more logs (simulate extra reward)
+      addPoint();
+    } else if (id === 's2') {
+      state.translationOn = true;
+      toggleTranslateBtn.textContent = 'Translate: On';
+      refreshLogs();
+    } else if (id === 's3') {
+      marginaliaPanel.style.display = 'block';
+      showToast('Botsmithing grants a glyph of efficiency.');
+    } else if (id === 's4') {
+      adjustConflict(+2);
+      showToast('Banishment Analects yield stricter gates.');
+    }
+  }
+
+  // Initialize
+  function init() {
+    initOnce();
+  }
+  function initOnce() {
+    if (!mapEl) return;
+    buildMap();
+    state.player = { x: 0, y: 0 };
+    renderPlayer();
+    updateChapterBadge();
+    loadMarginalia();
+    refreshLogs();
+    // keyboard
+    window.addEventListener('keydown', handleKey);
+  }
+
+  // Settings modal
+  function openSettings() {
+    settingsModal.style.display = 'block';
+    settingsBackdrop.style.display = 'block';
+  }
+  function closeSettings() {
+    settingsModal.style.display = 'none';
+    settingsBackdrop.style.display = 'none';
+  }
+
+  settingsBtn.addEventListener('click', openSettings);
+  settingsClose.addEventListener('click', closeSettings);
+  settingsBackdrop.addEventListener('click', closeSettings);
+
+  // Apply settings toggles (persist to state)
+  optAutoTranslate.checked = state.autoTranslate;
+  optShowNPCs.checked = state.showNPCs;
+  optParchmentGlow.checked = state.parchmentGlow;
+  optAutoTranslate.addEventListener('change', (e) => {
+    state.autoTranslate = e.target.checked;
+  });
+  optShowNPCs.addEventListener('change', (e) => {
+    state.showNPCs = e.target.checked;
+    // toggle NPC visibility
+    document.querySelectorAll('.npc').forEach(n => n.style.display = state.showNPCs ? '' : 'none');
+  });
+  optParchmentGlow.addEventListener('change', (e) => {
+    state.parchmentGlow = e.target.checked;
+    if (!state.parchmentGlow) {
+      document.body.style.filter = 'none';
+    } else {
+      document.body.style.filter = 'none';
+    }
+  });
+
+  // Start
+  init();
+  updateSkills();
+
+  // Save on unload
+  window.addEventListener('beforeunload', saveState);
+
+})();
+</script>
+</body>
+</html>
