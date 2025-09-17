@@ -1,0 +1,1072 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Hebrew Warriors - Pacman-ish</title>
+<style>
+  :root {
+    --bg: #0b1020;
+    --fg: #e7e7ff;
+    --wall: #2a2a3a;
+    --fruit1: #6bff88;
+    --fruit2: #ff6b6b;
+    --fruit3: #ffd166;
+    --bee: #ffd700;
+    --ghost1: #ff5a5a;
+    --ghost2: #5ac8fa;
+    --ghost3: #9b5cff;
+    --power: #7bdfff;
+    --panel: rgba(255,255,255,0.08);
+    --text: #ffffff;
+    --contrast: #00ffcc;
+  }
+  [data-contrast="true"] {
+    --bg: #0b0b0b;
+    --panel: rgba(0,0,0,0.7);
+    --text: #fff;
+    --contrast: #ff0;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; padding: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto; background: var(--bg); color: var(--fg); }
+  body { display: flex; flex-direction: column; align-items: stretch; }
+
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; background: rgba(0,0,0,0.25); border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+  .brand { font-weight: bold; letter-spacing: .5px; }
+  .hint { font-size: 12px; opacity: .8; }
+  .langbar { display: flex; gap: 8px; align-items: center; }
+  .btn {
+    padding: 6px 10px; border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.25);
+    background: rgba(255,255,255,0.08);
+    color: #fff; cursor: pointer;
+  }
+  .btn.primary { background: rgba(0,150,255,0.3); border-color: rgba(0,150,255,0.8); }
+  .btn.ghost { background: transparent; border: 1px solid rgba(255,255,255,0.25); }
+
+  #gameArea {
+    display: grid; grid-template-columns: 1fr 320px;
+    gap: 12px; padding: 12px; width: 100%;
+    align-items: start;
+  }
+
+  canvas#game {
+    width: 100%; height: auto; max-width: 800px;
+    image-rendering: pixelated; background: #000;
+    border: 2px solid rgba(255,255,255,0.15);
+  }
+
+  /* HUD overlay on canvas area (for convenience) */
+  .hud {
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 8px; background: rgba(0,0,0,0.25); border-radius: 8px;
+    max-width: 320px;
+  }
+  .hudRow { display: flex; justify-content: space-between; align-items: center; }
+  .hudLabel { font-size: 14px; opacity: .9; }
+  .hudValue { font-weight: bold; }
+
+  /* Right panel: level editor + vocab popups and flashcards */
+  #sidebar {
+    display: flex; flex-direction: column; gap: 12px;
+  }
+
+  .panel {
+    padding: 12px; border-radius: 8px; background: var(--panel);
+    border: 1px solid rgba(255,255,255,0.12);
+  }
+  .panel h3 { margin: 0 0 8px 0; font-size: 14px; text-transform: uppercase; letter-spacing: .6px; }
+
+  /* Editor grid canvas for level editor preview */
+  #editorGrid {
+    width: 100%; height: auto; display: block;
+    image-rendering: pixelated; background: #111;
+    border: 1px solid rgba(255,255,255,0.2);
+  }
+
+  .row { display:flex; gap:6px; align-items:center; }
+
+  .card {
+    padding: 8px; border-radius: 6px; background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.15);
+  }
+
+  .vocabCard {
+    position: fixed; right: 12px; bottom: 12px;
+    width: 260px; max-width: calc(100% - 24px);
+    background: rgba(0,0,0,0.8); color: #fff; padding: 12px; border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.5);
+    display: none; flex-direction: column;
+  }
+  .vocabCard.show { display: flex; }
+  .vocabCard .close { align-self: flex-end; cursor: pointer; }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
+    padding: 8px 12px; border-radius: 6px; background: rgba(0,0,0,0.8); color:#fff;
+  }
+
+  .flash {
+    position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
+    padding: 6px 12px; border-radius: 6px; background: rgba(0,0,0,0.7);
+  }
+
+  /* Vocabulary text blocks (Hebrew RTL) */
+  .rtl { direction: rtl; text-align: right; }
+  .english { direction: ltr; text-align: left; }
+
+  /* High contrast toggle mock */
+  .contrastToggle { margin-left: auto; }
+
+  @media (max-width: 980px) {
+    #gameArea { grid-template-columns: 1fr; }
+    #sidebar { order: -1; }
+  }
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand" id="brandHeb">Hebrew Warriors</div>
+    <div class="hint" id="hintArea" aria-live="polite"></div>
+    <div class="langbar" role="group" aria-label="Language switch">
+      <button class="btn" id="btnLang" title="Switch language">עכשיו: עברית</button>
+      <button class="btn" id="btnContrast" title="Toggle high contrast">הנגה</button>
+    </div>
+  </header>
+
+  <section id="gameArea" aria-label="Game area">
+    <div style="position: relative;">
+      <canvas id="game" width="600" height="520"></canvas>
+      <div id="billboard" class="flash" style="display:none;"></div>
+      <div id="vocabToast" class="toast" style="display:none;"></div>
+    </div>
+
+    <aside id="sidebar" aria-label="Level editor and settings" class="panel">
+      <h3>Level Editor & Settings ( built-in )</h3>
+      <div class="panel" style="padding:8px;">
+        <div class="row">
+          <label class="rtl" style="width: 120px;">Seed</label>
+          <input id="seedInput" placeholder="Enter seed (optional)" style="flex:1; padding:6px;" />
+        </div>
+        <div class="row" style="margin-top:6px;">
+          <button class="btn primary" id="btnNewSeed">Seed Level</button>
+          <button class="btn" id="btnExport">Export Maze</button>
+          <button class="btn" id="btnImport">Import Maze</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>Editor Grid</h3>
+        <canvas id="editorGrid" width="360" height="324" aria-label="Editor grid"></canvas>
+        <div class="row" style="margin-top:6px;">
+          <select id="toolSel" aria-label="Tool selection" style="flex:1; padding:6px;">
+            <option value="wall">Wall</option>
+            <option value="empty">Empty</option>
+            <option value="fig">Fig</option>
+            <option value="pomegranate">Pomegranate</option>
+            <option value="olive">Olive</option>
+            <option value="vocab">Vocab</option>
+            <option value="bee">Bee</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>Level Tuning</h3>
+        <div class="row" style="align-items: center;">
+          <span class="rtl" style="width: 72px;">Ghosts</span>
+          <input id="ghostCount" type="range" min="1" max="4" value="2" style="flex:1;">
+        </div>
+        <div class="row" style="align-items: center;">
+          <span class="rtl" style="width: 72px;">Bees</span>
+          <input id="beeSpawn" type="range" min="0" max="3" value="2" style="flex:1;">
+        </div>
+        <div class="row" style="align-items: center;">
+          <span class="rtl" style="width: 72px;">Speed</span>
+          <input id="speedMult" type="range" min="0.5" max="2" step="0.1" value="1" style="flex:1;">
+        </div>
+      </div>
+
+    </aside>
+  </section>
+
+  <div id="vocabCard" class="vocabCard" aria-live="polite">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <strong id="vocabHeb" class="rtl" style="font-size:14px;">מילה בעברית</strong>
+      <span class="close" id="vocabClose" style="cursor:pointer; font-size:12px; opacity:.7;">סגור</span>
+    </div>
+    <div id="vocabTrans" class="rtl" style="font-size:13px; margin-top:6px;"></div>
+    <div id="vocabGloss" class="rtl" style="font-size:12px; opacity:.8; margin-top:4px;"></div>
+  </div>
+
+  <div id="vocabBanner" class="toast" style="display:none; top:auto; bottom: 60px; left:50%; transform: translateX(-50%);"></div>
+
+  <script>
+/*
+ Hebrew Warriors - Pacman-like
+ Vanilla JS single-file game with:
+ - PCB/maze with Hebrew fruit labels
+ - Bees as power-ups in boosted state; ghosts as hazards
+ - Vocabulary pickups with flashcards
+ - Level editor (import/export) and seedable levels
+ - RTL UI, bilingual HUD, high-contrast toggle
+ - Simple audio cues via Web Audio
+*/
+
+// ------------------- Utility -------------------
+function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+
+// Seeded RNG (Mulberry32)
+function createRNG(seed){
+  let t = seed || 123456789;
+  function xorshift32() {
+    t += 0x6D2B79F5;
+    let x = Math.imul(t ^ (t >>> 15), 1 | t);
+    x ^= x + Math.imul(x ^ (x >>> 7), 61 | x);
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  }
+  return xorshift32;
+}
+function hashStringToSeed(str){
+  let h = 2166136261 >>> 0;
+  for(let i=0;i<str.length;i++){
+    h = Math.imul(h ^ str.charCodeAt(i), 16777619);
+  }
+  return h >>> 0;
+}
+
+// Simple AABB collision helper
+function rectsOverlap(ax,ay,aw,ah,bx,by,bw,bh){
+  return ax < bx+bw && ax+aw > bx && ay < by+bh && ay+ah > by;
+}
+
+// ------------------- Constants & Data -------------------
+const TILE = 28; // size in px for the game grid
+const MAZE_W = 15;
+const MAZE_H = 13;
+const GAME_W = MAZE_W * TILE;
+const GAME_H = MAZE_H * TILE;
+
+const FRUIT_TYPES = [
+  {key:'fig', heb:'תאנה', translit:"Te'enah", gloss:"fig", color:"#6bff88"},
+  {key:'pomegranate', heb:'רימון', translit:"Rimon", gloss:"pomegranate", color:"#ff6b6b"},
+  {key:'olive', heb:'זית', translit:"Zeit", gloss:"olive", color:"#ffd166"}
+];
+
+const VOCAB_ITEMS = [
+  {he:'שלום', translit:'Shalom', gloss:'hello'},
+  {he:'תודה', translit:'Toda', gloss:'thank you'},
+  {he:'אבא', translit:'Aba', gloss:'father'},
+  {he:'אמא', translit:'Ima', gloss:'mother'},
+  {he:'ספר', translit:'Sefer', gloss:'book'},
+  {he:'מים', translit:'Mayim', gloss:'water'}
+];
+
+// Hebrew UI strings (gloss kept)
+const UI = {
+  hud: { score:'נקודות', scoreEng:'Score', powered:'מוגבר', poweredEng:'Powered', lives:'חיים', livesEng:'Lives' },
+  level: { ghost:'Ghosts', bees:'Bees', speed:'Speed' },
+  vocabCard: { title:'מילה בעברית', transl:'Translit', gloss:'Gloss'},
+  alt: { newGame:'התחל משחק חדש', editor:'עורך רמות', export:'יצוא', import:'יבוא' }
+};
+
+// ------------------- Level Data Structures -------------------
+let levelData = {
+  seed: null,
+  walls: [], // 2D boolean array MAZE_W x MAZE_H
+  fruits: [], // {x,y,type:'fig'|'pomegranate'|'olive'}
+  vocab: [],  // {x,y, idx}
+  beePower: [], // {x,y}
+  ghosts: [] // {x,y, color}
+};
+
+// Helpers to create an empty maze
+function emptyMaze(){
+  const walls = Array.from({length: MAZE_H}, ()=> Array(MAZE_W).fill(false));
+  // outer walls
+  for(let x=0;x<MAZE_W;x++){ walls[0][x]=true; walls[MAZE_H-1][x]=true; }
+  for(let y=0;y<MAZE_H;y++){ walls[y][0]=true; walls[y][MAZE_W-1]=true; }
+  // some interior walls
+  const inner = [
+    [2,2],[3,2],[4,2],[5,2],
+    [9,2],[10,2],[11,2],
+    [2,4],[3,4],[4,4],[5,4],[6,4],
+    [9,6],[10,6],[11,6],
+    [3,8],[4,8],[5,8],[6,8],
+    [8,8],[9,8],[10,8]
+  ];
+  for(const [x,y] of inner){
+    if(x>0 && y>0 && x<MAZE_W-1 && y<MAZE_H-1) walls[y][x]=true;
+  }
+  return walls;
+}
+
+// Create a handcrafted level (first)
+function buildBaseLevel(seed){
+  const walls = emptyMaze();
+
+  // place some fruits in grid
+  const fruits = [
+    {x:2,y:1,type:'fig'},
+    {x:12,y:1,type:'pomegranate'},
+    {x:7,y:3,type:'olive'},
+    {x:2,y:11,type:'fig'},
+    {x:12,y:11,type:'olive'}
+  ];
+
+  // vocab pickups
+  const vocab = [
+    {x:1,y:3, idx:0},
+    {x:13,y:3, idx:1},
+    {x:7,y:5, idx:2},
+  ];
+
+  // bee power pickups
+  const beePower = [
+    {x:7,y:1}
+  ];
+
+  // ghosts initial positions
+  const ghosts = [
+    {x:7,y:1,color:'#ff4d4d'},
+    {x:7,y:11,color:'#5ac8fa'}
+  ];
+
+  return { walls, fruits, vocab, beePower, ghosts };
+}
+
+// Seeded variation (procedural tweak)
+function applySeedVariant(base, seed){
+  const rand = createRNG(seed);
+  const fcopy = base.fruits.slice();
+  for(let i=0;i<fcopy.length;i++){
+    const j = Math.floor(rand() * fcopy.length);
+    [fcopy[i], fcopy[j]] = [fcopy[j], fcopy[i]];
+  }
+  const vocab = base.vocab.slice();
+  if(vocab.length>0){
+    const idx = Math.floor(rand()*vocab.length);
+    vocab[idx].x = clamp(vocab[idx].x + (rand()>0.5?1:-1),1,MAZE_W-2);
+  }
+  const bee = base.beePower.map(b => ({...b}));
+  if(bee.length){
+    bee[0].x = clamp(bee[0].x + (rand()>0.5?1:-1),1,MAZE_W-2);
+    bee[0].y = clamp(bee[0].y + (rand()>0.5?1:-1),1,MAZE_H-2);
+  }
+  return { walls: base.walls, fruits: fcopy, vocab, beePower: bee, ghosts: base.ghosts };
+}
+
+// Initialize level
+function loadLevel(useSeed){
+  const seed = useSeed ? (document.getElementById('seedInput').value.trim() || null) : null;
+  let base = buildBaseLevel(seed);
+  if(seed){
+    const s = hashStringToSeed(seed);
+    base = applySeedVariant(base, s);
+  }
+  levelData.seed = seed;
+  levelData.walls = base.walls;
+  levelData.fruits = base.fruits.map(f=>({ x:f.x, y:f.y, type:f.type }));
+  levelData.vocab = base.vocab.map(v=>({x:v.x, y:v.y, idx:v.idx}));
+  levelData.beePower = base.beePower;
+  levelData.ghosts = base.ghosts;
+  // refresh
+  resetGame();
+}
+
+// ------------------- Canvas & Rendering -------------------
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+canvas.width = GAME_W;
+canvas.height = GAME_H;
+
+// Editor canvas
+const editorCanvas = document.getElementById('editorGrid');
+const editorCtx = editorCanvas.getContext('2d');
+editorCanvas.width = MAZE_W*20;
+editorCanvas.height = MAZE_H*20;
+
+// Visual color picks (color-blind friendly)
+const palette = {
+  walls: '#2a2a3a',
+  fig: '#6bff88',
+  pomegranate: '#ff6b6b',
+  olive: '#ffd166',
+  ghost: '#aaaaff',
+  power: '#7bdfff',
+  bee: '#ffd700',
+  bg: '#000'
+};
+
+// ------------------- Entities -------------------
+let player = {x:1, y:1, px:1, py:1, dirX:0, dirY:0, targetX:1, targetY:1, speed: 8, powered: false, powerTime: 0, lives: 3, score:0};
+let ghosts = [];
+let bees = []; // hazards (roaming)
+let vocabCardVisible = false;
+
+// Items on map
+let fruits = [];
+let vocab = [];
+let beePowers = [];
+
+// Score labels
+let highScore = parseInt(localStorage.getItem('hw_highscore')) || 0;
+let level = 1;
+
+// Initialize game state
+function resetGame(){
+  // Use levelData to fill
+  fruits = levelData.fruits.map(f => ({x:f.x, y:f.y, type:f.type, consumed:false}));
+  vocab = levelData.vocab.map(v => ({x:v.x, y:v.y, idx:v.idx, collected:false}));
+  beePowers = levelData.beePower.map(b => ({x:b.x, y:b.y, collected:false}));
+  // Ghost setup
+  ghosts = levelData.ghosts.map(g => ({
+    x:g.x, y:g.y, color:g.color, dirX:0, dirY:0, scared:false
+  }));
+  // Place player at a default spot
+  player.x = 1; player.y = 1; player.px = 1; player.py = 1;
+  player.dirX = 0; player.dirY = 0;
+  player.powerTime = 0; player.powered = false;
+  // UI
+  updateHUD();
+  drawEditor();
+  drawParticles = []; // reset particles
+}
+
+// Input handling
+let keys = {};
+window.addEventListener('keydown', (e) => {
+  keys[e.key] = true;
+  // avoid scrolling when arrows
+  if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown',' '].includes(e.key)) e.preventDefault();
+});
+window.addEventListener('keyup', (e) => { keys[e.key] = false; });
+
+// Flashcards / vocab popups
+let flashcardQueue = [];
+
+// ------------------- Audio -------------------
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+let audioCtx;
+function ensureAudio(){
+  if(!audioCtx){
+    audioCtx = new AudioCtx();
+  }
+}
+function beep(freq=440, duration=0.1, type='sine', vol=0.2){
+  ensureAudio();
+  const osc = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.value = freq;
+  g.gain.value = vol;
+  osc.connect(g); g.connect(audioCtx.destination);
+  const now = audioCtx.currentTime;
+  g.gain.setValueAtTime(vol, now);
+  g.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+  osc.start(now);
+  osc.stop(now + duration + 0.01);
+}
+function playChant(){
+  // simple short sequence
+  beep(660,0.08,'sine',0.15);
+  beep(520,0.08,'sine',0.15);
+  beep(440,0.12,'sine',0.2);
+}
+
+// ------------------- Rendering Maze & Entities -------------------
+function drawCell(x,y, color){
+  ctx.fillStyle = color;
+  ctx.fillRect(x*TILE, y*TILE, TILE, TILE);
+}
+function isWall(x,y){
+  if(x<0||y<0||x>=MAZE_W||y>=MAZE_H) return true;
+  return levelData.walls[y][x];
+}
+let particles = []; // sparkles
+let drawParticles = []; // for reset
+function spawnParticles(px, py, count=18, color='#fff'){
+  for(let i=0;i<count;i++){
+    particles.push({
+      x: px, y: py,
+      vx: (Math.random()*2-1)*60,
+      vy: (Math.random()*2-1)*60,
+      life: 0.9 + Math.random()*0.6,
+      color
+    });
+  }
+}
+function updateParticles(dt){
+  for(let i=particles.length-1;i>=0;i--){
+    const p = particles[i];
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy += 120 * dt; // gravity-ish
+    p.life -= dt;
+    if(p.life <= 0){
+      particles.splice(i,1);
+    }
+  }
+}
+function renderParticles(){
+  for(const p of particles){
+    const sx = p.x;
+    const sy = p.y;
+    ctx.fillStyle = p.color;
+    ctx.globalAlpha = Math.max(0, p.life);
+    ctx.fillRect(sx-1, sy-1, 2, 2);
+    ctx.globalAlpha = 1.0;
+  }
+}
+
+// ------------------- Game Logic -------------------
+let lastTime = 0;
+function gameLoop(ts){
+  const dt = Math.min(1/30, (ts - lastTime)/1000);
+  lastTime = ts;
+  update(dt);
+  render();
+  requestAnimationFrame(gameLoop);
+}
+function update(dt){
+  // movement input
+  let dx=0, dy=0;
+  if(keys['ArrowLeft']||keys['a']) dx = -1;
+  if(keys['ArrowRight']||keys['d']) dx = 1;
+  if(keys['ArrowUp']||keys['w']) dy = -1;
+  if(keys['ArrowDown']||keys['s']) dy = 1;
+
+  // allow continuous movement by checking walls
+  if(dx!==0){
+    if(!isWall(player.x+dx, player.y)){
+      player.x += dx;
+      dx = 0;
+    }
+  }
+  if(dy!==0){
+    if(!isWall(player.x, player.y+dy)){
+      player.y += dy;
+      dy = 0;
+    }
+  }
+
+  // collect items on new cell
+  // fruits
+  for(let i=0;i<fruits.length;i++){
+    const f = fruits[i];
+    if(!f.consumed && f.x===player.x && f.y===player.y){
+      f.consumed = true;
+      player.score += 100;
+      if(f.type==='fig') player.score += 20;
+      if(f.type==='pomegranate') player.score += 50;
+      if(f.type==='olive') player.score += 60;
+      // sparkle
+      spawnParticles((player.x*TILE)+TILE/2, (player.y*TILE)+TILE/2, 28, palette.fig);
+      updateHUD();
+      flash("+"+(100)+" "/*points*/) ;
+      playChant();
+    }
+  }
+
+  // vocab
+  for(let i=0;i<vocab.length;i++){
+    const v = vocab[i];
+    if(!v.collected && v.x===player.x && v.y===player.y){
+      v.collected = true;
+      showVocabFlash(v.idx);
+      player.score += 150;
+      updateHUD();
+    }
+  }
+
+  // bee power pickups
+  for(let i=0;i<beePowers.length;i++){
+    const b = beePowers[i];
+    if(!b.collected && b.x===player.x && b.y===player.y){
+      b.collected = true;
+      player.powered = true;
+      player.powerTime = 15; // seconds
+      flash("Power!");
+      playChant();
+    }
+  }
+
+  // power decay
+  if(player.powered){
+    player.powerTime -= dt;
+    if(player.powerTime <= 0){
+      player.powered = false;
+      ghosts.forEach(g=>g.scared=false);
+    } else {
+      ghosts.forEach(g=>g.scared = true);
+    }
+  }
+
+  // Ghosts simple chase
+  for(let g of ghosts){
+    const targetX = player.x;
+    const targetY = player.y;
+    const moves = [
+      {dx:1, dy:0},{dx:-1, dy:0},{dx:0, dy:1},{dx:0, dy:-1}
+    ];
+    if(Math.random()<0.5){
+      // prefer moves that reduce distance
+      moves.sort((a,b)=>{
+        const da = Math.abs((g.x+a.dx) - targetX) + Math.abs((g.y+a.dy) - targetY);
+        const db = Math.abs((g.x+b.dx) - targetX) + Math.abs((g.y+b.dy) - targetY);
+        return da - db;
+      });
+    }
+    let moved=false;
+    for(let m of moves){
+      const nxm = g.x + m.dx, nym = g.y + m.dy;
+      if(!isWall(nxm, nym)){
+        const distBefore = Math.abs(g.x - targetX) + Math.abs(g.y - targetY);
+        const distAfter = Math.abs(nxm - targetX) + Math.abs(nym - targetY);
+        if(distAfter <= distBefore){
+          g.x = nxm; g.y = nym; moved = true; break;
+        }
+      }
+    }
+    if(!moved){
+      // random wander
+      for(let m of moves){
+        const nxm = g.x + m.dx, nym = g.y + m.dy;
+        if(!isWall(nxm, nym)){ g.x = nxm; g.y = nym; break; }
+      }
+    }
+  }
+
+  // collision player-ghost
+  for(let g of ghosts){
+    if(g.x===player.x && g.y===player.y){
+      if(player.powered){
+        // eaten ghost
+        g.x = 7; g.y = 6; // respawn
+        g.scared = false;
+        player.score += 200;
+        updateHUD();
+        beep(500,0.08);
+      }else{
+        // lose life
+        player.lives -= 1;
+        updateHUD();
+        if(player.lives<=0){
+          flash("Game Over");
+          resetGame();
+        } else {
+          // reset player position
+          player.x = 1; player.y = 1;
+        }
+      }
+    }
+  }
+
+  // Bees as hazards
+  for(let i=0;i<bees.length;i++){
+    const b = bees[i];
+    if(!b || b.collected) continue;
+    if(Math.random()<0.4){
+      const mv = [{dx:1,dy:0},{dx:-1,dy:0},{dx:0,dy:1},{dx:0,dy:-1}][Math.floor(Math.random()*4)];
+      const nxm = b.x + mv.dx, nym = b.y + mv.dy;
+      if(!isWall(nxm, nym)){
+        b.x = nxm; b.y = nym;
+      }
+    }
+    if(b.x===player.x && b.y===player.y){
+      if(player.powered){
+        b.collected = true;
+        player.score += 120;
+        updateHUD();
+        flash("Bee eaten!");
+      } else {
+        player.lives -= 1;
+        updateHUD();
+        if(player.lives<=0){
+          flash("Game Over");
+          resetGame();
+        } else {
+          player.x=1; player.y=1;
+        }
+      }
+    }
+  }
+
+  // Level completion
+  const allFruits = fruits.filter(f=>!f.consumed).length;
+  const allVocab = vocab.filter(v=>!v.collected).length;
+  const allBees = beePowers.filter(b=>!b.collected).length;
+  if(allFruits===0 && allVocab===0 && allBees===0){
+    flash("Level Complete!");
+    level = level + 1;
+    // apply new seed or refresh with slightly harder level
+    loadLevel(true);
+    // keep player position
+  }
+
+  // update particles
+  updateParticles(dt);
+}
+
+// HUD update
+function updateHUD(){
+  document.title = "Hebrew Warriors - "+player.score;
+  // high score
+  if(player.score > highScore){
+    highScore = player.score;
+    localStorage.setItem('hw_highscore', String(highScore));
+  }
+  // inline HUD on page
+  const hud = document.getElementById('hintArea');
+  hud.textContent = "Score: "+player.score+" | Lives: "+player.lives+" | Level: "+level;
+}
+function renderHUDOverride(){
+  // not used; kept for potential future overlay
+}
+
+function render(){
+  // background
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0,0,GAME_W,GAME_H);
+
+  // walls
+  for(let y=0;y<MAZE_H;y++){
+    for(let x=0;x<MAZE_W;x++){
+      if(isWall(x,y)){
+        ctx.fillStyle = palette.walls;
+        ctx.fillRect(x*TILE, y*TILE, TILE, TILE);
+      }
+    }
+  }
+
+  // glow around power
+  if(player.powered){
+    const px = player.x*TILE + TILE/2;
+    const py = player.y*TILE + TILE/2;
+    const g = ctx.createRadialGradient(px, py, TILE*0.1, px, py, TILE*1.4);
+    g.addColorStop(0, 'rgba(123,223,255,0.9)');
+    g.addColorStop(1, 'rgba(123,223,255,0.0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(px, py, TILE*1.4, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // fruits
+  fruits.forEach(f=>{
+    if(!f.consumed){
+      const item = FRUIT_TYPES.find(r => r.key===f.type);
+      ctx.fillStyle = item.color;
+      ctx.beginPath();
+      const cx = f.x*TILE + TILE/2;
+      const cy = f.y*TILE + TILE/2;
+      ctx.arc(cx, cy, TILE/2.6, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.font = '12px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(item.heb, cx, cy+4);
+    }
+  });
+
+  // vocab pickups
+  vocab.forEach(v=>{
+    if(!v.collected){
+      ctx.fillStyle = '#66ccff';
+      ctx.fillRect(v.x*TILE+6, v.y*TILE+6, TILE-12, TILE-12);
+      ctx.fillStyle = '#fff';
+      ctx.font = '9px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('א', v.x*TILE + TILE/2, v.y*TILE + TILE - 6);
+    }
+  });
+
+  // bee power pickups
+  beePowers.forEach(b=>{
+    if(!b.collected){
+      ctx.fillStyle = palette.bee;
+      const cx = b.x*TILE + TILE/2;
+      const cy = b.y*TILE + TILE/2;
+      ctx.beginPath(); ctx.arc(cx, cy, TILE/3, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#000';
+      ctx.fillRect(cx-1, cy-6, 2, 8);
+      ctx.fillRect(cx-6, cy-1, 12, 2);
+    }
+  });
+
+  // ghosts
+  ghosts.forEach(g=>{
+    const color = g.scared ? '#7bdfff' : (g.color || '#ffaaaa');
+    ctx.fillStyle = color;
+    const gx = g.x*TILE + TILE/2;
+    const gy = g.y*TILE + TILE/2;
+    ctx.beginPath();
+    ctx.arc(gx, gy, TILE/2.2, Math.PI, 0);
+    ctx.lineTo(gx + TILE/2.4, gy + TILE/2.0);
+    ctx.lineTo(gx - TILE/2.4, gy + TILE/2.0);
+    ctx.closePath();
+    ctx.fill();
+
+    // eyes
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(gx - 6, gy - 2, 3, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(gx + 6, gy - 2, 3, 0, Math.PI*2); ctx.fill();
+  });
+
+  // particles
+  renderParticles();
+
+  // player
+  const px = player.x*TILE + TILE/2;
+  const py = player.y*TILE + TILE/2;
+  if(player.powered){
+    // glowing aura behind player
+    ctx.fillStyle = 'rgba(123,223,255,0.6)';
+    ctx.beginPath();
+    ctx.arc(px, py, TILE*0.9, 0, Math.PI*2);
+    ctx.fill();
+  }
+  ctx.fillStyle = '#ffd';
+  ctx.beginPath();
+  ctx.arc(px, py, TILE/2.4, 0, Math.PI*2);
+  ctx.fill();
+  // sombrero
+  ctx.fillStyle = '#222';
+  ctx.fillRect(px-8, py-16, 16, 6);
+  ctx.fillRect(px-6, py-26, 12, 12);
+  // mouth
+  ctx.fillStyle = '#000';
+  ctx.fillRect(px-3, py+4, 6, 2);
+
+  // debug grid overlay (optional)
+  // for(let x=0;x<=MAZE_W;x++){ ctx.strokeStyle='rgba(255,255,255,0.04)'; ctx.strokeRect(x*TILE,0,1,GAME_H); }
+  // for(let y=0;y<=MAZE_H;y++){ ctx.strokeStyle='rgba(255,255,255,0.04)'; ctx.strokeRect(0,y*TILE,GAME_W,1); }
+
+}
+
+// ------------------- Level Editor (UI) -------------------
+function drawEditor(){
+  // draw grid with walls and items
+  const w = MAZE_W, h = MAZE_H;
+  const cw = editorCanvas.width / w;
+  const ch = editorCanvas.height / h;
+  editorCtx.clearRect(0,0,editorCanvas.width, editorCanvas.height);
+
+  // background
+  editorCtx.fillStyle='#111';
+  editorCtx.fillRect(0,0, editorCanvas.width, editorCanvas.height);
+
+  // walls
+  for(let y=0;y<h;y++){
+    for(let x=0;x<w;x++){
+      if(levelData.walls[y][x]){
+        editorCtx.fillStyle = '#333';
+        editorCtx.fillRect(x*cw, y*ch, cw, ch);
+      } else {
+        editorCtx.fillStyle = '#222';
+        editorCtx.fillRect(x*cw, y*ch, cw, ch);
+      }
+      editorCtx.strokeStyle = '#000';
+      editorCtx.strokeRect(x*cw, y*ch, cw, ch);
+    }
+  }
+
+  // fruits
+  fruits.forEach(f=>{
+    if(!f.consumed){
+      editorCtx.fillStyle = '#6bff88';
+      editorCtx.fillRect(f.x*cw+cw*0.25, f.y*ch+ch*0.25, cw*0.5, ch*0.5);
+    }
+  });
+
+  // vocab
+  vocab.forEach(v=>{
+    if(!v.collected){
+      editorCtx.fillStyle = '#66ccff';
+      editorCtx.fillRect(v.x*cw+cw*0.25, v.y*ch+ch*0.25, cw*0.5, ch*0.5);
+    }
+  });
+
+  // bee power
+  beePowers.forEach(b=>{
+    if(!b.collected){
+      editorCtx.fillStyle = '#ffd700';
+      editorCtx.fillRect(b.x*cw+cw*0.25, b.y*ch+ch*0.25, cw*0.5, ch*0.5);
+    }
+  });
+
+  // ghosts
+  ghosts.forEach(g=>{
+    editorCtx.fillStyle = g.color || '#ff8888';
+    editorCtx.fillRect(g.x*cw+cw*0.25, g.y*ch+ch*0.25, cw*0.5, ch*0.5);
+  });
+
+  // player
+  editorCtx.fillStyle = '#fff';
+  editorCtx.fillRect(player.x*cw+cw*0.25, player.y*ch+ch*0.25, cw*0.5, ch*0.5);
+}
+
+let currentTool = 'wall';
+document.getElementById('toolSel').addEventListener('change', (e)=> {
+  currentTool = e.target.value;
+  drawEditor();
+});
+
+// Click on editor to modify
+editorCanvas.addEventListener('click', (e)=>{
+  const rect = editorCanvas.getBoundingClientRect();
+  const cx = e.clientX - rect.left;
+  const cy = e.clientY - rect.top;
+  const cw = editorCanvas.width / MAZE_W;
+  const ch = editorCanvas.height / MAZE_H;
+  const x = Math.floor(cx / cw);
+  const y = Math.floor(cy / ch);
+  if(currentTool==='wall'){
+    levelData.walls[y][x] = true;
+  } else if(currentTool==='empty'){
+    levelData.walls[y][x] = false;
+  } else {
+    // add items
+    if(currentTool==='fig' || currentTool==='pomegranate' || currentTool==='olive'){
+      // ensure not already present
+      const exists = fruits.find(f=>f.x===x&&f.y===y&&!f.consumed);
+      if(!exists){
+        fruits.push({x,y,type:currentTool, consumed:false});
+      }
+    } else if(currentTool==='vocab'){
+      const idx = Math.floor(Math.random()*VOCAB_ITEMS.length);
+      vocab.push({x,y, idx, collected:false});
+    } else if(currentTool==='bee'){
+      beePowers.push({x,y, collected:false});
+    }
+  }
+  drawEditor();
+  render();
+});
+
+// Export / Import
+document.getElementById('btnExport').addEventListener('click', ()=> {
+  const data = {
+    seed: levelData.seed,
+    walls: levelData.walls,
+    fruits: levelData.fruits,
+    vocab: levelData.vocab,
+    beePower: levelData.beePower,
+    ghosts: levelData.ghosts
+  };
+  const json = JSON.stringify(data);
+  navigator.clipboard.writeText(json).then(()=> flash("Maze JSON copied"));
+});
+document.getElementById('btnImport').addEventListener('click', async ()=>{
+  const json = prompt("Paste level JSON here");
+  if(!json) return;
+  try{
+    const data = JSON.parse(json);
+    levelData.seed = data.seed||null;
+    levelData.walls = data.walls||levelData.walls;
+    levelData.fruits = data.fruits||[];
+    levelData.vocab = data.vocab||[];
+    levelData.beePower = data.beePower||[];
+    levelData.ghosts = data.ghosts||[];
+    // refresh and redraw
+    resetGame();
+    fruits = levelData.fruits.map(f => ({x:f.x, y:f.y, type:f.type, consumed:false}));
+    vocab = levelData.vocab.map(v => ({x:v.x, y:v.y, idx:v.idx, collected:false}));
+    beePowers = levelData.beePower.map(b => ({x:b.x, y:b.y, collected:false}));
+    ghosts = levelData.ghosts.map(g => ({x:g.x, y:g.y, color:g.color, dirX:0, dirY:0, scared:false}));
+    drawEditor();
+    flash("Maze imported");
+  } catch(e){
+    flash("Import failed");
+  }
+});
+
+// Seed / New Seed
+document.getElementById('btnNewSeed').addEventListener('click', ()=>{
+  const s = document.getElementById('seedInput').value.trim();
+  if(!s){
+    flash("Enter a seed string");
+    return;
+  }
+  loadLevel(true);
+  flash("Seed applied");
+});
+
+// Init
+function init(){
+  // create base level from craft
+  const seed = null;
+  const base = buildBaseLevel(seed);
+  levelData = {
+    seed: null,
+    walls: base.walls,
+    fruits: base.fruits,
+    vocab: base.vocab,
+    beePower: base.beePower,
+    ghosts: base.ghosts
+  };
+  // ready
+  loadLevel(false);
+  // start rendering loop
+  requestAnimationFrame((t)=> { lastTime = t; requestAnimationFrame(gameLoop); });
+  // set up editor preview
+  drawEditor();
+}
+init();
+
+// UI language toggling (Hebrew/English)
+let isHeb = true;
+const btnLang = document.getElementById('btnLang');
+btnLang.addEventListener('click', ()=> {
+  isHeb = !isHeb;
+  if(isHeb){
+    btnLang.textContent = 'עכשיו: עברית';
+  } else {
+    btnLang.textContent = 'Language: English';
+  }
+  // For simplicity, still Hebrew UI; could swap texts if desired
+});
+
+// High-contrast toggle
+let contrast = false;
+document.getElementById('btnContrast').addEventListener('click', ()=> {
+  contrast = !contrast;
+  document.documentElement.setAttribute('data-contrast', contrast ? 'true' : 'false');
+});
+
+// Vocabulary popup close
+document.getElementById('vocabClose').addEventListener('click', ()=> {
+  const card = document.getElementById('vocabCard');
+  card.classList.remove('show');
+  vocabCardVisible = false;
+});
+
+// show vocab flash
+function showVocabFlash(idx){
+  const v = VOCAB_ITEMS[idx];
+  const card = document.getElementById('vocabCard');
+  document.getElementById('vocabHeb').textContent = v.he;
+  document.getElementById('vocabTrans').textContent = v.translit;
+  document.getElementById('vocabGloss').textContent = v.gloss;
+  vocabCardVisible = true;
+  card.classList.add('show');
+  setTimeout(()=>{ card.classList.remove('show'); vocabCardVisible = false; }, 3500);
+  const t = document.getElementById('vocabToast');
+  t.textContent = v.he+' — '+v.translit+' ("'+v.gloss+'")';
+  t.style.display = 'block';
+  setTimeout(()=> t.style.display='none', 1800);
+}
+
+// Init particles arr
+let particleReset = false;
+
+// Start the loop
+requestAnimationFrame((t)=> { lastTime = t; requestAnimationFrame(gameLoop); });
+
+</script>
+</body>
+</html>
