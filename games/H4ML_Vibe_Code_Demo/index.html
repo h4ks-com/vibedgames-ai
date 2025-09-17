@@ -1,0 +1,779 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>H4KS Vibe Code Demo - Enhanced</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #0b0f1a;
+      --fg: #e6e6f5;
+      --muted: #aeb7d6;
+      --card: rgba(255,255,255,0.08);
+      --card-border: rgba(255,255,255,0.15);
+      --accent: #6bd4ff;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto; background: #0b0f1a; color: #eaeafc; }
+    body { overflow: hidden; }
+
+    .app {
+      padding: 14px;
+      max-width: 1200px;
+      margin: 0 auto;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .topbar {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 12px; padding: 12px 14px; border-radius: 12px;
+      background: rgba(20,26,40,0.75); border: 1px solid rgba(120,140,200,0.4);
+      backdrop-filter: blur(2px);
+    }
+    .title { font-weight: 700; letter-spacing: .5px; }
+    .controls { display: flex; gap: 10px; align-items: center; }
+    select, button, input, textarea {
+      font-family: inherit;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.25);
+      background: rgba(0,0,0,0.25);
+      color: #fff;
+    }
+    select, button { padding: 8px 12px; }
+    button { cursor: pointer; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 12px;
+      height: calc(100% - 0px);
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 12px;
+      position: relative;
+      overflow: hidden;
+      min-height: 180px;
+    }
+
+    #scenePreview {
+      min-height: 240px;
+      border-radius: 8px;
+      padding: 0;
+      background: #111;
+      border: 1px solid rgba(255,255,255,0.15);
+      display: flex; align-items: center; justify-content: center;
+      color: #f2f2f2;
+      position: relative;
+      overflow: hidden;
+      isolation: isolate;
+    }
+    #sceneBackdrop {
+      position: absolute; inset: 0;
+      background: rgba(255,255,255,0.08);
+      filter: blur(6px);
+      transform: scale(1.05);
+      mix-blend-mode: overlay;
+      opacity: 0.9;
+    }
+    #vibeLabel { position: absolute; z-index: 2; font-weight: 700; text-shadow: 0 1px 2px rgba(0,0,0,.4); }
+    #sceneCanvas { position: absolute; left:0; top:0; width:100%; height:100%; pointer-events:none; }
+
+    .sceneLabel {
+      position: absolute; bottom: 8px; left: 12px; font-size: 12px; opacity: .9;
+      z-index: 3;
+    }
+
+    #yamlDerived { width: 100%; height: 180px; resize: vertical;
+      border-radius: 8px; padding: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas;
+      font-size: 12.5px; line-height: 1.45; border: 1px solid rgba(255,255,255,.25);
+      background: #0a0f1a; color: #e6e6ff;
+    }
+
+    #yamlEditor { width: 100%; height: 180px; resize: vertical;
+      border-radius: 8px; padding: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas;
+      font-size: 12.5px; line-height: 1.45; border: 1px solid rgba(255,255,255,.25);
+      background: #0b1020; color: #e6e6ff;
+    }
+
+    .sectionTitle { font-size: 14px; color: #cbd5e1; margin: 6px 6px 8px; }
+    .row { display: flex; gap: 12px; align-items: stretch; }
+    .half { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+
+    .tutorial { display: flex; flex-direction: column; gap: 8px; }
+    .step { padding: 8px; border-radius: 8px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); }
+    .step.completed { background: rgba(46, 204, 113, 0.15); border-color: rgba(46,204,113,0.4); }
+    .hint { font-size: 12px; color: #d1d5db; }
+
+    .validation { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas; font-size: 12px; padding: 8px; white-space: pre-wrap; min-height: 60px; }
+
+    .sceneGlow { position: absolute; width: 120%; height: 120%; filter: blur(40px); opacity: .5; pointer-events: none; }
+
+    .ghost { opacity: .5; }
+
+    .advanced { cursor: pointer; padding: 6px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,.25); background: rgba(0,0,0,.25); }
+
+    .hidden { display: none; }
+
+    /* Canvas glow behind scene area for depth */
+    #sceneBackdropGlow {
+      position: absolute; inset: -40px -40px -40px -40px; pointer-events: none;
+      background: radial-gradient(circle at 60% 40%, rgba(255,255,255,.25), rgba(0,0,0,0) 40%),
+                  radial-gradient(circle at 20% 60%, rgba(100,180,255,.25), rgba(0,0,0,0) 40%);
+      filter: blur(40px);
+      opacity: 0.25;
+      mix-blend-mode: screen;
+    }
+
+    /* Layout tweaks for small screens */
+    @media (max-width: 980px) {
+      .grid { grid-template-columns: 1fr; height: auto; }
+      #scenePreview { min-height: 160px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="topbar">
+      <div class="title">H4KS Vibe Code Demo - Enhanced</div>
+      <div class="controls">
+        <label for="sceneSelector" class="ghost" style="font-size:12px; margin-right:4px;">Scene</label>
+        <select id="sceneSelector" aria-label="Scene">
+          <option value="dawn">Dawn</option>
+          <option value="noon">Noon Burst</option>
+          <option value="dusk">Dusk Pulse</option>
+        </select>
+        <button id="autoCorrectBtn" title="Auto-correct H4KS blocks">Auto-Correct</button>
+        <button id="exportBtn" title="Export current state as JSON">Export JSON</button>
+        <button id="importBtn" title="Import JSON to load state">Import JSON</button>
+      </div>
+    </div>
+
+    <div class="grid" id="gridMain">
+      <section class="card" aria-label="Live H4KS Playground" style="min-height:480px;">
+        <div class="sceneHeader" style="display:flex; align-items:center; justify-content: space-between; gap:12px;">
+          <span id="sceneName" style="font-weight:700;">Dawn</span>
+          <span id="sceneMood" style="font-size:12px; color:#cbd5e1;">Ambience: Calm</span>
+        </div>
+
+        <div id="scenePreview" aria-label="Vibe Preview" style="margin:8px 0; position:relative;">
+          <div id="sceneBackdrop"></div>
+          <canvas id="sceneCanvas" width="800" height="600"></canvas>
+          <div id="vibeLabel" style="font-size:16px; z-index:2; text-shadow:0 1px 2px rgba(0,0,0,.4);">Vibe Preview</div>
+          <div id="sceneBackdropGlow"></div>
+        </div>
+
+        <div class="row" style="gap:16px; align-items: stretch;">
+          <div class="half">
+            <div class="sectionTitle">H4KS Editor (Ultra-simple markup)</div>
+            <textarea id="h4ksEditor" placeholder="header: Title
+paragraph: This is a vibe-driven scene.
+list:
+- item A
+- item B
+image: data:image/svg+xml;utf8,<svg...> | Scene image" spellcheck="false"></textarea>
+          </div>
+          <div class="half">
+            <div class="sectionTitle">Live Rendering</div>
+            <div id="renderTarget" class="card" style="min-height: 180px; padding:12px; background:#0a0f1a; border:1px solid rgba(255,255,255,.15); border-radius:8px;">
+              <!-- Rendered H4KS goes here -->
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card" aria-label="YAML Comparison" style="min-height:480px;">
+        <div class="sectionTitle">YAML Comparison (Side-by-Side)</div>
+        <div class="row" style="gap:12px;">
+          <div class="half" style="min-width:0;">
+            <div class="sectionTitle" style="margin-bottom:6px;">YAML Editor</div>
+            <textarea id="yamlEditor" placeholder="scene: dawn
+h4ks:
+  header: Welcome
+  paragraph: This is a vibe-driven YAML preview.
+  list:
+    - Calm
+    - Focus
+  image:
+    src: data:image/svg+xml;utf8,<svg...>
+    alt: Scene image" spellcheck="false"></textarea>
+          </div>
+          <div class="half" style="min-width:0;">
+            <div class="sectionTitle" style="margin-bottom:6px;">Derived YAML</div>
+            <textarea id="yamlDerived" readonly aria-readonly="true" placeholder="Derived YAML" ></textarea>
+          </div>
+        </div>
+        <div class="sectionTitle" style="margin-top:8px;">Validation/Hints</div>
+        <div class="validation card" id="validationPanel" style="min-height:60px; background:#0a0f1a;"></div>
+      </section>
+    </div>
+
+    <div class="grid" style="margin-top:12px; height: 260px;">
+      <section class="card" aria-label="Tutorials" style="min-height: 180px;">
+        <div class="sectionTitle">Interactive Tutorial: Bite-sized Challenges</div>
+        <div class="tutorial" id="tutorial" style="min-height:120px;"></div>
+      </section>
+      <section class="card" aria-label="Live Scene Tips" style="min-height: 180px;">
+        <div class="sectionTitle">Scene Ambience</div>
+        <div style="font-size:13px; color:#d1d5db;">
+          Choose a vibe to steer ambience. Scenes alter background gradient and mood. H4KS content drives the storytelling.
+        </div>
+        <div style="margin-top:8px; display:flex; gap:8px; align-items:center;">
+          <label style="font-size:12px; color:#cbd5e1;">Animations</label>
+          <input id="animToggle" type="checkbox" checked />
+          <span style="font-size:12px; color:#cbd5e1;">Enable</span>
+          <label style="font-size:12px; margin-left:8px; color:#cbd5e1;">Speed</label>
+          <input id="speedSlider" type="range" min="0.2" max="2" step="0.1" value="1" />
+        </div>
+        <div style="margin-top:8px;">
+          <button id="resetViewBtn" class="advanced" title="Reset to defaults">Reset</button>
+          <button id="exportJsonBtn" class="advanced" title="Export JSON state">Export JSON</button>
+          <button id="importJsonBtn" class="advanced" title="Import JSON state">Import JSON</button>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    // Advanced Features: Scene, H4KS, YAML, Rendering, Animations
+    const SCENES = [
+      { id: 'dawn', name: 'Dawn', mood: 'Calm & hopeful', gradient: 'radial-gradient(circle at 30% 20%, #fff4e1 0, #ffd1a8 40%, #b8e0ff 100%)' },
+      { id: 'noon', name: 'Noon Burst', mood: 'Bright focus', gradient: 'radial-gradient(circle at 60% 40%, #fff 0, #a0e6ff 40%, #66e09e 100%)' },
+      { id: 'dusk', name: 'Dusk Pulse', mood: 'Moody & cinematic', gradient: 'radial-gradient(circle at 40% 60%, #ffd8f0 0, #4e3a8a 60%, #1a1140 100%)' }
+    ];
+    const INITIAL_H4KS = [
+      "header: Welcome to H4KS",
+      "paragraph: A vibe-driven scene unfolds as you craft UI with ultra-simple markup.",
+      "list:",
+      "- Calm ambience",
+      "- Focused energy",
+      "image: data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='600' height='360'><defs><linearGradient id='g' x1='0' x2='1' y1='0' y2='1'><stop stop-color='%23ffd7a8'/><stop offset='1' stop-color='%2399d6ff'/></linearGradient></defs><rect width='600' height='360' fill='url(%23g)'/><text x='40' y='190' font-family='Arial' font-size='28' fill='black'>Vibe Scene</text></svg>"
+    ].join('\\n');
+
+    // Elements
+    const h4ksEditor = document.getElementById('h4ksEditor');
+    const renderTarget = document.getElementById('renderTarget');
+    const yamlEditor = document.getElementById('yamlEditor');
+    const yamlDerived = document.getElementById('yamlDerived');
+    const sceneSelector = document.getElementById('sceneSelector');
+    const sceneName = document.getElementById('sceneName');
+    const sceneMood = document.getElementById('sceneMood');
+    const validationPanel = document.getElementById('validationPanel');
+    const tutorialBox = document.getElementById('tutorial');
+    const autoCorrectBtn = document.getElementById('autoCorrectBtn');
+    const sceneBackdrop = document.getElementById('sceneBackdrop');
+    const sceneCanvas = document.getElementById('sceneCanvas');
+    const scenePreview = document.getElementById('scenePreview');
+    const exportBtn = document.getElementById('exportBtn');
+    const importBtn = document.getElementById('importBtn');
+    const sceneBackdropGlow = document.getElementById('sceneBackdropGlow');
+    const animToggle = document.getElementById('animToggle');
+    const speedSlider = document.getElementById('speedSlider');
+    const resetViewBtn = document.getElementById('resetViewBtn');
+    const exportJsonBtn = document.getElementById('exportJsonBtn');
+    const importJsonBtn = document.getElementById('importJsonBtn');
+    const yamlSection = document.getElementById('yamlEditor');
+
+    // State
+    let currentScene = SCENES[0];
+    let ignoreYamlFromH4ks = false;
+    let particlesEnabled = true;
+    let animationSpeed = 1.0;
+    let animationFrame = 0;
+    let particles = [];
+    let canvasReady = false;
+    let currentData = null;
+
+    // Helpers
+    function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
+
+    function applyScene(id) {
+      const s = SCENES.find(x => x.id === id) || SCENES[0];
+      currentScene = s;
+      // Apply gradient to body
+      document.body.style.background = s.gradient;
+      // Update labels
+      sceneName.textContent = s.name;
+      sceneMood.textContent = 'Ambience: ' + (s.mood || 'Vibe');
+      // Update glow
+      if (sceneBackdrop) {
+        sceneBackdrop.style.background = s.gradient;
+        sceneBackdrop.style.opacity = '0.25';
+      }
+      // Update canvas tint
+      if (sceneCanvas) {
+        const ctx = sceneCanvas.getContext('2d');
+        ctx.save();
+        ctx.restore();
+      }
+    }
+
+    // Parse H4KS simple blocks
+    function h4ksToData(text) {
+      const lines = text.split(/\r?\n/);
+      let header = null;
+      let paragraph = null;
+      let list = null;
+      let image = null;
+      let inList = false;
+      for (let raw of lines) {
+        const line = raw.trim();
+        if (!line) continue;
+        if (line.startsWith('header:')) {
+          header = line.substring(7).trim().replace(/^"|"$/g, '');
+          continue;
+        }
+        if (line.startsWith('paragraph:')) {
+          paragraph = line.substring(10).trim().replace(/^"|"$/g, '');
+          continue;
+        }
+        if (line.startsWith('list:')) {
+          inList = true;
+          list = [];
+          continue;
+        }
+        if (inList) {
+          if (line.startsWith('- ')) {
+            list.push(line.substring(2).trim());
+            continue;
+          } else {
+            inList = false;
+          }
+        }
+        if (line.startsWith('image:')) {
+          const rest = line.substring(6).trim();
+          // expected: src | alt
+          const parts = rest.split('|');
+          image = { src: parts[0] ? parts[0].trim() : '', alt: parts[1] ? parts[1].trim() : '' };
+        }
+      }
+      if (list && list.length === 0) list = null;
+      if (image && !image.src) image = null;
+      return { header, paragraph, list, image };
+    }
+
+    function renderFromData(data) {
+      renderTarget.innerHTML = '';
+      if (!data) return;
+      const frag = document.createDocumentFragment();
+      if (data.header) {
+        const h = document.createElement('h1');
+        h.textContent = data.header;
+        frag.appendChild(h);
+      }
+      if (data.paragraph) {
+        const p = document.createElement('p');
+        p.textContent = data.paragraph;
+        frag.appendChild(p);
+      }
+      if (data.list && data.list.length) {
+        const ul = document.createElement('ul');
+        data.list.forEach(it => {
+          const li = document.createElement('li');
+          li.textContent = it;
+          ul.appendChild(li);
+        });
+        frag.appendChild(ul);
+      }
+      if (data.image && data.image.src) {
+        const img = document.createElement('img');
+        img.src = data.image.src;
+        img.alt = data.image.alt || '';
+        img.style.maxWidth = '100%';
+        frag.appendChild(img);
+      }
+      renderTarget.appendChild(frag);
+    }
+
+    function toYAMLFromData(data, sceneId) {
+      const lines = [];
+      lines.push(`scene: ${sceneId || currentScene.id}`);
+      lines.push(`h4ks:`);
+      if (data.header) lines.push(`  header: "${data.header.replace(/"/g,'\\"')}"`);
+      if (data.paragraph) lines.push(`  paragraph: "${data.paragraph.replace(/"/g,'\\"')}"`);
+      if (data.list && data.list.length) {
+        lines.push(`  list:`);
+        data.list.forEach(it => lines.push(`    - ${it.replace(/"/g,'\\"')}`));
+      }
+      if (data.image && data.image.src) {
+        lines.push(`  image:`);
+        lines.push(`    src: "${data.image.src.replace(/"/g,'\\"')}"`);
+        lines.push(`    alt: "${(data.image.alt || '').replace(/"/g,'\\"')}"`);
+      }
+      return lines.join('\n');
+    }
+
+    function unquote(s) {
+      if (!s) return '';
+      if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+        return s.slice(1, -1);
+      }
+      return s;
+    }
+
+    function parseYaml(text) {
+      // Very lightweight YAML subset
+      const lines = text.split(/\r?\n/);
+      let scene = null;
+      let h4ks = { header: null, paragraph: null, list: [], image: null };
+      let mode = null;
+      for (let raw of lines) {
+        const t = raw.trim();
+        if (!t) continue;
+        if (t.startsWith('scene:')) { scene = t.substring(6).trim(); continue; }
+        if (t.startsWith('h4ks:')) { mode = null; continue; }
+        if (t.startsWith('  header:')) { h4ks.header = unquote(t.substring(10).trim()); continue; }
+        if (t.startsWith('  paragraph:')) { h4ks.paragraph = unquote(t.substring(12).trim()); continue; }
+        if (t.startsWith('  list:')) { mode = 'list'; h4ks.list = []; continue; }
+        if (t.startsWith('  image:')) { mode = 'image'; h4ks.image = { src: null, alt: '' }; continue; }
+        if (mode === 'list' && t.startsWith('    -')) {
+          h4ks.list.push(unquote(t.substring(6).trim())); continue;
+        }
+        if (mode === 'image') {
+          if (t.startsWith('    src:')) { h4ks.image.src = unquote(t.substring(8).trim()); continue; }
+          if (t.startsWith('    alt:')) { h4ks.image.alt = unquote(t.substring(8).trim()); continue; }
+        }
+      }
+      if (h4ks.list && h4ks.list.length === 0) h4ks.list = null;
+      if (h4ks.image && !h4ks.image.src) h4ks.image = null;
+      return { scene, h4ks };
+    }
+
+    function validateRealtime(text) {
+      const data = h4ksToData(text);
+      const hints = [];
+      if (!data.header) hints.push('- Add a header: header: Your Scene');
+      if (!data.paragraph) hints.push('- Add a paragraph: paragraph: Your vibe text');
+      if (!data.list) hints.push('- Add a list with items under "list:"');
+      if (!data.image || !data.image.src) hints.push('- Add an image: image: <src> | <alt>');
+      validationPanel.textContent = hints.length ? 'Hints:\n' + hints.join('\n') : 'All good. Your H4KS looks complete!';
+    }
+
+    function renderTutorial() {
+      // Simple steps
+      tutorialBox.innerHTML = '';
+      const header = document.createElement('div');
+      header.className = 'sectionTitle';
+      header.textContent = 'Progress';
+      tutorialBox.appendChild(header);
+      const steps = [
+        { id: 's1', title: 'Step 1: Add a header', instruction: 'Add a line: header: Welcome to the vibe' },
+        { id: 's2', title: 'Step 2: Add a paragraph', instruction: 'Add a line: paragraph: Your scene begins here' },
+        { id: 's3', title: 'Step 3: Add a list and an image', instruction: 'Add a list and an image block' }
+      ];
+      // Very lightweight progress: if header present mark completed
+      const dataPreview = h4ksToData(h4ksEditor.value);
+      steps.forEach((s, idx) => {
+        const stepEl = document.createElement('div');
+        stepEl.className = 'step' + (idx === 0 && dataPreview.header ? ' completed' : '');
+        stepEl.innerHTML = `<strong>${idx + 1}. ${s.title}</strong><div class="hint">${s.instruction}</div>`;
+        tutorialBox.appendChild(stepEl);
+      });
+      // Show a basic confetti flash on complete (simulated)
+      if (dataPreview.header && dataPreview.paragraph && dataPreview.list?.length) {
+        showMiniConfetti();
+      }
+    }
+
+    function showMiniConfetti() {
+      const dots = 20;
+      for (let i = 0; i < dots; i++) {
+        const el = document.createElement('div');
+        el.style.position = 'absolute';
+        el.style.width = '6px';
+        el.style.height = '6px';
+        el.style.borderRadius = '50%';
+        el.style.background = i % 2 ? '#6bd4ff' : '#7cffb3';
+        el.style.left = Math.random() * 100 + '%';
+        el.style.top = '-10px';
+        el.style.opacity = '0.9';
+        el.style.transform = `translateY(0) rotate(${Math.random() * 360}deg)`;
+        el.style.transition = 'transform 1s ease-out, opacity 1s ease-out';
+        renderTarget.appendChild(el);
+        requestAnimationFrame(() => {
+          el.style.transform = `translateY(120px) rotate(${Math.random() * 360}deg)`;
+          el.style.opacity = '0';
+        });
+        setTimeout(() => el.remove(), 1200);
+      }
+    }
+
+    // H4KS -> YAML -> H4KS roundtrip
+    function updateDerivedYamlFromData(data) {
+      const yaml = toYAMLFromData(data, currentScene.id);
+      yamlDerived.value = yaml;
+      YAMLUpdateUI(yaml);
+    }
+
+    function YAMLUpdateUI(yaml) {
+      yamlDerived.value = yaml;
+      // Do not auto-change YAML editor to prevent feedback loops here;
+      // keep as read-only derived pane.
+    }
+
+    function updateLiveFromH4KS() {
+      const text = h4ksEditor.value;
+      const data = h4ksToData(text);
+      currentData = data;
+      renderFromData(data);
+      const yaml = toYAMLFromData(data, currentScene.id);
+      yamlEditor.value = yaml;
+      updateDerivedYamlFromData(data);
+      validateRealtime(text);
+      renderTutorial();
+    }
+
+    // Canvas particle background
+    function initParticles() {
+      particles = [];
+      for (let i = 0; i < Math.floor(60 * (1.0)); i++) {
+        particles.push(makeParticle());
+      }
+    }
+    function makeParticle() {
+      const w = scenePreview.clientWidth;
+      const h = scenePreview.clientHeight;
+      return {
+        x: Math.random() * w,
+        y: Math.random() * h,
+        vx: (Math.random() - 0.5) * 0.6,
+        vy: (Math.random() - 0.5) * 0.6,
+        size: Math.random() * 2 + 1,
+        alpha: Math.random() * 0.6 + 0.2,
+        hue: Math.random() * 360
+      };
+    }
+
+    function resizeCanvas() {
+      const dpr = Math.max(1, window.devicePixelRatio || 1);
+      sceneCanvas.width = Math.floor(scenePreview.clientWidth * dpr);
+      sceneCanvas.height = Math.floor(scenePreview.clientHeight * dpr);
+      const ctx = sceneCanvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      canvasReady = true;
+    }
+
+    function drawParticles() {
+      if (!canvasReady || !particlesEnabled) return;
+      const ctx = sceneCanvas.getContext('2d');
+      ctx.clearRect(0, 0, sceneCanvas.width, sceneCanvas.height);
+      // soft glow background
+      const g = ctx.createRadialGradient(
+        scenePreview.clientWidth * 0.3, scenePreview.clientHeight * 0.2, scenePreview.clientWidth * 0.1,
+        scenePreview.clientWidth * 0.3, scenePreview.clientHeight * 0.2, scenePreview.clientWidth * 0.7
+      );
+      g.addColorStop(0, 'rgba(240,240,255,0.25)');
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, scenePreview.clientWidth, scenePreview.clientHeight);
+
+      // draw particles
+      const hueBase = currentScene.id === 'dawn' ? 210 : currentScene.id === 'noon' ? 180 : 260;
+      for (let p of particles) {
+        p.x += p.vx * animationSpeed;
+        p.y += p.vy * animationSpeed;
+        if (p.x < -5) p.x = scenePreview.clientWidth + 5;
+        if (p.y < -5) p.y = scenePreview.clientHeight + 5;
+        if (p.x > scenePreview.clientWidth + 5) p.x = -5;
+        if (p.y > scenePreview.clientHeight + 5) p.y = -5;
+
+        ctx.beginPath();
+        ctx.fillStyle = `hsla(${(p.hue + hueBase) % 360}, 85%, 60%, ${p.alpha})`;
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+        // subtle trail
+        ctx.lineWidth = 0.3;
+        ctx.strokeStyle = `hsla(${(p.hue + hueBase) % 360}, 70%, 70%, ${p.alpha * 0.25})`;
+        ctx.beginPath(); ctx.moveTo(p.x, p.y);
+        ctx.lineTo(p.x - p.vx * 2, p.y - p.vy * 2);
+        ctx.stroke();
+      }
+      animationFrame = requestAnimationFrame(loop);
+    }
+
+    function loop() {
+      drawParticles();
+    }
+
+    // Init and bind events
+    function init() {
+      // Scene initial
+      applyScene('dawn');
+      // H4KS initial
+      h4ksEditor.value = INITIAL_H4KS;
+      // Render initial
+      currentData = h4ksToData(INITIAL_H4KS);
+      renderFromData(currentData);
+      const yaml = toYAMLFromData(currentData, currentScene.id);
+      yamlEditor.value = yaml;
+      yamlDerived.value = yaml;
+      // Tutorial
+      renderTutorial();
+      // Setup events
+      h4ksEditor.addEventListener('input', () => {
+        updateLiveFromH4KS();
+      });
+      yamlEditor.addEventListener('input', () => {
+        // Guard: keep derived YAML in sync, but allow editing for demo (parseable)
+        const text = yamlEditor.value;
+        const parsed = parseYaml(text);
+        if (!parsed) {
+          validationPanel.textContent = 'YAML parse error: ensure correct keys and indentation.';
+          return;
+        }
+        const { scene, h4ks } = parsed;
+        // Build H4KS text
+        const lines = [];
+        if (h4ks && h4ks.header) lines.push(`header: ${h4ks.header}`);
+        if (h4ks && h4ks.paragraph) lines.push(`paragraph: ${h4ks.paragraph}`);
+        if (h4ks && h4ks.list && h4ks.list.length) {
+          lines.push('list:');
+          h4ks.list.forEach(it => lines.push(`- ${it}`));
+        }
+        if (h4ks && h4ks.image && h4ks.image.src) {
+          const alt = h4ks.image.alt ? h4ks.image.alt : '';
+          lines.push(`image: ${h4ks.image.src} | ${alt}`);
+        }
+        const newH4KS = lines.join('\\n');
+        h4ksEditor.value = newH4KS;
+        updateLiveFromH4KS();
+      });
+
+      sceneSelector.addEventListener('change', (e) => {
+        const id = e.target.value;
+        applyScene(id);
+        // refresh YAML/derived for new scene
+        if (currentData) {
+          const yaml = toYAMLFromData(currentData, id);
+          yamlEditor.value = yaml;
+          yamlDerived.value = yaml;
+        }
+      });
+
+      autoCorrectBtn.addEventListener('click', () => {
+        const text = h4ksEditor.value;
+        const data = h4ksToData(text);
+        let changed = false;
+        if (!data.header) {
+          h4ksEditor.value = 'header: Welcome to H4KS\n' + h4ksEditor.value;
+          changed = true;
+        }
+        if (!data.paragraph) {
+          h4ksEditor.value = h4ksEditor.value + (h4ksEditor.value.endsWith('\n') ? '' : '\n') + 'paragraph: This is auto-corrected to guide you.';
+          changed = true;
+        }
+        if (!data.list) {
+          h4ksEditor.value = h4ksEditor.value + '\\nlist:\\n- Item 1\\n- Item 2';
+          changed = true;
+        }
+        if (changed) {
+          updateLiveFromH4KS();
+          validationPanel.textContent = 'Auto-correct applied.';
+          setTimeout(() => { validationPanel.textContent = ''; }, 1500);
+        }
+      });
+
+      exportBtn.addEventListener('click', () => {
+        const payload = {
+          scene: currentScene.id,
+          h4ks: h4ksToData(h4ksEditor.value)
+        };
+        navigator.clipboard.writeText(JSON.stringify(payload, null, 2)).then(() => {
+          validationPanel.textContent = 'JSON copied to clipboard.';
+          setTimeout(() => { validationPanel.textContent = ''; }, 1500);
+        }).catch(() => {
+          validationPanel.textContent = 'Copy failed. JSON in clipboard by default.';
+        });
+      });
+
+      exportJsonBtn.addEventListener('click', () => {
+        const payload = {
+          scene: currentScene.id,
+          h4ks: h4ksToData(h4ksEditor.value)
+        };
+        alert('Exported JSON:\\n' + JSON.stringify(payload, null, 2));
+      });
+
+      importJsonBtn.addEventListener('click', () => {
+        const text = prompt('Paste JSON to import state:');
+        if (!text) return;
+        try {
+          const obj = JSON.parse(text);
+          if (obj && obj.scene && obj.h4ks) {
+            applyScene(obj.scene);
+            const rebuilt = buildH4KSFromData(obj.h4ks);
+            h4ksEditor.value = rebuilt;
+            updateLiveFromH4KS();
+            validationPanel.textContent = 'Imported JSON successfully.';
+            setTimeout(() => { validationPanel.textContent = ''; }, 1500);
+          } else {
+            throw new Error('Invalid structure');
+          }
+        } catch (e) {
+          alert('Invalid JSON: ' + e.message);
+        }
+      });
+
+      resetViewBtn.addEventListener('click', () => {
+        h4ksEditor.value = INITIAL_H4KS;
+        applyScene('dawn');
+        updateLiveFromH4KS();
+        validationPanel.textContent = 'Reset to defaults.';
+        setTimeout(() => { validationPanel.textContent = ''; }, 1500);
+      });
+
+      // Advanced UI: animation toggle and speed
+      animToggle.addEventListener('change', () => {
+        particlesEnabled = animToggle.checked;
+        if (particlesEnabled) requestAnimationFrame(loop);
+      });
+      speedSlider.addEventListener('input', () => {
+        const v = parseFloat(speedSlider.value);
+        animationSpeed = clamp(v, 0.2, 2);
+      });
+
+      // Resize canvas
+      window.addEventListener('resize', () => {
+        resizeCanvas();
+        // redraw once
+        drawParticles();
+      });
+
+      initParticles();
+      resizeCanvas();
+      requestAnimationFrame(loop);
+
+      // Initialize after DOM ready
+      updateLiveFromH4KS();
+      applyScene('dawn');
+    }
+
+    // Helpers for JSON export/import
+    function buildH4KSFromData(h4ksObj) {
+      // h4ksObj is { header, paragraph, list, image }
+      const lines = [];
+      if (h4ksObj.header) lines.push(`header: ${h4ksObj.header}`);
+      if (h4ksObj.paragraph) lines.push(`paragraph: ${h4ksObj.paragraph}`);
+      if (h4ksObj.list && h4ksObj.list.length) {
+        lines.push('list:');
+        h4ksObj.list.forEach(it => lines.push(`- ${it}`));
+      }
+      if (h4ksObj.image && h4ksObj.image.src) {
+        const alt = h4ksObj.image.alt ? h4ksObj.image.alt : '';
+        lines.push(`image: ${h4ksObj.image.src} | ${alt}`);
+      }
+      return lines.join('\\n');
+    }
+
+    // Init on load
+    init();
+
+  </script>
+</body>
+</html>
