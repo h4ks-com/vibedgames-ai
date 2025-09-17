@@ -1,0 +1,866 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Zoerhoff: Neon Runner</title>
+  <style>
+    :root {
+      --bg: #0a0b1a;
+      --panel: rgba(15, 23, 42, 0.75);
+      --card: #111222;
+      --text: #e7eaf6;
+      --muted: #a5b4d2;
+      --accent: #7c3aed;
+      --accent2: #22d3ee;
+      --green: #10b981;
+      --shadow: 0 10px 25px rgba(0,0,0,.25);
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+      color: var(--text);
+      background: radial-gradient(circle at 20% -10%, rgba(124,58,237,.25), transparent 40%),
+                  radial-gradient(circle at 100% 0%, rgba(2,132,199,.25), transparent 40%),
+                  linear-gradient(135deg, #0b0f1a 0%, #0a0b1a 100%);
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      overflow: hidden;
+    }
+    header {
+      padding: 16px 20px;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      backdrop-filter: blur(6px);
+      background: rgba(10,12,26,.75);
+      z-index: 5;
+    }
+    header h1 {
+      margin: 0;
+      font-size: clamp(1.2rem, 2vw + 1rem, 2rem);
+      letter-spacing: .4px;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+    }
+    header .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .brand .dot {
+      width: 12px; height: 12px; border-radius: 50%;
+      background: conic-gradient(from 180deg at 50% 50%, #22d3ee, #7c3aed, #22d3ee);
+      box-shadow: 0 0 12px #22d3ee;
+      animation: spin 4s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    main {
+      display: grid;
+      place-items: center;
+      padding: 16px;
+      position: relative;
+    }
+
+    /* Game Card */
+    #gameCard {
+      width: min(1080px, 92vw);
+      aspect-ratio: 16 / 9;
+      border-radius: 18px;
+      overflow: hidden;
+      position: relative;
+      box-shadow: var(--shadow);
+      background: radial-gradient(circle at 60% 0%, rgba(124, 58, 237,.2), transparent 40%),
+                  linear-gradient(135deg, rgba(2,6,23,.9), rgba(2,6,23,.6));
+      border: 1px solid rgba(255,255,255,.08);
+      display: grid;
+      grid-template-columns: 1fr auto;
+    }
+
+    /* Canvas */
+    #gameCanvas {
+      width: 100%; height: 100%;
+      display: block;
+      background: linear-gradient(#0a0f1a, #0a0f1a);
+    }
+
+    /* HUD overlay */
+    .hud {
+      position: absolute; top: 10px; left: 10px;
+      display: flex; gap: 10px; align-items: center;
+      z-index: 2;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(0,0,0,.25);
+      border: 1px solid rgba(255,255,255,.15);
+      backdrop-filter: blur(2px);
+      font-family: ui-monospace,SFMono-Regular,Monaco,Consolas,monospace;
+      color: #e8eaf6;
+      user-select: none;
+    }
+    .badge { padding: 4px 10px; border-radius: 999px; background: rgba(124,58,237,.25); border:1px solid rgba(124,58,237,.6); }
+    .hud .sep { width:1px; height: 20px; background: rgba(255,255,255,.25); margin: 0 6px; }
+
+    /* Side panel (settings) */
+    #settingsPanel {
+      width: 320px;
+      padding: 16px;
+      background: var(--panel);
+      color: var(--text);
+      border-left: 1px solid rgba(255,255,255,.08);
+      height: 100%;
+      overflow: auto;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+    #settingsPanel h3 { margin: 0 0 6px 0; font-size: 1.05rem; }
+    .setting { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; padding: 6px 0; border-bottom: 1px dashed rgba(255,255,255,.12); }
+    .setting:last-child { border-bottom: none; }
+    .setting label { font-size: .9rem; color: var(--muted); }
+    .row { display:flex; align-items:center; gap:6px; }
+    input[type="range"] { width: 100%;}
+    input[type="checkbox"] { width: 18px; height: 18px; }
+
+    /* Buttons */
+    .btn {
+      padding: 10px 14px; border-radius: 10px; border: 0;
+      background: #1e40af; color: white; cursor: pointer;
+      font-weight: 600;
+      box-shadow: 0 4px 0 rgba(0,0,0,.2);
+    }
+    .btn.secondary { background: #374151; color: #e5e7eb; }
+    .btn.ghost { background: transparent; border: 1px solid rgba(255,255,255,.25); color: #fff; }
+    .btn:active { transform: translateY(1px); }
+
+    /* Start overlay */
+    #startOverlay {
+      position: absolute; inset: 0;
+      display: grid; place-items: center;
+      background: rgba(0,0,0,.45);
+      z-index: 4;
+      text-align: center;
+      padding: 20px;
+    }
+    #startOverlay .card {
+      padding: 28px; border-radius: 14px; background: rgba(2,6,23,.92);
+      border: 1px solid rgba(255,255,255,.15);
+      max-width: 420px; width: 90%;
+      box-shadow: 0 20px 60px rgba(0,0,0,.5);
+    }
+    #startOverlay h2 { margin: 0 0 10px 0; font-size: 1.4rem; }
+    #startOverlay p { margin: 0 0 14px 0; color: #cbd5e1; }
+    #startOverlay .cta { display:flex; gap:10px; justify-content: center; }
+
+    /* Parallax background stars (behind canvas) for depth */
+    #starsLayer {
+      position: absolute; left:0; right:0; top:0; bottom:0;
+      pointer-events: none; z-index: 0;
+    }
+
+    /* Footer */
+    footer {
+      padding: 8px 12px;
+      text-align: center;
+      font-size: 0.85rem;
+      color: var(--muted);
+      border-top: 1px solid rgba(255,255,255,.08);
+      background: rgba(2,6,23,.65);
+    }
+
+    /* Responsive tweaks */
+    @media (max-width: 900px) {
+      #settingsPanel { display: none; }
+      #gameCard { width: 100%; height: auto; aspect-ratio: 16 / 9; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      * { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <header aria-label="Zoerhoff site header">
+    <div class="brand">
+      <span class="dot" aria-hidden="true"></span>
+      <h1>Zoerhoff Neon Runner</h1>
+    </div>
+    <div class="row" style="gap:8px;">
+      <button id="btnSettings" class="btn ghost" title="Settings">Settings</button>
+      <button id="btnPause" class="btn" title="Pause/Resume">Pause</button>
+    </div>
+  </header>
+
+  <main aria-label="Game area">
+    <div id="gameCard" role="region" aria-label="Game canvas container">
+      <canvas id="gameCanvas"></canvas>
+
+      <div id="starsLayer" aria-hidden="true"></div>
+
+      <div class="hud" id="hud" title="Score, Level, Lives">
+        <span>Score: <strong id="scoreVal">0</strong></span>
+        <span class="sep"></span>
+        <span>Level: <strong id="levelVal">1</strong></span>
+        <span class="sep"></span>
+        <span>Lives: <strong id="livesVal">3</strong></span>
+      </div>
+
+      <div id="startOverlay" aria-label="Start Screen" style="display:block;">
+        <div class="card">
+          <h2>Welcome to Zoerhoff Neon Runner</h2>
+          <p>A tiny browser game concept: collect runes, dodge neon sprites, and master the trails.</p>
+          <div class="cta" style="margin-top:12px;">
+            <button id="btnStart" class="btn" style="min-width:110px;">Start Game</button>
+            <button id="btnReset" class="btn secondary" style="min-width:110px;">Reset</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <aside id="settingsPanel" aria-label="Game Advanced Settings" style="display:flex;">
+      <div class="card" style="flex:1; padding: 8px 12px 0 12px;">
+        <h3 style="margin:6px 0 8px 0; text-align:left;">Advanced Options</h3>
+        <div class="setting">
+          <label for="difficulty">Difficulty</label>
+          <select id="difficulty" aria-label="Difficulty" style="background:#111; color:#fff; border:1px solid rgba(255,255,255,.25); border-radius:6px; padding:6px;">
+            <option value="easy">Easy</option>
+            <option value="normal" selected>Normal</option>
+            <option value="hard">Hard</option>
+          </select>
+        </div>
+        <div class="setting">
+          <label for="speedMul">Speed Multiplier</label>
+          <div class="row" style="min-width: 120px;">
+            <input type="range" id="speedMul" min="0.5" max="2" step="0.05" value="1" />
+            <span id="speedMulVal" style="min-width:40px; text-align:right;">1.00x</span>
+          </div>
+        </div>
+        <div class="setting">
+          <label for="spawnRate">Spawn Rate</label>
+          <div class="row" style="min-width: 120px;">
+            <input type="range" id="spawnRate" min="0.5" max="2" step="0.05" value="1" />
+            <span id="spawnRateVal" style="min-width:40px; text-align:right;">1.00x</span>
+          </div>
+        </div>
+        <div class="setting">
+          <label for="particles">Particles</label>
+          <input type="checkbox" id="particles" checked />
+        </div>
+        <div class="setting">
+          <label for="trails">Trails</label>
+          <input type="checkbox" id="trails" checked />
+        </div>
+        <div class="setting">
+          <label for="sound">Sound</label>
+          <input type="checkbox" id="sound" checked />
+        </div>
+        <div class="setting" style="padding-bottom:10px;">
+          <label>Display</label>
+          <button id="btnFullscreen" class="btn ghost" style="font-weight:600;">Fullscreen</button>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <footer aria-label="Footer">
+    <span>© 2025 Zoerhoff Neon Runner • Built as a tiny, self-contained browser game.</span>
+  </footer>
+
+  <script>
+    // Core game state and utilities
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const startOverlay = document.getElementById('startOverlay');
+    const scoreVal = document.getElementById('scoreVal');
+    const levelVal = document.getElementById('levelVal');
+    const livesVal = document.getElementById('livesVal');
+    const btnStart = document.getElementById('btnStart');
+    const btnReset = document.getElementById('btnReset');
+    const btnSettings = document.getElementById('btnSettings');
+    const btnPause = document.getElementById('btnPause');
+    const settingsPanel = document.getElementById('settingsPanel');
+    const difficultySel = document.getElementById('difficulty');
+    const speedRange = document.getElementById('speedMul');
+    const speedVal = document.getElementById('speedMulVal');
+    const spawnRange = document.getElementById('spawnRate');
+    const spawnVal = document.getElementById('spawnRateVal');
+    const particlesChk = document.getElementById('particles');
+    const trailsChk = document.getElementById('trails');
+    const soundChk = document.getElementById('sound');
+    const fullscreenBtn = document.getElementById('btnFullscreen');
+    let isRunning = false;
+    let isPaused = false;
+
+    // World settings
+    const WORLD_W = 40;
+    const WORLD_H = 22;
+    let cellSize = 20;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    // Difficulty presets
+    const DIFF = {
+      easy: { enemySpeed: 0.9, spawnBase: 0.45, coinpts: 15 },
+      normal: { enemySpeed: 1.25, spawnBase: 0.75, coinpts: 10 },
+      hard: { enemySpeed: 1.6, spawnBase: 1.15, coinpts: 8 }
+    };
+
+    // Game objects
+    let player = { x: WORLD_W / 2, y: WORLD_H / 2, vx: 0, vy: 0, radius: 0.9, color: '#7c3aed' };
+    let coins = [];
+    let enemies = [];
+    let particles = [];
+    let trail = [];
+
+    // Input
+    const keys = {};
+    window.addEventListener('keydown', (e) => { keys[e.key.toLowerCase()] = true; });
+    window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+
+    // UI
+    let score = 0;
+    let level = 1;
+    let lives = 3;
+    let highScore = 0;
+    let speedMul = 1;
+    let spawnRateMul = 1;
+    let showParticles = true;
+    let showTrails = true;
+    let showSound = true;
+
+    // Audio (Web Audio API)
+    const audioCtx = window.AudioContext ? new (window.AudioContext)() : null;
+    function playTone(freq, duration = 0.08, type = 'sine', vol = 0.2) {
+      if (!audioCtx || !showSound) return;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = type;
+      osc.frequency.value = freq;
+      gain.gain.value = vol;
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + duration);
+    }
+
+    // Stars layer (parallax background)
+    const stars = [];
+    function initStars(n = 60) {
+      stars.length = 0;
+      for (let i = 0; i < n; i++) {
+        stars.push({
+          x: Math.random() * WORLD_W,
+          y: Math.random() * WORLD_H,
+          z: Math.random() * 0.8 + 0.2  // depth factor
+        });
+      }
+    }
+
+    // Resize canvas to fit container and compute scaling
+    function resize() {
+      const parent = document.getElementById('gameCard');
+      const w = parent.clientWidth;
+      const h = parent.clientHeight;
+      canvas.width = w;
+      canvas.height = h;
+      // World to pixels
+      const scaleX = w / WORLD_W;
+      const scaleY = h / WORLD_H;
+      cellSize = Math.min(scaleX, scaleY);
+      offsetX = (w - WORLD_W * cellSize) / 2;
+      offsetY = (h - WORLD_H * cellSize) / 2;
+    }
+    window.addEventListener('resize', resize);
+
+    // World helpers
+    function worldToScreen(x, y) {
+      return {
+        x: offsetX + x * cellSize,
+        y: offsetY + y * cellSize
+      };
+    }
+
+    function spawnCoin() {
+      // spawn in a random free cell
+      let tries = 0;
+      while (tries < 50) {
+        const cx = Math.floor(Math.random() * WORLD_W);
+        const cy = Math.floor(Math.random() * WORLD_H);
+        // Avoid too close to player
+        if (Math.hypot(player.x - cx, player.y - cy) > 3) {
+          coins.push({ x: cx + 0.5, y: cy + 0.5, collected: false });
+          return;
+        }
+        tries++;
+      }
+    }
+
+    function spawnEnemy() {
+      // spawn on edges
+      const side = Math.floor(Math.random() * 4);
+      let x, y;
+      if (side === 0) { x = 0; y = Math.random() * WORLD_H; }
+      else if (side === 1) { x = WORLD_W; y = Math.random() * WORLD_H; }
+      else if (side === 2) { x = Math.random() * WORLD_W; y = 0; }
+      else { x = Math.random() * WORLD_W; y = WORLD_H; }
+      enemies.push({ x, y, vx: 0, vy: 0, radius: 0.8, color: '#ff3b3b' });
+    }
+
+    function resetGame() {
+      score = 0;
+      level = 1;
+      lives = 3;
+      coins = [];
+      enemies = [];
+      particles = [];
+      trail = [];
+      player.x = WORLD_W / 2;
+      player.y = WORLD_H / 2;
+      spawnCoin();
+      spawnCoin();
+      // spawn some enemies
+      for (let i = 0; i < 2; i++) spawnEnemy();
+    }
+
+    // Init
+    function init() {
+      // load high score
+      const hs = localStorage.getItem('zoerhoff_high');
+      if (hs) highScore = parseInt(hs, 10) || 0;
+      // apply initial UI
+      resize();
+      initStars();
+      // initial settings
+      speedMul = 1;
+      speedRange.value = 1;
+      speedVal.textContent = "1.00x";
+      spawnRateMulUpdate();
+      // set up event handlers
+      btnStart.addEventListener('click', startGame);
+      btnSettings.addEventListener('click', toggleSettings);
+      btnPause.addEventListener('click', togglePause);
+      btnReset.addEventListener('click', () => { resetGame(); startGame(); });
+      fullscreenBtn.addEventListener('click', () => {
+        if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+      });
+      speedRange.addEventListener('input', () => {
+        speedMul = parseFloat(speedRange.value);
+        speedVal.textContent = speedMul.toFixed(2) + "x";
+      });
+      spawnRange.addEventListener('input', () => {
+        spawnRateMul = parseFloat(spawnRange.value);
+        spawnVal.textContent = spawnRateMul.toFixed(2) + "x";
+      });
+      particlesChk.addEventListener('change', () => { showParticles = particlesChk.checked; });
+      trailsChk.addEventListener('change', () => { showTrails = trailsChk.checked; });
+      soundChk.addEventListener('change', () => { showSound = soundChk.checked; });
+      // keyboard hints
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) isPaused = true;
+      });
+
+      // start idle
+      resetGame();
+      updateHUD();
+    }
+
+    function spawnLogic(dt) {
+      // spawn coins with rate depending on difficulty
+      const base = DIFF[difficultySel.value] || DIFF.normal;
+      // coin cadence inversely proportional to level
+      if (Math.random() < (0.5 * dt) * (1.0 / (level * 0.25 + 0.25))) {
+        spawnCoin();
+      }
+      // enemies spawn over time
+      if (Math.random() < (dt * base.spawnBase * spawnRateMul)) {
+        if (enemies.length < 6) spawnEnemy();
+      }
+    }
+
+    function updateHUD() {
+      scoreVal.textContent = score;
+      levelVal.textContent = level;
+      livesVal.textContent = lives;
+      if (score > highScore) {
+        highScore = score;
+        localStorage.setItem('zoerhoff_high', highScore);
+      }
+    }
+
+    // Main loop
+    let last = performance.now();
+    let shake = 0;
+    function loop(now) {
+      const dt = Math.min(0.033, (now - last) / 1000);
+      last = now;
+
+      if (isRunning && !isPaused) {
+        // Update
+        update(dt);
+        // Draw
+        draw(dt);
+        // Score tick (optional passive progress)
+      }
+
+      requestAnimationFrame(loop);
+    }
+
+    function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+
+    function update(dt) {
+      // Inputs -> velocity
+      const moveSpeed = 5.0 * speedMul;
+      let vx = 0, vy = 0;
+      if (keys['arrowleft'] || keys['a']) vx -= 1;
+      if (keys['arrowright'] || keys['d']) vx += 1;
+      if (keys['arrowup'] || keys['w']) vy -= 1;
+      if (keys['arrowdown'] || keys['s']) vy += 1;
+
+      // normalize
+      const mag = Math.hypot(vx, vy) || 1;
+      vx = (vx / mag) * moveSpeed;
+      vy = (vy / mag) * moveSpeed;
+
+      // apply
+      player.vx = vx;
+      player.vy = vy;
+
+      // trail
+      if (showTrails) {
+        trail.push({ x: player.x, y: player.y, life: 0.6 });
+        if (trail.length > 40) trail.shift();
+      }
+
+      // move player
+      player.x += player.vx * dt;
+      player.y += player.vy * dt;
+
+      // clamp to world
+      player.x = clamp(player.x, 0.5, WORLD_W - 0.5);
+      player.y = clamp(player.y, 0.5, WORLD_H - 0.5);
+
+      // collisions with coins
+      for (let i = coins.length - 1; i >= 0; i--) {
+        const c = coins[i];
+        if (Math.hypot(player.x - c.x, player.y - c.y) < player.radius + 0.4) {
+          coins.splice(i, 1);
+          const pts = DIFF[difficultySel.value].coinpts;
+          score += pts;
+          // particle burst
+          burst(player.x, player.y, 12, '#ffd166', 0.9);
+          if (showSound) playTone(440, 0.08, 'sine', 0.25);
+          // level up
+          if (score > 0 && score % 200 === 0) {
+            level++;
+            burst(player.x, player.y, 20, '#8b5cf6', 1.0);
+          }
+          updateHUD();
+        }
+      }
+
+      // collisions with enemies
+      for (let i = enemies.length - 1; i >= 0; i--) {
+        const e = enemies[i];
+        // chase player
+        const dx = player.x - e.x;
+        const dy = player.y - e.y;
+        const dist = Math.hypot(dx, dy) || 1;
+        const speed = DIFF[difficultySel.value].enemySpeed * speedMul;
+        e.vx = (dx / dist) * speed;
+        e.vy = (dy / dist) * speed;
+        e.x += e.vx * dt;
+        e.y += e.vy * dt;
+
+        // collision
+        if (Math.hypot(player.x - e.x, player.y - e.y) < player.radius + e.radius) {
+          // hit
+          lives--;
+          updateHUD();
+          burst(player.x, player.y, 18, '#f87171', 0.9);
+          if (showSound) playTone(180, 0.12, 'triangle', 0.25);
+          // knockback
+          player.x = WORLD_W / 2;
+          player.y = WORLD_H / 2;
+          shake = 6;
+          if (lives <= 0) {
+            endGame();
+            return;
+          }
+          // remove enemy
+          enemies.splice(i, 1);
+        }
+      }
+
+      // spawn logic
+      spawnLogic(dt);
+
+      // stage shake
+      if (shake > 0) shake -= dt * 20;
+    }
+
+    function burst(x, y, count, color, scale = 1) {
+      for (let i = 0; i < count; i++) {
+        const ang = Math.random() * Math.PI * 2;
+        const s = Math.random() * 0.9 + 0.2;
+        particles.push({
+          x, y, vx: Math.cos(ang) * s * 6, vy: Math.sin(ang) * s * 6,
+          life: Math.random() * 0.6 + 0.4,
+          color
+        });
+      }
+    }
+
+    function endGame() {
+      isRunning = false;
+      startOverlay.style.display = 'flex';
+      // small pulse to indicate end
+      burst(player.x, player.y, 24, '#f472b6', 1.0);
+    }
+
+    function resetForNextRun() {
+      coins = [];
+      enemies = [];
+      particles = [];
+      trail = [];
+      player.x = WORLD_W / 2;
+      player.y = WORLD_H / 2;
+      spawnCoin();
+      spawnCoin();
+      for (let i = 0; i < Math.min(3, level); i++) spawnEnemy();
+      updateHUD();
+    }
+
+    function startGame() {
+      startOverlay.style.display = 'none';
+      isRunning = true;
+      isPaused = false;
+      resetForNextRun();
+      // resume audio context on user gesture
+      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+      // small sound feedback
+      if (showSound) playTone(880, 0.1, 'square', 0.25);
+      // start loop if not already
+      requestAnimationFrame(loop);
+    }
+
+    function toggleSettings() {
+      const isOpen = settingsPanel.style.display === 'flex';
+      settingsPanel.style.display = isOpen ? 'none' : 'flex';
+    }
+
+    function togglePause() {
+      isPaused = !isPaused;
+      btnPause.textContent = isPaused ? 'Resume' : 'Pause';
+      if (!isPaused && isRunning) {
+        // resume loop by fast-forwarding last timestamp
+        last = performance.now();
+      }
+    }
+
+    function spawnStarsIfNeeded() {
+      // simply keep stars moving (no heavy logic)
+      for (let s of stars) {
+        s.x -= 0.1 * s.z;
+        if (s.x < 0) s.x += WORLD_W;
+      }
+    }
+
+    function draw(dt) {
+      // Clear
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // world background glow
+      const glow = 0.25 + Math.sin(performance.now() / 1000) * 0.05;
+      ctx.fillStyle = `rgba(10,14,26,${0.9 * glow})`;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // parallax stars behind grid
+      if (showParticles) {
+        for (let s of stars) {
+          const px = offsetX + s.x * cellSize;
+          const py = offsetY + s.y * cellSize;
+          ctx.fillStyle = 'rgba(255,255,255,0.7)';
+          ctx.fillRect(px, py, Math.max(1, s.z * 2), Math.max(1, s.z * 2));
+        }
+      }
+
+      // Apply shake
+      ctx.save();
+      if (shake > 0) {
+        const sh = shake;
+        ctx.translate((Math.random() - 0.5) * sh, (Math.random() - 0.5) * sh);
+      }
+
+      // Draw grid (optional)
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = 'rgba(255,255,255,.08)';
+      for (let i = 0; i <= WORLD_W; i++) {
+        const x = offsetX + i * cellSize;
+        ctx.beginPath();
+        ctx.moveTo(x, offsetY);
+        ctx.lineTo(x, offsetY + WORLD_H * cellSize);
+        ctx.stroke();
+      }
+      for (let j = 0; j <= WORLD_H; j++) {
+        const y = offsetY + j * cellSize;
+        ctx.beginPath();
+        ctx.moveTo(offsetX, y);
+        ctx.lineTo(offsetX + WORLD_W * cellSize, y);
+        ctx.stroke();
+      }
+
+      // Draw coins
+      for (const c of coins) {
+        const p = worldToScreen(c.x, c.y);
+        const r = Math.max(2, cellSize * 0.28);
+        ctx.save();
+        // glow
+        ctx.fillStyle = '#ffd700';
+        ctx.shadowColor = '#ffd700';
+        ctx.shadowBlur = 6;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+        // star polygon
+        ctx.fillStyle = '#fff';
+        star(ctx, p.x, p.y, r * 0.8, 5, 0.6);
+      }
+
+      // Draw enemies
+      for (const e of enemies) {
+        const p = worldToScreen(e.x, e.y);
+        ctx.fillStyle = e.color;
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, Math.max(6, cellSize * 0.8), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        // eyes
+        ctx.fillStyle = '#000';
+        ctx.beginPath();
+        ctx.arc(p.x - 4, p.y - 2, 1.4, 0, Math.PI * 2);
+        ctx.arc(p.x + 4, p.y - 2, 1.4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Draw player with glow/trail
+      const pScreen = worldToScreen(player.x, player.y);
+      if (showTrails) {
+        for (let t of trail) {
+          const ts = worldToScreen(t.x, t.y);
+          const a = t.life;
+          ctx.fillStyle = `rgba(124,58,237, ${0.25 * a})`;
+          ctx.beginPath();
+          ctx.arc(ts.x, ts.y, Math.max(2, cellSize * 0.6), 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      // Player
+      ctx.save();
+      ctx.shadowColor = '#7c3aed';
+      ctx.shadowBlur = 12;
+      ctx.fillStyle = player.color;
+      ctx.beginPath();
+      ctx.arc(pScreen.x, pScreen.y, Math.max(8, cellSize * player.radius), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      // Trail afterimages
+      ctx.save();
+      ctx.globalAlpha = 0.2;
+      ctx.fillStyle = '#22d3ee';
+      for (let i = 0; i < 6; i++) {
+        const t = 1 - i / 6;
+        const trx = pScreen.x - i * (player.vx * dt * 2);
+        const try_ = pScreen.y - i * (player.vy * dt * 2);
+        ctx.beginPath();
+        ctx.arc(trx, try_, Math.max(2, cellSize * 0.6 * t), 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+
+      ctx.restore();
+
+      // Particles
+      if (showParticles) {
+        for (let i = particles.length - 1; i >= 0; i--) {
+          const par = particles[i];
+          par.x += par.vx * dt;
+          par.y += par.vy * dt;
+          par.life -= dt;
+          if (par.life <= 0) {
+            particles.splice(i, 1);
+            continue;
+          }
+          ctx.fillStyle = par.color;
+          ctx.globalAlpha = Math.max(0, par.life);
+          ctx.beginPath();
+          ctx.arc(worldToScreen(par.x, par.y).x, worldToScreen(par.x, par.y).y, Math.max(1, cellSize * 0.25 * par.life), 0, Math.PI * 2);
+          ctx.fill();
+          ctx.globalAlpha = 1;
+        }
+      }
+
+      // UI overlay (score) drawn on top
+      ctx.save();
+      ctx.fillStyle = 'rgba(0,0,0,.25)';
+      ctx.fillRect(offsetX, offsetY + WORLD_H * cellSize - 26, WORLD_W * cellSize, 26);
+      ctx.fillStyle = 'white';
+      ctx.font = `${Math.max(12, cellSize * 0.8)}px monospace`;
+      ctx.fillText(`Score ${score}  Level ${level}  Lives ${lives}`, offsetX + 8, offsetY + WORLD_H * cellSize - 8);
+      ctx.restore();
+    }
+
+    // Star drawing helper (five-point)
+    function star(ctx, cx, cy, r, p, rotor) {
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(rotor);
+      ctx.beginPath();
+      for (let i = 0; i < p * 2; i++) {
+        const ang = (i * Math.PI) / p;
+        const rad = (i % 2 === 0) ? r : r * 0.4;
+        const x = Math.cos(ang) * rad;
+        const y = Math.sin(ang) * rad;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Initialize
+    function spawnInitial() {
+      coins = [];
+      enemies = [];
+      for (let i = 0; i < 5; i++) spawnCoin();
+      for (let i = 0; i < 2; i++) spawnEnemy();
+    }
+
+    // Helpers for spawn rate label
+    function spawnRateMulUpdate() {
+      spawnRateMul = 1;
+      spawnVal.textContent = spawnRateMul.toFixed(2) + "x";
+    }
+
+    // Start
+    init();
+    // Expose start state
+    // Start loop host
+    window.addEventListener('load', () => {
+      resize();
+      // show overlay until user starts
+      // ensure audio context is resumed on first interaction
+    });
+  </script>
+</body>
+</html>
