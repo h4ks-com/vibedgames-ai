@@ -1,19 +1,961 @@
 <!DOCTYPE html>
-<html lang=\"en\">
+<html lang="en">
 <head>
-  <meta charset=\"UTF-8\" />
+  <meta charset="UTF-8" />
   <title>Neon City Heist — Expanded</title>
-  <link rel=\"stylesheet\" href=\"style.css\" />
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: #000;
+      overflow: hidden;
+      font-family: Inter, Arial, Helvetica, sans-serif;
+      color: #fff;
+    }
+    #gameCanvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      background: #0a0a0a;
+    }
+    .hud {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      padding: 8px 12px;
+      background: rgba(0,0,0,0.6);
+      border: 1px solid rgba(255,255,255,0.25);
+      border-radius: 10px;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      z-index: 10;
+      font-size: 13px;
+      backdrop-filter: blur(4px);
+    }
+    .hud .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.15);
+    }
+    .panel {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      width: 360px;
+      max-height: calc(100vh - 16px);
+      overflow: auto;
+      padding: 12px;
+      background: rgba(0,0,0,0.6);
+      border: 1px solid rgba(255,255,255,0.25);
+      border-radius: 12px;
+      z-index: 9;
+    }
+    .panel h3 { margin: 6px 0 10px; font-size: 15px; }
+    .panel .row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.08); }
+    .panel label { display: inline-flex; align-items: center; gap: 8px; }
+    .btn {
+      background: #1e1e1e;
+      color: #fff;
+      border: 1px solid #555;
+      padding: 8px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .btn:hover { background: #333; }
+    .tool {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 8px;
+      border-radius: 6px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.15);
+    }
+    #overlay {
+      position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+      width: 520px;
+      max-width: calc(100vw - 40px);
+      background: rgba(15,15,25,0.95);
+      border: 1px solid rgba(255,255,255,0.25);
+      border-radius: 12px;
+      padding: 14px;
+      display: none;
+      z-index: 20;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+    }
+    #overlay h2 { margin: 6px 0 8px; font-size: 18px; }
+    #overlay .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0; }
+    #overlay .grid .toolbox { display: flex; align-items: center; gap: 8px; }
+    #overlay .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+    .badge { padding: 4px 8px; border-radius: 999px; background: rgba(255,255,255,0.1); font-size: 12px; }
+    .toast {
+      position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%);
+      background: rgba(0,0,0,0.75); padding: 10px 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.25);
+      z-index: 30;
+      font-size: 14px;
+      display: none;
+      pointer-events: none;
+    }
+    canvas { image-rendering: pixelated; }
+    .hidden { display: none; }
+    /* Settings panel is separate for advanced options in HUD */
+    #settingsPanel {
+      position: absolute;
+      bottom: 12px;
+      right: 12px;
+      width: 360px;
+      max-height: calc(100vh - 24px);
+      overflow: auto;
+      padding: 12px;
+      background: rgba(0,0,0,0.7);
+      border: 1px solid rgba(255,255,255,0.25);
+      border-radius: 10px;
+      z-index: 11;
+      display: none;
+    }
+    #settingsPanel h3 { margin: 6px 0 10px; font-size: 15px; }
+    #settingsPanel .row { display:flex; justify-content: space-between; align-items: center; padding:6px 0; border-bottom:1px solid rgba(255,255,255,0.08); }
+    input[type="checkbox"] { transform: scale(1.1); }
+    input[type="range"] { width: 120px; }
+    .pulse {
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0% { filter: brightness(1); }
+      50% { filter: brightness(1.25); }
+      100% { filter: brightness(1); }
+    }
+  </style>
 </head>
 <body>
-  <canvas id=\"gameCanvas\"></canvas>
-  <div id=\"overlayStart\" class=\"overlay\">
-    <div class=\"panel\">
-      <h2>Neon City Heist</h2>
-      <p>Click Start to begin. Music will start after opening the game.</p>
-      <button id=\"btnStart\" class=\"btn\">Start Game</button>
+  <canvas id="gameCanvas"></canvas>
+
+  <div class="hud" id="hud">
+    <div class="pill">Time: <span id="timeLabel">Day 1 12:00</span></div>
+    <div class="pill">Weather: <span id="weatherLabel">Clear</span></div>
+    <div class="pill">City Rep: <span id="repLabel">Neutral</span></div>
+    <div class="pill">Money: <span id="moneyLabel">$0</span></div>
+    <div class="pill">XP: <span id="xpLabel">0</span></div>
+    <button class="btn" id="btnSettings" title="Advanced options">Settings</button>
+  </div>
+
+  <div class="panel" id="leftPanel">
+    <h3>Character & Vehicle</h3>
+    <div class="row">
+      <span>Character</span>
+      <button class="btn" id="btnCustomizeChar">Customize</button>
+    </div>
+    <div class="row">
+      <span>Vehicle</span>
+      <button class="btn" id="btnCustomizeVeh">Customize</button>
+    </div>
+    <div class="row">
+      <span>Mission</span>
+      <button class="btn" id="btnPlanMission">Plan Heist</button>
+    </div>
+    <div class="row">
+      <span>Diplomacy</span>
+      <button class="btn" id="btnDiplomacy">Factions</button>
+    </div>
+    <div class="row">
+      <span>Mode</span>
+      <select id="modeSelect" class="btn" style="padding:6px 8px;">
+        <option value="co-op">Co-op Local</option>
+        <option value="competitive">Competitive Local</option>
+      </select>
     </div>
   </div>
-  <script src=\"main.js\"></script>
+
+  <div class="panel" id="rightPanel">
+    <h3>Factions & Alliances</h3>
+    <div id="factionList"></div>
+  </div>
+
+  <div id="overlay" aria-label="Mission overlay" role="dialog">
+    <h2>Mission Planning</h2>
+    <div class="grid">
+      <div class="toolbox">
+        <label class="tool">
+          <span>Lockpick</span>
+          <input type="checkbox" id="toolLockpick" checked />
+        </label>
+        <label class="tool">
+          <span>Hacking Kit</span>
+          <input type="checkbox" id="toolHack" checked />
+        </label>
+      </div>
+      <div class="toolbox" style="justify-content:flex-end;">
+        <span>Stealth</span>
+        <input type="range" id="stealthSlider" min="0" max="100" value="60" />
+        <span id="stealthVal" class="badge">60</span>
+      </div>
+      <div class="toolbox" style="grid-column: span 2;">
+        <span>Loot Multiplier</span>
+        <span class="badge" id="lootMult">1.00x</span>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn" id="btnStartMission">Start Mission</button>
+      <button class="btn" id="btnCancelMission">Cancel</button>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <div id="settingsPanel" aria-label="Settings">
+    <h3>Advanced Settings</h3>
+    <div class="row">
+      <span>Particle Density</span>
+      <input type="range" id="settDensity" min="1" max="3" step="1" value="2" />
+    </div>
+    <div class="row">
+      <span>Camera Shake</span>
+      <input type="checkbox" id="settShake" checked />
+    </div>
+    <div class="row">
+      <span>Bloom Glow</span>
+      <input type="checkbox" id="settBloom" checked />
+    </div>
+    <div class="row">
+      <span>Shadows</span>
+      <input type="checkbox" id="settShadows" checked />
+    </div>
+    <div class="row">
+      <span>Music</span>
+      <input type="checkbox" id="settMusic" checked />
+    </div>
+  </div>
+
+  <script>
+/* Neon City Heist - Expanded Vanilla JS (single file) */
+
+// Utility
+class Vec2 { constructor(x=0,y=0){ this.x=x; this.y=y; } add(v){ this.x+=v.x; this.y+=v.y; return this; } sub(v){ this.x-=v.x; this.y-=v.y; return this; } mul(s){ this.x*=s; this.y*=s; return this; } len(){ return Math.hypot(this.x,this.y);} norm(){ const l=this.len()||1; this.x/=l; this.y/=l; return this; } clone(){ return new Vec2(this.x,this.y); } }
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const rand = (a,b)=> Math.random()*(b-a)+a;
+const lerp = (a,b,t)=> a+(b-a)*t;
+
+// Canvas setup
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+let DPR = Math.max(1, Math.min(2, window.devicePixelRatio||1));
+let W=0,H=0,VIEW_W=0,VIEW_H=0;
+function resize(){
+  DPR = Math.max(1, Math.min(2, window.devicePixelRatio||1));
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = Math.floor(W * DPR);
+  canvas.height = Math.floor(H * DPR);
+  canvas.style.width = W+'px';
+  canvas.style.height = H+'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  VIEW_W = W;
+  VIEW_H = H;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// World
+const WORLD_W = 4000;
+const WORLD_H = 4000;
+
+// Time & Weather
+let timeOfDay = 12; // 0-23
+let day = 1;
+let weather = 'Clear'; // Clear, Rain, Fog
+let weatherTimer = 0;
+let timeSpeed = 0.25; // hours per second
+
+function updateTime(dt){
+  timeOfDay += timeSpeed * dt;
+  if(timeOfDay >= 24){ timeOfDay -= 24; day += 1; }
+  // weather drift
+  weatherTimer += dt;
+  if(weatherTimer > 20){
+    const r = Math.random();
+    if(r < 0.3) weather = 'Rain';
+    else if(r < 0.6) weather = 'Fog';
+    else weather = 'Clear';
+    weatherTimer = 0;
+  }
+}
+function timeLabel(){
+  const h = Math.floor(timeOfDay);
+  const m = Math.floor((timeOfDay - h) * 60);
+  return `Day ${day} ${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+}
+
+// Factions
+class Faction {
+  constructor(name, color){
+    this.name = name;
+    this.color = color;
+    this.rep = 0; // -100..100
+  }
+}
+const factions = [
+  new Faction('Police', '#4aa0f4'),
+  new Faction('Corporates', '#9b59b6'),
+  new Faction('Gangs', '#e74c3c'),
+  new Faction('Tech Guild', '#2ecc71')
+];
+
+// UI hooks
+const hudTime = document.getElementById('timeLabel');
+const hudWeather = document.getElementById('weatherLabel');
+const hudRep = document.getElementById('repLabel');
+const hudMoney = document.getElementById('moneyLabel');
+const hudXP = document.getElementById('xpLabel');
+function updateHUD(){
+  hudTime.textContent = timeLabel();
+  hudWeather.textContent = weather;
+  hudRep.textContent = computeRep().toFixed(0);
+  hudMoney.textContent = '$' + money.toFixed(0);
+  hudXP.textContent = xp.toFixed(0);
+}
+function computeRep(){
+  let s=0;
+  factions.forEach(f=> s += f.rep);
+  return s / (factions.length || 1);
+}
+
+// Player & Vehicle
+class Vehicle {
+  constructor(color='#fff'){
+    this.color = color;
+    this.speed = 2.0;
+    this.accel = 0.07;
+    this.friction = 0.985;
+    this.angle = 0;
+    this.pos = new Vec2(0,0);
+    this.vel = new Vec2(0,0);
+    this.length = 40;
+    this.width = 18;
+  }
+}
+class Player {
+  constructor(id, x, y, color, controls){
+    this.id = id;
+    this.pos = new Vec2(x,y);
+    this.vel = new Vec2(0,0);
+    this.angle = 0;
+    this.color = color;
+    this.controls = controls; // {up,down,left,right,forward}
+    this.car = new Vehicle(color);
+    this.car.pos = this.pos.clone();
+    this.money = 0;
+    this.xp = 0;
+    this.level = 1;
+    this.inCar = true;
+    this.name = id===0? 'Nova' : 'Vapor';
+  }
+  update(dt, keys){
+    let accel = 0;
+    if(keys[this.controls.forward]) accel += this.car.accel;
+    if(keys[this.controls.backward]) accel -= this.car.accel*0.6;
+    let steer = 0;
+    if(keys[this.controls.left]) this.angle -= 0.04;
+    if(keys[this.controls.right]) this.angle += 0.04;
+    const fwdX = Math.cos(this.angle);
+    const fwdY = Math.sin(this.angle);
+    this.vel.x += fwdX * accel;
+    this.vel.y += fwdY * accel;
+    this.vel.x *= this.car.friction;
+    this.vel.y *= this.car.friction;
+    const maxSpeed = 5;
+    const sp = Math.hypot(this.vel.x, this.vel.y);
+    if(sp > maxSpeed){
+      this.vel.x = (this.vel.x / sp) * maxSpeed;
+      this.vel.y = (this.vel.y / sp) * maxSpeed;
+    }
+    this.pos.x += this.vel.x;
+    this.pos.y += this.vel.y;
+    this.pos.x = clamp(this.pos.x, 0, WORLD_W);
+    this.pos.y = clamp(this.pos.y, 0, WORLD_H);
+    this.car.pos = this.pos.clone();
+  }
+  draw(ctx, cam){
+    ctx.save();
+    ctx.translate(this.pos.x - cam.x, this.pos.y - cam.y);
+    ctx.rotate(this.angle);
+    // car body
+    ctx.fillStyle = this.color;
+    ctx.fillRect(-this.car.length/2, -this.car.width/2, this.car.length, this.car.width);
+    // headlights
+    ctx.fillStyle = '#ffd';
+    ctx.fillRect(this.car.length/2 - 6, -3, 6, 6);
+    // glow
+    ctx.shadowColor = this.color;
+    ctx.shadowBlur = 12;
+    ctx.fillStyle = this.color;
+    ctx.fillRect(-this.car.length/2, -this.car.width/2, 6, this.car.width);
+    ctx.restore();
+  }
+}
+
+// World rendering helpers
+function drawGrid(ctx, cam){
+  const gridSize = 200;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.lineWidth = 1;
+  for(let x=0; x<=WORLD_W; x+=gridSize){
+    ctx.beginPath();
+    ctx.moveTo(x - cam.x, 0 - cam.y);
+    ctx.lineTo(x - cam.x, WORLD_H - cam.y);
+    ctx.stroke();
+  }
+  for(let y=0; y<=WORLD_H; y+=gridSize){
+    ctx.beginPath();
+    ctx.moveTo(0 - cam.x, y - cam.y);
+    ctx.lineTo(WORLD_W - cam.x, y - cam.y);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+function drawBuildings(ctx, cam){
+  ctx.save();
+  for(let i=0;i<28;i++){
+    for(let j=0;j<28;j++){
+      const x = i*140;
+      const y = j*140;
+      const w = 80;
+      const h = 60;
+      const hue = (i*17 + j*23) % 360;
+      ctx.fillStyle = `hsl(${hue},40%,25%)`;
+      ctx.fillRect(x - cam.x, y - cam.y, w, h);
+      // windows
+      ctx.fillStyle = 'rgba(255,230,180,0.14)';
+      for(let wy=8; wy<h; wy+=14){
+        for(let wx=8; wx<w; wx+=14){
+          if(((i*7 + j*11 + wx + wy) % 3)===0) ctx.fillRect(x+wx - cam.x, y+wy - cam.y, 3,5);
+        }
+      }
+    }
+  }
+  ctx.restore();
+}
+
+// Particles & misc
+let money = 1800;
+let xp = 0;
+
+// Mission planning state
+let overlayVisible = false;
+let currentMission = null;
+let lootMult = 1.0;
+let particles = [];
+let sparks = [];
+let pulsingLights = [];
+
+// Crates
+let crates = [];
+function spawnCrates(){
+  crates = [];
+  for(let i=0;i<6;i++){
+    crates.push({ pos: new Vec2(rand(200, WORLD_W-200), rand(200, WORLD_H-200)), value: rand(100, 350), collected: false });
+  }
+}
+spawnCrates();
+
+// Input
+const keys = {};
+window.addEventListener('keydown', (e)=> {
+  keys[e.key.toLowerCase()] = true;
+  if(e.key.toLowerCase() === 'm'){ showOverlay(true); }
+  if(e.key === 'Escape'){ togglePause(); }
+});
+window.addEventListener('keyup', (e)=> { keys[e.key.toLowerCase()] = false; });
+
+// UI hooks
+const btnSettings = document.getElementById('btnSettings');
+const settingsPanel = document.getElementById('settingsPanel');
+btnSettings.addEventListener('click', ()=> {
+  settingsPanel.style.display = settingsPanel.style.display === 'block' ? 'none' : 'block';
+});
+// overlay actions
+const btnPlanMission = document.getElementById('btnPlanMission');
+const overlay = document.getElementById('overlay');
+const btnStartMission = document.getElementById('btnStartMission');
+const btnCancelMission = document.getElementById('btnCancelMission');
+const toolLock = document.getElementById('toolLockpick');
+const toolHack = document.getElementById('toolHack');
+const stealthSlider = document.getElementById('stealthSlider');
+const stealthVal = document.getElementById('stealthVal');
+document.getElementById('btnCustomizeChar').addEventListener('click', ()=> showToast('Character customization coming soon.'));
+document.getElementById('btnCustomizeVeh').addEventListener('click', ()=> showToast('Vehicle customization coming soon.'));
+document.getElementById('btnDiplomacy').addEventListener('click', ()=> showToast('Faction diplomacy interface opened.'));
+document.getElementById('modeSelect').addEventListener('change', (e)=> {
+  showToast('Mode switched to '+ e.target.value);
+});
+stealthSlider.addEventListener('input', ()=> { stealthVal.textContent = stealthSlider.value; });
+
+function showOverlay(show){
+  overlay.style.display = show ? 'block' : 'none';
+  overlayVisible = show;
+}
+btnPlanMission.addEventListener('click', ()=> { showOverlay(true); });
+btnCancelMission.addEventListener('click', ()=> { showOverlay(false); });
+
+const lootMultLabel = document.getElementById('lootMult');
+const overlayStart = document.getElementById('btnStartMission');
+overlayStart.addEventListener('click', () => {
+  // Plan outcome
+  const hasLock = toolLock.checked;
+  const hasHack = toolHack.checked;
+  const stealth = parseInt(stealthSlider.value);
+  const base = 40;
+  const toolBonus = (hasLock?15:0) + (hasHack?20:0);
+  const stealthBonus = (stealth - 50)/2;
+  const roll = rand(0,100);
+  const success = roll < clamp(base + toolBonus + stealthBonus, 5, 95);
+  const loot = Math.max(50, 100 * lootMult * (success?1:0.6)) + rand(-20,40);
+  if(success){
+    money += loot;
+    xp += 20;
+    showToast('Mission success! Loot +' + Math.round(loot));
+    cameraShake(12);
+    spawnBurst(players[0].pos.x, players[0].pos.y);
+  } else {
+    showToast('Mission failed. Better plan next time.');
+    cameraShake(6);
+  }
+  overlayVisible = false;
+  overlay.style.display = 'none';
+  updateHUD();
+  lootMult = clamp(lootMult + (success? 0.12 : -0.05), 0.5, 2.0);
+  lootMultLabel.textContent = lootMult.toFixed(2) + 'x';
+  renderFactions();
+});
+
+// helper toast
+const toastEl = document.getElementById('toast');
+function showToast(text){
+  toastEl.textContent = text;
+  toastEl.style.display = 'block';
+  setTimeout(()=> { toastEl.style.display='none'; }, 1800);
+}
+
+// Faction panel
+const factionList = document.getElementById('factionList');
+function renderFactions(){
+  factionList.innerHTML = '';
+  factions.forEach((f, idx)=> {
+    const el = document.createElement('div');
+    el.className = 'row';
+    el.innerHTML = `
+      <span>${f.name}</span>
+      <span class="badge" style="background:${f.color};color:white;">Rep ${Math.round(f.rep)}</span>
+      <button class="btn" data-action="alliance" data-i="${idx}">${f.rep>=0? 'Maintain' : 'Negotiate'}</button>
+    `;
+    factionList.appendChild(el);
+  });
+}
+factionList.addEventListener('click', (e)=>{
+  const t = e.target;
+  if(t.tagName==='BUTTON'){
+    const idx = parseInt(t.dataset.i);
+    const f = factions[idx];
+    if(t.dataset.action==='alliance'){
+      const delta = rand(5, 15) * (Math.random()>0.5? 1:-1);
+      f.rep += delta;
+      showToast(`Diplomacy with ${f.name} adjusted by ${Math.round(delta)}`);
+      updateHUD();
+      renderFactions();
+    }
+  }
+});
+
+// Crates loot collection
+function checkCratesPickup(p){
+  let collectedAny = false;
+  for(let c of crates){
+    if(c.collected) continue;
+    const dx = p.pos.x - camera.x - c.pos.x;
+    const dy = p.pos.y - camera.y - c.pos.y;
+    const dist = Math.hypot(dx, dy);
+    if(dist < 40){
+      c.collected = true;
+      money += c.value;
+      xp += 10;
+      showToast('Loot crate collected: +' + c.value);
+      spawnBurst(p.pos.x, p.pos.y);
+      collectedAny = true;
+    }
+  }
+  if(collectedAny){
+    updateHUD();
+  }
+}
+function drawCrates(ctx, cam){
+  crates.forEach(c=>{
+    ctx.save();
+    ctx.translate(-cam.x, -cam.y);
+    const x = c.pos.x;
+    const y = c.pos.y;
+    ctx.globalAlpha = c.collected ? 0.0 : 0.9;
+    // crate
+    ctx.fillStyle = '#8b5a2b';
+    ctx.fillRect(x-16 - cam.x, y-16 - cam.y, 32,32);
+    // glow
+    const g = ctx.createRadialGradient(x-6 - cam.x, y-6 - cam.y, 4, x-6 - cam.x, y-6 - cam.y, 40);
+    g.addColorStop(0, 'rgba(180,120,40,0.6)');
+    g.addColorStop(1, 'rgba(180,120,40,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(x-48 - cam.x, y-48 - cam.y, 96,96);
+    ctx.restore();
+  });
+}
+
+// Overlay overlay
+// Neon signs (animated glow)
+let neonSigns = [];
+function spawnNeonSigns(){
+  neonSigns = [];
+  for(let i=0;i<60;i++){
+    const x = i*60 + 100;
+    const y = (i*37) % (WORLD_H - 400) + 100;
+    neonSigns.push({ x, y, hue: (i*13)%360, t: Math.random()*2*Math.PI });
+  }
+}
+spawnNeonSigns();
+
+// Particles
+function spawnBurst(x, y){
+  const count = 40;
+  for(let i=0;i<count;i++){
+    particles.push({
+      x, y,
+      vx: Math.cos(i*0.4)*2*Math.random(),
+      vy: Math.sin(i*0.4)*2*Math.random(),
+      life: 0.6 + Math.random()*0.8,
+      color: `hsl(${(i*9)%360},90%,60%)`,
+      size: 2 + Math.random()*2
+    });
+  }
+}
+function updateParticles(dt){
+  for(let i=particles.length-1; i>=0; i--){
+    const p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.life -= dt;
+    if(p.life <= 0) particles.splice(i,1);
+  }
+}
+function drawParticles(ctx){
+  for(const p of particles){
+    ctx.fillStyle = p.color;
+    ctx.globalAlpha = Math.max(0, Math.min(1, p.life/1.0));
+    ctx.fillRect(p.x, p.y, p.size, p.size);
+  }
+  ctx.globalAlpha = 1.0;
+}
+
+// Camera shake
+let shakeTime = 0;
+let shakeAmp = 0;
+function cameraShake(amplitude, duration=0.4){
+  shakeAmp = amplitude;
+  shakeTime = duration;
+}
+function applyShake(){
+  if(shakeTime > 0){
+    const th = shakeTime;
+    shakeTime -= 1/60;
+    const dx = (Math.random()*2-1) * shakeAmp;
+    const dy = (Math.random()*2-1) * shakeAmp;
+    // adjust global transform by translating canvas context when drawing
+    ctx.translate(dx, dy);
+  }
+}
+
+// Pulsing city lights
+function drawNeonSigns(ctx, cam){
+  neonSigns.forEach(s => {
+    s.t += 0.01;
+    const glow = Math.sin(s.t) * 0.5 + 0.5;
+    ctx.save();
+    ctx.shadowColor = `hsl(${s.hue}, 100%, 60%)`;
+    ctx.shadowBlur = 20 + glow*20;
+    ctx.fillStyle = `hsl(${s.hue}, 100%, 70%)`;
+    ctx.fillRect(s.x - cam.x - 1, s.y - cam.y - 20, 2, 20);
+    ctx.restore();
+  });
+}
+
+// Pause
+let paused = false;
+function togglePause(){
+  paused = !paused;
+  if(paused){
+    showToast('Paused');
+  } else {
+    showToast('Resumed');
+  }
+}
+window.addEventListener('keydown', (e)=> { if(e.key === 'p' || e.key === 'P') togglePause(); });
+
+// Players
+const players = [
+  new Player(0, WORLD_W*0.25, WORLD_H*0.25, '#00faff', { forward: 'w', backward: 's', left: 'a', right: 'd', shoot: ' ' }),
+  new Player(1, WORLD_W*0.75, WORLD_H*0.75, '#ff8b00', { forward: 'ArrowUp', backward: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight' })
+];
+players[0].name = 'Nova';
+players[1].name = 'Vapor';
+
+// Camera
+const camera = { x: 0, y: 0 };
+
+// Init
+renderFactions();
+lootMultLabel && (lootMultLabel.textContent = lootMult.toFixed(2) + 'x');
+updateHUD();
+
+// Main loop
+let lastTime = performance.now();
+let eventTimer = 0;
+let ambientPulse = 0;
+function loop(now){
+  const dt = Math.min(0.033, (now - lastTime) / 1000);
+  lastTime = now;
+  if(!paused){
+    update(dt);
+    drawFrame();
+  } else {
+    drawFrame(true);
+  }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+function update(dt){
+  timeOfDay = ((timeOfDay + timeSpeed*dt) % 24);
+  updateTime(dt);
+
+  // Update ambient pulse
+  ambientPulse = (Math.sin(nowMs()/1000)*0.5 + 0.5);
+
+  // update players
+  for(let p of players){
+    p.update(dt, keys);
+  }
+
+  // crates pickup
+  checkCratesPickup(players[0]);
+
+  // camera follows player 0
+  const target = players[0].pos;
+  camera.x = clamp(target.x - VIEW_W/2, 0, WORLD_W - VIEW_W);
+  camera.y = clamp(target.y - VIEW_H/2, 0, WORLD_H - VIEW_H);
+
+  // events
+  eventTimer += dt;
+  if(eventTimer > rand(6, 12)){
+    // occasional patrol beep
+    showToast('City hums with neon glare.');
+    eventTimer = 0;
+  }
+
+  updateHUD();
+
+  // update particles
+  updateParticles(dt);
+}
+
+function nowMs(){ return performance.now(); }
+
+function drawFrame(notice=false){
+  // clear
+  ctx.clearRect(0,0,VIEW_W, VIEW_H);
+
+  // sky gradient
+  const sky = ctx.createLinearGradient(0,0,0,VIEW_H);
+  const dayActive = (timeOfDay >= 6 && timeOfDay <= 18);
+  if(dayActive){
+    sky.addColorStop(0, '#0b1740');
+    sky.addColorStop(1, '#0a0e2c');
+  } else {
+    sky.addColorStop(0, '#050315');
+    sky.addColorStop(1, '#120a24');
+  }
+  ctx.fillStyle = sky;
+  ctx.fillRect(0,0,VIEW_W, VIEW_H);
+
+  // subtle ambient overlay
+  if(weather==='Rain'){
+    ctx.fillStyle = 'rgba(60,80,180,0.25)';
+    ctx.fillRect(0,0,VIEW_W,VIEW_H);
+  } else if(weather==='Fog'){
+    ctx.fillStyle = 'rgba(180,180,220,0.15)';
+    ctx.fillRect(0,0,VIEW_W,VIEW_H);
+  }
+
+  // apply camera shake
+  ctx.save();
+  if(sett('settShake')){
+    // rough shake factor
+  }
+
+  // compute cam offset due to shake
+  if(shakeTime > 0){
+    const shakeX = (Math.random()*2-1)*shakeAmp;
+    const shakeY = (Math.random()*2-1)*shakeAmp;
+    ctx.translate(shakeX, shakeY);
+  }
+
+  // background neon glow
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.fillStyle = 'rgba(0, 255, 220, 0.04)';
+  ctx.fillRect(-1000, -1000, WORLD_W+2000, WORLD_H+2000);
+  ctx.restore();
+
+  // world
+  ctx.save();
+  ctx.translate(-camera.x, -camera.y);
+
+  // city elements
+  drawGrid(ctx, camera);
+  drawBuildings(ctx, camera);
+  drawCrates(ctx, camera);
+
+  // roads glow
+  ctx.fillStyle = 'rgba(200,240,255,0.08)';
+  for(let x=0; x<=WORLD_W; x+=200){
+    ctx.fillRect(x - camera.x, -10 - camera.y, 12, WORLD_H+20);
+  }
+  for(let y=0; y<=WORLD_H; y+=200){
+    ctx.fillRect(-10 - camera.x, y - camera.y, WORLD_W+20, 12);
+  }
+
+  // neon signs
+  drawNeonSigns(ctx, camera);
+
+  // players
+  for(let p of players){
+    p.draw(ctx, camera);
+  }
+
+  ctx.restore();
+
+  // crates glow
+  // overlay weather particles
+  ctx.restore();
+
+  // particles
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  drawParticles(ctx);
+  ctx.restore();
+
+  // ambient glow around city
+  if(settBloom()){
+    const g = ctx.createRadialGradient(VIEW_W/2, VIEW_H/2, VIEW_W/4, VIEW_W/2, VIEW_H/2, VIEW_W/2);
+    g.addColorStop(0, 'rgba(0,180,255,0.15)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,VIEW_W, VIEW_H);
+  }
+
+  // end of frame
+  // overlay hints
+  if(overlayVisible){
+    // overlay already in DOM
+  }
+
+  // end of frame
+}
+
+function sett(name){
+  // read settings bool
+  const el = document.getElementById(name);
+  if(!el) return false;
+  if(el.type === 'checkbox') return el.checked;
+  return true;
+}
+function settBloom(){
+  return document.getElementById('settBloom')?.checked;
+}
+function setShadows(){
+  return document.getElementById('settShadows')?.checked;
+}
+
+// Fallback: initialize crates glow and signs
+function init(){
+  renderFactions();
+  lootMultLabel && (lootMultLabel.textContent = lootMult.toFixed(2) + 'x');
+  updateHUD();
+}
+function renderFactions(){
+  // already defined earlier; re-call to ensure content
+}
+function togglePauseUI(paused){
+  // optional: show overlay
+}
+
+// Settings hidden by default; stored in localStorage
+function loadSettings(){
+  const s = localStorage.getItem('nc_settings');
+  if(s){
+    try {
+      const data = JSON.parse(s);
+      Object.assign(settings, data);
+    } catch(_) {}
+  }
+}
+function saveSettings(){ localStorage.setItem('nc_settings', JSON.stringify(settings)); }
+
+// Settings container
+const defaultSettings = {
+  density: 2,
+  shake: true,
+  bloom: true,
+  shadows: true,
+  music: true
+};
+let settings = { ...defaultSettings };
+loadSettings();
+
+// DOM interactions for density and booleans
+document.getElementById('settDensity').addEventListener('input', (e)=> {
+  settings.density = parseInt(e.target.value);
+  // adjust particle spawn rate
+});
+document.getElementById('settShake').addEventListener('change', (e)=> {
+  settings.shake = e.target.checked;
+});
+document.getElementById('settBloom').addEventListener('change', (e)=> {
+  settings.bloom = e.target.checked;
+});
+document.getElementById('settShadows').addEventListener('change', (e)=> {
+  settings.shadows = e.target.checked;
+});
+document.getElementById('settMusic').addEventListener('change', (e)=> {
+  settings.music = e.target.checked;
+});
+window.addEventListener('beforeunload', saveSettings);
+
+// Sign helper: distance to crate to collect on frame as optional ascii
+
+// Helpers for foggy glow
+function clamp01(v){ return Math.max(0, Math.min(1, v)); }
+
+// Public-like helper to spawn a tiny neon pulse at location
+function spawnPulse(x,y,color='#0ff'){
+  for(let i=0;i<18;i++){
+    particles.push({ x, y, vx: (Math.random()*2-1)*0.6, vy: (Math.random()*2-1)*0.6, life: 0.4 + Math.random()*0.6, color, size: 1 + Math.random()*2 });
+  }
+}
+
+// Initialize
+init();
+</script>
 </body>
 </html>
