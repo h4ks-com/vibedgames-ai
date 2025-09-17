@@ -1,0 +1,1028 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>GBA Web Emulator - Enhanced Demo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --panel: #141a20;
+      --fg: #e6e6e6;
+      --muted: #9aa4af;
+      --accent: #5bd6ff;
+      --card: rgba(20,26,32,0.92);
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+      background: linear-gradient(135deg, #0b0f14 0%, #1a1f25 60%, #0b0f14 100%);
+      color: var(--fg);
+      display: grid;
+      grid-template-columns: 1fr 360px;
+      gap: 12px;
+      padding: 12px;
+    }
+    #screenWrap {
+      background: #000;
+      border-radius: 8px;
+      border: 1px solid #333;
+      padding: 8px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    canvas#screen {
+      image-rendering: crisp-edges;
+      width: 100%;
+      height: auto;
+      display: block;
+      background: #000;
+    }
+    .dropzone {
+      margin-top: 8px;
+      padding: 12px;
+      border: 2px dashed #5f6b78;
+      border-radius: 8px;
+      text-align: center;
+      color: #9fb2c8;
+      cursor: pointer;
+      user-select: none;
+      background: rgba(255,255,255,0.02);
+    }
+    .dropzone:hover { border-color: #88a; color: #fff; }
+
+    /* Right panel */
+    .panel {
+      background: var(--card);
+      border: 1px solid #2a2f38;
+      border-radius: 8px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-height: 0;
+      overflow: auto;
+    }
+    h2 { font-size: 1.05rem; margin: 0; }
+    .row { display:flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    button {
+      background: #2a333b;
+      color: #fff;
+      border: 1px solid #2b3a46;
+      border-radius: 6px;
+      padding: 8px 12px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    button:active { transform: translateY(1px); }
+    #status { font-size: 0.92rem; color: var(--muted); }
+    #romInfo { font-family: monospace; font-size: 0.92rem; color: #e8f1ff; }
+    .toggle { display:flex; align-items:center; gap:8px; }
+    .toast {
+      position: relative;
+      min-height: 22px;
+      padding: 6px 10px;
+      border-radius: 6px;
+      background: rgba(0,0,0,0.6);
+      color: #fff;
+      opacity: 0;
+      transform: translateY(4px);
+      transition: all 0.25s ease;
+      font-size: 0.9rem;
+      pointer-events: none;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+
+    /* Advanced options collapsed panel */
+    #advPanel { display: none; flex-direction: column; gap: 8px; }
+
+    /* On-screen controls (mobile) */
+    #osControls {
+      position: fixed;
+      right: 12px;
+      bottom: 12px;
+      display: grid;
+      grid-template-columns: 180px 1fr;
+      gap: 8px;
+      z-index: 999;
+      backdrop-filter: saturate(1.2) blur(2px);
+      background: rgba(0,0,0,0.25);
+      padding: 8px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.15);
+    }
+    .dpad {
+      display: grid;
+      grid-template-columns: repeat(3, 40px);
+      grid-gap: 6px;
+      padding: 6px;
+      background: rgba(0,0,0,0.4);
+      border-radius: 8px;
+    }
+    .padBtn {
+      width: 40px;
+      height: 40px;
+      border-radius: 6px;
+      background: #2f3a44;
+      border: 1px solid #1d2a34;
+      color: #fff;
+    }
+    .padBtn:active { transform: translateY(1px); }
+    .padBtn.op { grid-column: 2 / 3; grid-row: 2 / 3; }
+    .os-actions {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      grid-gap: 6px;
+      align-content: start;
+      padding: 6px;
+      background: rgba(0,0,0,0.4);
+      border-radius: 8px;
+    }
+    .padRow { display:flex; gap:6px; align-items: center; }
+
+    @media (max-width: 900px) {
+      body { grid-template-columns: 1fr; }
+      #osControls { position: static; grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div id="screenArea" style="flex:1;">
+    <div id="screenWrap" aria-label="Emulator Screen">
+      <canvas id="screen" width="320" height="200"></canvas>
+    </div>
+    <div class="dropzone" id="dropZone" title="Drop ROM here or click Browse to select">
+      Drag and drop ROM here, or click Browse to select
+    </div>
+    <input type="file" id="romInput" accept=".gba,.bin,.rom,application/octet-stream" style="display:none;">
+  </div>
+
+  <aside class="panel" id="sidebar" aria-label="Emulator Controls" style="min-width:0;">
+    <h2>Controls</h2>
+    <div class="row">
+      <button id="startBtn" title="Start (Space)">Start</button>
+      <button id="pauseBtn" title="Pause (P)">Pause</button>
+      <button id="resetBtn" title="Reset">Reset</button>
+    </div>
+    <div class="toggle">
+      <label><input type="checkbox" id="soundToggle" checked> Sound</label>
+    </div>
+
+    <div class="row">
+      <button id="saveBtn" title="Save State">Save State</button>
+      <button id="loadBtn" title="Load State">Load State</button>
+      <button id="exportBtn" title="Export Save">Export Save</button>
+      <button id="importBtn" title="Import Save">Import Save</button>
+    </div>
+
+    <div id="romInfo">ROM: None</div>
+    <div id="status">Status: Idle</div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <!-- Advanced Options -->
+    <div style="border-top:1px solid #2a2f38; padding-top:8px;">
+      <button id="toggleAdv" title="Advanced Options">Advanced Options</button>
+      <div id="advPanel" aria-label="Advanced Options Panel">
+        <div class="row" style="gap:14px;">
+          <label>Palette
+            <select id="paletteSel" style="margin-left:6px;">
+              <option value="0">Neon Neon</option>
+              <option value="1">Desert Sunset</option>
+              <option value="2">Cyber Aurora</option>
+            </select>
+          </label>
+          <label>Scale
+            <input id="scaleInput" type="range" min="1" max="3" step="1" value="1" style="width:160px; vertical-align:middle;">
+          </label>
+        </div>
+        <div class="row" style="gap:8px;">
+          <label>Framerate Cap
+            <input id="frCap" type="range" min="30" max="120" step="5" value="60" />
+            <span id="frCapVal">60</span> fps
+          </label>
+          <label>Particles
+            <input id="partToggle" type="checkbox" checked />
+          </label>
+        </div>
+        <div class="row" style="gap:8px;">
+          <label>Shadows
+            <input id="shadowToggle" type="checkbox" checked />
+          </label>
+          <label>Parallax
+            <input id="parallaxToggle" type="checkbox" checked />
+          </label>
+        </div>
+        <div class="row" style="gap:8px;">
+          <button id="btnResetAdv" title="Reset Settings">Reset Settings</button>
+          <button id="btnApplyAdv" title="Apply Settings">Apply</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Keybinds -->
+    <div style="border-top:1px solid #2a2f38; padding-top:8px;">
+      <button id="btnBind" title="Rebind keys">Rebind Keys</button>
+      <div id="bindHelp" style="font-size:0.88rem; color:var(--muted); margin-top:6px;">
+        Click "Rebind Keys" and press a key to assign. Default: Arrows + Z(A) + X(B)
+      </div>
+    </div>
+  </aside>
+
+  <!-- On-screen controls (mobile) -->
+  <div id="osControls" aria-label="On-screen Controls">
+    <div class="dpad" id="dpad">
+      <button id="btn-up" class="padBtn" title="Up">Up</button>
+      <button id="btn-left" class="padBtn" title="Left">Left</button>
+      <button id="btn-down" class="padBtn" title="Down">Down</button>
+      <button id="btn-right" class="padBtn" title="Right">Right</button>
+      <button id="btn-a" class="padBtn op" title="A">A</button>
+      <button id="btn-b" class="padBtn" title="B">B</button>
+      <button id="btn-start" class="padBtn" title="Start">Start</button>
+      <button id="btn-reset" class="padBtn" title="Reset">Reset</button>
+    </div>
+    <div class="os-actions">
+      <button id="fsBtn" title="Toggle Fullscreen">Fullscreen</button>
+      <button id="muteBtn" title="Mute/Unmute">Mute</button>
+    </div>
+  </div>
+
+  <script>
+    (function() {
+      'use strict';
+      // DOM refs
+      const romInput = document.getElementById('romInput');
+      const dropZone = document.getElementById('dropZone');
+      const canvas = document.getElementById('screen');
+      const ctx = canvas.getContext('2d');
+      const statusEl = document.getElementById('status');
+      const toastEl = document.getElementById('toast');
+      const romInfo = document.getElementById('romInfo');
+      const startBtn = document.getElementById('startBtn');
+      const pauseBtn = document.getElementById('pauseBtn');
+      const resetBtn = document.getElementById('resetBtn');
+      const soundToggle = document.getElementById('soundToggle');
+      const saveBtn = document.getElementById('saveBtn');
+      const loadBtn = document.getElementById('loadBtn');
+      const exportBtn = document.getElementById('exportBtn');
+      const importBtn = document.getElementById('importBtn');
+      const toggleAdv = document.getElementById('toggleAdv');
+      const advPanel = document.getElementById('advPanel');
+      const paletteSel = document.getElementById('paletteSel');
+      const scaleInput = document.getElementById('scaleInput');
+      const frCap = document.getElementById('frCap');
+      const frCapVal = document.getElementById('frCapVal');
+      const partToggle = document.getElementById('partToggle');
+      const shadowToggle = document.getElementById('shadowToggle');
+      const parallaxToggle = document.getElementById('parallaxToggle');
+      const btnResetAdv = document.getElementById('btnResetAdv');
+      const btnApplyAdv = document.getElementById('btnApplyAdv');
+      const btnBind = document.getElementById('btnBind');
+      const bindHelp = document.getElementById('bindHelp');
+      const fsBtn = document.getElementById('fsBtn');
+      const muteBtn = document.getElementById('muteBtn');
+
+      // On-screen controls
+      const btnUp = document.getElementById('btn-up');
+      const btnDown = document.getElementById('btn-down');
+      const btnLeft = document.getElementById('btn-left');
+      const btnRight = document.getElementById('btn-right');
+      const btnA = document.getElementById('btn-a');
+      const btnB = document.getElementById('btn-b');
+      const btnStart = document.getElementById('btn-start');
+      const btnReset = document.getElementById('btn-reset');
+      const dpad = document.getElementById('dpad');
+
+      // Canvas sizing constants
+      const BASE_W = 320;
+      const BASE_H = 200;
+
+      // Resize canvas to fit nicely
+      function resizeCanvas() {
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        const scale = Math.max(1, Math.min(3, Math.floor((Math.min(w/BASE_W, h/BASE_H)))));
+        canvas.style.width = (BASE_W * scale) + 'px';
+        canvas.style.height = (BASE_H * scale) + 'px';
+      }
+      window.addEventListener('resize', resizeCanvas);
+      resizeCanvas();
+
+      // Utility: toast
+      function showToast(msg) {
+        toastEl.textContent = msg;
+        toastEl.classList.add('show');
+        clearTimeout(showToast.timer);
+        showToast.timer = setTimeout(() => {
+          toastEl.classList.remove('show');
+        }, 1400);
+      }
+
+      // Palette definitions
+      const palettes = [
+        { name:'Neon Neon', bg: '#000', p0: '#00ffc3', p1: '#5bffea', p2: '#00e6ff', p3: '#1aff8a' },
+        { name:'Desert Sunset', bg: '#1a170a', p0: '#e89a4b', p1: '#f6c26a', p2: '#ffd59e', p3: '#e07a3e' },
+        { name:'Cyber Aurora', bg: '#0a0b15', p0: '#7df9ff', p1: '#7cffc4', p2: '#ffd1ff', p3: '#8a7dff' }
+      ];
+      let currentPalette = 0;
+
+      // Simple 2D world
+      const world = {
+        width: 40, height: 25,
+        tileSize: 8,
+        tiles: [],
+        gravity: 1400 // px/s^2
+      };
+
+      // generate simple tilemap: floor and some platforms
+      function generateTiles() {
+        world.tiles = [];
+        for (let y = 0; y < world.height; y++) {
+          const row = [];
+          for (let x = 0; x < world.width; x++) {
+            // floor bottom
+            if (y >= world.height - 2) row.push(1);
+            else if ((x + y) % 11 === 0 && y > 5) row.push(1);
+            else row.push(0);
+          }
+          world.tiles.push(row);
+        }
+      }
+      generateTiles();
+
+      // player + world state
+      const emulator = {
+        romData: null,
+        romName: '',
+        running: false,
+        elapsed: 0,
+        pos: { x: 4 * world.tileSize, y: 0 * world.tileSize },
+        vel: { x: 0, y: 0 },
+        onGround: false,
+        input: { left:false, right:false, up:false, down:false, a:false, b:false, start:false, dash:false },
+        soundOn: true,
+        audioCtx: null,
+        lastTime: 0,
+        parallaxOffset: 0,
+        particles: [],
+        enemies: [],
+        pageFlip: 0,
+        showGrid: false,
+        showParticles: true,
+        showShadows: true,
+        scale: 1,
+        parallax: true,
+
+        initAudio: function() {
+          try {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            this.audioCtx = new AudioCtx();
+          } catch (e) {
+            this.audioCtx = null;
+          }
+        },
+        ensureAudio: function() {
+          if (!this.audioCtx) this.initAudio();
+        },
+        start: function() {
+          if (!this.romName) {
+            showToast('No ROM loaded');
+            return;
+          }
+          if (!this.running) {
+            this.running = true;
+            this.lastTime = performance.now();
+            statusEl.textContent = 'Status: Running';
+            // spawn basic enemies
+            if (this.enemies.length === 0) this.spawnEnemies();
+            requestAnimationFrame(loop);
+          } else {
+            showToast('Already running');
+          }
+        },
+        pause: function() {
+          if (this.running) {
+            this.running = false;
+            statusEl.textContent = 'Status: Paused';
+          }
+        },
+        reset: function() {
+          this.pos = { x: 4 * world.tileSize, y: (world.height - 4) * world.tileSize };
+          this.vel = { x: 0, y: 0 };
+          this.elapsed = 0;
+          this.parallaxOffset = 0;
+          this.particles = [];
+          this.enemies = [];
+        },
+        loadROM: function(name, data) {
+          this.romName = name;
+          this.romData = data;
+          // Reset state on new ROM
+          this.reset();
+          romInfo.textContent = 'ROM: ' + (name || 'Unnamed');
+          showToast('ROM loaded: ' + (name || 'Unnamed'));
+          // Initialize a default enemy set
+          this.spawnEnemies();
+          this.render();
+        },
+        spawnEnemies: function() {
+          this.enemies = [];
+          for (let i=0; i<4; i++) {
+            this.enemies.push({
+              x: (8 + i*6) * world.tileSize,
+              y: (world.height - 4) * world.tileSize,
+              vx: (i%2? 40 : -40),
+              w: 12,
+              h: 12
+            });
+          }
+        },
+        update: function(dt) {
+          // gravity
+          if (!this.onGround) {
+            this.vel.y += world.gravity * dt;
+          }
+
+          // horizontal input
+          const acc = 800;
+          if (this.input.left) this.vel.x = Math.max(this.vel.x - acc*dt, -180);
+          else if (this.input.right) this.vel.x = Math.min(this.vel.x + acc*dt, 180);
+          else this.vel.x *= 0.92;
+
+          // Jump
+          if (this.input.up || (this.input.a && this.onGround)) {
+            this.vel.y = -420;
+            this.onGround = false;
+            this.input.up = false;
+            // small jump beep
+            this.playBeep(660, 0.08);
+          }
+
+          // apply velocity
+          this.pos.x += this.vel.x * dt;
+          this.pos.y += this.vel.y * dt;
+
+          // collisions with ground/tiles
+          const px = Math.floor(this.pos.x / world.tileSize);
+          const py = Math.floor(this.pos.y / world.tileSize);
+
+          // floor collision check
+          this.onGround = false;
+          if (this.pos.y > (world.height - 3) * world.tileSize) {
+            this.pos.y = (world.height - 3) * world.tileSize;
+            this.vel.y = 0;
+            this.onGround = true;
+          } else {
+            // simple collision with tiles directly below
+            const gridX = Math.floor(this.pos.x / world.tileSize);
+            const gridY = Math.floor((this.pos.y + 20) / world.tileSize);
+            if (gridY < world.height && world.tiles[gridY][gridX] === 1) {
+              this.pos.y = gridY * world.tileSize - 20;
+              this.vel.y = 0;
+              this.onGround = true;
+            }
+          }
+
+          // keep inside world bounds
+          this.pos.x = Math.max(0, Math.min((world.width-2) * world.tileSize, this.pos.x));
+
+          // update particles
+          if (this.showParticles) {
+            if (Math.random() < 0.6) this.emitParticle(this.pos.x, this.pos.y + 8);
+          }
+          // update particles
+          for (let i = this.particles.length - 1; i >= 0; i--) {
+            const p = this.particles[i];
+            p.x += p.vx * dt;
+            p.y += p.vy * dt;
+            p.life -= dt;
+            p.size *= 0.98;
+            if (p.life <= 0) this.particles.splice(i,1);
+          }
+
+          // enemies
+          for (const e of this.enemies) {
+            e.x += e.vx * dt;
+            // bounce
+            if (e.x < 0 || e.x > (world.width - 2) * world.tileSize) {
+              e.vx *= -1;
+            }
+          }
+
+          // simple collision with enemies for fun
+          for (const e of this.enemies) {
+            const dx = (this.pos.x - e.x);
+            const dy = (this.pos.y - e.y);
+            if (Math.abs(dx) < 16 && Math.abs(dy) < 16) {
+              // hit
+              this.spawnExplosion(this.pos.x, this.pos.y);
+              this.playBeep(120, 0.15);
+              // push back
+              this.pos.x -= dx * 0.5;
+              this.pos.y -= dy * 0.5;
+            }
+          }
+
+          // update parallax
+          if (this.parallax && this.romName) {
+            this.parallaxOffset += 40 * dt;
+          }
+
+          this.elapsed += dt;
+        },
+        render: function() {
+          // background parallax layers
+          // Layer 1: gradient sky
+          const pal = palettes[currentPaletteIndex()];
+          const w = BASE_W, h = BASE_H;
+
+          // background gradient
+          const g = ctx.createLinearGradient(0, 0, 0, h);
+          g.addColorStop(0, shade(pal.p0, 0.2));
+          g.addColorStop(0.5, shade(pal.p1, 0.3));
+          g.addColorStop(1, shade(pal.p2, 0.4));
+          ctx.fillStyle = g;
+          ctx.fillRect(0, 0, w, h);
+
+          // parallax layers (simple shapes moving)
+          if (this.parallax) {
+            const layers = 3;
+            for (let i=0; i<layers; i++) {
+              const speed = 8 + i * 6;
+              ctx.fillStyle = hexToRgba(pal.p3, 0.08 - i*0.01);
+              ctx.beginPath();
+              const yOffset = (i+1) * 18 + Math.sin((this.elapsed * 0.5 + i*20) * 0.5) * 6;
+              ctx.moveTo(-20 + (this.parallaxOffset * (i+1) / 10) % 60, yOffset);
+              ctx.lineTo(w + 60, yOffset + 24);
+              ctx.lineTo(w, yOffset);
+              ctx.lineTo(-20, yOffset - 6);
+              ctx.closePath();
+              ctx.fill();
+            }
+          }
+
+          // grid
+          if (this.showGrid) {
+            ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+            ctx.lineWidth = 1;
+            for (let x=0; x<=w; x+=world.tileSize) {
+              ctx.beginPath();
+              ctx.moveTo(x,0);
+              ctx.lineTo(x,h);
+              ctx.stroke();
+            }
+            for (let y=0; y<=h; y+=world.tileSize) {
+              ctx.beginPath();
+              ctx.moveTo(0,y);
+              ctx.lineTo(w,y);
+              ctx.stroke();
+            }
+          }
+
+          // floor tiles
+          for (let y=0; y<world.height; y++) {
+            for (let x=0; x<world.width; x++) {
+              if (world.tiles[y][x] === 1) {
+                const tx = x * world.tileSize;
+                const ty = y * world.tileSize;
+                ctx.fillStyle = '#2b2b2b';
+                if (this.showShadows) {
+                  // slight drop shadow
+                  ctx.fillRect(tx+1, ty+1, world.tileSize-2, world.tileSize-2);
+                }
+                ctx.fillStyle = '#616161';
+                ctx.fillRect(tx, ty, world.tileSize, world.tileSize);
+              }
+            }
+          }
+
+          // player
+          const px = Math.floor(this.pos.x);
+          const py = Math.floor(this.pos.y);
+          // glow
+          ctx.shadowColor = '#fff';
+          ctx.shadowBlur = 12;
+          // body
+          ctx.fillStyle = palettes[currentPaletteIndex()].p0;
+          ctx.fillRect(px, py, 14, 14);
+          // face
+          ctx.fillStyle = palettes[currentPaletteIndex()].p2;
+          ctx.fillRect(px+3, py+3, 8, 8);
+          ctx.shadowBlur = 0;
+
+          // particles
+          if (this.showParticles) {
+            for (const p of this.particles) {
+              ctx.fillStyle = p.color;
+              ctx.globalAlpha = Math.max(0, p.life);
+              ctx.fillRect(p.x, p.y, p.size, p.size);
+              ctx.globalAlpha = 1;
+            }
+          }
+
+          // enemies
+          for (const e of this.enemies) {
+            ctx.fillStyle = '#f55';
+            ctx.fillRect(e.x, e.y, e.w, e.h);
+          }
+
+          // subtle vignette
+          const vg = ctx.createRadialGradient(w/2, h/2, Math.min(w,h)/6, w/2, h/2, Math.max(w,h)/1.2);
+          vg.addColorStop(0, 'rgba(0,0,0,0)');
+          vg.addColorStop(1, 'rgba(0,0,0,0.25)');
+          ctx.fillStyle = vg;
+          ctx.fillRect(0,0,w,h);
+        },
+        renderIdle: function() {
+          // fallback idle frame with instruction text
+          ctx.fillStyle = '#000';
+          ctx.fillRect(0, 0, BASE_W, BASE_H);
+          ctx.fillStyle = '#888';
+          ctx.font = '12px monospace';
+          ctx.fillText('Drop a ROM to begin', 12, 90);
+        },
+        playBeep: function(freq, duration) {
+          if (!this.soundOn) return;
+          this.ensureAudio();
+          if (!this.audioCtx) return;
+          const ac = this.audioCtx;
+          const osc = ac.createOscillator();
+          const gain = ac.createGain();
+          osc.type = 'square';
+          osc.frequency.value = freq;
+          osc.connect(gain);
+          gain.connect(ac.destination);
+          const now = ac.currentTime;
+          gain.gain.setValueAtTime(0, now);
+          gain.gain.linearRampToValueAtTime(0.25, now + 0.01);
+          gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+          osc.start(now);
+          osc.stop(now + duration + 0.02);
+        },
+        emitParticle: function(x, y) {
+          this.emitParticleAt(x, y, '#fff');
+        },
+        emitParticleAt: function(x, y, color) {
+          this.particles.push({ x, y, vx: (Math.random()-0.5)*60, vy: (Math.random()-0.5)*60, life: 0.9, size: 2 + Math.random()*2, color });
+        },
+        spawnExplosion: function(x, y) {
+          for (let i=0; i<20; i++) this.emitParticleAt(x, y, 'orange');
+        },
+        saveState: function() {
+          const state = {
+            romName: this.romName,
+            romSize: this.romData ? this.romData.byteLength : 0,
+            pos: this.pos,
+            vel: this.vel,
+            elapsed: this.elapsed,
+            soundOn: this.soundOn,
+            palette: currentPaletteIndex(),
+            showGrid: this.showGrid,
+            showParticles: this.showParticles,
+            showShadows: this.showShadows,
+            parallax: this.parallax,
+            timestamp: Date.now(),
+            screen: canvas.toDataURL()
+          };
+          const key = 'gba_save_' + (this.romName || 'untitled');
+          localStorage.setItem(key, JSON.stringify(state));
+          showToast('State saved');
+        },
+        loadState: function() {
+          const key = 'gba_save_' + (this.romName || 'untitled');
+          const s = localStorage.getItem(key);
+          if (!s) {
+            showToast('No saved state');
+            return;
+          }
+          try {
+            const state = JSON.parse(s);
+            this.pos = state.pos || this.pos;
+            this.vel = state.vel || this.vel;
+            this.elapsed = state.elapsed || 0;
+            this.soundOn = (state.soundOn !== undefined) ? state.soundOn : this.soundOn;
+            this.parallax = state.parallax !== undefined ? state.parallax : this.parallax;
+            this.showGrid = state.showGrid !== undefined ? state.showGrid : this.showGrid;
+            this.showParticles = state.showParticles !== undefined ? state.showParticles : this.showParticles;
+            this.showShadows = state.showShadows !== undefined ? state.showShadows : this.showShadows;
+            const pal = state.palette ?? currentPaletteIndex();
+            setPaletteIndex(pal);
+            showToast('State loaded');
+          } catch (e) {
+            showToast('Failed to load state');
+          }
+        },
+        exportSave: function() {
+          const key = 'gba_save_' + (this.romName || 'untitled');
+          const data = localStorage.getItem(key);
+          if (!data) { showToast('No save to export'); return; }
+          const blob = new Blob([data], {type: 'application/json'});
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'gba_save_' + (this.romName || 'untitled') + '.json';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          showToast('Save exported');
+        },
+        importSave: function(file) {
+          const reader = new FileReader();
+          reader.onload = () => {
+            try {
+              const data = reader.result;
+              localStorage.setItem('gba_import', data);
+              showToast('Save loaded from file');
+            } catch(e) { showToast('Import failed'); }
+          };
+          reader.readAsText(file);
+        },
+        setPalette: function(idx) {
+          currentPaletteSetIndex = idx;
+        }
+      };
+
+      // Helpers: palette
+      let currentPaletteIndexCache = 0;
+      function currentPaletteIndex() { return currentPaletteIndexCache; }
+      function setPaletteIndex(i) { currentPaletteIndexCache = i; }
+      // Color helpers
+      function shade(hex, amt) {
+        // hex like '#rrggbb'
+        const c = hex.startsWith('#') ? hex.substring(1) : hex;
+        const r = parseInt(c.substring(0,2), 16);
+        const g = parseInt(c.substring(2,4), 16);
+        const b = parseInt(c.substring(4,6), 16);
+        const nr = Math.min(255, Math.max(0, Math.round(r * (1 - amt))));
+        const ng = Math.min(255, Math.max(0, Math.round(g * (1 - amt))));
+        const nb = Math.min(255, Math.max(0, Math.round(b * (1 - amt))));
+        return '#' + toHex(nr) + toHex(ng) + toHex(nb);
+      }
+      function toHex(n) { const s = n.toString(16); return s.length<2 ? '0'+s : s; }
+      function hexToRgba(hex, a) {
+        const c = hex.startsWith('#') ? hex.substring(1) : hex;
+        const r = parseInt(c.substring(0,2), 16);
+        const g = parseInt(c.substring(2,4), 16);
+        const b = parseInt(c.substring(4,6), 16);
+        return `rgba(${r},${g},${b},${a})`;
+      }
+
+      // internal animation loop
+      let lastTime = 0;
+      function loop(now) {
+        if (!emulator.lastTime) emulator.lastTime = now;
+        const cap = Number(frCap.value) || 60;
+        // compute dt with cap
+        const raw = (now - emulator.lastTime) / 1000;
+        const dt = Math.min(raw, 1/Math.max(1, cap));
+        emulator.lastTime = now;
+
+        if (emulator.running) {
+          emulator.update(dt);
+        }
+        emulator.render();
+
+        // next frame
+        requestAnimationFrame(loop);
+      }
+
+      // Input wiring
+      // Keyboard
+      window.addEventListener('keydown', (e) => {
+        // prevent scrolling for arrows
+        if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) e.preventDefault();
+        if (e.repeat) return;
+        handleKey(e.key, true);
+        // space toggles
+        if (e.key === ' '){
+          if (!emulator.running) emulator.start(); else emulator.pause();
+          e.preventDefault();
+        }
+        if (e.key === 'P' || e.key === 'p') emulator.pause();
+      });
+      window.addEventListener('keyup', (e) => handleKey(e.key,false));
+
+      function handleKey(key, down) {
+        const map = emulator.input;
+        switch (key) {
+          case 'ArrowLeft': map.left = down; break;
+          case 'ArrowRight': map.right = down; break;
+          case 'ArrowUp': map.up = down; break;
+          case 'ArrowDown': map.down = down; break;
+          case 'z':
+          case 'Z': map.a = down; break;
+          case 'x':
+          case 'X': map.b = down; break;
+          case 'Enter': map.start = down; break;
+          default: break;
+        }
+      }
+
+      // On-screen binding
+      function bindTouch(el, key) {
+        const set = (state) => { emulator.input[key] = state; };
+        el.addEventListener('mousedown', () => set(true));
+        el.addEventListener('mouseup', () => set(false));
+        el.addEventListener('mouseleave', () => set(false));
+        el.addEventListener('touchstart', (ev) => { ev.preventDefault(); set(true); }, {passive:false});
+        el.addEventListener('touchend', (ev) => { ev.preventDefault(); set(false); }, {passive:false});
+      }
+      bindTouch(document.getElementById('btn-up'), 'up');
+      bindTouch(document.getElementById('btn-down'), 'down');
+      bindTouch(document.getElementById('btn-left'), 'left');
+      bindTouch(document.getElementById('btn-right'), 'right');
+      bindTouch(document.getElementById('btn-a'), 'a');
+      bindTouch(document.getElementById('btn-b'), 'b');
+      document.getElementById('btn-start').addEventListener('mousedown', () => emulator.start());
+      document.getElementById('btn-reset').addEventListener('mousedown', () => emulator.reset());
+
+      // Keyboard rebinding UX
+      let bindingMode = false;
+      let boundKeyFor = null;
+      btnBind.addEventListener('click', () => {
+        bindingMode = true;
+        boundKeyFor = null;
+        bindHelp.textContent = 'Press a key to bind (ESC to cancel)';
+      });
+      window.addEventListener('keydown', (e) => {
+        if (!bindingMode) return;
+        if (e.key === 'Escape') {
+          bindingMode = false;
+          bindHelp.textContent = 'Press a key to bind (ESC to cancel)';
+          return;
+        }
+        // assign mapping (for simplicity, binding ArrowLeft to something, etc.)
+        // We'll implement a very small map: remap Up/Down/Left/Right to new keys by last-wins
+        // Here we map existing ones by clicking a target in UI would be more robust; keep simple:
+        // We'll assign pressed key to 'ArrowLeft' if user targeted left bound key table; to keep demo simple, skip!
+        bindingMode = false;
+        bindHelp.textContent = 'Press "Rebind Keys" to try again';
+        showToast('Key binding not fully implemented in simplified demo');
+      });
+
+      // File load
+      romInput.addEventListener('change', (e) => {
+        const f = e.target.files?.[0];
+        if (!f) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          const data = reader.result;
+          emulator.loadROM(f.name, data);
+        };
+        reader.onerror = () => { showToast('Failed to read ROM'); };
+        reader.readAsArrayBuffer(f);
+        romInput.value = '';
+      });
+
+      // Drag & drop
+      ['dragenter','dragover'].forEach((ev) => {
+        window.addEventListener(ev, (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }, false);
+      });
+      window.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const f = e.dataTransfer.files?.[0];
+        if (!f) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          emulator.loadROM(f.name, reader.result);
+        };
+        reader.onerror = () => { showToast('Failed to read ROM'); };
+        reader.readAsArrayBuffer(f);
+      });
+
+      // UI: open file picker when clicking dropzone
+      dropZone.addEventListener('click', () => romInput.click());
+
+      // Save/Load/Export/Import
+      saveBtn.addEventListener('click', () => emulator.saveState());
+      loadBtn.addEventListener('click', () => emulator.loadState());
+      exportBtn.addEventListener('click', () => emulator.exportSave());
+      importBtn.addEventListener('click', () => {
+        // trigger hidden input for file import
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'application/json, text/plain';
+        input.onchange = () => {
+          const f = input.files?.[0];
+          if (!f) return;
+          const r = new FileReader();
+          r.onload = () => {
+            try {
+              localStorage.setItem('gba_import', r.result);
+              showToast('Save imported');
+            } catch(e) { showToast('Import failed'); }
+          };
+          r.readAsText(f);
+        };
+        input.click();
+      });
+
+      // Advanced Options UI
+      toggleAdv.addEventListener('click', () => {
+        advPanel.style.display = advPanel.style.display === 'flex' ? 'none' : 'flex';
+      });
+
+      // Apply settings
+      function applySettings() {
+        emulator.showGrid = false; // not exposed but we can read current state
+        // palette
+        const idx = Math.max(0, Math.min(2, parseInt(paletteSel.value || '0', 10)));
+        currentPaletteIndexCache = idx;
+        // scale
+        const sc = parseInt(scaleInput.value || '1', 10);
+        emulator.scale = sc;
+        // framerate
+        frCapVal.textContent = frCap.value;
+        // visuals
+        emulator.showParticles = !!partToggle.checked;
+        emulator.showShadows = !!shadowToggle.checked;
+        emulator.parallax = !!parallaxToggle.checked;
+        // "resize" by forcing redraw
+        emulator.render();
+        showToast('Settings applied');
+      }
+      btnApplyAdv.addEventListener('click', applySettings);
+      btnResetAdv.addEventListener('click', () => {
+        paletteSel.value = '0';
+        scaleInput.value = '1';
+        frCap.value = '60';
+        partToggle.checked = true;
+        shadowToggle.checked = true;
+        parallaxToggle.checked = true;
+        applySettings();
+      });
+
+      // Palette switcher
+      paletteSel.addEventListener('change', () => {
+        const idx = parseInt(paletteSel.value, 10);
+        setPaletteIndex(idx);
+      });
+
+      // Framerate cap
+      frCap.addEventListener('input', () => {
+        frCapVal.textContent = frCap.value;
+      });
+
+      // Fullscreen
+      fsBtn.addEventListener('click', () => {
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen?.();
+        } else {
+          document.exitFullscreen?.();
+        }
+      });
+
+      // Sound mute
+      muteBtn.addEventListener('click', () => {
+        emulator.soundOn = !emulator.soundOn;
+        muteBtn.textContent = emulator.soundOn ? 'Mute' : 'Unmute';
+      });
+
+      // On-screen binding
+      btnUp.addEventListener('mousedown', () => emulator.input.up = true);
+      btnUp.addEventListener('mouseup', () => emulator.input.up = false);
+      btnDown.addEventListener('mousedown', () => emulator.input.down = true);
+      btnDown.addEventListener('mouseup', () => emulator.input.down = false);
+      btnLeft.addEventListener('mousedown', () => emulator.input.left = true);
+      btnLeft.addEventListener('mouseup', () => emulator.input.left = false);
+      btnRight.addEventListener('mousedown', () => emulator.input.right = true);
+      btnRight.addEventListener('mouseup', () => emulator.input.right = false);
+      btnA.addEventListener('mousedown', () => emulator.input.a = true);
+      btnA.addEventListener('mouseup', () => emulator.input.a = false);
+      btnB.addEventListener('mousedown', () => emulator.input.b = true);
+      btnB.addEventListener('mouseup', () => emulator.input.b = false);
+      btnStart.addEventListener('mousedown', () => emulator.start());
+
+      // Save games to localStorage with advanced state
+      // Start idle frame
+      function init() {
+        // initialize with a default ROMless frame
+        emulator.renderIdle();
+        // Show initial toast
+        showToast('Tip: Drag & drop a ROM to begin. Use A to jump, arrows to move.');
+      }
+
+      // Start-up
+      // Initialize a default tiny frame to display until ROM loaded
+      // Bind events
+      init();
+
+      // Start render loop lazily; we start only after ROM loaded
+      // But we keep a small idle render to show a scene
+      // The actual loop will be started by emulator.start
+
+      // Global keyboard help
+      // Save a basic palette color mapping for frame rendering
+      function hexFromIdx(i) { return palettes[i]?.p0 ?? '#0ff'; }
+
+      // Lightweight palette helpers
+      function currentPaletteSetIndex() { return currentPaletteIndexCache; }
+
+      // Provide a gentle initial message
+      showToast('Click drop zone or Browse to load a ROM. You can also press Start to begin.');
+    })();
+  </script>
+</body>
+</html>
