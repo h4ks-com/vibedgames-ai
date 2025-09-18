@@ -1,0 +1,869 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>StarVoyager — Enhanced</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #050712;
+      --fg: #e8f0ff;
+      --hud: rgba(0,0,0,0.5);
+      --accent: #6bd6ff;
+      --panel: rgba(0,0,0,0.45);
+      --panel2: rgba(12,12,28,0.75);
+    }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #000;
+      color: #fff;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto;
+      overflow: hidden;
+    }
+    #game {
+      position: absolute;
+      inset: 0;
+      display: block;
+      background: radial-gradient(circle at 50% 40%, #1b1b2b 0%, #050712 40%, #000 100%);
+      image-rendering: optimizeQuality;
+    }
+    /* HUD overlay panels */
+    #hud {
+      position: absolute;
+      left: 0; top: 0;
+      width: 100%; height: 100%;
+      pointer-events: none;
+      display: flex; flex-direction: column; justify-content: space-between;
+    }
+    .panel {
+      position: absolute;
+      right: 14px; top: 14px;
+      padding: 12px 14px;
+      background: var(--panel);
+      border-radius: 10px;
+      color: #e9f1ff;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas;
+      font-size: 12px;
+      line-height: 1.25;
+      user-select: none;
+      min-width: 210px;
+      backdrop-filter: saturate(1.2) blur(2px);
+    }
+    #panelObj { top: auto; bottom: 14px; right: 14px; }
+    #panelHud { top: 14px; right: 14px; }
+    #panelColor {
+      top: auto; bottom: 14px; right: 14px;
+    }
+    #hudTitle {
+      position: absolute;
+      left: 14px; bottom: 14px;
+      padding: 8px 12px;
+      background: rgba(0,0,0,0.4);
+      border-radius: 6px;
+      font-family: ui-mantov, system-ui;
+      font-size: 12px;
+      color: #cfe6ff;
+      user-select: none;
+    }
+    #radar {
+      position: absolute;
+      right: 14px; bottom: 90px;
+      width: 210px; height: 210px;
+      background: rgba(10,10,20,0.6);
+      border-radius: 50%;
+      border: 1px solid rgba(255,255,255,0.25);
+      box-shadow: inset 0 0 20px rgba(0,0,0,0.5);
+      pointer-events: none;
+    }
+    #radarCanvas { width: 100%; height: 100%; display: block; }
+    #settings {
+      position: absolute; left: 18px; top: 18px;
+      padding: 12px 14px;
+      background: rgba(0,0,0,0.55);
+      border-radius: 8px;
+      font-family: ui-monospace, monospace;
+      font-size: 12px;
+      color: #e9f1ff;
+      display: none;
+      max-width: 320px;
+      z-index: 2;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+    }
+    #settings.active { display: block; }
+    .row { margin: 6px 0; display:flex; align-items:center; gap:8px; }
+    label { white-space: nowrap; }
+    input[type="range"] { width: 170px; vertical-align: middle; }
+    select, button { background: #111; color: #e9f1ff; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; padding: 4px 6px; }
+    .swatch { width: 12px; height: 12px; display: inline-block; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+    #toggleLock { padding: 6px 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.25); cursor: pointer; }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div id="hud" aria-label="HUD overlay">
+    <div class="panel" id="panelHud">
+      <div>Speed: <span id="speed">0.0</span> u/s</div>
+      <div>Heading: <span id="heading">0°</span></div>
+      <div>Distance to Objective: <span id="distObj">∞</span> u</div>
+      <div>Objects: <span id="objCount">0</span></div>
+    </div>
+
+    <div class="panel" id="panelColor" style="right: 14px; bottom: 14px;">
+      <div style="margin-bottom:6px;">Color Mode
+        <select id="colorMode" style="margin-left:6px;">
+          <option value="default">Default</option>
+          <option value="colorblind1">Colorblind A</option>
+          <option value="colorblind2">Colorblind B</option>
+          <option value="mono">Monochrome</option>
+        </select>
+      </div>
+      <div class="row">
+        UI Scale
+        <input type="range" id="uiScale" min="0.75" max="1.5" step="0.05" value="1">
+      </div>
+      <div class="row">
+        <button id="toggleLock">Pointer Lock: Off</button>
+      </div>
+    </div>
+
+    <div id="radar">
+      <canvas id="radarCanvas" width="210" height="210" aria-label="Radar"></canvas>
+    </div>
+
+    <div id="hudTitle">StarVoyager — Click to Lock Pointer</div>
+
+    <div id="settings" class="">
+      <div class="row">
+        <span>Palette</span>
+        <select id="paletteSel" style="margin-left:6px;">
+          <option value="default">Default</option>
+          <option value="mono">Monochrome</option>
+        </select>
+      </div>
+      <div class="row">
+        Bloom Intensity
+        <input type="range" id="bloom" min="0" max="2" step="0.1" value="1">
+      </div>
+      <div class="row">
+        <button id="openCloseSettings" style="padding:6px 8px; border-radius:6px; cursor:pointer;">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+/*
+  StarVoyager Enhanced
+  Vanilla JS canvas prototype with:
+  - Multi-layer starfield with parallax
+  - 3D-ish ship controls (yaw/pitch) and forward thrust
+  - Procedural objects (planets, debris, artifacts) with scanning
+  - Simple thruster particles
+  - Radar/minimap
+  - UI controls with color palettes and bloom intensity
+  - Basic post-process bloom via additive overlay
+  - Pointer lock for immersive experience
+*/
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+  const radarCanvas = document.getElementById('radarCanvas');
+  const radarCtx = radarCanvas.getContext('2d');
+  const speedEl = document.getElementById('speed');
+  const headingEl = document.getElementById('heading');
+  const distEl = document.getElementById('distObj');
+  const objCountEl = document.getElementById('objCount');
+  const colorModeSel = document.getElementById('colorMode');
+  const uiScaleSlider = document.getElementById('uiScale');
+  const toggleLockBtn = document.getElementById('toggleLock');
+  const hudTitle = document.getElementById('hudTitle');
+  const settingsPanel = document.getElementById('settings');
+  const paletteSel = document.getElementById('paletteSel');
+  const bloomSlider = document.getElementById('bloom');
+  const paletteObject = {
+    default: { stars:'auto' },
+  };
+  let bloomIntensity = 1.0;
+
+  // Runtime state
+  let dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+  let paused = false;
+  let started = false;
+
+  // Ship
+  const ship = {
+    pos: { x: 0, y: 0, z: 0 },
+    vel: { x: 0, y: 0, z: 0 },
+    yaw: 0,
+    pitch: 0,
+    thrust: 0.0,
+    maxSpeed: 140,
+    boost: 2.5,
+    pitchingSpeed: 1.2,
+  };
+
+  // World content
+  const stars = []; // multi-layer
+  const OBJECTS = []; // planets, debris, artifacts
+  let objectiveIndex = -1;
+  const DISCOVERY = [];
+
+  // Particle system
+  const particles = [];
+
+  // Radar
+  const radar = {
+    range: 1000,
+    color: '#6bd6ff',
+  };
+
+  // Colors palettes
+  const palettes = {
+    default: {
+      star: '#e6f0ff',
+      bright: '#ffffff',
+      nebula: 'rgba(60,20,100,0.25)',
+      planet: '#6bd6ff',
+      artifact: '#ffd166',
+    },
+    colorblind1: {
+      star: '#ffd266',
+      bright: '#fff',
+      nebula: 'rgba(0,120,160,0.25)',
+      planet: '#66ffcc',
+      artifact: '#a2ff66',
+    },
+    colorblind2: {
+      star: '#9a9aff',
+      bright: '#fff',
+      nebula: 'rgba(255,60,160,0.25)',
+      planet: '#66a3ff',
+      artifact: '#ff9050',
+    },
+    mono: {
+      star: '#fff',
+      bright: '#fff',
+      nebula: 'rgba(255,255,255,0.15)',
+      planet: '#aaa',
+      artifact: '#bbb',
+    }
+  };
+  let currentPaletteKey = 'default';
+  function palette() { return palettes[currentPaletteKey] || palettes.default; }
+
+  // Resize
+  function resize() {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    canvas.width = Math.floor(w * dpr);
+    canvas.height = Math.floor(h * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener('resize', () => { dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1)); resize(); });
+
+  // Pointer lock handlers
+  let pointerLocked = false;
+  function lockPointer() {
+    if (canvas.requestPointerLock) {
+      canvas.requestPointerLock();
+    }
+  }
+  canvas.addEventListener('click', () => {
+    if (!pointerLocked) lockPointer();
+  });
+  document.addEventListener('pointerlockchange', () => {
+    pointerLocked = document.pointerLockElement === canvas;
+    toggleLockBtn.textContent = `Pointer Lock: ${pointerLocked ? 'On' : 'Off'}`;
+    hudTitle.style.display = pointerLocked ? 'none' : 'block';
+  });
+
+  // Input
+  const keys = {};
+  window.addEventListener('keydown', (e) => { keys[e.code || e.key] = true; if (e.code === 'KeyP') paused = !paused; });
+  window.addEventListener('keyup', (e) => { keys[e.code || e.key] = false; });
+
+  // Mouse look (when locked)
+  let yaw = 0;
+  let pitch = 0;
+  const mouseSensitivity = 0.0024;
+  window.addEventListener('mousemove', (e) => {
+    if (pointerLocked) {
+      yaw   -= e.movementX * mouseSensitivity;
+      pitch -= e.movementY * mouseSensitivity;
+      pitch = Math.max(-Math.PI/3, Math.min(Math.PI/3, pitch));
+    }
+  });
+
+  // Init world
+  function rand(a,b){ return a + Math.random()*(b-a); }
+  function initStars() {
+    stars.length = 0;
+    const layers = 3;
+    const perLayer = 630;
+    for (let L=0; L<layers; L++) {
+      for (let i=0;i<perLayer;i++){
+        const s = {
+          x: rand(-800, 800),
+          y: rand(-600, 600),
+          z: rand(50, 2000),
+          layer: L,
+          hue: rand(0,360),
+          speed: 0.3 + L*0.3,
+        };
+        stars.push(s);
+      }
+    }
+  }
+
+  // Init objects
+  function initObjects() {
+    OBJECTS.length = 0;
+    const count = 22;
+    for (let i=1;i<=count;i++){
+      const z = rand(400, 1800);
+      const theta = rand(-Math.PI, Math.PI);
+      const r = rand(-260, 260);
+      const x = Math.cos(theta) * r;
+      const y = rand(-120, 120) * 0.4;
+      const type = Math.random() < 0.5 ? 'planet' : 'debris';
+      const obj = {
+        id: i, x, y, z, type, name: type==='planet' ? 'Exo-'+i : 'Debris-'+i,
+        scanned: false, objective: false
+      };
+      OBJECTS.push(obj);
+    }
+    // designate one objective
+    if (OBJECTS.length > 0) {
+      const idx = Math.floor(Math.random()*OBJECTS.length);
+      OBJECTS[idx].objective = true;
+      objectiveIndex = idx;
+    }
+  }
+
+  // Utility: projection from world to screen
+  function project(p) {
+    // World to camera transform (simple: translate by ship.pos, rotate around Y (yaw) and X (pitch))
+    let dx = p.x - ship.pos.x;
+    let dy = p.y - ship.pos.y;
+    let dz = p.z - ship.pos.z;
+    // yaw (around Y)
+    const cy = Math.cos(-ship.yaw);
+    const sy = Math.sin(-ship.yaw);
+    let xz = dx * cy - dz * sy;
+    let zz = dx * sy + dz * cy;
+    // pitch (around X) - rotate YZ plane
+    const cp = Math.cos(-ship.pitch);
+    const sp = Math.sin(-ship.pitch);
+    let yz = dy * cp - zz * sp;
+    let z2 = dy * sp + zz * cp;
+    if (z2 <= 0.1) return null;
+    const fov = Math.PI / 3;
+    const f = (canvas.width/ dpr) * Math.tan(fov/2);
+    const sx = (xz) * (f / z2) + (canvas.width / dpr) * 0.5;
+    const sy = (yz) * (f / z2) + (canvas.height / dpr) * 0.5;
+    return { x: sx, y: sy, z: z2, depth: z2, world: p };
+  }
+
+  // Gravityless glow helper
+  function glowCircle(cx, cy, r, color, alpha=0.8) {
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+    g.addColorStop(0, color);
+    g.addColorStop(1, color.slice(0,4) + '0)');
+    ctx.fillStyle = g;
+    ctx.globalAlpha = alpha;
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI*2); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  // Stars render
+  function drawStars(dt) {
+    const w = canvas.width / dpr;
+    const h = canvas.height / dpr;
+    // background nebula gradient
+    const grad = ctx.createRadialGradient(w*0.5, h*0.25, 20, w*0.5, h*0.25, Math.max(w,h)*0.9);
+    const pal = palette();
+    grad.addColorStop(0, (currentPaletteKey==='mono')?'rgba(100,100,100,0.25)':'rgba(40,20,60,0.25)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0,0,w,h);
+
+    // parallax stars
+    for (let s of stars) {
+      // drift with velocity
+      s.z -= (ship.vel.z * 0.01) + (s.layer * 0.01);
+      if (s.z < 1) {
+        s.x = rand(-800, 800);
+        s.y = rand(-600, 600);
+        s.z = rand(1200, 2400);
+      }
+      // project
+      const p = project({ x: s.x, y: s.y, z: s.z });
+      if (!p) continue;
+      const px = p.x, py = p.y;
+      if (px<0||px>w||py<0||py>h) continue;
+      const depth = Math.max(0.1, p.z);
+      const brightness = Math.max(0.2, 1.0 - (depth / 2400));
+      ctx.fillStyle = `hsl(${(s.hue|0)} 90% ${50 + brightness*40}%)`;
+      const r = 0.6 + brightness * 1.2;
+      ctx.fillRect(px, py, r, r);
+    }
+
+    // water-mark glow
+  }
+
+  // Thruster particles
+  function spawnThruster() {
+    const forwardX = Math.sin(ship.yaw);
+    const forwardZ = Math.cos(ship.yaw);
+    // position behind ship (in world space)
+    const tx = ship.pos.x - forwardX * 2;
+    const ty = ship.pos.y - Math.sin(ship.pitch) * 1.2;
+    const tz = ship.pos.z - forwardZ * 2;
+    for (let i=0; i<6; i++) {
+      const p = {
+        x: tx + rand(-0.5,0.5),
+        y: ty + rand(-0.5,0.5),
+        z: tz + rand(-0.5,0.5),
+        vx: (-forwardX) * rand(0.7,1.6) + rand(-0.4,0.4),
+        vy: rand(-0.2, 0.4),
+        vz: (-forwardZ) * rand(0.7,1.6) + rand(-0.4,0.4),
+        life: rand(0.25, 0.6),
+        color: 'rgba(240,180,100,0.9)'
+      };
+      particles.push(p);
+    }
+  }
+
+  function updateParticles(dt) {
+    for (let i = particles.length-1; i>=0; i--) {
+      const p = particles[i];
+      p.x += p.vx * dt * 60;
+      p.y += p.vy * dt * 60;
+      p.z += p.vz * dt * 60;
+      p.life -= dt;
+      if (p.life <= 0) particles.splice(i,1);
+    }
+  }
+
+  function drawParticles() {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (let p of particles) {
+      ctx.fillStyle = p.color;
+      ctx.globalAlpha = Math.max(0, p.life * 2);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 1.4, 0, Math.PI*2);
+      // but in world coords; project to screen
+      const proj = project({ x: p.x, y: p.y, z: p.z });
+      if (proj) {
+        const px = proj.x, py = proj.y;
+        ctx.fillRect(px, py, 2, 2);
+      }
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+
+  // Objects rendering
+  function renderObjects() {
+    const w = canvas.width / dpr;
+    const h = canvas.height / dpr;
+    const pal = palette();
+    for (let obj of OBJECTS) {
+      const proj = project({ x: obj.x, y: obj.y, z: obj.z });
+      if (!proj) continue;
+      const px = proj.x, py = proj.y;
+      if (px < 0 || px > w || py < 0 || py > h) continue;
+      const s = obj.type === 'planet' ? 8 : 4;
+      // glow
+      const core = obj.type==='planet' ? pal.planet : pal.artifact || '#aaa';
+      const glowR = s * 2.5;
+      ctx.fillStyle = 'rgba(180,230,255,0.15)';
+      ctx.beginPath(); ctx.arc(px, py, glowR, 0, Math.PI*2); ctx.fill();
+      // core
+      ctx.fillStyle = core;
+      ctx.beginPath(); ctx.arc(px, py, s, 0, Math.PI*2); ctx.fill();
+      // label
+      if (obj.objective) {
+        ctx.strokeStyle = '#ffd700';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(px, py, s+6, 0, Math.PI*2); ctx.stroke();
+      }
+      // scanned label
+      if (obj.scanned) {
+        ctx.fillStyle = 'rgba(0,255,150,0.9)';
+        ctx.font = '12px monospace';
+        ctx.fillText('SCANNED', px + s + 4, py - s - 4);
+      }
+    }
+  }
+
+  // Update world
+  function updateWorld(dt) {
+    // basic ship inertia
+    // input: keyboard
+    const thrustF = ((keys['KeyW'] || keys['ArrowUp']) ? 1 : 0) - ((keys['KeyS'] || keys['ArrowDown']) ? 1 : 0);
+    const yawInput = ((keys['KeyA'] || keys['ArrowLeft']) ? 1 : 0) - ((keys['KeyD'] || keys['ArrowRight']) ? 1 : 0);
+    const pitchInput = ((keys['KeyQ'] ? 1 : 0) - (keys['KeyE'] ? 1 : 0));
+
+    // Update orientation
+    ship.yaw += yawInput * 1.2 * dt;
+    ship.pitch += pitchInput * 1.0 * dt;
+    ship.pitch = Math.max(-Math.PI/3, Math.min(Math.PI/3, ship.pitch));
+
+    // Boost toggle
+    const boosting = keys['Space'] ? 1 : 0;
+    ship.thrust = 0.8 + boosting * 0.6;
+
+    // Orient forward vector
+    const forwardX = Math.sin(ship.yaw);
+    const forwardZ = Math.cos(ship.yaw);
+    const up = -Math.sin(ship.pitch);
+
+    // Acceleration
+    const ax = forwardX * ship.thrust;
+    const az = forwardZ * ship.thrust;
+    ship.vel.x += ax * dt;
+    ship.vel.z += az * dt;
+    ship.vel.y += up * dt * 0.4;
+
+    // Damping
+    ship.vel.x *= 0.995;
+    ship.vel.y *= 0.995;
+    ship.vel.z *= 0.995;
+
+    // Speed cap
+    const sp = Math.hypot(ship.vel.x, ship.vel.y, ship.vel.z);
+    const maxSp = ship.maxSpeed * (boosting ? 1.4 : 1.0);
+    if (sp > maxSp) {
+      const mul = maxSp / sp;
+      ship.vel.x *= mul; ship.vel.y *= mul; ship.vel.z *= mul;
+    }
+
+    // Update position
+    ship.pos.x += ship.vel.x * dt;
+    ship.pos.y += ship.vel.y * dt;
+    ship.pos.z += ship.vel.z * dt;
+
+    // Boundaries (wrap)
+    const wrap = 3000;
+    if (ship.pos.x < -wrap) ship.pos.x = wrap;
+    if (ship.pos.x > wrap) ship.pos.x = -wrap;
+    if (ship.pos.y < -wrap) ship.pos.y = wrap;
+    if (ship.pos.y > wrap) ship.pos.y = -wrap;
+    if (ship.pos.z < -wrap) ship.pos.z = wrap;
+    if (ship.pos.z > wrap) ship.pos.z = -wrap;
+
+    // Spawn thrusters when pushing
+    if (ship.thrust > 0.0 && Math.random() < 0.6) spawnThruster();
+
+    // Update stars
+    // slight parallax drift
+    for (let s of stars) {
+      s.x += -ship.vel.x * 0.002 * (s.layer + 1);
+      s.y += -ship.vel.y * 0.002 * (s.layer + 1);
+    }
+
+    // Update objective distance
+    if (objectiveIndex >= 0) {
+      const obj = OBJECTS[objectiveIndex];
+      const dx = obj.x - ship.pos.x;
+      const dy = obj.y - ship.pos.y;
+      const dz = obj.z - ship.pos.z;
+      const d = Math.sqrt(dx*dx + dy*dy + dz*dz);
+      distEl.textContent = d.toFixed(1) + ' u';
+    } else {
+      distEl.textContent = '∞';
+    }
+
+    // Scanning input
+    if (keys['KeyF'] || keys['Enter']) {
+      // find nearest object within range
+      let best = null;
+      let bestDist = Number.POSITIVE_INFINITY;
+      for (let i=0;i<OBJECTS.length;i++){
+        const b = OBJECTS[i];
+        const dx = b.x - ship.pos.x;
+        const dy = b.y - ship.pos.y;
+        const dz = b.z - ship.pos.z;
+        const d = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        if (d < 60 && d < bestDist) { best = b; bestDist = d; }
+      }
+      if (best && !best.scanned) {
+        best.scanned = true;
+        DISCOVERY.push({ name: best.name, type: best.type, pos: { x: best.x, y: best.y, z: best.z }, time: performance.now() });
+      }
+    }
+
+    // Stop/Start events
+    if (keys['KeyT']) {
+      // teleport to origin (fun)
+      ship.pos.x = 0; ship.pos.y = 0; ship.pos.z = 0;
+      ship.vel.x = 0; ship.vel.y = 0; ship.vel.z = 0;
+    }
+  }
+
+  // Radar rendering
+  function drawRadar() {
+    const w = radarCanvas.width;
+    const h = radarCanvas.height;
+    radarCtx.clearRect(0,0,w,h);
+
+    // background
+    radarCtx.fillStyle = 'rgba(0,20,60,0.6)';
+    radarCtx.fillRect(0,0,w,h);
+
+    // grid ring
+    radarCtx.strokeStyle = 'rgba(120,180,255,0.7)';
+    radarCtx.lineWidth = 1;
+    radarCtx.beginPath();
+    radarCtx.arc(w/2, h/2, w/2 - 6, 0, Math.PI*2);
+    radarCtx.stroke();
+
+    // center
+    radarCtx.fillStyle = '#fff';
+    radarCtx.fillRect(w/2-1, h/2-6, 2, 12);
+    radarCtx.fillRect(w/2-6, h/2-1, 12, 2);
+
+    const range = radar.range;
+    const scale = (w/2 - 8) / range;
+
+    // objects
+    for (let obj of OBJECTS) {
+      const dx = obj.x - ship.pos.x;
+      const dy = obj.y - ship.pos.y;
+      // map to 2D plane
+      const x2d = w/2 + dx * scale;
+      const y2d = h/2 + dy * scale;
+      if (x2d < 6 || x2d > w-6 || y2d < 6 || y2d > h-6) continue;
+      radarCtx.fillStyle = obj.objective ? '#ffd000' : (obj.scanned ? '#35ff70' : '#6aa4ff');
+      radarCtx.fillRect(x2d-2, y2d-2, 4, 4);
+      if (obj.objective) {
+        radarCtx.strokeStyle = '#fff200';
+        radarCtx.lineWidth = 1;
+        radarCtx.beginPath();
+        radarCtx.arc(x2d, y2d, 6, 0, Math.PI*2);
+        radarCtx.stroke();
+      }
+    }
+
+    // ship indicator
+    radarCtx.fillStyle = '#fff';
+    radarCtx.fillRect(w/2-2, h/2-2, 4,4);
+  }
+
+  // Rendering: ship
+  function renderShip() {
+    const w = canvas.width / dpr;
+    const h = canvas.height / dpr;
+    // Simple triangular ship at center with facing direction
+    const cx = w * 0.5;
+    const cy = h * 0.5;
+    const size = 12;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(-ship.yaw);
+    // body
+    ctx.fillStyle = palette().bright;
+    ctx.beginPath();
+    ctx.moveTo(0, -size);
+    ctx.lineTo(size, size);
+    ctx.lineTo(-size, size);
+    ctx.closePath();
+    ctx.fill();
+    // glow tail
+    ctx.fillStyle = 'rgba(100,180,255,0.4)';
+    ctx.beginPath();
+    ctx.moveTo(0, size);
+    ctx.lineTo(-size/2, size+6);
+    ctx.lineTo(size/2, size+6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Bloom post-process (overlay)
+  const bloomCanvas = document.createElement('canvas');
+  const bloomCtx = bloomCanvas.getContext('2d', { alpha: false });
+
+  function renderBloomOverlay() {
+    // render bright spots into bloom canvas
+    const w = canvas.width / dpr;
+    const h = canvas.height / dpr;
+    bloomCanvas.width = w;
+    bloomCanvas.height = h;
+    bloomCtx.clearRect(0,0,w,h);
+    bloomCtx.globalCompositeOperation = 'lighter';
+    // gather bright points from stars
+    for (let s of stars) {
+      const p = project({ x: s.x, y: s.y, z: s.z });
+      if (!p) continue;
+      const px = p.x, py = p.y;
+      if (px<0||px>w||py<0||py>h) continue;
+      if (s.layer === 2) {
+        bloomCtx.fillStyle = 'rgba(255,255,255,0.6)';
+      } else if (s.layer === 1) {
+        bloomCtx.fillStyle = 'rgba(180,210,255,0.4)';
+      } else {
+        bloomCtx.fillStyle = 'rgba(120,160,255,0.25)';
+      }
+      const r = 1.8 + (2 - s.layer) * 0.6;
+      bloomCtx.beginPath(); bloomCtx.arc(px, py, r, 0, Math.PI*2); bloomCtx.fill();
+    }
+    // small test glow around objective
+    for (let obj of OBJECTS) {
+      if (!obj.objective) continue;
+      const p = project({ x: obj.x, y: obj.y, z: obj.z });
+      if (!p) continue;
+      const px = p.x, py = p.y;
+      bloomCtx.fillStyle = 'rgba(255,215,0,0.5)';
+      bloomCtx.beginPath(); bloomCtx.arc(px, py, 8, 0, Math.PI*2); bloomCtx.fill();
+    }
+    // blur-ish look by scaling up then drawing
+  }
+
+  function compositeBloom() {
+    // upscale bloom onto main canvas with additive blend
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    // draw bloom at full resolution
+    ctx.drawImage(bloomCanvas, 0, 0, canvas.width/dpr, canvas.height/dpr);
+    ctx.restore();
+  }
+
+  // Engine loop
+  let last = performance.now();
+  function loop(now) {
+    const dt = Math.min(0.033, (now - last) / 1000);
+    last = now;
+    if (!started) return requestAnimationFrame(loop);
+
+    // update
+    if (!paused) {
+      updateWorld(dt);
+      updateParticles(dt);
+    }
+
+    // render
+    // clear space
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0,0, canvas.width/dpr, canvas.height/dpr);
+
+    // background stars
+    drawStars(dt);
+
+    // world objects
+    renderObjects();
+
+    // ship
+    renderShip();
+
+    // thruster particles
+    drawParticles();
+
+    // bloom
+    renderBloomOverlay();
+    compositeBloom();
+
+    // HUD
+    speedEl.textContent = ship.vel ? Math.hypot(ship.vel.x, ship.vel.y, ship.vel.z).toFixed(1) : '0.0';
+    headingEl.textContent = ((ship.yaw * 180 / Math.PI) | 0) + '°';
+    objCountEl.textContent = OBJECTS.filter(o => o.objective).length;
+
+    // radar
+    drawRadar();
+
+    requestAnimationFrame(loop);
+  }
+
+  // Init/Start
+  function start() {
+    resize();
+    initStars();
+    initObjects();
+    // start input
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Escape') {
+        // exit pointer lock if possible
+        document.exitPointerLock?.();
+      }
+      // toggle settings
+      if (e.key.toLowerCase() === 'l') {
+        settingsPanel.classList.toggle('active');
+      }
+      if (e.key.toLowerCase() === 'p') {
+        paused = !paused;
+      }
+    }, { once: false });
+    started = true;
+    requestAnimationFrame(loop);
+  }
+
+  // UI interactions
+  colorModeSel.addEventListener('change', () => {
+    currentPaletteKey = colorModeSel.value;
+  });
+  uiScaleSlider.addEventListener('input', () => {
+    // not altering rendering scale per se; could scale UI
+  });
+  toggleLockBtn.addEventListener('click', () => {
+    if (pointerLocked) {
+      document.exitPointerLock();
+    } else {
+      lockPointer();
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (!started && (e.key || e.code)) start();
+  }, { once: true });
+
+  // Settings panel
+  const openCloseBtn = document.getElementById('openCloseSettings');
+  if (openCloseBtn) {
+    openCloseBtn.addEventListener('click', () => {
+      settingsPanel.classList.remove('active');
+    });
+  }
+
+  paletteSel.addEventListener('change', () => {
+    currentPaletteKey = paletteSel.value;
+  });
+
+  bloomSlider.addEventListener('input', () => {
+    bloomIntensity = parseFloat(bloomSlider.value);
+  });
+
+  // Boot
+  resize();
+  // wait for first interaction to start due browser auto-play policy
+  window.addEventListener('click', () => { if (!started) start(); }, { once: true });
+
+  // Initialize while user interacts
+  // kick off with a soft initialize to draw something
+  let _initOnce = false;
+  function initOnce() {
+    if (_initOnce) return;
+    _initOnce = true;
+    // place a few artifacts
+    initObjects();
+  }
+
+  // Decorative: small nebula vignette on each frame
+  function vignette() {
+    const w = canvas.width / dpr;
+    const h = canvas.height / dpr;
+    const g = ctx.createRadialGradient(w/2, h/2, Math.min(w,h)*0.2, w/2, h/2, Math.max(w,h)*0.6);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(1, 'rgba(0,0,0,0.25)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,w,h);
+  }
+
+  // Start by waiting for user interaction
+  // Init a gentle frame to show something
+  initOnce();
+})();
+</script>
+</body>
+</html>
