@@ -1,0 +1,776 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>P2P Battleships: Advanced JSON Move Exchange</title>
+  <style>
+    :root{
+      --bg: #0b1b2b;
+      --panel: #0f1f38;
+      --panelBorder:#2b5a9a;
+      --grid:#1b2a4d;
+      --ship:#2b6e2b;
+      --hit:#d90429;
+      --miss:#9fb8d9;
+      --accent:#2a3aab;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body { font-family: Inter, Arial, sans-serif; background: linear-gradient(135deg, #0b1b2b 0%, #0f2031 60%, #0b1b2b 100%); color:#e8eefc; margin:0; padding:0; overflow:auto; }
+    header { padding:16px; text-align:center; background: #12213a; border-bottom:1px solid #2e5b9a; position: sticky; top:0; z-index: 10; }
+    header h1{ margin:0; font-size:22px; letter-spacing:0.5px; text-shadow:0 1px 0 rgba(0,0,0,.3); }
+    .container{ display:flex; flex-wrap:wrap; gap:14px; padding:14px; }
+    .panel{ background:var(--panel); border:1px solid var(--panelBorder); border-radius:12px; padding:12px; min-width:300px; flex:1 1 320px; box-shadow: 0 8px 24px rgba(0,0,0,.25); position: relative; overflow: hidden; }
+    .panel:hover{ transform: translateY(-1px); transition: transform .25s ease; }
+    .panel h2{ font-size:14px; color:#d4e7ff; margin:6px 0 8px; text-transform:uppercase; letter-spacing:0.5px; }
+    .grid{ display:grid; grid-template-columns: repeat(10, 22px); grid-template-rows: repeat(10, 22px); gap:2px; }
+    .cell{ width:22px; height:22px; background:#1b2a4d; border-radius:4px; display:flex; align-items:center; justify-content:center; font-size:12px; cursor:pointer; position: relative; user-select:none; transition: transform .15s ease; }
+    .cell:hover{ transform: scale(1.08); }
+    .cell.ship{ background:#2b6e2b; }
+    .cell.hit{ background:#d90429; box-shadow: inset 0 0 8px rgba(255,255,255,.25); animation: pop .25s ease-out; }
+    .cell.miss{ background:#9fb8d9; }
+    .cell.fired{ outline:2px solid #ffd700; outline-offset: -2px; }
+    .cell.sunk{ background:#3a7f2e; animation: sink 0.9s ease-in-out; }
+    @keyframes pop { from{ transform: scale(0.9);} to{ transform: scale(1.0);} }
+    @keyframes sink { 0%{ transform: translateY(0); opacity:1;} 100%{ transform: translateY(8px) scale(0.98); opacity:.6; } }
+    .legend{ font-size:12px; color:#cbdafc; display:flex; gap:12px; align-items:center; margin-top:6px; }
+    .legend span{ display:inline-block; padding:0 6px; border-radius:4px; }
+    .legend .ship{ background:#2b6e2b; color:#000; }
+    .legend .hit{ background:#d90429; color:#fff; }
+    .legend .miss{ background:#9fb8d9; color:#000; }
+    .row{ display:flex; gap:12px; align-items:center; }
+    button{ padding:8px 12px; border-radius:8px; border:1px solid #2e5b9a; background:#1a4b9b; color:white; cursor:pointer; transition: transform .15s ease; }
+    button:hover{ transform: translateY(-1px); }
+    button:disabled{ opacity:.5; cursor:not-allowed; }
+    textarea{ width:100%; height:90px; resize:vertical; background:#0b2140; color:#fff; border:1px solid #3a6bdc; border-radius:6px; padding:6px; font-family: ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace; }
+    input{ padding:6px; border-radius:4px; border:1px solid #3a6bdc; background:#0b2140; color:#fff; }
+    .title{ font-weight:600; font-size:13px; margin-bottom:6px; color:#e7f0ff; }
+    .status{ font-family: monospace; white-space: pre; }
+    .hidden{ display:none; }
+    .panel-header{ display:flex; justify-content:space-between; align-items:center; padding:0 4px 6px 4px; border-bottom:1px solid rgba(255,255,255,.08); margin-bottom:6px; }
+    .panel-body{ padding:0 4px 6px 4px; }
+    .grid-wrap{ display:flex; gap:14px; flex-wrap:wrap; align-items:flex-start; }
+    .section{ min-width: 280px; flex:1 1 420px; }
+    .pulse{ position:absolute; width:20px; height:20px; border-radius:50%; background:radial-gradient(circle at 30% 30%, rgba(255,255,255,.9) 0 20%, rgba(255,0,0,.6) 40%, transparent 50%); animation: pulse 0.9s ease-out forwards; pointer-events:none; }
+    @keyframes pulse { 0%{ transform: scale(0.5); opacity: 0.9; } 60%{ transform: scale(1.4); opacity: 0.7; } 100%{ transform: scale(2.2); opacity:0; } }
+    .boom{ position:absolute; width:14px; height:14px; border-radius:50%; background: radial-gradient(circle at 30% 30%, #fff 0 10%, rgba(255,255,255,.0) 11%), radial-gradient(circle at 70% 70%, rgba(216,4,41,.9) 0 40%, rgba(216,4,41,0) 41%); animation: boom 700ms ease-out forwards; pointer-events:none; transform: translate(-50%, -50%); }
+    @keyframes boom { 0%{ transform: scale(0.5); opacity:1; } 100%{ transform: scale(2.2); opacity:0; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>P2P Battleships: Advanced JSON Move Exchange</h1>
+  </header>
+
+  <div class="container" id="gameRoot">
+    <!-- Placement Panel -->
+    <section class="panel" id="placementPanel">
+      <div class="panel-header">
+        <div class="title" style="margin:0;">Placement Phase</div>
+        <div class="row">
+          <button id="rotateBtn" title="Toggle orientation">Rotate (H/V)</button>
+          <button id="finishPlacementBtn" disabled>Share Placements & Begin Battle</button>
+          <button id="autoPlaceBtn" title="Automatically place ships randomly">Auto Deploy</button>
+        </div>
+      </div>
+      <div class="grid-wrap section" style="align-items:flex-start;">
+        <div style="flex:1 1 300px;">
+          <div class="title" style="margin-bottom:6px;">Placement Grid</div>
+          <div id="placeGrid" class="grid" aria-label="Your ship placement grid"></div>
+          <div class="legend" style="margin-top:6px;">
+            <span class="ship">Ship</span><span class="hit">Hit</span><span class="miss">Miss</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Battle Panel -->
+    <section class="panel section" id="battlePanel" aria-label="Battle area" style="flex:1 1 640px;">
+      <div class="panel-header">
+        <div class="title" style="margin:0;">Battle</div>
+        <div class="row">
+          <span id="turnIndicator" class="status" style="color:#fff; padding:6px 10px; border-radius:6px; background:#2a3aab; display:inline-block;">Waiting for opponent...</span>
+          <button id="replayBtn" title="Replay moves from start">Replay Moves</button>
+          <button id="integrityBtn" title="Show a quick integrity hash of moves">Show Integrity Hash</button>
+        </div>
+      </div>
+      <div class="grid-wrap" style="gap:14px;">
+        <div>
+          <div class="title" style="margin-bottom:6px;">Your Grid (Ships)</div>
+          <div id="ownGrid" class="grid" aria-label="Your grid"></div>
+        </div>
+        <div>
+          <div class="title" style="margin-bottom:6px;">Opponent Grid (Your Shots)</div>
+          <div id="opponentGrid" class="grid" aria-label="Opponent grid"></div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <label class="title" style="margin:0 6px 0 0;">Game Mode</label>
+        <select id="modeSelect" title="Choose game mode" style="padding:6px; border-radius:6px; border:1px solid #3a6bdc; background:#0b2140; color:#fff;">
+          <option value="p2p">P2P (WebRTC DataChannel)</option>
+          <option value="ai">AI Opponent (Single Player)</option>
+        </select>
+      </div>
+      <div id="integrityDisplay" class="hidden" style="margin-top:8px; font-family: monospace; background:#0b2140; padding:6px; border-radius:6px; border:1px solid #3a6bdc;"></div>
+    </section>
+
+    <!-- P2P & Logs Panel -->
+    <section class="panel" id="p2pPanel" aria-label="P2P & Logs" style="min-width:320px;">
+      <div class="panel-header">
+        <div class="title" style="margin:0;">Peer Connection & Moves</div>
+        <div class="row">
+          <span class="badge" style="font-size:12px; padding:6px 8px; border-radius:8px; background:#143a8b; color:#fff;">Live</span>
+        </div>
+      </div>
+      <div class="panel-body" style="display:flex; flex-direction:column; gap:10px;">
+        <div class="row" style="gap:8px; flex-wrap:wrap;">
+          <button id="createOfferBtn">Create Offer</button>
+          <button id="applyOfferBtn" title="Paste Offer SDP into Offer Field">Apply Offer</button>
+          <button id="copyLogBtn" title="Copy move log to clipboard">Copy Move Log</button>
+        </div>
+        <div>
+          <div class="title">Offer SDP</div>
+          <textarea id="offerField" placeholder="Offer SDP will appear here after Create Offer"></textarea>
+        </div>
+        <div>
+          <div class="title">Answer SDP</div>
+          <textarea id="answerField" placeholder="Paste Answer SDP received from peer, then click Apply" ></textarea>
+        </div>
+        <div>
+          <div class="title">Signaling (copy/paste)</div>
+          <div style="font-family:monospace; font-size:12px; background:#0b2140; padding:6px; border-radius:6px; border:1px solid #3a6bdc;">
+            Use Offer/Answer fields to exchange SDP strings between peers manually. After both sides exchange, the data channel will open automatically.
+          </div>
+        </div>
+        <div>
+          <div class="title" style="margin-top:6px;">Move Log</div>
+          <textarea id="moveLogArea" readonly></textarea>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+  // Core constants and helpers
+  const GRID_SIZE = 10;
+  const SHIP_DEFS = [
+    { id: 'carrier', name: 'Carrier', size: 5 },
+    { id: 'battleship', name: 'Battleship', size: 4 },
+    { id: 'cruiser', name: 'Cruiser', size: 3 },
+    { id: 'submarine', name: 'Submarine', size: 3 },
+    { id: 'destroyer', name: 'Destroyer', size: 2 },
+  ];
+
+  function key(x,y){ return x+\",\"+y; }
+
+  function coordsFor(start, size, orientation){
+    const pts = [];
+    for(let i=0;i<size;i++){
+      if(orientation==='H') pts.push({x:start.x+i, y:start.y});
+      else pts.push({x:start.x, y:start.y+i});
+    }
+    return pts;
+  }
+
+  function inBounds(p){ return p.x>=0 && p.x<GRID_SIZE && p.y>=0 && p.y<GRID_SIZE; }
+
+  function serializeMove(move){
+    return JSON.stringify(move);
+  }
+  function parseMove(str){
+    try{ return JSON.parse(str); }catch(e){ return null; }
+  }
+
+  function randId(){ return Math.random().toString(36).slice(2,9); }
+
+  // State
+  const state = {
+    localId: 'local',
+    remoteId: 'remote',
+    phase: 'placement', // 'placement'|'battle'|'done'
+    orientation: 'H', // 'H' or 'V'
+    shipIndex: 0, // next ship to place
+    myShips: {}, // id -> {id, size, orientation, start, coords, hits}
+    myCoordsSet: new Set(),
+    opponentShips: {}, // remote ships by id
+    shotsFired: new Set(), // "x,y"
+    hitsOnOpponent: new Set(),
+    missesOnOpponent: new Set(),
+    hitsOnMe: new Set(),
+    missesOnMe: new Set(),
+    moveLog: [], // array of Move objects
+    turn: 'local', // 'local'|'remote'
+    connection: null,
+    dataChannel: null,
+    offerSDP: '',
+    answerSDP: '',
+    placedShipsCount: 0,
+    totalShips: SHIP_DEFS.length,
+    mode: 'p2p'
+  };
+
+  // UI refs
+  const currentShipLabel = document.getElementById('currentShipLabel');
+  const rotateBtn = document.getElementById('rotateBtn');
+  const finishPlacementBtn = document.getElementById('finishPlacementBtn');
+  const placeGrid = document.getElementById('placeGrid');
+  const ownGrid = document.getElementById('ownGrid');
+  const opponentGrid = document.getElementById('opponentGrid');
+  const turnIndicator = document.getElementById('turnIndicator');
+  const replayBtn = document.getElementById('replayBtn');
+  const integrityBtn = document.getElementById('integrityBtn');
+  const integrityDisplay = document.getElementById('integrityDisplay');
+  const createOfferBtn = document.getElementById('createOfferBtn');
+  const applyOfferBtn = document.getElementById('applyOfferBtn');
+  const offerField = document.getElementById('offerField');
+  const answerField = document.getElementById('answerField');
+  const moveLogArea = document.getElementById('moveLogArea');
+  const modeSelect = document.getElementById('modeSelect');
+  const placePanel = document.getElementById('placementPanel');
+  const placeGridEl = document.getElementById('placeGrid');
+  const autoPlaceBtn = document.getElementById('autoPlaceBtn');
+  const copyLogBtn = document.getElementById('copyLogBtn');
+  const moveLogEl = document.getElementById('moveLogArea');
+
+  // Build grids
+  function createGrid(container, clickHandler){
+    container.innerHTML = '';
+    for(let y=0;y<GRID_SIZE;y++){
+      for(let x=0;x<GRID_SIZE;x++){
+        const cell = document.createElement('div');
+        cell.className = 'cell';
+        cell.dataset.x = x;
+        cell.dataset.y = y;
+        cell.addEventListener('click', () => {
+          clickHandler && clickHandler({x, y}, cell);
+        });
+        container.appendChild(cell);
+      }
+    }
+  }
+
+  // Rendering helpers
+  function renderPlacementGrid(){
+    // highlight ships placed
+    const cells = placeGrid.querySelectorAll('.cell');
+    cells.forEach(c=>{ c.classList.remove('ship','hit','miss','sunk'); });
+
+    Object.values(state.myShips).forEach(ship=>{
+      ship.coords.forEach(p=>{
+        const idx = p.y*GRID_SIZE + p.x;
+        if(placeGrid.children[idx]) placeGrid.children[idx].classList.add('ship');
+      });
+    });
+
+    // show orientation hint by border on start cell
+    // not strictly necessary
+  }
+
+  function renderOwnGrid(){
+    const cells = ownGrid.querySelectorAll('.cell');
+    cells.forEach(c=>{ c.classList.remove('ship','hit','miss','fired','sunk'); });
+    // Ships
+    Object.values(state.myShips).forEach(ship=>{
+      ship.coords.forEach(p=>{
+        const idx = p.y*GRID_SIZE + p.x;
+        if(ownGrid.children[idx]) ownGrid.children[idx].classList.add('ship');
+      });
+    });
+    // Hits on me
+    state.hitsOnMe.forEach(s=>{
+      const [x,y] = s.split(',').map(Number);
+      const idx = y*GRID_SIZE + x;
+      if(ownGrid.children[idx]){
+        ownGrid.children[idx].classList.add('hit');
+        spawnBoom(ownGrid, x, y, '#d90429');
+      }
+    });
+    // Misses on me
+    state.missesOnMe.forEach(s=>{
+      const [x,y] = s.split(',').map(Number);
+      const idx = y*GRID_SIZE + x;
+      if(ownGrid.children[idx]){
+        ownGrid.children[idx].classList.add('miss');
+        spawnBoom(ownGrid, x, y, '#9fb8d9');
+      }
+    });
+  }
+
+  function renderOpponentGrid(){
+    const cells = opponentGrid.querySelectorAll('.cell');
+    cells.forEach((c) => {
+      c.classList.remove('hit','miss','fired','sunk');
+    });
+    // Mark fired shots
+    state.shotsFired.forEach(keyStr=>{
+      const [x,y] = keyStr.split(',').map(Number);
+      const idx = y*GRID_SIZE + x;
+      const c = opponentGrid.children[idx];
+      if(!c) return;
+      const hit = state.hitsOnOpponent.has(keyStr);
+      if(hit){
+        c.classList.add('hit','fired');
+        spawnBoom(opponentGrid, x, y, '#ffd700');
+      } else {
+        c.classList.add('miss','fired');
+      }
+    });
+  }
+
+  function renderAll(){
+    renderPlacementGrid();
+    renderOwnGrid();
+    renderOpponentGrid();
+    renderMoveLog();
+    updateTurnIndicator();
+  }
+
+  function updateTurnIndicator(){
+    if(state.phase==='placement'){
+      turnIndicator.textContent = 'Placement: place ' + SHIP_DEFS[state.shipIndex].name;
+    } else if(state.phase==='battle'){
+      turnIndicator.textContent = (state.turn==='local') ? 'Your turn to fire' : 'Opponent turn';
+      // subtle glow
+      document.body.style.transition = 'box-shadow .3s';
+      document.body.style.boxShadow = (state.turn==='local') ? '0 0 0 0 rgba(0,0,0,0)' : 'inset 0 0 20px rgba(42,58,171,.25)';
+    } else {
+      turnIndicator.textContent = 'Game finished';
+    }
+  }
+
+  function resetBoardsForReplay(){
+    state.myShips = {};
+    state.myCoordsSet = new Set();
+    state.opponentShips = {};
+    state.shotsFired = new Set();
+    state.hitsOnOpponent = new Set();
+    state.missesOnOpponent = new Set();
+    state.hitsOnMe = new Set();
+    state.missesOnMe = new Set();
+    state.moveLog = [];
+    state.phase = 'placement';
+    state.turn = 'local';
+    state.shipIndex = 0;
+    state.placedShipsCount = 0;
+  }
+
+  // Initialize grids
+  createGrid(placeGrid, handlePlacementClick);
+  createGrid(ownGrid, ()=>{});
+  createGrid(opponentGrid, handleOpponentGridClick);
+
+  // Current ship label
+  function setCurrentShipLabel(){
+    const ship = SHIP_DEFS[state.shipIndex];
+    currentShipLabel.innerHTML = `Placing: ${ship.name} (size ${ship.size})`;
+  }
+  // initial
+  setCurrentShipLabel();
+
+  // Local placement handling
+  function handlePlacementClick(pos, cell){
+    if(state.phase !== 'placement') return;
+    const ship = SHIP_DEFS[state.shipIndex];
+    const start = { x: pos.x, y: pos.y };
+    const coords = coordsFor(start, ship.size, state.orientation);
+    // bounds & collision check
+    for(const p of coords){
+      if(!inBounds(p)) return;
+      if(state.myCoordsSet.has(key(p.x,p.y))) return; // collision
+    }
+    // place
+    state.myShips[ship.id] = { id: ship.id, size: ship.size, orientation: state.orientation, start, coords, hits: 0 };
+    coords.forEach(p=> state.myCoordsSet.add(key(p.x,p.y)));
+    state.placedShipsCount++;
+    state.moveLog.push({
+      action:'place_ship',
+      player_id: state.localId,
+      move_id: randId(),
+      ship_id: ship.id,
+      coordinates: { x: start.x, y: start.y, orientation: state.orientation },
+      timestamp: Date.now()
+    });
+    // advance
+    state.shipIndex++;
+    if(state.shipIndex >= SHIP_DEFS.length){
+      finishPlacementBtn.disabled = false;
+      renderAll();
+      setCurrentShipLabel();
+      return;
+    } else {
+      setCurrentShipLabel();
+      renderAll();
+      return;
+    }
+  }
+
+  rotateBtn.addEventListener('click', ()=> {
+    state.orientation = (state.orientation === 'H') ? 'V' : 'H';
+    rotateBtn.textContent = 'Orientation: ' + state.orientation;
+    // Update label snippet
+    setCurrentShipLabel();
+  });
+  // initial rotate label
+  rotateBtn.textContent = 'Rotate (H/V)';
+
+  finishPlacementBtn.addEventListener('click', ()=>{
+    if(state.placedShipsCount !== SHIP_DEFS.length){
+      alert('Place all ships before sharing.');
+      return;
+    }
+    const movesToSend = state.moveLog.filter(m => m.action==='place_ship');
+    if(state.dataChannel && state.dataChannel.readyState === 'open'){
+      movesToSend.forEach(m=>{ state.dataChannel.send(JSON.stringify({ type:'move', payload: m })); });
+      // Also send a special start message
+      state.dataChannel.send(JSON.stringify({ type:'start' }));
+    } else {
+      console.warn('Data channel not open; proceeding with local battle in AI mode?');
+    }
+    state.phase = 'battle';
+    state.turn = 'local';
+    renderAll();
+  });
+
+  // Opponent grid click (firing)
+  function handleOpponentGridClick(pos, cell){
+    if(state.mode === 'ai'){
+      // simple AI: if AI mode, compute best shot by random
+      if(state.phase !== 'battle') return;
+      if(state.turn !== 'local') return;
+      // Fire at random not already fired
+      const candidates = [];
+      for(let y=0;y<GRID_SIZE;y++){
+        for(let x=0;x<GRID_SIZE;x++){
+          const k = x+','+y;
+          if(!state.shotsFired.has(k)) candidates.push({x,y});
+        }
+      }
+      if(candidates.length===0) return;
+      const pick = candidates[Math.floor(Math.random()*candidates.length)];
+      processMoveFire({x: pick.x, y: pick.y}, true); // simulated
+      return;
+    }
+
+    if(state.phase !== 'battle') return;
+    if(state.turn !== 'local') return;
+    const t = pos.x + ',' + pos.y;
+    if(state.shotsFired.has(t)) return;
+    const move = {
+      action: 'fire',
+      player_id: state.localId,
+      move_id: randId(),
+      coordinates: { x: pos.x, y: pos.y },
+      timestamp: Date.now()
+    };
+    state.moveLog.push(move);
+    state.shotsFired.add(t);
+    // If we know opponent ships, determine hit
+    const isHit = Object.values(state.opponentShips).some(ship => ship.coords.some(p => p.x===pos.x && p.y===pos.y));
+    if(isHit){
+      state.hitsOnOpponent.add(t);
+    } else {
+      state.missesOnOpponent.add(t);
+    }
+    // send
+    if(state.dataChannel && state.dataChannel.readyState === 'open'){
+      state.dataChannel.send(JSON.stringify({ type:'move', payload: move }));
+    }
+    // Update turn
+    state.turn = 'remote';
+    renderAll();
+  }
+
+  // P2P Signaling (WebRTC)
+  // Simple signaling using manual SDP paste
+  const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+  function createPeerConnection(isOfferer){
+    const pc = new RTCPeerConnection(configuration);
+    if(isOfferer){
+      const dc = pc.createDataChannel('battle');
+      setupDataChannel(dc);
+    } else {
+      pc.ondatachannel = (event) => {
+        setupDataChannel(event.channel);
+      };
+    }
+    pc.onicecandidate = (event) => {
+      if(event.candidate){
+        // Could show candidate strings if needed
+      }
+    };
+    state.connection = pc;
+    return pc;
+  }
+
+  function setupDataChannel(dc){
+    state.dataChannel = dc;
+    dc.onopen = () => {
+      console.log('Data channel open');
+      if(state.phase==='placement' && state.placedShipsCount===SHIP_DEFS.length){
+        finishPlacementBtn.disabled = false;
+      }
+    };
+    dc.onmessage = (ev) => {
+      try{
+        const msg = JSON.parse(ev.data);
+        if(msg.type==='move'){
+          applyRemoteMove(msg.payload);
+        }else if(msg.type==='start'){
+          // opponent confirms start
+          state.phase = 'battle';
+          renderAll();
+        }
+      }catch(e){
+        console.warn('Invalid message', e);
+      }
+    };
+  }
+
+  // Signaling flows
+  createOfferBtn.addEventListener('click', async () => {
+    const pc = createPeerConnection(true);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    state.offerSDP = JSON.stringify(offer);
+    offerField.value = state.offerSDP;
+  });
+
+  applyOfferBtn.addEventListener('click', async () => {
+    const offer = offerField.value;
+    if(!offer) { alert('No offer SDP provided.'); return; }
+    const pc = createPeerConnection(false);
+    await pc.setRemoteDescription(JSON.parse(offerField.value));
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    answerField.value = JSON.stringify(answer);
+  });
+
+  // When the other side provides the answer
+  answerField.addEventListener('input', async ()=> {
+    // This simplistic handler is for UX; real setRemoteDescription is called on the peer that created the offer
+    // Here we don't automatically apply to allow manual testing
+  });
+
+  function applyRemoteMove(move){
+    if(move.action==='place_ship'){
+      // Build opponent ship
+      const shipInfo = SHIP_DEFS.find(s => s.id===move.ship_id);
+      if(!shipInfo){
+        console.warn('Unknown remote ship_id', move.ship_id);
+        return;
+      }
+      const orientation = move.coordinates.orientation || 'H';
+      const coords = coordsFor({ x: move.coordinates.x, y: move.coordinates.y }, shipInfo.size, orientation);
+      if(!coords.every(p => inBounds(p))){
+        console.warn('Remote placement out of bounds');
+        return;
+      }
+      state.opponentShips[move.ship_id] = {
+        id: move.ship_id, size: shipInfo.size, orientation, start: { x: move.coordinates.x, y: move.coordinates.y }, coords, hits: 0
+      };
+      // if all ships placed locally too, begin; else rely on user to finish
+    } else if(move.action==='fire'){
+      // Opponent fired at our board
+      const target = move.coordinates;
+      const hit = shipContains(state.myShips, target);
+      const keystr = target.x + ',' + target.y;
+      if(hit){
+        state.hitsOnMe.add(keystr);
+      } else {
+        state.missesOnMe.add(keystr);
+      }
+      // turn back to local and log
+      state.turn = 'local';
+      state.moveLog.push(move);
+      renderAll();
+      if(allMyShipsSunk()){
+        state.phase = 'done';
+        turnIndicator.textContent = 'Defeat: all your ships sunk';
+      }
+    }
+    renderAll();
+  }
+
+  function shipContains(ships, target){
+    for(const sid in ships){
+      const s = ships[sid];
+      if(s.coords.some(p => p.x===target.x && p.y===target.y)) return true;
+    }
+    return false;
+  }
+
+  function allMyShipsSunk(){
+    for(const sid in state.myShips){
+      const s = state.myShips[sid];
+      if(!s.coords.every(p => state.hitsOnMe.has(p.x+','+p.y))) return false;
+    }
+    return true;
+  }
+
+  // Logging UI
+  function renderMoveLog(){
+    moveLogArea.value = JSON.stringify(state.moveLog, null, 2);
+  }
+
+  // Replay
+  replayBtn.addEventListener('click', ()=>{
+    resetBoardsForReplay();
+    renderAll();
+    let idx = 0;
+    const interval = setInterval(()=>{
+      if(idx >= state.moveLog.length){ clearInterval(interval); return; }
+      const m = state.moveLog[idx];
+      if(m.action==='place_ship'){
+        const shipInfo = SHIP_DEFS.find(s => s.id===m.ship_id);
+        if(!shipInfo){ idx++; return; }
+        const s = {
+          id: shipInfo.id, size: shipInfo.size, orientation: m.coordinates.orientation || 'H',
+          start: { x: m.coordinates.x, y: m.coordinates.y }, coords: coordsFor({ x: m.coordinates.x, y: m.coordinates.y }, shipInfo.size, m.coordinates.orientation || 'H'), hits:0
+        };
+        state.myShips[s.id] = s;
+        s.coords.forEach(p=> state.myCoordsSet.add(key(p.x,p.y)));
+      } else if(m.action==='fire'){
+        const t = m.coordinates;
+        state.shotsFired.add(t.x+','+t.y);
+        const isHit = Object.values(state.opponentShips).some(ship => ship.coords.some(p => p.x===t.x && p.y===t.y));
+        if(isHit){
+          state.hitsOnOpponent.add(t.x+','+t.y);
+        } else {
+          state.missesOnOpponent.add(t.x+','+t.y);
+        }
+        state.turn = (state.turn==='local') ? 'remote' : 'local';
+      }
+      idx++;
+      renderAll();
+    }, 250);
+  });
+
+  integrityBtn.addEventListener('click', ()=>{
+    const str = JSON.stringify(state.moveLog);
+    let hash = 0;
+    for(let i=0;i<str.length;i++){
+      hash = ((hash<<5) - hash) + str.charCodeAt(i);
+      hash |= 0;
+    }
+    integrityDisplay.textContent = 'Integrity hash: ' + hash;
+    integrityDisplay.classList.toggle('hidden');
+  });
+
+  // AI mode utilities
+  function processMoveFire(pos, silent){
+    // helper to simulate a fire move for AI
+    const t = pos.x + ',' + pos.y;
+    if(state.shotsFired.has(t)) return;
+    const m = { action:'fire', player_id: state.localId, move_id: randId(), coordinates: { x: pos.x, y: pos.y }, timestamp: Date.now() };
+    state.moveLog.push(m);
+    state.shotsFired.add(t);
+    const isHit = Object.values(state.opponentShips).some(ship => ship.coords.some(p => p.x===pos.x && p.y===pos.y));
+    if(isHit) state.hitsOnOpponent.add(t);
+    else state.missesOnOpponent.add(t);
+    state.turn = 'remote';
+    renderAll();
+  }
+
+  // Mode switch
+  modeSelect.addEventListener('change', ()=> {
+    const mode = modeSelect.value;
+    state.mode = mode;
+    if(mode==='ai'){
+      // reset some
+      state.phase = 'battle';
+      state.turn = 'local';
+      // generate a tiny random enemy if not present
+      if(Object.keys(state.opponentShips).length===0){
+        // randomize a couple of ships (for demo)
+        let attempt = 0;
+        while(attempt<5){
+          attempt++;
+          const s = SHIP_DEFS[ attempt % SHIP_DEFS.length ];
+          const orient = Math.random()<0.5 ? 'H' : 'V';
+          const start = { x: Math.floor(Math.random()*(GRID_SIZE - (orient==='H'? s.size:0))), y: Math.floor(Math.random()*(GRID_SIZE - (orient==='V'? s.size:0))) };
+          const coords = coordsFor(start, s.size, orient);
+          if(coords.every(p=> inBounds(p) && !state.opponentShips.hasOwnProperty(s.id))){
+            state.opponentShips[s.id] = { id:s.id, size:s.size, orientation: orient, start, coords, hits:0 };
+            break;
+          }
+        }
+      }
+      renderAll();
+    }
+  });
+
+  // Auto deploy
+  autoPlaceBtn.addEventListener('click', ()=>{
+    // Clear
+    state.myShips = {};
+    state.myCoordsSet.clear();
+    state.shipIndex = 0;
+    state.placedShipsCount = 0;
+    // random placement
+    for(let i=0; i<SHIP_DEFS.length; i++){
+      const s = SHIP_DEFS[i];
+      const placed = false;
+      for(let tries=0; tries<500; tries++){
+        const orient = Math.random()<0.5 ? 'H':'V';
+        const maxX = orient==='H' ? GRID_SIZE - s.size : GRID_SIZE - 1;
+        const maxY = orient==='V' ? GRID_SIZE - s.size : GRID_SIZE - 1;
+        const start = { x: Math.floor(Math.random()*maxX), y: Math.floor(Math.random()*maxY) };
+        const coords = coordsFor(start, s.size, orient);
+        if(coords.every(p => inBounds(p) && !state.myCoordsSet.has(key(p.x,p.y)))){
+          state.myShips[s.id] = { id: s.id, size: s.size, orientation: orient, start, coords, hits:0 };
+          coords.forEach(p=> state.myCoordsSet.add(key(p.x,p.y)));
+          state.placedShipsCount++;
+          placed = true;
+          break;
+        }
+      }
+    }
+    renderAll();
+    if(state.placedShipsCount === SHIP_DEFS.length){
+      finishPlacementBtn.disabled = false;
+    }
+  });
+
+  // Copy log to clipboard
+  copyLogBtn.addEventListener('click', async ()=>{
+    const text = JSON.stringify(state.moveLog, null, 2);
+    try{
+      await navigator.clipboard.writeText(text);
+      alert('Move log copied to clipboard');
+    }catch(e){
+      prompt('Copy manually:', text);
+    }
+  });
+
+  // Spawn simple explosion at grid cell
+  function spawnBoom(container, x, y, color){
+    const boom = document.createElement('div');
+    boom.className = 'boom';
+    const cellRect = container.querySelectorAll('.cell')[y*GRID_SIZE + x].getBoundingClientRect();
+    // position relative to container
+    const cRect = container.getBoundingClientRect();
+    const cx = ((cellRect.left - cRect.left) + 11);
+    const cy = ((cellRect.top - cRect.top) + 11);
+    boom.style.left = cx + 'px';
+    boom.style.top = cy + 'px';
+    container.appendChild(boom);
+    setTimeout(()=> boom.remove(), 700);
+  }
+
+  // Initialize
+  renderAll();
+
+  // Keyboard shortcut
+  window.addEventListener('keydown', (e)=>{
+    if(e.key==='Enter' && (e.metaKey || e.ctrlKey)){
+      replayBtn.click();
+    }
+  });
+
+  // End of script
+  // Note: This advanced implementation adds animations, AI mode, auto-deploy, enhanced UI,
+  // randomization, and richer feedback while preserving the JSON move exchange core (Move objects).
+  </script>
+</body>
+</html>
