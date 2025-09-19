@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Chaos Engine: AI Slop Blog Remix</title>
+<style>
+  :root {
+    --bg: #0f0f14;
+    --card: #1d1b2e;
+    --text: #e8e3ff;
+    --muted: #c6bafc;
+    --accent: #7c3aed;
+    --glow: 0 0 12px rgba(124,58,237,.6);
+    --panel: rgba(0,0,0,.28);
+  }
+
+  html, body {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI";
+    color: var(--text);
+    background: radial-gradient(circle at 20% 0%, rgba(0,0,0,.25), transparent 40%), 
+                radial-gradient(circle at 100% 100%, rgba(255,0,180,.15), transparent 40%), 
+                linear-gradient(135deg, #0b0b22 0%, #191639 60%, #0b0b22 100%);
+    overflow: hidden;
+  }
+
+  /* Fullscreen animated background canvas behind content */
+  #bg {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    z-index: 0;
+    pointer-events: none;
+  }
+
+  #app {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    grid-gap: 16px;
+    height: 100vh;
+    padding: 16px;
+    box-sizing: border-box;
+  }
+
+  header {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-radius: 14px;
+    background: linear-gradient(135deg, rgba(50,0,100,.75), rgba(0,0,0,.25));
+    border: 1px solid rgba(255,255,255,.15);
+    box-shadow: var(--glow);
+    user-select: none;
+    backdrop-filter: blur(2px);
+  }
+
+  .brand {
+    display:flex; align-items:center; gap:12px;
+  }
+  .logo {
+    width: 34px; height: 34px; border-radius: 8px;
+    background: linear-gradient(135deg, #4facfe, #00f5a0);
+    box-shadow: 0 0 12px rgba(0,255,180,.6);
+  }
+  h1 { font-size: 18px; margin: 0; }
+  .subtitle { font-size: 12px; color: var(--muted); }
+
+  #controls {
+    background: var(--panel);
+    border: 1px solid rgba(255,255,255,.15);
+    border-radius: 12px;
+    padding: 12px;
+    height: calc(100% - 0px);
+    overflow: auto;
+    box-shadow: inset 0 2px 6px rgba(255,255,255,.04);
+  }
+
+  #controls h2 { font-size: 14px; margin: 6px 0 8px; color: #fff; }
+  .section { margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px dashed rgba(255,255,255,.15); }
+  .control { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; padding: 8px 0; }
+  input[type="range"] { width: 100%; }
+
+  .button {
+    padding: 10px 12px; border-radius: 8px; border: none; cursor: pointer;
+    background: linear-gradient(135deg, #4b8df0, #6bdcff);
+    color: white; font-weight: bold; box-shadow: 0 6px 14px rgba(0,0,0,.25);
+  }
+  .button.secondary {
+    background: linear-gradient(135deg, #2b2b50, #14143a);
+    color: #eaeaff;
+  }
+
+  #skipBtn { width: 100%; padding: 12px; margin-top: 8px; border-radius: 8px; border: none; cursor: pointer;
+    background: linear-gradient(135deg, #ff4d4d, #ff9a9a);
+    color: #fff; font-weight: bold; box-shadow: 0 4px 12px rgba(255,77,77,.5);
+  }
+  #skipBtn:hover { filter: brightness(1.05); }
+
+  #slopMeter {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; border-radius: 8px;
+    background: rgba(255,255,255,.08);
+    border: 1px solid rgba(255,255,255,.15);
+  }
+
+  #slopValueDisplay {
+    font-family: "Courier New", monospace; font-weight: bold; color: #fff;
+    padding: 4px 8px; border-radius: 6px; background: rgba(0,0,0,.25);
+  }
+
+  #milestones, #upgrades { font-weight: bold; }
+
+  #progress {
+    grid-column: 1 / -1;
+    display: flex; gap: 14px; align-items: center;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: rgba(0,0,0,.25);
+    border: 1px solid rgba(255,255,255,.15);
+    align-self: start;
+  }
+
+  #blogArea {
+    position: relative;
+    overflow: auto;
+    height: calc(100vh - 160px);
+    padding: 6px;
+    border-radius: 12px;
+    background: rgba(0,0,0,.25);
+    border: 1px solid rgba(255,255,255,.15);
+  }
+
+  #blogArea::-webkit-scrollbar { width: 10px; }
+  #blogArea::-webkit-scrollbar-thumb { background: rgba(255,255,255,.25); border-radius: 5px; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+    align-items: start;
+  }
+
+  .post {
+    background: var(--card);
+    border: 1px solid rgba(255,255,255,.15);
+    border-radius: 12px;
+    padding: 12px;
+    box-shadow: 0 6px 18px rgba(0,0,0,.28);
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+    transition: transform .25s ease, box-shadow .25s ease, border-color .25s;
+    transform-origin: center;
+  }
+  .post:hover { transform: translateY(-2px); box-shadow: 0 12px 26px rgba(0,0,0,.32); }
+
+  .post h3 { margin: 0 0 6px 0; font-size: 15px; line-height: 1.25; }
+  .post p { margin: 0; font-size: 12.5px; line-height: 1.4; color: #eee; }
+
+  .tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .tag { font-size: 10px; padding: 4px 6px; border-radius: 999px; background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.25); }
+
+  /* Slop bubble animation */
+  .slopBubble {
+    position: absolute;
+    padding: 6px 9px;
+    border-radius: 999px;
+    background: rgba(255,255,255,.95);
+    color: #000;
+    font-weight: bold;
+    pointer-events: none;
+    transform: translate(-50%, -50%);
+    white-space: nowrap;
+    z-index: 50;
+    animation: rise 1.2s ease forwards;
+    box-shadow: 0 4px 12px rgba(0,0,0,.25);
+  }
+  @keyframes rise { 0% { transform: translate(-50%, 0); opacity: 1; } 60% { transform: translate(-50%, -40px); opacity: 1; } 100% { transform: translate(-50%, -90px); opacity: 0; } }
+
+  /* Glitchy mode */
+  .glitched { mix-blend-mode: difference; }
+  .glitched .post { animation: glitchOnce 0.6s steps(2, end) 1; }
+  @keyframes glitchOnce { 0% { transform: translateX(0); } 20% { transform: translateX(-2px) skewX(-5deg); } 40% { transform: translateX(3px) skewX(6deg); } 60% { transform: translateX(-3px) skewX(-6deg); } 100% { transform: translateX(0); } }
+
+  /* Color pulse for chaos */
+  @keyframes pulseColors { 0% { filter: hue-rotate(0deg); } 50% { filter: hue-rotate(180deg); } 100% { filter: hue-rotate(0deg); } }
+  .pulse { animation: pulseColors 5s linear infinite; }
+
+  /* Floating title glitch lines for ambience */
+  .scanline { position: absolute; left: 0; right: 0; top: 0; height: 2px; background: linear-gradient(to bottom, rgba(255,255,255,.0), rgba(255,255,255,.25), rgba(255,255,255,.0)); opacity: .6; animation: scan 3s linear infinite; }
+  @keyframes scan { 0% { transform: translateY(0); } 100% { transform: translateY(4px); } }
+
+  /* Background overlay helper */
+  .glow-border { box-shadow: inset 0 0 0 1px rgba(255,255,255,.18); }
+
+  /* Responsive */
+  @media (max-width: 980px) {
+    #app { grid-template-columns: 1fr; height: auto; grid-auto-rows: min-content; }
+    #controls { order: 2; height: auto; }
+    #progress { order: 3; }
+  }
+
+  /* Tiny helpers */
+  .kbd { font-family: ui-monospace,SFMono-Regular,Monaco,"Consolas","Liberation Mono"; }
+</style>
+</head>
+<body>
+  <!-- Dynamic background canvas -->
+  <canvas id="bg" aria-label="Background chaos animation"></canvas>
+
+  <div id="app" aria-label="Chaos Engine Interface">
+    <header>
+      <div class="brand" aria-label="Brand">
+        <div class="logo" aria-hidden="true"></div>
+        <div>
+          <h1>Chaos Engine</h1>
+          <div class="subtitle">A chaotic blog playground with upgrades, visuals, and synthy glitches</div>
+        </div>
+      </div>
+      <div id="statusLine" class="subtitle" style="font-variant-numeric: tabular-nums; font-family: ui-maintained;">
+        Slop: <span id="slopValueDisplay">0</span> • Chaos: <span id="chaosValueDisplay">40</span>
+      </div>
+    </header>
+
+    <section id="controls" aria-label="Chaos controls" class="section">
+      <h2>Chaos Controls</h2>
+
+      <div class="control" title="Chaos intensity controls how wild the posts are and how glitchy the UI gets">
+        <span>Chaos Level</span>
+        <span class="kbd" id="chaosValue" style="padding:6px 10px; border-radius:6px; background: rgba(255,255,255,.15);">40</span>
+      </div>
+
+      <div class="control" title="Increase or decrease chaos and its effects">
+        <span>Chaos</span>
+        <input type="range" id="chaos" min="0" max="100" value="40" />
+      </div>
+
+      <div class="section" style="padding:0 0 8px 0; margin:0;">
+        <div style="display:flex; gap:8px; align-items:center;">
+          <button id="startBatchBtn" class="button" aria-label="Generate a batch now" title="Generate a new batch of posts">Generate Batch</button>
+          <button id="toggleAutoBtn" class="button secondary" aria-label="Toggle auto batch generation" title="Auto generate batches">Auto: OFF</button>
+        </div>
+      </div>
+
+      <div class="section" style="padding:0 0 8px 0;">
+        <button id="skipBtn" aria-label="Skip content" title="Skip to fresh chaotic content (accessible)">Skip Content</button>
+      </div>
+
+      <div class="section" aria-label="Shop Upgrades">
+        <h3 style="margin:0 0 6px 0; font-size:13px; color:#fff; letter-spacing:.4px;">Upgrades</h3>
+        <div id="upgrades" style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+          <div class="upgradeCard" style="padding:10px; background: rgba(0,0,0,.28); border:1px solid rgba(255,255,255,.15); border-radius:8px;">
+            <strong>Quicker Batches</strong>
+            <div class="muted" style="font-size:12px; color:#ddd;">Cost: <span id="up1Cost">20</span> slop</div>
+            <button id="buy1" class="button small" style="margin-top:8px;">Buy</button>
+            <div id="up1Note" style="font-size:11px; color:#c6bafc; margin-top:6px;">+1 posts per batch</div>
+          </div>
+          <div class="upgradeCard" style="padding:10px; background: rgba(0,0,0,.28); border:1px solid rgba(255,255,255,.15); border-radius:8px;">
+            <strong>Glitch Amplifier</strong>
+            <div class="muted" style="font-size:12px; color:#ddd;">Cost: <span id="up2Cost">40</span> slop</div>
+            <button id="buy2" class="button small" style="margin-top:8px;">Buy</button>
+            <div id="up2Note" style="font-size:11px; color:#c6bafc; margin-top:6px;">Chaos increases UI glitch multiplier</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="blogArea" aria-label="Blog content" style="scroll-behavior:smooth;">
+      <div class="grid" id="blogGrid"></div>
+    </section>
+
+    <section id="progress" aria-label="Progress and milestones">
+      <div id="slopMeter" style="flex:1;">
+        <span>Slop collected</span>
+        <span id="slopValue" class="kbd" style="min-width:60px; text-align:right;">0</span>
+      </div>
+      <div id="milestonesWrap" style="flex:0 0 auto;">
+        <span>Milestones unlocked: </span><span id="milestones" class="kbd" style="min-width:60px; text-align:center;">0</span>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    // Background canvas setup
+    const bg = document.getElementById('bg');
+    const ctx = bg.getContext('2d');
+    let w = window.innerWidth;
+    let h = window.innerHeight;
+    bg.width = w; bg.height = h;
+
+    // Particles for background
+    let particles = [];
+    let chaos = 40;
+    let speedFactor = 0.6;
+
+    function spawnParticle() {
+      const p = {
+        x: Math.random() * w,
+        y: Math.random() * h,
+        vx: (Math.random() - 0.5) * 0.6,
+        vy: (Math.random() - 0.5) * 0.6,
+        size: Math.random() * 2 + 1,
+        hue: Math.floor(Math.random() * 360),
+        life: Math.random() * 120,
+        decay: 0.98
+      };
+      particles.push(p);
+    }
+
+    function initBackground(count = 120) {
+      particles = [];
+      for (let i = 0; i < count; i++) spawnParticle();
+    }
+
+    function resize() {
+      w = window.innerWidth;
+      h = window.innerHeight;
+      bg.width = w; bg.height = h;
+    }
+
+    window.addEventListener('resize', () => {
+      resize();
+    });
+
+    // Render loop
+    function renderBG() {
+      ctx.clearRect(0, 0, w, h);
+
+      // dynamic hue shift with chaos
+      const hueShift = (Date.now() * 0.02) % 360;
+
+      for (let i = 0; i < particles.length; i++) {
+        const p = particles[i];
+        // drift with chaos
+        p.vx += (Math.random() - 0.5) * 0.05 * (chaos / 100);
+        p.vy += (Math.random() - 0.5) * 0.05 * (chaos / 100);
+        p.x += p.vx * (0.8 + chaos / 100);
+        p.y += p.vy * (0.8 + chaos / 100);
+
+        // wrap around
+        if (p.x < -5) p.x = w + 5;
+        if (p.x > w + 5) p.x = -5;
+        if (p.y < -5) p.y = h + 5;
+        if (p.y > h + 5) p.y = -5;
+
+        // draw
+        ctx.fillStyle = `hsla(${(p.hue + hueShift) % 360}, 60%, 70%, ${0.25 + (p.life/120)*0.65})`;
+        ctx.fillRect(p.x, p.y, p.size, p.size);
+        p.life -= 0.5;
+        if (p.life <= 0) {
+          // respawn
+          p.x = Math.random() * w;
+          p.y = Math.random() * h;
+          p.life = Math.random() * 120;
+          p.vx = (Math.random() - 0.5) * 0.8;
+          p.vy = (Math.random() - 0.5) * 0.8;
+        }
+      }
+
+      // overlay some glow gradient
+      const g = ctx.createRadialGradient(w/2, h/2, Math.min(w,h)*0.2, w/2, h/2, Math.max(w,h)*0.6);
+      g.addColorStop(0, `hsla(${(chaos*2)%360},100%,70%,0.08)`);
+      g.addColorStop(1, 'transparent');
+      ctx.fillStyle = g;
+      ctx.fillRect(0,0,w,h);
+
+      requestAnimationFrame(renderBG);
+    }
+
+    // Blog logic
+    const blogGrid = document.getElementById('blogGrid');
+    const chaosInput = document.getElementById('chaos');
+    const chaosLabel = document.getElementById('chaosValue');
+    const chaosValueDisplay = document.getElementById('chaosValueDisplay');
+    const skipBtn = document.getElementById('skipBtn');
+    const slopValueEl = document.getElementById('slopValue');
+    const milestonesEl = document.getElementById('milestones');
+    const startBatchBtn = document.getElementById('startBatchBtn');
+    const toggleAutoBtn = document.getElementById('toggleAutoBtn');
+    const blogArea = document.getElementById('blogArea');
+    const statusLine = document.getElementById('statusLine');
+    const up1Cost = document.getElementById('up1Cost');
+    const up2Cost = document.getElementById('up2Cost');
+    const buy1 = document.getElementById('buy1');
+    const buy2 = document.getElementById('buy2');
+    const up1Note = document.getElementById('up1Note');
+    const up2Note = document.getElementById('up2Note');
+
+    // Core state
+    let postsPerBatch = 6;
+    let batchInterval = 0; // ms; computed by upgrades and chaos
+    let autoRunning = false;
+    let autoTimer = null;
+    let chaos = 40;
+    let slop = 0;
+    let milestonesUnlocked = 0;
+    let unlockedTemplates = []; // dynamic pool
+    let startedAudio = false;
+    let audioCtx = null;
+    let masterGain = null;
+    let glitchedMode = false;
+
+    // Content pools
+    const adj1 = ["hyper","glitchy","absurd","delirious","synthetic","neural","crass","marbled","soggy","cacophonic"];
+    const adj2 = ["unstable","chaotic","noisy","ramshackle","sparking","mangled","sparkly","fuzzy","arcane","weird"];
+    const nouns1 = ["headline","template","widget","ramble","artifact","scroll","cursor","post","banner","snippet"];
+    const nouns2 = ["algorithm","blog","headline","neuron","paradox","glitch","daemon","snippet","pixel","meme"];
+    const verbs1 = ["screams","reboots","glitches","vacuums","dances","crashes","snoozes","juggles","bursts","rattles"];
+    const verbs2 = ["wanders","slurps","splats","loops","skips","drips","buzzes","fizzes","crinkles","pings"];
+
+    const baseTemplates = [
+      { title: "The {adj1} {noun1} {verb1}", body: "In a world of {adj2} {noun2}s, this post {verb2} through the meme-layers of the blog. Chaos factor rising.", tags: ["chaos","meta"] },
+      { title: "Post #{num} • {adj1} {noun1}", body: "A {adj2} {noun2} slithers across the UI, murmuring that the {noun1} is not a {noun2}. Reader beware.", tags: ["absurd","postmodern"] }
+    ];
+    const advancedTemplates = [
+      { title: "Hyper {adj1} {noun1} Suite", body: "Templates fuse: {noun2} meets {noun2}, while the {noun1} negotiates with {noun2} in a loop of {verb1}.", tags: ["meta","suite"] },
+      { title: "Glitch {noun1} Manifest", body: "A manifesto written by {noun2} entities: {verb1} and {verb2} collide in a chorus of pixels.", tags: ["glitch","manifesto"] }
+    ];
+    const hyperTemplates = [
+      { title: "Hyper Chaos Protocol", body: "All attempts at order are deprecated. {adj1} {noun1} collaborate with {noun2} to rewrite the feed.", tags: ["hyper","protocol"] }
+    ];
+
+    // Unlock state
+    const milestones = {10:false, 25:false, 50:false};
+
+    // Helpers
+    function pick(arr) { return arr[Math.floor(Math.random()*arr.length)]; }
+    function fillTemplate(tpl) {
+      const title = tpl.title
+        .replace("{adj1}", pick(adj1))
+        .replace("{adj2}", pick(adj2))
+        .replace("{noun1}", pick(nouns1))
+        .replace("{noun2}", pick(nouns2))
+        .replace("{verb1}", pick(verbs1))
+        .replace("{verb2}", pick(verbs2))
+        .replace("{num}", Math.floor(Math.random()*999));
+      const body = tpl.body
+        .replace("{adj1}", pick(adj1))
+        .replace("{adj2}", pick(adj2))
+        .replace("{noun1}", pick(nouns1))
+        .replace("{noun2}", pick(nouns2))
+        .replace("{verb1}", pick(verbs1))
+        .replace("{verb2}", pick(verbs2))
+        ;
+      return { title, body, tags: tpl.tags || [] };
+    }
+    function generatePost() {
+      const pool = unlockedTemplates.length ? unlockedTemplates : baseTemplates;
+      const tpl = pool[Math.floor(Math.random() * pool.length)];
+      const content = fillTemplate(tpl);
+
+      const card = document.createElement('div');
+      card.className = 'post';
+      // Glitchy vibe when chaos high
+      if (chaos > 60) card.classList.add('glitched');
+
+      const titleEl = document.createElement('h3');
+      titleEl.textContent = content.title;
+      const bodyEl = document.createElement('p');
+      bodyEl.textContent = content.body;
+
+      const tagRow = document.createElement('div');
+      tagRow.className = 'tags';
+      const metaTags = content.tags.length ? content.tags : ['chaos'];
+      metaTags.forEach(tag => {
+        const span = document.createElement('span');
+        span.className = 'tag';
+        span.textContent = tag;
+        tagRow.appendChild(span);
+      });
+
+      card.appendChild(titleEl);
+      card.appendChild(bodyEl);
+      card.appendChild(tagRow);
+
+      card.addEventListener('click', (e) => {
+        if (!startedAudio) { ensureAudio(); startedAudio = true; }
+        spawnSlopBubble(e.clientX, e.clientY);
+        slop += 1;
+        updateSlopUI();
+        checkMilestones();
+        flashCard(card);
+      });
+
+      if (chaos > 70) {
+        card.style.borderColor = '#fff';
+        card.style.boxShadow = '0 8px 28px rgba(255,255,255,.25)';
+      }
+      if (Math.random() < chaos/100) {
+        card.style.transform = 'rotate(' + (Math.random()*2-1) + 'deg)';
+      }
+      // subtle entrance animation
+      card.style.opacity = '0';
+      setTimeout(() => card.style.opacity = '1', 20);
+
+      return card;
+    }
+
+    function spawnSlopBubble(x, y) {
+      const bubble = document.createElement('div');
+      bubble.className = 'slopBubble';
+      bubble.textContent = '+1 Slop';
+      const rect = blogArea.getBoundingClientRect();
+      const px = x - rect.left;
+      const py = y - rect.top;
+      bubble.style.left = px + 'px';
+      bubble.style.top = py + 'px';
+      blogArea.appendChild(bubble);
+      setTimeout(() => bubble.remove(), 1200);
+    }
+
+    function updateSlopUI() {
+      slopValueEl.textContent = slop;
+      chaosValueDisplay.textContent = chaos;
+      chaosLabel.textContent = chaos;
+      if (slop > 0) {
+        blogArea.classList.add('pulse');
+        setTimeout(() => blogArea.classList.remove('pulse'), 600);
+      }
+      milestonesEl.textContent = Object.values(milestones).filter(v => v).length;
+    }
+
+    function checkMilestones() {
+      if (slop >= 10 && !milestones[10]) {
+        unlockTemplates('advanced');
+        milestones[10] = true;
+      }
+      if (slop >= 25 && !milestones[25]) {
+        unlockTemplates('hyper');
+        milestones[25] = true;
+      }
+      if (slop >= 50 && !milestones[50]) {
+        unlockTemplates('meta');
+        milestones[50] = true;
+      }
+      const count = Object.values(milestones).filter(v => v).length;
+      milestonesEl.textContent = count;
+    }
+
+    function unlockTemplates(level) {
+      if (level === 'advanced') {
+        unlockedTemplates = unlockedTemplates.concat(advancedTemplates);
+        showToast("Advanced templates unlocked!");
+        applyChaosToUI();
+      } else if (level === 'hyper') {
+        unlockedTemplates = unlockedTemplates.concat(hyperTemplates);
+        showToast("Hyper templates unlocked!");
+        applyChaosToUI();
+      } else if (level === 'meta') {
+        unlockedTemplates = unlockedTemplates.concat(advancedTemplates);
+        showToast("Meta chaos unlocked!");
+        applyChaosToUI();
+      }
+    }
+
+    function applyChaosToUI() {
+      if (chaos > 50) {
+        document.documentElement.style.setProperty('--glow', '0 0 18px rgba(0,0,0,.2)');
+        appEl.classList.add('glitched');
+      } else {
+        appEl.style.filter = 'saturate(1.05)';
+        setTimeout(() => appEl.style.filter = '', 600);
+        appEl.classList.remove('glitched');
+      }
+    }
+
+    function flashCard(card) {
+      const orig = card.style.boxShadow;
+      card.style.boxShadow = '0 0 0 rgba(0,0,0,0)';
+      setTimeout(() => { card.style.boxShadow = orig; }, 150);
+    }
+
+    function ensureAudio() {
+      if (!audioCtx) {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioCtx();
+        masterGain = audioCtx.createGain();
+        masterGain.gain.value = 0.08;
+        masterGain.connect(audioCtx.destination);
+      }
+      // ambient drone
+      const osc = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.value = 60;
+      g.gain.value = 0.15;
+      osc.connect(g); g.connect(masterGain);
+      osc.start();
+
+      function burst() {
+        const t = audioCtx.currentTime;
+        const b = audioCtx.createOscillator();
+        const bg = audioCtx.createGain();
+        b.type = Math.random() > 0.5 ? 'square' : 'triangle';
+        b.frequency.value = 250 + Math.random() * 900;
+        bg.gain.value = 0.08;
+        b.connect(bg); bg.connect(masterGain);
+        b.start(t);
+        b.frequency.exponentialRampToValueAtTime(0.001, t + 0.12);
+        b.stop(t + 0.13);
+        const next = 450 + Math.random() * 900;
+        setTimeout(burst, next);
+      }
+      setTimeout(burst, 1000);
+    }
+
+    function initBatcher() {
+      generateBatch(6);
+      updateSlopUI();
+    }
+
+    // Chaos visual update
+    function applyChaosVisuals() {
+      const hue = (chaos * 4) % 360;
+      const hue2 = (hue + 60) % 360;
+      document.documentElement.style.setProperty('--bg', `hsl(${hue}, 15%, 6%)`);
+      document.documentElement.style.setProperty('--card', `hsl(${(hue2+180)%360}, 60%, 22%)`);
+      document.documentElement.style.setProperty('--text', `hsl(${(hue+180)%360}, 90%, 92%)`);
+      glitchedMode = chaos > 65;
+      if (glitchedMode) appEl.classList.add('glitched');
+      else appEl.classList.remove('glitched');
+    }
+
+    function generateBatch(n=postsPerBatch) {
+      for (let i = 0; i < n; i++) {
+        blogGrid.appendChild(generatePost());
+      }
+      // fade-in animation
+      Array.from(blogGrid.children).forEach((c, idx) => {
+        c.style.opacity = 0;
+        setTimeout(() => c.style.opacity = 1, 20 + idx * 25);
+      });
+    }
+
+    // Content skip
+    function skipContent() {
+      if (chaos < 20) chaos = 20;
+      chaosInput.value = chaos;
+      updateChaos();
+      generateBatch(6);
+      showToast("Fresh chaos engaged!");
+    }
+
+    // Upgrades
+    let up1Purchased = 0;
+    let up2Purchased = 0;
+    function updateUpgradesUI() {
+      up1Cost.textContent = Math.max(20 - up1Purchased * 5, 0);
+      up2Cost.textContent = Math.max(40 - up2Purchased * 8, 0);
+    }
+    function buyUpgrade1() {
+      const cost = Math.max(20 - up1Purchased * 5, 0);
+      if (slop >= cost) {
+        slop -= cost;
+        postsPerBatch += 1;
+        up1Purchased += 1;
+        updateSlopUI();
+        updateUpgradesUI();
+        showToast("+1 post per batch");
+      } else {
+        showToast("Not enough slop");
+      }
+    }
+    function buyUpgrade2() {
+      const cost = Math.max(40 - up2Purchased * 8, 0);
+      if (slop >= cost) {
+        slop -= cost;
+        chaos += 6;
+        up2Purchased += 1;
+        if (chaos > 100) chaos = 100;
+        updateSlopUI();
+        updateUpgradesUI();
+        applyChaosVisuals();
+        chaosInput.value = chaos;
+        showToast("Chaos amplified!");
+      } else {
+        showToast("Not enough slop");
+      }
+    }
+
+    function showToast(msg) {
+      const t = document.createElement('div');
+      t.textContent = msg;
+      t.style.position = 'fixed';
+      t.style.right = '16px';
+      t.style.bottom = '16px';
+      t.style.background = 'rgba(0,0,0,.7)';
+      t.style.color = '#fff';
+      t.style.padding = '10px 14px';
+      t.style.borderRadius = '8px';
+      t.style.zIndex = '999';
+      t.style.fontSize = '14px';
+      t.style.boxShadow = '0 6px 16px rgba(0,0,0,.25)';
+      document.body.appendChild(t);
+      setTimeout(() => {
+        t.style.transition = 'opacity .3s';
+        t.style.opacity = '0';
+        setTimeout(() => t.remove(), 350);
+      }, 1200);
+    }
+
+    // UI events
+    chaosInput.addEventListener('input', (e) => {
+      chaos = +e.target.value;
+      updateChaos();
+    });
+    function updateChaos() {
+      document.getElementById('chaosValue').textContent = chaos;
+      chaosValueDisplay.textContent = chaos;
+      if (chaos > 60) {
+        appEl.classList.add('glitched');
+      } else {
+        appEl.classList.remove('glitched');
+      }
+      // dynamic batch size and frequency depending on chaos
+      postsPerBatch = 4 + Math.floor(chaos / 20);
+      batchInterval = Math.max(1000 - chaos * 6, 200);
+      if (autoRunning) {
+        resetAuto();
+      }
+      applyChaosVisuals();
+      // background speed factor
+      speedFactor = 0.4 + chaos/200;
+    }
+
+    startBatchBtn.addEventListener('click', () => {
+      generateBatch();
+    });
+
+    toggleAutoBtn.addEventListener('click', () => {
+      autoRunning = !autoRunning;
+      toggleAutoBtn.textContent = 'Auto: ' + (autoRunning ? 'ON' : 'OFF');
+      if (autoRunning) {
+        resetAuto();
+        showToast("Auto batching enabled");
+      } else {
+        clearInterval(autoTimer);
+        autoTimer = null;
+        showToast("Auto batching paused");
+      }
+    });
+
+    skipBtn.addEventListener('click', () => {
+      skipContent();
+    });
+
+    buy1.addEventListener('click', buyUpgrade1);
+    buy2.addEventListener('click', buyUpgrade2);
+
+    // Init
+    const appEl = document.getElementById('app');
+    function resetAuto() {
+      if (autoTimer) clearInterval(autoTimer);
+      autoTimer = setInterval(() => {
+        // generate batch periodically influenced by chaos
+        generateBatch();
+      }, Math.max(800 * (1.0 - chaos/200), 500));
+    }
+
+    function generateInitial() {
+      unlockedTemplates = baseTemplates.slice();
+      updateUpgradesUI();
+      updateSlopUI();
+    }
+
+    function init() {
+      // background
+      initBackground(180);
+      renderBG();
+      resize();
+      // initial data
+      generateInitial();
+      // initial batch
+      initBatcher();
+      // UI
+      updateChaos();
+      // keyboard shortcuts
+      window.addEventListener('keydown', (e) => {
+        if (e.key === ' ') { e.preventDefault(); generateBatch(); }
+        else if (e.key === '+') { chaos = Math.min(chaos+5, 100); chaosInput.value = chaos; updateChaos(); }
+        else if (e.key === '-') { chaos = Math.max(chaos-5, 0); chaosInput.value = chaos; updateChaos(); }
+      });
+      // first post in view
+      // scanline ambience
+      const scan = document.createElement('div');
+      scan.className = 'scanline';
+      blogArea.appendChild(scan);
+    }
+
+    // Batch generation helpers
+    function generatePost() {
+      const pool = unlockedTemplates.length ? unlockedTemplates : baseTemplates;
+      const tpl = pool[Math.floor(Math.random() * pool.length)];
+      const content = fillTemplate(tpl);
+
+      const card = document.createElement('div');
+      card.className = 'post';
+      if (chaos > 60) card.classList.add('glitched');
+      const titleEl = document.createElement('h3');
+      titleEl.textContent = content.title;
+      const bodyEl = document.createElement('p');
+      bodyEl.textContent = content.body;
+
+      const tagRow = document.createElement('div');
+      tagRow.className = 'tags';
+      const metaTags = content.tags.length ? content.tags : ['chaos'];
+      metaTags.forEach(tag => {
+        const span = document.createElement('span');
+        span.className = 'tag';
+        span.textContent = tag;
+        tagRow.appendChild(span);
+      });
+
+      card.appendChild(titleEl);
+      card.appendChild(bodyEl);
+      card.appendChild(tagRow);
+
+      card.addEventListener('click', (e) => {
+        if (!startedAudio) { ensureAudio(); startedAudio = true; }
+        spawnSlopBubble(e.clientX, e.clientY);
+        slop += 1;
+        updateSlopUI();
+        checkMilestones();
+        flashCard(card);
+      });
+
+      if (chaos > 70) {
+        card.style.borderColor = '#fff';
+        card.style.boxShadow = '0 8px 28px rgba(255,255,255,.25)';
+      }
+
+      // gentle random tilt
+      if (Math.random() < chaos/100) {
+        card.style.transform = 'rotate(' + (Math.random()*2-1) + 'deg)';
+      }
+
+      return card;
+    }
+
+    function generateBatch(n = postsPerBatch) {
+      for (let i=0; i<n; i++) {
+        blogGrid.appendChild(generatePost());
+      }
+    }
+
+    // DOM references for upgrade costs
+    updateUpgradesUI();
+    init();
+
+    // Initialize rendering loop
+    // start background rendering
+    renderBG();
+  </script>
+</body>
+</html>
