@@ -1,0 +1,898 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title TurboText Quest - Expanded</title>
+<style>
+  :root{
+    --bg: #001f3f;
+    --fg: #e8f6ff;
+    --acc: #00ffff;
+    --panel: #002a54;
+    --panelBorder: #00ffff;
+    --muted: #a6d1e8;
+    --shadow: rgba(0,0,0,.4);
+    --glow: 0 0 16px rgba(0,255,255,.75);
+  }
+
+  *{box-sizing:border-box}
+  html,body{height:100%; margin:0; padding:0; background:var(--bg); color:var(--fg); font-family: "Courier New", monospace; font-size:14px; overflow:hidden;}
+
+  /* Cinematic layers */
+  body.cinematic {
+    animation: hue 20s linear infinite;
+  }
+  @keyframes hue {
+    0% { filter: hue-rotate(0deg); }
+    100% { filter: hue-rotate(360deg); }
+  }
+
+  /* Particle canvas behind UI */
+  #particleLayer {
+    position: fixed; left:0; top:0; width:100%; height:100%; pointer-events:none;
+    z-index: 0; mix-blend-mode: screen;
+  }
+
+  .wrapper{min-height:100vh; display:flex; flex-direction:column; padding:6px 8px 0; gap:6px; position:relative; z-index:1;}
+  /* Menu bar (top chrome) */
+  .menubar{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:6px 10px; border:1px solid var(--panelBorder); color:var(--fg);
+    background: #062d68;
+    text-shadow:0 1px 0 rgba(0,0,0,.5);
+    letter-spacing:.5px;
+    border-radius:6px;
+  }
+  .menubar .title{ font-weight:bold; color:#c5fbff; display:flex; align-items:center; gap:8px; }
+  .menubar .hint{ color:var(--muted); font-size:12px; display:flex; align-items:center; gap:6px; }
+
+  /* Two-panel layout with ascii vibe border around panels */
+  .frame{
+    display:flex; flex:1; min-height:0; gap:8px; padding:6px;
+  }
+  .panel{ flex:1; min-width:260px; background:#001a2f; border:1px solid var(--panelBorder); border-radius:6px; padding:6px 8px; position:relative; overflow:auto; }
+  .panel.left{ max-width:42%; min-width:260px; }
+  .panel.right{ max-width:58%; min-width:360px; }
+
+  .panel-header{ display:flex; align-items:center; gap:8px; padding:2px 6px; border-bottom:1px solid #0a335f; margin-bottom:6px; }
+  .panel-title{ font-weight:bold; color:#c9faff; letter-spacing:.5px; }
+
+  .ascii-frame-top,.ascii-frame-bottom{ text-align:center; color:#88f6ff; font-family:monospace; font-size:12px; user-select:none; }
+  .ascii-frame{ padding:6px; border:1px solid #0a3d7a; background:#00172a; border-radius:2px; }
+
+  /* Tree lines in left panel */
+  .tree{ font-family: "Courier New", monospace; font-size:14px; line-height:1.4; padding:4px 6px; white-space:pre; }
+  .tree-line{ padding:2px 0; cursor:default; transition: background .2s; }
+  .tree-line:hover{ background: rgba(0,255,255,.08); }
+  .tree-line.selected{ background: rgba(0,255,255,.25); color:#eaffff; border-radius:4px; }
+  .badge{ display:inline-block; padding:2px 6px; border:1px solid #00ffff; border-radius:3px; font-size:12px; margin-left:6px; color:#bfffff; }
+
+  .locked{ color:#ffb3b3; opacity:.9; }
+  .unlocked{ color:#b6ffd6; }
+
+  /* Right panel content (scene) */
+  .scene{ padding:6px; white-space:pre-wrap; min-height:180px; }
+  .scene h2{ margin:6px 0; font-size:16px; color:#c9ffe9; }
+  .scene .section{ margin:8px 0; }
+  .scene .items{ display:flex; flex-direction:column; gap:6px; }
+  .scene .item{ display:flex; align-items:center; gap:8px; padding:4px 6px; border:1px solid #0a4b87; border-radius:4px; background:#012a58; transition: transform .2s, background .2s; }
+  .scene .item.selected{ background: rgba(0,255,255,.15); border-color:#00ffff; }
+  .scene .item .tag{ font-size:12px; color:#9be1ff; margin-left:auto; }
+  .scene .item .pill{ padding:1px 5px; border-radius:3px; border:1px solid #0ff; color:#b3f9ff; font-size:12px; }
+
+  /* Inventory/status bar at bottom (status chrome) */
+  .statusbar{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:6px 8px; border:1px solid var(--panelBorder); background:#001a3b; color:#eaffff;
+    font-family: "Courier New", monospace; font-size:12px;
+    border-radius:6px;
+  }
+  .status-left{ display:flex; gap:8px; align-items:center; }
+  .inventory{ display:inline-flex; gap:6px; align-items:center; padding:2px 6px; border:1px solid #0ff; border-radius:4px; background:#003a66; }
+  .inventory .chip{ font-weight:bold; color:#dffcff; padding:0 6px; }
+
+  /* Prompt line (command) */
+  .prompt{ display:flex; align-items:center; padding:6px 8px; gap:6px; border-top:1px solid #0a335f; }
+  .prompt .prompt-label{ color:#bff; margin-right:4px; }
+  #cmd{ flex:1; background:#001a3b; color:#eaffff; border:1px solid #0ff; padding:4px 6px; font-family:inherit; font-size:13px; border-radius:3px; outline:none; }
+
+  /* Help overlay (F1) */
+  .overlay{ position:fixed; top:10%; left:50%; transform:translateX(-50%); width: min(800px, 92vw); max-height:80vh; overflow:auto; padding:14px; border:2px solid #0ff; border-radius:6px; background:#012b58; color:#eaffff; z-index:1000; box-shadow: 0 0 20px rgba(0,255,255,.4); display:none; }
+  .overlay h3{ margin-top:0; color:#d8fff7; }
+  .overlay pre{ white-space:pre-wrap; font-family: "Courier New", monospace; }
+  .overlay .close{ text-align:right; }
+
+  /* Settings overlay */
+  .settings{ display:flex; flex-direction:column; gap:10px; padding:6px 10px; }
+  .toggle{ display:flex; align-items:center; justify-content:space-between; padding:6px 8px; border-radius:6px; background: rgba(0,255,255,.08); border:1px solid rgba(0,255,255,.25); }
+  .toggle input{ transform: scale(1.2); }
+
+  /* Puzzle animations on pick-up / actions */
+  .pulse{ animation: pulse 400ms ease-out; }
+  @keyframes pulse {
+    0% { transform: scale(1); box-shadow: 0 0 0 rgba(0,255,255,0); }
+    60% { transform: scale(1.08); box-shadow: 0 0 24px rgba(0,255,255,.75); }
+    100% { transform: scale(1); box-shadow: 0 0 0 rgba(0,0,0,0); }
+  }
+  .floaty{ position: relative; overflow: visible; }
+  .floaty:after{
+    content:'';
+    position:absolute; left:50%; top:0; width:6px; height:6px; border-radius:50%;
+    background:#9ff; transform: translate(-50%, -10px); opacity:0; animation: spawn 700ms ease-out forwards;
+  }
+  @keyframes spawn{
+    0% { opacity:1; transform: translate(-50%, -6px); }
+    100% { opacity:0; transform: translate(-50%, -40px); }
+  }
+
+  /* Responsive tweaks */
+  @media (max-width: 900px){
+    .frame{ flex-direction:column; }
+    .panel{ min-width:0; width:100%; max-height:45vh; }
+    .statusbar{ font-size:11px; }
+  }
+
+  /* Light frame ornaments for ASCII vibe */
+  .frame-ornaments{ font-family:monospace; font-size:12px; color:#7bd9ff; text-align:left; padding-left:6px; }
+</style>
+</head>
+<body>
+  <!-- particle layer (behind UI) -->
+  <canvas id="particleLayer"></canvas>
+
+  <div class="wrapper" id="app">
+    <div class="menubar" aria-label="Menu Bar">
+      <div class="title">
+        <span style="color:#c5fbff;">TurboText Quest</span>
+        <span class="badge" id="cinematicBadge" title="Cinematic mode status">CN: OFF</span>
+      </div>
+      <div class="hint">
+        Use Arrow keys to navigate, Enter to pick/enter, Esc to reset, F1 help, F2 inventory, F3 settings
+      </div>
+    </div>
+
+    <div class="frame" style="border:1px solid #0ff; padding:6px;">
+      <div class="panel left ascii-frame" aria-label="World Tree">
+        <div class="ascii-frame-top">+---------------- LEFT TREE (Xtree Gold style) ----------------+</div>
+        <div class="frame-ornaments" style="padding:2px 0 6px 6px; text-align:left;">
+          World
+        </div>
+        <div class="tree" id="tree"></div>
+        <div class="ascii-frame-bottom" style="margin-top:6px;">+-----------------------------------------------------------------+</div>
+        <div class="frame-ornaments" style="padding:6px 6px; text-align:left; opacity:.9;">
+          [Inventory] <span id="logBadge" class="badge" style="margin-left:6px;">0 new</span>
+        </div>
+        <div id="log" class="tree" style="max-height:140px; overflow:auto; border-top:1px solid #0a335f; padding-top:6px; opacity:.95;">
+          <div class="tree-line" style="color:#9bdcff;">Log initialized. Explore the map and collect keys.</div>
+        </div>
+      </div>
+
+      <div class="panel right ascii-frame" aria-label="Scene">
+        <div class="ascii-frame-top" style="margin-bottom:6px;">+----------------- SCENE / ROOM CONTENT -----------------+</div>
+        <div class="scene" id="scene">
+          <div class="prompt-spot" style="color:#9be6ff;">Select a room from the left, then use Enter to view / interact.</div>
+        </div>
+        <div class="ascii-frame-bottom" style="margin-top:6px;">+-----------------------------------------------------------+</div>
+      </div>
+    </div>
+
+    <div class="prompt" aria-label="Command Line">
+      <span class="prompt-label">&gt;</span>
+      <input id="cmd" placeholder="Type commands (look, take <item>, inventory, go <room>, use <item> on <target>, help)..." autocomplete="off" />
+    </div>
+
+    <div class="statusbar" role="status" aria-label="Status Bar">
+      <div class="status-left">
+        <div class="inventory" title="Inventory">
+          <span>Inventory:</span>
+          <span id="invList" style="font-weight:bold; color:#d9ffff;">(empty)</span>
+        </div>
+      </div>
+      <div id="statusProgress" style="white-space:nowrap;">
+        Progress: Unlocked 0/6 rooms
+      </div>
+    </div>
+  </div>
+
+  <!-- Help Overlay (F1) -->
+  <div class="overlay" id="helpOverlay" role="dialog" aria-label="Help">
+    <div class="close" style="text-align:right;">
+      <button id="closeHelp" style="padding:6px 10px; border-radius:4px; border:1px solid #0ff; background:#0a335f; color:#c9faff; cursor:pointer;">Close</button>
+    </div>
+    <h3>TurboText Quest - Help</h3>
+    <pre>
+Keyboard controls:
+- Up/Down arrows: navigate left tree
+- Enter: enter a room or take/select item when on left/right list
+- Esc: clear selection / reset
+- F1: toggle this help
+- F2: show inventory
+- F3: toggle settings
+- Type commands in the prompt and press Enter
+
+Game goals:
+- Navigate the two-panel world (Left: rooms, Right: room content)
+- Pick up items to unlock other rooms
+- Unlocks shown in status bar and left tree
+
+Rooms (unlocked when required items are in inventory):
+- Entrance Corridor (start room)
+- Control Room (requires Blue Key)
+- Vault (requires Blue Key + Red Key)
+- Observatory (requires Silver Key)
+- Engine Room (requires Green Key)
+- Laboratory (requires Gold Key)
+
+ASCII icons:
+- [ ] item
+- [x] taken item
+- [LOCKED] / [UNLOCKED] status
+</pre>
+    <div style="text-align:right; font-size:12px; color:#b8eaff;">Press F1 to close</div>
+  </div>
+
+  <!-- Settings Overlay -->
+  <div class="overlay" id="settingsOverlay" role="dialog" aria-label="Settings" style="display:none;">
+    <div class="close" style="text-align:right;">
+      <button id="closeSettings" style="padding:6px 10px; border-radius:4px; border:1px solid #0ff; background:#0a335f; color:#c9faff; cursor:pointer;">Close</button>
+    </div>
+    <h3>Settings</h3>
+    <div class="settings">
+      <div class="toggle">
+        <span>Cinematic mode</span>
+        <label><input type="checkbox" id="cinematicToggle" /> Enable</label>
+      </div>
+      <div class="toggle">
+        <span>ASCII frames</span>
+        <label><input type="checkbox" id="asciiToggle" checked/> Show ascii frames</label>
+      </div>
+      <div class="toggle">
+        <span>Particle trails</span>
+        <label><input type="checkbox" id="particleToggle" checked/> Enable</label>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Data Model
+    const rooms = {
+      entrance: {
+        id: 'entrance',
+        name: 'Entrance Corridor',
+        description: 'A cold blue-lit corridor. A pedestal holds a Blue Key.',
+        unlocked: true,
+        required: [],
+        items: [
+          { id: 'blue_key', name: 'Blue Key', description: 'An old key etched with a blue rune.', picked: false }
+        ]
+      },
+      control: {
+        id: 'control',
+        name: 'Control Room',
+        description: 'A humming chamber full of consoles. A vault door looms to the east.',
+        unlocked: false,
+        required: ['blue_key'],
+        items: [
+          { id: 'red_key', name: 'Red Key', description: 'A key glowing with a red aura.', picked: false }
+        ]
+      },
+      vault: {
+        id: 'vault',
+        name: 'Vault',
+        description: 'A sealed vault filled with crystalline data. Glints of gold catch the eye.',
+        unlocked: false,
+        required: ['blue_key','red_key'],
+        items: [
+          { id: 'gold_coin', name: 'Gold Coin', description: 'A coin stamped with strange runes.', picked: false }
+        ]
+      },
+      observatory: {
+        id: 'observatory',
+        name: 'Observatory',
+        description: 'A dome with star charts. A Silver Key rests by the viewport.',
+        unlocked: false,
+        required: ['silver_key'],
+        items: [
+          { id: 'silver_key', name: 'Silver Key', description: 'A key that gleams with pale light.', picked: false }
+        ]
+      },
+      engine: {
+        id: 'engine',
+        name: 'Engine Room',
+        description: 'Gleaming turbines hum with energy. Green Key is embedded in a panel.',
+        unlocked: false,
+        required: ['green_key'],
+        items: [
+          { id: 'green_key', name: 'Green Key', description: 'A key forged from emerald metal.', picked: false }
+        ]
+      },
+      laboratory: {
+        id: 'laboratory',
+        name: 'Laboratory',
+        description: 'A sterile lab with crystalline shelves. Gold Key lies within a locked cabinet.',
+        unlocked: false,
+        required: ['gold_key'],
+        items: [
+          { id: 'gold_key', name: 'Gold Key', description: 'Key coated in golden dust.', picked: false }
+        ]
+      }
+    };
+
+    // World Root
+    const worldRoot = {
+      id: 'world',
+      name: 'World',
+      type: 'folder',
+      children: [rooms.entrance, rooms.control, rooms.vault, rooms.observatory, rooms.engine, rooms.laboratory]
+    };
+
+    // UI State
+    let selectedLeftIndex = 0;
+    let flatTree = []; // array of {id, name, depth, room}
+    let currentRoom = rooms.entrance; // start in entrance
+    let helpVisible = false;
+    let settingsVisible = false;
+
+    // DOM references
+    const treeEl = document.getElementById('tree');
+    const sceneEl = document.getElementById('scene');
+    const invListEl = document.getElementById('invList');
+    const statusProgressEl = document.getElementById('statusProgress');
+    const cmdInput = document.getElementById('cmd');
+    const helpOverlay = document.getElementById('helpOverlay');
+    const settingsOverlay = document.getElementById('settingsOverlay');
+    const cinematicBadge = document.getElementById('cinematicBadge');
+    const logEl = document.getElementById('log');
+    const logBadge = document.getElementById('logBadge');
+    const logPanel = document.getElementById('log');
+
+    // Settings controls
+    const cinematicToggle = document.getElementById('cinematicToggle');
+    const asciiToggle = document.getElementById('asciiToggle');
+    const particleToggle = document.getElementById('particleToggle');
+
+    // Particle layer
+    const particleCanvas = document.getElementById('particleLayer');
+    const pctx = particleCanvas.getContext('2d');
+    let particles = [];
+    function resizeCanvas(){
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      if (particleCanvas.width !== w || particleCanvas.height !== h) {
+        particleCanvas.width = w;
+        particleCanvas.height = h;
+      }
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // Inventory helper
+    function getInventory() {
+      const items = [];
+      // Collect from all rooms
+      for (const r of Object.values(rooms)) {
+        for (const it of r.items) {
+          if (it.picked) items.push(it);
+        }
+      }
+      // Unique by id
+      const map = {};
+      items.forEach(i => map[i.id] = i);
+      return Object.values(map);
+    }
+    function inventoryToString() {
+      const items = getInventory().map(i => i.name);
+      return items.length ? items.join(', ') : '(empty)';
+    }
+
+    // Unlock logic
+    function roomContainsInInventory(itemId) {
+      for (const r of Object.values(rooms)) {
+        for (const it of r.items) {
+          if (it.id === itemId && it.picked) return true;
+        }
+      }
+      return false;
+    }
+    function updateUnlocks() {
+      let count = 0;
+      for (const r of Object.values(rooms)) {
+        if (r.unlocked) count++;
+        if (r.required.length === 0) { r.unlocked = true; continue; }
+        r.unlocked = r.required.every(req => roomContainsInInventory(req) );
+      }
+      // ensure current room if unlocked
+      if (currentRoom && !currentRoom.unlocked) {
+        // stay in place; will enable when unlocked
+      }
+      refreshLeftTree();
+    }
+
+    // Rendering
+    function flattenTree() {
+      flatTree = [{id: worldRoot.id, name: worldRoot.name, depth: 0, type: 'folder'}];
+      for (const r of worldRoot.children) {
+        flatTree.push({id: r.id, name: r.name, depth: 1, type: 'room', room: r});
+      }
+    }
+
+    function renderTree() {
+      flattenTree();
+      treeEl.innerHTML = '';
+      flatTree.forEach((node, idx) => {
+        const line = document.createElement('div');
+        line.className = 'tree-line' + (idx === selectedLeftIndex ? ' selected' : '');
+        const indent = '  '.repeat(node.depth);
+        let status = '';
+        if (node.type === 'room') {
+          status = ' [' + (node.room.unlocked ? 'UNLOCKED' : 'LOCKED') + ']';
+        }
+        line.textContent = indent + (node.depth === 0 ? node.name : '• ' + node.name) + status;
+        line.dataset.id = node.id;
+        line.addEventListener('click', ()=> {
+          selectedLeftIndex = idx;
+          renderTree();
+        });
+        treeEl.appendChild(line);
+      });
+      // ensure current room is visible
+      scrollTreeIntoView();
+    }
+
+    function scrollTreeIntoView() {
+      const lines = treeEl.querySelectorAll('.tree-line');
+      if (lines[selectedLeftIndex]) {
+        lines[selectedLeftIndex].scrollIntoView({block:'nearest', behavior:'smooth'});
+      }
+    }
+
+    function renderScene() {
+      const r = currentRoom;
+      sceneEl.innerHTML = '';
+      const title = document.createElement('h2');
+      title.textContent = r.name;
+      sceneEl.appendChild(title);
+      const p = document.createElement('div');
+      p.textContent = r.description;
+      sceneEl.appendChild(p);
+
+      // Items in room
+      const hasItems = r.items && r.items.length > 0;
+      const section = document.createElement('div');
+      section.className = 'section';
+      const secTitle = document.createElement('div');
+      secTitle.textContent = 'Items in room:';
+      section.appendChild(secTitle);
+      const itemsList = document.createElement('div');
+      itemsList.className = 'items';
+      r.items.forEach((it, idx) => {
+        if (it.picked) return;
+        const itDiv = document.createElement('div');
+        itDiv.className = 'item' + (idx === 0 ? ' selected' : '');
+        const name = document.createElement('span');
+        name.textContent = it.name;
+        const tag = document.createElement('span');
+        tag.className = 'tag';
+        tag.textContent = 'id:' + it.id;
+        itDiv.appendChild(name);
+        itDiv.appendChild(tag);
+        itemsList.appendChild(itDiv);
+      });
+      if (!hasItems) {
+        const none = document.createElement('div');
+        none.textContent = '(no items here)';
+        itemsList.appendChild(none);
+      }
+      section.appendChild(itemsList);
+      sceneEl.appendChild(section);
+
+      // Quick hint
+      const hint = document.createElement('div');
+      hint.style.marginTop = '6px';
+      hint.style.fontSize = '12px';
+      hint.style.color = '#b8eaff';
+      hint.textContent = 'Tip: Take items to unlock new rooms automatically. Use "look" to redisplay description.';
+      sceneEl.appendChild(hint);
+
+      updateStatusWord();
+    }
+
+    function updateStatusWord() {
+      invListEl.textContent = inventoryToString();
+      const unlockedCount = Object.values(rooms).filter(r => r.unlocked).length;
+      // Note: 6 total rooms (Entrance + 5 others)
+      statusProgressEl.textContent = `Progress: Unlocked ${unlockedCount}/6 rooms`;
+      renderTree();
+    }
+
+    function refreshLeftTree() {
+      renderTree();
+      renderScene();
+      updateStatusWord();
+    }
+
+    // Event handlers
+    function handleLeftKey(e){
+      if (e.key === 'ArrowDown') {
+        if (selectedLeftIndex < flatTree.length - 1) {
+          selectedLeftIndex++;
+          renderTree();
+        }
+        e.preventDefault();
+      } else if (e.key === 'ArrowUp') {
+        if (selectedLeftIndex > 0) {
+          selectedLeftIndex--;
+          renderTree();
+        }
+        e.preventDefault();
+      } else if (e.key === 'Enter') {
+        const node = flatTree[selectedLeftIndex];
+        if (!node) return;
+        if (node.type === 'folder' || node.id === 'world') {
+          // no action
+        } else if (node.type === 'room') {
+          if (node.room.unlocked) {
+            currentRoom = node.room;
+            renderScene();
+            spawnBurstAtCenter();
+          } else {
+            const missing = node.room.required.filter(id => !roomContainsInInventory(id)).map(id => id);
+            const missingNames = missing.map(id => {
+              for (const rr of Object.values(rooms)) {
+                const item = rr.items.find(it => it.id === id);
+                if (item) return item.name;
+              }
+              return id;
+            });
+            const msg = missingNames.length ? `Door is locked. Need: ${missingNames.join(', ')}` : 'Door locked';
+            pushStatus(msg);
+          }
+        }
+        e.preventDefault();
+      }
+    }
+
+    function pushStatus(text){
+      const note = document.createElement('div');
+      note.style.color = '#c6fffa';
+      note.style.fontSize = '12px';
+      note.style.marginTop = '6px';
+      note.textContent = text;
+      sceneEl.appendChild(note);
+      setTimeout(()=>{ note.remove(); }, 2500);
+      // also log
+      logEvent(text);
+    }
+
+    // Log helpers
+    function logEvent(text){
+      const div = document.createElement('div');
+      div.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
+      div.style.fontSize = '12px';
+      div.style.color = '#bfeaff';
+      div.style.padding = '2px 0';
+      logEl.insertBefore(div, logEl.firstChild);
+      // update badge
+      const lines = logEl.children.length;
+      logBadge.textContent = lines;
+      // clamp log length
+      if (logEl.children.length > 100) logEl.removeChild(logEl.lastChild);
+      // small pulse to indicate log
+      div.classList.add('pulse');
+    }
+
+    // Command processing
+    function processCommand(input) {
+      const parts = input.trim().split(/\s+/);
+      const cmd = parts[0]?.toLowerCase();
+      const arg = parts.slice(1).join(' ');
+      if (!cmd) return;
+      switch(cmd){
+        case 'look':
+          renderScene();
+          pushStatus(currentRoom.description);
+          break;
+        case 'inventory':
+          pushStatus('Inventory: ' + inventoryToString());
+          break;
+        case 'take':
+          if (!arg) { pushStatus('Specify an item to take.'); break; }
+          takeItemInRoom(currentRoom, arg);
+          break;
+        case 'go':
+          if (!arg) { pushStatus('Specify a room to go to.'); break; }
+          goToRoomByName(arg);
+          break;
+        case 'help':
+          toggleHelp(true);
+          break;
+        case 'lookat':
+          lookAtItem(currentRoom, arg);
+          break;
+        case 'use':
+          if (!arg) { pushStatus('Usage: use <item> on <target>'); break; }
+          useItemOnTarget(arg);
+          break;
+        default:
+          pushStatus('Unknown command. Type "help" for commands.');
+      }
+      cmdInput.value = '';
+    }
+
+    function normalizeName(name){
+      return name.trim().toLowerCase();
+    }
+
+    function takeItemInRoom(room, itemNameOrId) {
+      if (!room || !room.items) { pushStatus('No items here.'); return; }
+      const key = itemNameOrId.toLowerCase();
+      const item = room.items.find(it => !it.picked && (it.name.toLowerCase() === key || it.id.toLowerCase() === key));
+      if (!item) {
+        pushStatus('No such available item.');
+        return;
+      }
+      item.picked = true;
+      // simple ripple pulse via DOM
+      spawnBurst(0.5, 0.5);
+      pushStatus(`You took: ${item.name}`);
+      updateUnlocks();
+      renderScene();
+      renderTree();
+      updateStatusWord();
+      // log
+      logEvent(`Picked up ${item.name}`);
+      // fancy highlight
+      flashElement(item.name);
+    }
+
+    function flashElement(text){
+      // quick ephemeral glow on top-left panel
+      const el = document.createElement('div');
+      el.textContent = text;
+      el.style.position = 'fixed';
+      el.style.left = '50%';
+      el.style.top = '40%';
+      el.style.transform = 'translate(-50%, -50%)';
+      el.style.background = '#003a66';
+      el.style.border = '1px solid #0ff';
+      el.style.color = '#d9fbff';
+      el.style.padding = '8px 12px';
+      el.style.borderRadius = '6px';
+      el.style.zIndex = '999';
+      el.style.boxShadow = '0 0 16px rgba(0,255,255,.8)';
+      el.style.opacity = '0';
+      el.style.transition = 'opacity 0.6s';
+      document.body.appendChild(el);
+      requestAnimationFrame(()=>{ el.style.opacity = '1'; });
+      setTimeout(()=>{ el.style.opacity = '0'; setTimeout(()=>{ el.remove(); }, 700); }, 1200);
+    }
+
+    function goToRoomByName(name) {
+      const target = Object.values(rooms).find(r => r.name.toLowerCase() === name.toLowerCase());
+      if (!target) { pushStatus('No such room.'); return; }
+      if (!target.unlocked) {
+        const missing = target.required.filter(id => !roomContainsInInventory(id));
+        const missingNames = missing.map(id => {
+          for (const rr of Object.values(rooms)) {
+            const it = rr.items.find(it => it.id === id);
+            if (it) return it.name;
+          }
+          return id;
+        });
+        pushStatus('Door locked. Need: ' + (missingNames.length ? missingNames.join(', ') : 'unknown'));
+        return;
+      }
+      currentRoom = target;
+      renderScene();
+      const idx = flatTree.findIndex(n => n.id === target.id);
+      if (idx >= 0) {
+        selectedLeftIndex = idx;
+        renderTree();
+      }
+      logEvent('Entered ' + target.name);
+    }
+
+    function lookAtItem(room, name) {
+      const it = room.items.find(i => i.name.toLowerCase() === name.toLowerCase() || i.id.toLowerCase() === name.toLowerCase());
+      if (!it) { pushStatus('No such item in this room.'); return; }
+      pushStatus(`${it.name}: ${it.description}`);
+    }
+
+    function useItemOnTarget(input) {
+      // Expect: "<item> on <target>"
+      const parts = input.split(/\\s+on\\s+/i);
+      if (parts.length !== 2) { pushStatus('Usage: use <item> on <target>'); return; }
+      const itemPart = parts[0].trim().toLowerCase();
+      const targetPart = parts[1].trim().toLowerCase();
+
+      // Find item in inventory (picked)
+      const inv = getInventory();
+      const item = inv.find(i => i.name.toLowerCase() === itemPart || i.id.toLowerCase() === itemPart);
+      if (!item) { pushStatus('You do not possess such an item.'); return; }
+
+      // Find target room
+      const targetRoom = Object.values(rooms).find(r => r.name.toLowerCase() === targetPart || r.id.toLowerCase() === targetPart);
+      if (!targetRoom) { pushStatus('No such target to use item on.'); return; }
+
+      // If target requires this item, unlock it
+      if (targetRoom.required && targetRoom.required.includes(item.id)) {
+        targetRoom.unlocked = true;
+        pushStatus(`Used ${item.name} on ${targetRoom.name}. Door unlocked!`);
+        logEvent(`Used ${item.name} on ${targetRoom.name} (unlock)`);
+        updateUnlocks();
+        renderTree();
+        renderScene();
+        updateStatusWord();
+        spawnBurstAtCenter();
+      } else {
+        pushStatus('That item cannot be used on that target.');
+        logEvent(`Tried to use ${item.name} on ${targetRoom.name} but no effect`);
+      }
+    }
+
+    function lookAtNearby() { /* placeholder for future directional look */ }
+
+    // Command shortcuts: Enter helper
+    function pushHelp(text) { pushStatus(text); }
+
+    // Init scene after load
+    function renderInit() {
+      updateUnlocks();
+      currentRoom = rooms.entrance;
+      renderTree();
+      renderScene();
+      updateStatusWord();
+      cmdInput.focus();
+    }
+
+    // Random burst animation for pickup
+    function spawnBurst(ratio=0.5, drift=0.5){
+      if (!window.spawnBurst) window.spawnBurst = [];
+      spawnBurstAtCenter();
+    }
+    function spawnBurstAtCenter(){
+      if (!particleToggle.checked) return;
+      const cx = window.innerWidth * 0.5;
+      const cy = window.innerHeight * 0.45;
+      launchBurst(cx, cy);
+    }
+
+    // Particle burst effect
+    function launchBurst(x, y){
+      const count = 24;
+      for(let i=0;i<count;i++){
+        particles.push({
+          x: x,
+          y: y,
+          vx: (Math.random() - 0.5) * 2,
+          vy: (Math.random() - 0.5) * 2,
+          life: 60 + Math.random()*40,
+          color: 'hsl(' + (200 + Math.random()*60) + ',100%,60%)'
+        });
+      }
+      if (!animating) requestAnimationFrame(stepParticles);
+    }
+
+    let animating = false;
+    function stepParticles(){
+      animating = true;
+      const w = particleCanvas.width, h = particleCanvas.height;
+      pctx.clearRect(0,0,w,h);
+      for(let i=particles.length-1;i>=0;i--){
+        const p = particles[i];
+        p.x += p.vx * 2;
+        p.y += p.vy * 2;
+        p.vx *= 0.98;
+        p.vy *= 0.98;
+        p.life -= 1;
+        if (p.life <= 0) {
+          particles.splice(i,1);
+          continue;
+        }
+        pctx.fillStyle = p.color;
+        pctx.globalAlpha = Math.max(p.life/100, 0.2);
+        pctx.fillRect(p.x, p.y, 2, 2);
+      }
+      if (particles.length > 0) {
+        requestAnimationFrame(stepParticles);
+      } else {
+        pctx.clearRect(0,0,w,h);
+        animating = false;
+      }
+    }
+
+    // Helpers
+    function toggleHelp(force) {
+      helpVisible = typeof force === 'boolean' ? force : !helpVisible;
+      helpOverlay.style.display = helpVisible ? 'block' : 'none';
+      if (helpVisible) cmdInput.focus();
+    }
+    function toggleSettings(force) {
+      settingsVisible = typeof force === 'boolean' ? force : !settingsVisible;
+      settingsOverlay.style.display = settingsVisible ? 'block' : 'none';
+      if (settingsVisible) {
+        // set controls to current state
+        cinematicToggle.checked = document.body.classList.contains('cinematic');
+      }
+    }
+
+    // Keyboard handlers
+    document.addEventListener('keydown', (e)=>{
+      // Global shortcuts
+      if (e.key === 'Escape') {
+        toggleHelp(false);
+        toggleSettings(false);
+        cmdInput.blur();
+        return;
+      }
+      if (e.key === 'F1') {
+        e.preventDefault();
+        toggleHelp(true);
+        return;
+      }
+      if (e.key === 'F2') {
+        e.preventDefault();
+        pushStatus('Inventory: ' + inventoryToString());
+        return;
+      }
+      if (e.key === 'F3') {
+        e.preventDefault();
+        toggleSettings(true);
+        return;
+      }
+
+      // When not typing, navigate left tree
+      if (document.activeElement !== cmdInput) {
+        handleLeftKey(e);
+      }
+    });
+
+    // Input handling
+    cmdInput.addEventListener('keydown', (e)=>{
+      if (e.key === 'Enter') {
+        const v = cmdInput.value;
+        processCommand(v);
+      }
+    });
+
+    // Initialize
+    function init() {
+      // Init settings
+      if (localStorage.getItem('ttq_settings_cinematic') === 'on') {
+        document.body.classList.add('cinematic');
+        cinematicBadge.textContent = 'CN: ON';
+        cinematicToggle.checked = true;
+      } else {
+        cinematicBadge.textContent = 'CN: OFF';
+        cinematicToggle.checked = false;
+      }
+      // apply initial animations toggles
+      resizeCanvas();
+      updateUnlocks();
+      currentRoom = rooms.entrance;
+      renderTree();
+      renderScene();
+      updateStatusWord();
+      logEvent('Game started.');
+      cmdInput.focus();
+    }
+
+    // Logs
+    function logInitial() {
+      logEvent('Welcome to TurboText Quest. Type "help" for commands.');
+    }
+
+    // Settings interactions
+    document.getElementById('closeHelp').addEventListener('click', ()=>toggleHelp(false));
+    document.getElementById('closeSettings').addEventListener('click', ()=>toggleSettings(false));
+    cinematicToggle.addEventListener('change', (e)=>{
+      if (e.target.checked) document.body.classList.add('cinematic'), cinematicBadge.textContent='CN: ON', localStorage.setItem('ttq_settings_cinematic','on');
+      else { document.body.classList.remove('cinematic'); cinematicBadge.textContent='CN: OFF'; localStorage.setItem('ttq_settings_cinematic','off'); }
+    });
+
+    // Init
+    init();
+  </script>
+</body>
+</html>
