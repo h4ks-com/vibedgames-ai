@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TurboTerminal Deluxe</title>
+<style>
+  :root{
+    --bg: #0a1a2a;
+    --fg: #e6ffff;
+    --blue: #1e6bd8;
+    --cyan: #00e8ff;
+    --panel: #0b2140;
+    --muted: #7fb6d4;
+    --selected: #0a5577;
+    --border: #0f3a7a;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: "Courier New", Consolas, monospace;
+    background: radial-gradient(circle at 20% 0%, #0b1a2a 0%, #081a2a 40%, #04121f 100%), var(--bg);
+    color: var(--fg);
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
+    padding: 20px;
+    overflow: hidden;
+  }
+
+  /* Terminal window */
+  .turbo {
+    width: min(1200px, 92vw);
+    height: 78vh;
+    min-height: 520px;
+    display: grid;
+    grid-template-rows: auto auto auto auto auto;
+    border: 2px solid var(--border);
+    background: linear-gradient(#06162a, #041225 60%, #040b1a);
+    box-shadow: 0 0 0.8rem rgba(0,170,255,0.4);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  /* Neon and normal themes */
+  .neon {
+    --bg: #020418;
+    --fg: #d8fff9;
+    --panel: #0b0630;
+    --muted: #9af0ff;
+    --border: #3affff;
+  }
+  .neon {
+    background: linear-gradient(#010216, #04082a 60%, #02040a);
+    box-shadow: 0 0 1rem rgba(0,255,255,.6);
+  }
+  /* Subtle glow when animations are on */
+  .animations-on .turbo { animation: glowPulse 6s infinite; }
+  @keyframes glowPulse {
+    0%, 100% { filter: saturate(1) brightness(1); }
+    50% { filter: saturate(1.2) brightness(1.15); }
+  }
+
+  /* Retro menu bar */
+  .menu {
+    display: flex;
+    background: linear-gradient(#0b2b64, #0a1a3a);
+    border-bottom: 2px solid #063e70;
+    padding: 6px 8px;
+  }
+  .menu > .menu-item {
+    color: #bcdfff;
+    padding: 6px 10px;
+    margin-right: 6px;
+    border-radius: 3px;
+    cursor: default;
+    user-select: none;
+    transition: transform .15s ease;
+  }
+  .menu > .menu-item:hover,
+  .menu > .menu-item:focus {
+    outline: 2px solid #00eaff;
+    outline-offset: 2px;
+    color: #fff;
+    transform: scale(1.02);
+  }
+  .dropdown {
+    position: absolute;
+    top: 36px;
+    left: 6px;
+    background: #0b1e38;
+    border: 1px solid #0b3a8f;
+    border-radius: 4px;
+    padding: 6px;
+    min-width: 180px;
+    display: none;
+    z-index: 10;
+  }
+  .dropdown .dd-item {
+    padding: 6px 8px;
+    color: #e6ffff;
+    cursor: pointer;
+  }
+  .dropdown .dd-item:hover, .dropdown .dd-item:focus {
+    background: #0b3158;
+    outline: 0;
+  }
+
+  /* Screen: path + listing */
+  .screen {
+    padding: 6px 10px;
+    display: grid;
+    grid-template-rows: auto 1fr;
+    gap: 6px;
+    align-items: start;
+  }
+  .titleIntro {
+    font-family: "Courier New", monospace;
+    font-size: 12px;
+    color: var(--muted);
+    padding: 6px 8px;
+    background: #061b2f;
+    border: 1px solid #0a365e;
+    border-radius: 4px;
+    white-space: pre-wrap;
+    min-height: 34px;
+  }
+
+  .introBlink { display: inline-block; width: 6px; height: 14px; background: #00eaff; border-radius: 3px; vertical-align: bottom; animation: blink 1s infinite; margin-left: 4px; opacity: .9; }
+  @keyframes blink { 0%, 60% { opacity: 1; } 61%, 100% { opacity: 0; } }
+
+  .path {
+    font-family: "Courier New", monospace;
+    font-size: 14px;
+    color: var(--muted);
+    padding: 6px 8px;
+    background: #061b2f;
+    border: 1px solid #0a365e;
+    border-radius: 3px;
+    letter-spacing: .3px;
+  }
+
+  .list {
+    height: 100%;
+    overflow: auto;
+    border: 1px solid #0a365e;
+    background: #041226;
+    border-radius: 3px;
+    padding: 6px;
+  }
+
+  .item {
+    display: grid;
+    grid-template-columns: 28px 1fr;
+    align-items: center;
+    padding: 4px 6px;
+    border-radius: 3px;
+    margin: 2px 0;
+    cursor: default;
+    transition: transform .15s ease, background .2s ease;
+  }
+  .item .icon {
+    width: 28px; text-align: center; font-size: 12px;
+    color: var(--cyan);
+  }
+  .item.dir .name { color: #3aa7ff; }
+  .item.file { color: var(--cyan); }
+  .item.exe { font-weight: bold; color: var(--cyan); }
+
+  .item.selected {
+    background: linear-gradient(#113c63, #062b58);
+    outline: 2px solid #00eaff;
+    transform: scale(1.01);
+    box-shadow: 0 0 8px rgba(0, 234, 255, .4);
+  }
+
+  .hint {
+    font-family: "Courier New", monospace;
+    font-size: 12px;
+    color: var(--muted);
+    padding: 6px;
+  }
+
+  /* Command line input */
+  .cmdLine {
+    display: flex;
+    align-items: center;
+    padding: 6px 10px;
+    gap: 8px;
+    border-top: 1px solid #0a2f64;
+    background: #06152b;
+  }
+  .cmdLine input {
+    flex: 1;
+    width: 100%;
+    background: #040b1f;
+    border: 1px solid #0d2f75;
+    color: var(--fg);
+    padding: 6px 8px;
+    font-family: "Courier New", monospace;
+    border-radius: 4px;
+    outline: none;
+  }
+  .cmdLine input:focus {
+    border-color: #00eaff;
+    box-shadow: 0 0 6px rgba(0, 234, 255, .6);
+  }
+
+  /* Status bar */
+  .status {
+    height: 28px;
+    line-height: 28px;
+    padding: 0 8px;
+    background: #06152b;
+    border-top: 1px solid #0a2f64;
+    font-family: "Courier New", monospace;
+    font-size: 13px;
+    color: #d6f6ff;
+  }
+
+  /* Animations for list items on render */
+  .animate-in { animation: slideIn 260ms ease-out; }
+  @keyframes slideIn {
+    from { transform: translateX(-8px); opacity: 0; }
+    to   { transform: translateX(0); opacity: 1; }
+  }
+
+  /* Focus outline accessibility for list container */
+  #list:focus { outline: 2px solid #00eaff; outline-offset: 2px; }
+
+  /* Responsive tweaks */
+  @media (max-width: 700px) {
+    .turbo { height: 75vh; }
+  }
+</style>
+</head>
+<body>
+  <div class="turbo" id="app" aria-label="TurboTerminal Deluxe">
+    <!-- Menu Bar -->
+    <nav class="menu" aria-label="Main Menu" id="mainMenu" tabindex="0">
+      <div class="menu-item" id="fileBtn" tabindex="0" aria-label="File menu">File</div>
+      <div class="menu-item" id="editBtn" tabindex="0" aria-label="Edit menu">Edit</div>
+      <div class="menu-item" id="viewBtn" tabindex="0" aria-label="View menu">View</div>
+      <div class="menu-item" id="settingsBtn" tabindex="0" aria-label="Settings menu">Settings</div>
+      <div class="menu-item" id="helpBtn" tabindex="0" aria-label="Help menu">Help</div>
+
+      <!-- Dropdowns (simple, toggled) -->
+      <div class="dropdown" id="dropdownFile" role="menu" aria-label="File menu options">
+        <div class="dd-item" data-action="open" role="menuitem">Open (Enter)</div>
+        <div class="dd-item" data-action="copy" role="menuitem">Copy</div>
+        <div class="dd-item" data-action="move" role="menuitem">Move</div>
+        <div class="dd-item" data-action="delete" role="menuitem">Delete</div>
+        <div class="dd-item" data-action="paste" role="menuitem">Paste</div>
+        <hr style="border:0; height:1px; background:#1a2f54; margin:6px 0;">
+        <div class="dd-item" data-action="swap" role="menuitem">Swap Dataset</div>
+      </div>
+
+      <div class="dropdown" id="dropdownEdit" role="menu" aria-label="Edit menu options" style="left:60px;">
+        <div class="dd-item" data-action="copy" role="menuitem">Copy</div>
+        <div class="dd-item" data-action="move" role="menuitem">Move</div>
+        <div class="dd-item" data-action="delete" role="menuitem">Delete</div>
+        <div class="dd-item" data-action="paste" role="menuitem">Paste</div>
+      </div>
+
+      <div class="dropdown" id="dropdownView" role="menu" aria-label="View menu options" style="left:120px;">
+        <div class="dd-item" role="menuitem">Columns</div>
+        <div class="dd-item" role="menuitem">Sort</div>
+      </div>
+
+      <div class="dropdown" id="dropdownHelp" role="menu" aria-label="Help menu options" style="left:180px;">
+        <div class="dd-item" role="menuitem">About</div>
+      </div>
+    </nav>
+
+    <!-- Screen: Path / List -->
+    <div class="screen" aria-label="Terminal screen">
+      <div class="titleIntro" id="introArea" aria-live="polite"></div>
+      <div class="path" id="pathLine">C:\TurboTerminal&gt; /</div>
+      <div class="list" id="list" tabindex="0" aria-label="Directory listing"></div>
+    </div>
+
+    <!-- Command Line -->
+    <div class="cmdLine" id="cmdLine" aria-label="Command input line">
+      <span style="opacity:.8;">$</span>
+      <input id="cmdInput" placeholder="Type 'help' for commands. Use / to focus command line." />
+    </div>
+
+    <div class="hint" id="hintLine" aria-live="polite" style="padding:6px 8px;">
+      Use Arrow Keys to navigate, Enter to Open, Backspace to Up. Copy/Move/Delete via Menu. Type 'swap' to switch datasets.
+    </div>
+
+    <div class="status" id="statusLine" aria-live="polite">Ready</div>
+  </div>
+
+<script>
+  // Data model with hierarchical nodes
+  function createDemoDatasetA() {
+    const root = { type:'dir', name:'/', parent:null, children: [] };
+    const bin = { type:'dir', name:'bin', parent: root, children: [] };
+    const docs = { type:'dir', name:'docs', parent: root, children: [] };
+    const src  = { type:'dir', name:'src',  parent: root, children: [] };
+
+    const exe = { type:'exe', name:'app.exe', parent: bin };
+    bin.children.push(exe);
+
+    const readme = { type:'file', name:'readme.txt', parent: docs };
+    const license = { type:'file', name:'license.txt', parent: docs };
+    docs.children.push(readme, license);
+
+    const main = { type:'file', name:'main.c', parent: src };
+    const lib  = { type:'dir', name:'lib', parent: src, children: [] };
+    const math = { type:'file', name:'math.h', parent: lib };
+    lib.children.push(math);
+    src.children.push(main, lib);
+
+    root.children.push(bin, docs, src, { type:'file', name:'config.sys', parent: root });
+
+    return root;
+  }
+
+  // Create another dataset for swap demo
+  function createDemoDatasetB() {
+    const root = { type:'dir', name:'/', parent:null, children: [] };
+    const usr = { type:'dir', name:'usr', parent: root, children: [] };
+    const etc = { type:'dir', name:'etc', parent: root, children: [] };
+    const varDir = { type:'dir', name:'var', parent: root, children: [] };
+
+    const bin2 = { type:'dir', name:'bin', parent: root, children: [] };
+    const welcomeExe = { type:'exe', name:'welcome.exe', parent: bin2 };
+    bin2.children.push(welcomeExe);
+
+    const passwd = { type:'file', name:'passwd', parent: etc };
+    const hosts = { type:'file', name:'hosts', parent: etc };
+    etc.children.push(passwd, hosts);
+
+    const readme = { type:'file', name:'readme.md', parent: usr };
+    const prog = { type:'dir', name:'prog', parent: usr, children: [
+      { type:'file', name:'build.sh', parent:null },
+      { type:'exe', name:'run',  parent:null }
+    ]};
+    prog.children[0].parent = prog;
+    prog.children[1].parent = prog;
+    usr.children.push(readme, prog);
+
+    root.children.push(usr, etc, varDir, bin2);
+
+    // set proper parents for new root overall
+    function fixParents(node, parent){
+      node.parent = parent;
+      if (node.type==='dir' && node.children){
+        for (const c of node.children){
+          fixParents(c, node);
+        }
+      }
+    }
+    fixParents(root, null);
+    return root;
+  }
+
+  // Helpers
+  let root = createDemoDatasetA();
+  function assignParents(node, parent){
+    node.parent = parent;
+    if (node.type==='dir' && node.children){
+      for (const ch of node.children){
+        assignParents(ch, node);
+      }
+    }
+  }
+  assignParents(root, null);
+
+  // Current navigation state
+  let currentDir = root;
+  let currentPath = []; // path of dir names from root (excluding root '/')
+  let selectedIndex = 0;
+
+  // Clipboard for Copy/Move/Paste
+  let clipboard = null; // { action:'copy'|'move', item: node, sourceParent: node.parent }
+
+  // DOM refs
+  const listEl = document.getElementById('list');
+  const pathLine = document.getElementById('pathLine');
+  const statusLine = document.getElementById('statusLine');
+  const dropdownFile = document.getElementById('dropdownFile');
+  const dropdownEdit = document.getElementById('dropdownEdit');
+  const dropdownView = document.getElementById('dropdownView');
+  const dropdownHelp = document.getElementById('dropdownHelp');
+  const mainMenu = document.getElementById('mainMenu');
+  const fileBtn = document.getElementById('fileBtn');
+  const editBtn = document.getElementById('editBtn');
+  const viewBtn = document.getElementById('viewBtn');
+  const settingsBtn = document.getElementById('settingsBtn');
+  const helpBtn = document.getElementById('helpBtn');
+  const introArea = document.getElementById('introArea');
+  const cmdLine = document.getElementById('cmdLine');
+  const cmdInput = document.getElementById('cmdInput');
+  const hintLine = document.getElementById('hintLine');
+  const appDiv = document.getElementById('app');
+
+  // Settings state
+  let animationsEnabled = true;
+  let themeNeon = false;
+  let isNeonApplied = false;
+
+  // Render
+  function render() {
+    // Apply theme and animation class on root
+    if (themeNeon && !isNeonApplied) {
+      appDiv.classList.add('neon');
+      isNeonApplied = true;
+    } else if (!themeNeon && isNeonApplied) {
+      appDiv.classList.remove('neon');
+      isNeonApplied = false;
+    }
+    document.body.style.background = '';
+    // Update path
+    const displayPath = '/' + currentPath.join('/');
+    pathLine.textContent = 'C:\\\\TurboTerminal> ' + (currentPath.length ? displayPath : '/');
+    // Render children
+    listEl.innerHTML = '';
+    const items = currentDir.children || [];
+    items.forEach((node, idx) => {
+      const row = document.createElement('div');
+      row.className = 'item';
+      if (idx === selectedIndex) row.classList.add('selected');
+
+      // Icon/text
+      const icon = document.createElement('div');
+      icon.className = 'icon';
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = node.name;
+
+      if (node.type === 'dir') {
+        row.classList.add('dir');
+        icon.textContent = '▦';
+        nameSpan.className = 'name';
+      } else if (node.type === 'exe') {
+        row.classList.add('exe');
+        icon.textContent = '▶';
+        nameSpan.className = 'name';
+      } else {
+        // file
+        icon.textContent = '•';
+        nameSpan.className = 'name';
+        row.classList.add('file');
+      }
+
+      // Color and style
+      icon.style.color = (node.type==='dir') ? '#3ea7ff' : '#00eaff';
+      row.appendChild(icon);
+      const nameCell = document.createElement('div');
+      nameCell.style.flex = '1';
+      nameCell.appendChild(nameSpan);
+      row.appendChild(nameCell);
+
+      // Data index
+      row.dataset.index = idx;
+      // click selects
+      row.addEventListener('click', () => {
+        selectedIndex = idx;
+        render();
+        focusList();
+      });
+
+      // Optional per-item animation
+      if (animationsEnabled) {
+        row.classList.add('animate-in');
+        // Remove the class after a tick to allow re-entry animations later
+        setTimeout(() => row.classList.remove('animate-in'), 260);
+      }
+
+      listEl.appendChild(row);
+    });
+
+    // Focus outline for accessibility
+    focusList();
+  }
+
+  function focusList(){
+    // ensure list has focus to catch key navigation
+    if (document.activeElement !== listEl) {
+      listEl.focus({preventScroll:true});
+    }
+  }
+
+  // Helpers for path and node lookup
+  function getSelectedItem(){
+    const items = currentDir.children || [];
+    return items[selectedIndex] || null;
+  }
+
+  function navigateIntoDir(dirNode){
+    if (!dirNode || dirNode.type !== 'dir') return;
+    currentPath.push(dirNode.name);
+    currentDir = dirNode;
+    selectedIndex = 0;
+    render();
+  }
+
+  function goUp(){
+    if (currentDir.parent) {
+      currentDir = currentDir.parent;
+      currentPath.pop();
+      selectedIndex = 0;
+      render();
+    }
+  }
+
+  function openSelected(){
+    const item = getSelectedItem();
+    if (!item) return;
+    if (item.type === 'dir') {
+      navigateIntoDir(item);
+      statusLine.textContent = 'Opened directory: ' + item.name;
+    } else {
+      statusLine.textContent = 'Opened file: ' + item.name;
+    }
+  }
+
+  // Copy/Move/Paste/Delete logic
+  function doCopy(){
+    const item = getSelectedItem();
+    if (!item) { statusLine.textContent = 'No item selected to copy'; return; }
+    clipboard = { action:'copy', item: item, sourceParent: item.parent };
+    statusLine.textContent = 'Copied: ' + item.name;
+  }
+
+  function doMove(){
+    const item = getSelectedItem();
+    if (!item) { statusLine.textContent = 'No item selected to move'; return; }
+    clipboard = { action:'move', item: item, sourceParent: item.parent };
+    statusLine.textContent = 'Move prepared: ' + item.name;
+  }
+
+  function doDelete(){
+    const item = getSelectedItem();
+    if (!item) { statusLine.textContent = 'No item selected to delete'; return; }
+    const ok = confirm('Delete "' + item.name + '"? This cannot be undone.');
+    if (!ok) return;
+    const parent = item.parent;
+    if (!parent || !parent.children) return;
+    const i = parent.children.indexOf(item);
+    if (i >= 0) {
+      parent.children.splice(i,1);
+      // adjust selection
+      const max = (currentDir.children || []).length;
+      if (selectedIndex >= max) selectedIndex = Math.max(0, max - 1);
+      render();
+      statusLine.textContent = 'Deleted: ' + item.name;
+    }
+  }
+
+  function doPaste(){
+    if (!clipboard) { statusLine.textContent = 'Clipboard is empty'; return; }
+    if (clipboard.action === 'copy'){
+      const cloneNode = (node) => {
+        const copy = { type: node.type, name: node.name + ' (copy)', parent: null, children: [] };
+        if (node.type === 'dir' && node.children) {
+          copy.children = node.children.map(child => {
+            const c = cloneNode(child);
+            c.parent = copy;
+            return c;
+          });
+        }
+        return copy;
+      };
+      const newNode = cloneNode(clipboard.item);
+      newNode.parent = currentDir;
+      currentDir.children.push(newNode);
+      render();
+      statusLine.textContent = 'Pasted (copy): ' + clipboard.item.name;
+    } else if (clipboard.action === 'move'){
+      const srcParent = clipboard.sourceParent;
+      const idx = srcParent && srcParent.children ? srcParent.children.indexOf(clipboard.item) : -1;
+      if (idx >= 0) {
+        // remove from old
+        srcParent.children.splice(idx, 1);
+        // add to current
+        clipboard.item.parent = currentDir;
+        currentDir.children.push(clipboard.item);
+        render();
+        statusLine.textContent = 'Moved to: ' + (currentDir.name || '/');
+      }
+    }
+    clipboard = null;
+  }
+
+  // Swap dataset
+  function swapDataset(){
+    const newRoot = (Math.random() > 0.5) ? createDemoDatasetB() : createDemoDatasetA();
+    // fix parents recursively
+    function fix(node, parent){
+      node.parent = parent;
+      if (node.type === 'dir' && node.children){
+        for (const c of node.children){
+          fix(c, node);
+        }
+      }
+    }
+    fix(newRoot, null);
+    root = newRoot;
+    currentDir = root;
+    currentPath = [];
+    selectedIndex = 0;
+    clipboard = null;
+    render();
+    statusLine.textContent = 'Dataset swapped';
+  }
+
+  // Keyboard navigation
+  const globalKeyHandler = (e) => {
+    // Quick access to command line
+    if (e.key === '/' && document.activeElement !== cmdInput){
+      e.preventDefault();
+      cmdInput.focus();
+      return;
+    }
+
+    const key = e.key;
+    const items = currentDir.children || [];
+    if (key === 'ArrowDown'){
+      if (items.length === 0) return;
+      selectedIndex = (selectedIndex + 1) % items.length;
+      render();
+      e.preventDefault();
+    } else if (key === 'ArrowUp'){
+      if (items.length === 0) return;
+      selectedIndex = (selectedIndex - 1 + items.length) % items.length;
+      render();
+      e.preventDefault();
+    } else if (key === 'Enter'){
+      openSelected();
+      e.preventDefault();
+    } else if (key === 'Backspace'){
+      goUp();
+      e.preventDefault();
+    } else if (key.toLowerCase() === 'c'){ // quick copy
+      doCopy();
+      e.preventDefault();
+    } else if (key.toLowerCase() === 'm'){ // quick move
+      doMove();
+      e.preventDefault();
+    } else if (key.toLowerCase() === 'v'){ // paste
+      doPaste();
+      e.preventDefault();
+    } else if (key.toLowerCase() === 'd'){ // delete
+      doDelete();
+      e.preventDefault();
+    } else if (key === 'Escape'){
+      // close any dropdowns
+      closeAllDropdowns();
+    }
+  };
+  document.addEventListener('keydown', globalKeyHandler);
+
+  // Menu interactions
+  function closeAllDropdowns(){
+    dropdownFile.style.display = 'none';
+    dropdownEdit.style.display = 'none';
+    dropdownView.style.display = 'none';
+    dropdownHelp.style.display = 'none';
+  }
+
+  // Menu button handlers
+  fileBtn.addEventListener('click', (e) => {
+    toggleDropdown(dropdownFile, e);
+  });
+  editBtn.addEventListener('click', (e) => {
+    toggleDropdown(dropdownEdit, e);
+  });
+  viewBtn.addEventListener('click', (e) => {
+    toggleDropdown(dropdownView, e);
+  });
+  settingsBtn.addEventListener('click', (e) => {
+    toggleDropdown(dropdownHelp, e); // reuse help dropdown area for settings to keep simple
+  });
+  helpBtn.addEventListener('click', (e) => {
+    toggleDropdown(dropdownHelp, e);
+  });
+
+  // Settings content area is a built-in dropdown using dropdownHelp
+  function toggleDropdown(dd, originEvent){
+    closeAllDropdowns();
+    const rect = originEvent.target.getBoundingClientRect();
+    dd.style.display = 'block';
+    dd.style.position = 'absolute';
+    dd.style.left = (rect.left) + 'px';
+    dd.style.top = (rect.bottom + window.scrollY) + 'px';
+  }
+
+  // Dropdowns common handler
+  [dropdownFile, dropdownEdit, dropdownView, dropdownHelp].forEach(dd => {
+    dd.addEventListener('click', (e) => {
+      const target = e.target.closest('.dd-item');
+      if (!target) return;
+      const action = target.dataset.action;
+      closeAllDropdowns();
+      applyDropdownAction(action);
+    });
+  });
+
+  function applyDropdownAction(action){
+    switch(action){
+      case 'open': openSelected(); break;
+      case 'copy': doCopy(); break;
+      case 'move': doMove(); break;
+      case 'delete': doDelete(); break;
+      case 'paste': doPaste(); break;
+      case 'swap': swapDataset(); break;
+      default: break;
+    }
+  }
+
+  // Dropdowns close when clicking outside
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.dropdown') && !e.target.closest('.menu-item')) {
+      closeAllDropdowns();
+    }
+  });
+
+  // Init view
+  function typeIntro(){
+    const lines = [
+      "Welcome to TurboTerminal Deluxe v3.0",
+      "A neon-flavored, animated terminal-like explorer.",
+      "Commands: ls, cd <dir>, cat <file>, help, swap, clear, pwd, theme neon/dark, anim on/off",
+      "Tip: Use / to focus command line. Navigate with Arrow keys."
+    ];
+    let i = 0;
+    let j = 0;
+    let current = "";
+    const el = introArea;
+    el.textContent = "";
+    function tick(){
+      if (i >= lines.length) return;
+      const line = lines[i];
+      if (j < line.length){
+        current += line[j];
+        el.textContent = current;
+        j++;
+        setTimeout(tick, 20);
+      } else {
+        el.textContent = el.textContent + "\n";
+        i++;
+        j = 0;
+        current = "";
+        setTimeout(tick, 350);
+      }
+    }
+    tick();
+  }
+
+  // Command interpreter (vanilla)
+  function runCommand(input){
+    const cmd = (input || "").trim();
+    if (!cmd) return;
+    const parts = cmd.split(/\s+/);
+    const base = parts[0].toLowerCase();
+    const arg = parts.slice(1).join(' ');
+
+    switch(base){
+      case 'help':
+        statusLine.textContent = "Commands: ls, cd <dir>, pwd, cat <file>, clear, swap, pwd, theme neon/dark, anim on/off";
+        break;
+      case 'pwd':
+        statusLine.textContent = (currentPath.length ? '/' + currentPath.join('/') : '/');
+        break;
+      case 'ls':
+        render();
+        statusLine.textContent = 'Directory listed';
+        break;
+      case 'cd':
+        if (!arg) { statusLine.textContent = 'Usage: cd <directory>'; break; }
+        if (arg === '..') { goUp(); break; }
+        {
+          const found = (currentDir.children || []).find(n => n.name === arg && n.type === 'dir');
+          if (found){
+            navigateIntoDir(found);
+          } else {
+            statusLine.textContent = 'No such directory: ' + arg;
+          }
+        }
+        break;
+      case 'cat':
+        if (!arg) { statusLine.textContent = 'Usage: cat <filename>'; break; }
+        {
+          const f = (currentDir.children || []).find(n => n.name === arg && n.type !== 'dir');
+          if (f){
+            statusLine.textContent = 'Contents of ' + f.name + ': (demo) This is a placeholder file.';
+          } else {
+            statusLine.textContent = 'No such file: ' + arg;
+          }
+        }
+        break;
+      case 'clear':
+        // move to root and clear current listing visually
+        currentDir = root;
+        currentPath = [];
+        selectedIndex = 0;
+        render();
+        statusLine.textContent = 'Screen cleared (to root).';
+        break;
+      case 'swap':
+        swapDataset();
+        break;
+      case 'anim':
+        if (!arg) { statusLine.textContent = 'Usage: anim on|off'; break; }
+        animationsEnabled = (arg.toLowerCase() === 'on');
+        if (animationsEnabled) appDiv.classList.add('animations-on');
+        else appDiv.classList.remove('animations-on');
+        render();
+        statusLine.textContent = 'Animations ' + (animationsEnabled ? 'enabled' : 'disabled');
+        break;
+      case 'theme':
+        if (!arg) { statusLine.textContent = 'Usage: theme neon|dark'; break; }
+        if (arg.toLowerCase() === 'neon') {
+          themeNeon = true;
+          appDiv.classList.add('neon');
+          render();
+          statusLine.textContent = 'Theme: Neon';
+        } else {
+          themeNeon = false;
+          appDiv.classList.remove('neon');
+          render();
+          statusLine.textContent = 'Theme: Dark';
+        }
+        break;
+      default:
+        statusLine.textContent = 'Unknown command. Type "help" for a list of commands.';
+    }
+  }
+
+  // Initialize
+  render();
+  typeIntro();
+  // ensure initial focus for keyboard nav
+  listEl.focus({preventScroll:true});
+  // Enter command mode by default typing into cmdInput
+  cmdInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter'){
+      const text = cmdInput.value;
+      cmdInput.value = '';
+      statusLine.textContent = '$ ' + text;
+      // run command and refresh
+      setTimeout(() => runCommand(text), 0);
+      e.preventDefault();
+    }
+  });
+
+  // Clicks in the list refocus for quick typing
+  listEl.addEventListener('click', () => { cmdInput.focus(); });
+
+  // Initialize a subtle settings panel toggle (via dropdownHelp)
+  // We reuse dropdownHelp for a minimal settings panel
+  // Populate simple settings items if needed in future
+
+  // Initialize the view
+  render();
+  // initial focus
+  focusList();
+</script>
+</body>
+</html>
