@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>DecentraChatGame - Telegram-inspired P2P WebRTC</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root{
+      --bg: #0b1020;
+      --panel: #141a2b;
+      --panel2: #1f2a46;
+      --text: #e6eaff;
+      --muted: #a8b6d8;
+      --accent: #4aa2f8;
+      --glow: 0 0 28px rgba(74,162,248,.6);
+      --sent: #58d68d;
+      --recv: #5e9aff;
+      --bubble-me: #1b6bd1;
+      --bubble-you: #2a2a2a;
+      --shadow: rgba(0,0,0,.25);
+    }
+    *{box-sizing:border-box}
+    html, body, #app{height:100%}
+    body{
+      margin:0;
+      font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto;
+      background: radial-gradient(circle at 20% -10%, rgba(74,144,226,.25), transparent 40%),
+                  radial-gradient(circle at 90% 0%, rgba(76,217,196,.15), transparent 40%),
+                  linear-gradient(#0b1020 0%, #090e22 60%, #0b1020 100%);
+      color:var(--text);
+      overflow:auto;
+    }
+    .container{display:flex; height:100%; width:100%; position:relative}
+    /* Sidebar like Telegram left rail with animations */
+    .sidebar{width:320px; border-right:1px solid rgba(255,255,255,.08);
+      background: linear-gradient(180deg, rgba(20,26,43,.95), rgba(20,26,43,.75));
+      padding:14px; overflow:auto; position:relative;
+      backdrop-filter: saturate(1.2) blur(2px);
+      animation: slideIn .6s ease both;
+    }
+    @keyframes slideIn{
+      from{ transform: translateX(-6px); opacity:.0 }
+      to{ transform: translateX(0); opacity:1 }
+    }
+    .brand{font-weight:800; font-size:20px; letter-spacing:.5px; padding:8px 12px; border-radius:12px;
+      background: linear-gradient(135deg, rgba(74,162,248,.25), rgba(74,162,248,.05)); display:flex; align-items:center; gap:8px; margin-bottom:12px;
+      color:#eaf2ff;
+      box-shadow: inset 0 0 12px rgba(74,162,248,.25);
+    }
+    .brand .dot{ width:10px; height:10px; border-radius:50%; background:#4aa2f8; display:inline-block; box-shadow:0 0 8px #4aa2f8}
+    .section{color:var(--muted); font-size:11px; text-transform:uppercase; margin:14px 6px}
+    .button{background: #1e2a6e; color:white; border:0; padding:10px 12px; border-radius:10px; cursor:pointer; font-weight:700;
+      transition: transform .15s ease, background .2s ease, box-shadow .2s ease;
+    }
+    .button:hover{ transform: translateY(-1px); box-shadow: var(--glow); }
+    .button.secondary{ background:#2a2a2a; color:#e8e8e8; }
+    .groupList{ display:flex; flex-direction:column; gap:8px; margin:6px 0 6px; }
+    .groupItem{ display:flex; align-items:center; justify-content:space-between; padding:10px; border-radius:10px;
+      background: rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.08); cursor:pointer; transition: transform .15s ease, background .2s ease;
+    }
+    .groupItem.active{ background: rgba(74,162,248,.25); border-color: rgba(74,162,248,.7); }
+    .groupName{ display:flex; align-items:center; gap:8px; font-weight:600; }
+    .hash{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas; font-size:12px; color:#cbd5e1; opacity:.9; }
+    #peerSelector{ width:100%; padding:6px; border-radius:8px; border:1px solid #334; background:#0b1130; color:#fff; }
+    textarea, input{ font-family: inherit; font-size: 14px; padding:8px; border-radius:8px; border:1px solid #334; background:#0b1130; color:#fff; width:100%; }
+    textarea{ resize:vertical; min-height:80px; }
+    #signalArea{ min-height:120px; border:1px solid #334; border-radius:8px; padding:8px; background:#0b1130; color:#e6eaff; position:relative; overflow:auto; }
+    #signalArea pre{ white-space:pre-wrap; word-break:break-word; margin:0; padding:0; }
+    #split{ height:1px; background:#223; margin:12px 0; border:0; }
+    #main{ flex:1; display:flex; flex-direction:column; height:100%; min-width:0; }
+    #chatHeader{ height:60px; display:flex; align-items:center; padding:12px 16px; border-bottom:1px solid rgba(255,255,255,.08);
+      background: linear-gradient(180deg, rgba(20,26,43,.95), rgba(20,26,43,.75)); position:sticky; top:0; z-index:2;
+    }
+    #groupTitle{ font-weight:800; font-size:16px; margin-right:8px; }
+    #localId{ font-size:12px; color:var(--muted); margin-left:8px; }
+    #signalStatus{ font-size:12px; color:var(--muted); margin-left:8px; }
+    #messageArea{ flex:1; padding:14px; overflow:auto; background: radial-gradient(circle at 20% 0%, rgba(80,120,240,.08), transparent 60%), linear-gradient(180deg, rgba(6,9,26,.9), rgba(6,9,26,.6)); }
+    .message{ display:flex; margin:6px 0; max-width:78%; padding:8px 12px; border-radius:12px; line-height:1.4;
+      animation: appear .25s ease both;
+    }
+    @keyframes appear{ from{ transform: translateY(6px); opacity:0 } to{ transform: translateY(0); opacity:1 } }
+    .message.me{ margin-left:auto; background: rgba(90,180,255,.28); border:1px solid rgba(90,180,255,.6); }
+    .message.you{ background: rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.08); }
+    .sender{ font-size:11px; color:var(--muted); margin-bottom:4px; }
+    .content{ white-space:pre-wrap; }
+    #inputArea{ padding:12px; display:flex; gap:8px; border-top:1px solid rgba(255,255,255,.08); background: #0b1130; position:sticky; bottom:0; }
+    #inputMessage{ flex:1; min-width:0; }
+    .tag{ display:inline-flex; align-items:center; padding:2px 8px; border-radius:999px; font-size:11px; background:#1b1f3a; color:#d9e6ff; margin-left:6px; }
+    .bubble{ padding:6px 10px; border-radius:12px; }
+    .typing{ display:inline-block; width:26px; height:14px; position:relative; margin-left:8px; }
+    .typing span{ position:absolute; width:6px; height:6px; border-radius:50%; background:#fff; animation: blink 1s infinite; left:0; top:0; }
+    .typing span:nth-child(2){ left:10px; animation-delay:.15s; }
+    .typing span:nth-child(3){ left:20px; animation-delay:.3s; }
+    @keyframes blink{ 0%,100%{ opacity:.2 } 50%{ opacity:1 } }
+    .glow{ box-shadow:0 0 0 rgba(0,0,0,0); transition: box-shadow .4s ease; }
+    .glow.active{ box-shadow: 0 0 34px rgba(122,204,249,.9); }
+    /* responsive tweaks */
+    @media (max-width: 980px){
+      .sidebar{ width:100%; height:48vh; position:relative; border-right:0; border-bottom:1px solid rgba(255,255,255,.08);}
+      #main{ height:52vh; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand" title="DecentraChat">
+        <span class="dot"></span> DecentraChat
+      </div>
+
+      <div class="section">Groups</div>
+      <div class="groupList" id="groupList"></div>
+
+      <button class="button" id="btnNewGroup" title="Create a new group">New Group</button>
+
+      <hr id="split" />
+
+      <div class="section">Connect</div>
+      <div style="display:flex; gap:6px; align-items:center;">
+        <input id="inputPeerId" placeholder="Peer ID to connect" />
+        <button class="button" id="btnCreateOffer" title="Create an offer for a peer">Offer</button>
+      </div>
+      <button class="button secondary" id="btnCopyLocalId" style="margin-top:8px;" title="Copy your Peer ID">Copy My ID</button>
+
+      <hr id="split" />
+
+      <div class="section">Signaling</div>
+      <div id="signalArea" style="margin:6px 0 6px; padding:6px; border-radius:8px;">
+        <pre id="signalPreview" aria-label="Signal JSON" style="margin:0; padding:6px; background:#0b1130; color:#e6eaff; border-radius:6px; min-height:60px;"></pre>
+      </div>
+      <textarea id="signalInput" placeholder="Paste signaling JSON from peer here..." rows="6" style="width:100%;"></textarea>
+      <button class="button" id="btnApplySignal" style="margin-top:6px;" title="Apply signaling data to establish connection">Apply Signal</button>
+
+      <div style="margin-top:12px; font-size:12px; color:var(--muted);">
+        Tip: Use the Offer/Answer with copy-paste to stay fully decentralized. NAT traversal via STUN is enabled.
+      </div>
+    </aside>
+
+    <section id="main" aria-label="Chat Area">
+      <div id="chatHeader">
+        <span id="groupTitle">No Group Selected</span>
+        <span class="tag" id="groupTag" style="display:none;">Active</span>
+        <span class="glow" id="liveGlow" style="width:8px;height:8px;border-radius:50%;display:inline-block;background:#2bdc8b;margin-left:6px; box-shadow:0 0 8px #2bdc8b;"></span>
+        <span class="typing" id="typingIndicator" style="display:none;" aria-label="Typing">
+          <span></span><span></span><span></span>
+        </span>
+        <span class="spacer" style="flex:1"></span>
+        <span class="tag" id="localId">ID: <span id="localPeerId"></span></span>
+        <button class="button secondary" id="btnCopyId" title="Copy your Peer ID" style="margin-left:8px;">Copy ID</button>
+      </div>
+
+      <div id="messageArea" aria-label="Messages"></div>
+
+      <div id="inputArea" aria-label="Message composer">
+        <input id="inputMessage" placeholder="Message to group..." autocomplete="off" />
+        <button class="button" id="btnSend" title="Send message to group">Send</button>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    // DecentraChatGame - Telegram-inspired P2P WebRTC prototype (vanilla JS with enhancements)
+    // GLOBAL STATE
+    const iceServers = [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" }
+      // You can add TURN servers here if desired
+    ];
+
+    // Local storage keys
+    const LS = {
+      LOCAL_ID: 'dc_local_id',
+      GROUPS: 'dc_groups',
+      MESSAGES: 'dc_messages',
+      PEERS: 'dc_peers',
+      CONNECTIONS: 'dc_connections'
+    };
+
+    // UTIL
+    function generateId(len = 6){
+      const chars = 'abcdef0123456789';
+      let s = '';
+      for(let i=0;i<len;i++) s += chars[Math.floor(Math.random()*chars.length)];
+      return s;
+    }
+    function now(){ return new Date().toLocaleTimeString(); }
+
+    // STATE
+    let localPeerId = localStorage.getItem(LS.LOCAL_ID) || generateId(8);
+    localStorage.setItem(LS.LOCAL_ID, localPeerId);
+
+    let groups = JSON.parse(localStorage.getItem(LS.GROUPS) || '{}');
+    let messagesStore = JSON.parse(localStorage.getItem(LS.MESSAGES) || '{}');
+    let connections = JSON.parse(localStorage.getItem(LS.CONNECTIONS) || '{}');
+    let iceCandidates = {}; // {peerId: [cand,...]}
+    let pendingSignals = {}; // {peerId: signalObj}
+    let currentGroupId = null;
+    let typingPeers = new Set();
+
+    // DOM references
+    const groupListEl = document.getElementById('groupList');
+    const btnNewGroup = document.getElementById('btnNewGroup');
+    const inputPeerIdEl = document.getElementById('inputPeerId');
+    const btnCreateOffer = document.getElementById('btnCreateOffer');
+    const btnCopyLocalId = document.getElementById('btnCopyLocalId');
+    const signalInput = document.getElementById('signalInput');
+    const btnApplySignal = document.getElementById('btnApplySignal');
+    const signalPreview = document.getElementById('signalPreview');
+    const localPeerIdEl = document.getElementById('localPeerId');
+    const groupTitleEl = document.getElementById('groupTitle');
+    const liveGlow = document.getElementById('liveGlow');
+    const typingIndicator = document.getElementById('typingIndicator');
+    const localIdTag = document.getElementById('localId');
+    const messageAreaEl = document.getElementById('messageArea');
+    const inputMessageEl = document.getElementById('inputMessage');
+    const btnSend = document.getElementById('btnSend');
+    const signalArea = document.getElementById('signalArea');
+    const inputArea = document.getElementById('inputArea');
+    const groupTag = document.getElementById('groupTag');
+    const localPeerIdSpan = document.getElementById('localPeerId');
+    const btnNewGroupRef = btnNewGroup;
+
+    // Initialize
+    localPeerIdEl.textContent = localPeerId;
+    localPeerIdSpan.textContent = localPeerId;
+
+    function saveGroups(){ localStorage.setItem(LS.GROUPS, JSON.stringify(groups)); }
+    function saveMessages(){ localStorage.setItem(LS.MESSAGES, JSON.stringify(messagesStore)); }
+    function saveConnections(){ localStorage.setItem(LS.CONNECTIONS, JSON.stringify(connections)); }
+
+    function addGroup(name){
+      const id = generateId(6);
+      groups[id] = { id, name, memberIds: [localPeerId], subGroups: [] };
+      saveGroups();
+      renderGroups();
+      return id;
+    }
+
+    function ensureGroupExists(groupId){
+      if(!(groupId in groups)){
+        groups[groupId] = { id: groupId, name: `Group ${groupId}`, memberIds: [], subGroups: [] };
+        saveGroups();
+        renderGroups();
+      }
+    }
+
+    function appendMessage(groupId, from, text){
+      if(!messagesStore[groupId]) messagesStore[groupId] = [];
+      messagesStore[groupId].push({ from, text, ts: Date.now() });
+      saveMessages();
+    }
+
+    function displayMessage(groupId, msg, me=false){
+      const d = document.createElement('div');
+      d.className = 'message ' + (me ? 'me' : 'you');
+      const sender = document.createElement('div');
+      sender.className = 'sender';
+      sender.textContent = (msg.from === localPeerId ? 'You' : (msg.from || 'Peer')) + ' • ' + new Date(msg.ts || Date.now()).toLocaleTimeString();
+      const content = document.createElement('div');
+      content.className = 'content';
+      content.textContent = msg.text;
+      d.appendChild(sender);
+      d.appendChild(content);
+      messageAreaEl.appendChild(d);
+      messageAreaEl.scrollTop = messageAreaEl.scrollHeight;
+    }
+
+    function renderMessages(groupId){
+      messageAreaEl.innerHTML = '';
+      const msgs = messagesStore[groupId] || [];
+      const group = groups[groupId] || { name: groupId };
+      groupTitleEl.textContent = group.name || `Group ${groupId}`;
+      groupTag.style.display = 'inline-block';
+      groupTag.textContent = `Members: ${ (group.memberIds || []).length }`;
+      for(const m of msgs){
+        displayMessage(groupId, m, m.from === localPeerId);
+      }
+    }
+
+    function renderGroups(){
+      groupListEl.innerHTML = '';
+      const keys = Object.keys(groups);
+      if(keys.length === 0){
+        const id = addGroup('General');
+        currentGroupId = id;
+        renderGroups();
+        return;
+      }
+      for(const gid of keys){
+        const g = groups[gid];
+        const el = document.createElement('div');
+        el.className = 'groupItem' + (gid === currentGroupId ? ' active' : '');
+        el.onclick = () => {
+          currentGroupId = gid;
+          renderGroups();
+          renderMessages(gid);
+        };
+        const left = document.createElement('div');
+        left.className = 'groupName';
+        left.innerHTML = '<span>🔹</span><span>' + g.name + '</span>';
+        const right = document.createElement('div');
+        right.style.display = 'flex';
+        right.style.alignItems = 'center';
+        const count = document.createElement('span');
+        count.className = 'hash';
+        const num = (g.memberIds || []).length;
+        count.textContent = ` members: ${num}`;
+        right.appendChild(count);
+        el.appendChild(left);
+        el.appendChild(right);
+        groupListEl.appendChild(el);
+      }
+      if(!currentGroupId || !groups[currentGroupId]){
+        currentGroupId = Object.keys(groups)[0];
+      }
+      renderMessages(currentGroupId);
+    }
+
+    // SIGNALING MANAGEMENT
+    async function applySignal(signal){
+      if(!signal || !signal.type){
+        alert('Invalid signal');
+        return;
+      }
+      if(signal.type === 'offer'){
+        // Remote is offering; create PC and answer
+        const fromPeer = signal.from;
+        const pc = new RTCPeerConnection({ iceServers });
+        let dc;
+        pc.ondatachannel = (event) => {
+          dc = event.channel;
+          setupDataChannel(dc, fromPeer);
+          connections[fromPeer] = connections[fromPeer] || {};
+          connections[fromPeer].pc = pc;
+          connections[fromPeer].dc = dc;
+          connections[fromPeer].connected = false;
+        };
+        pc.onicecandidate = (e) => {
+          if(e.candidate){
+            iceCandidates[fromPeer] = iceCandidates[fromPeer] || [];
+            iceCandidates[fromPeer].push(e.candidate);
+            refreshSignalPreview(fromPeer);
+          }
+        };
+        pc.onconnectionstatechange = () => {
+          if(pc.connectionState === 'connected'){
+            if(connections[fromPeer]) connections[fromPeer].connected = true;
+            liveGlow.classList.add('active');
+            setTimeout(()=>liveGlow.classList.remove('active'), 900);
+          }
+        };
+        await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+        const answerDesc = await pc.createAnswer();
+        await pc.setLocalDescription(answerDesc);
+
+        connections[fromPeer] = connections[fromPeer] || {};
+        connections[fromPeer].pc = pc;
+
+        const ans = {
+          type: 'answer',
+          from: localPeerId,
+          to: fromPeer,
+          sdp: pc.localDescription,
+          ice: (iceCandidates[localPeerId] || [])
+        };
+        writeSignalToPreview(ans);
+      } else if(signal.type === 'answer'){
+        const toPeer = signal.from;
+        ensureConnectionToPeer(toPeer);
+        const conn = connections[toPeer];
+        if(!conn || !conn.pc){
+          // Create placeholder PC if needed
+          const pc = new RTCPeerConnection({ iceServers });
+          pc.ondatachannel = (ev) => {
+            const dc = ev.channel;
+            setupDataChannel(dc, toPeer);
+            connections[toPeer] = connections[toPeer] || {};
+            connections[toPeer].pc = pc;
+            connections[toPeer].dc = dc;
+          };
+          pc.onicecandidate = (e) => {
+            if(e.candidate){
+              iceCandidates[toPeer] = iceCandidates[toPeer] || [];
+              iceCandidates[toPeer].push(e.candidate);
+              refreshSignalPreview(toPeer);
+            }
+          };
+          pc.onconnectionstatechange = () => {
+            if(pc.connectionState === 'connected'){
+              if(connections[toPeer]) connections[toPeer].connected = true;
+            }
+          };
+          connections[toPeer] = { pc, dc: null, connected: false };
+        }
+        await connections[toPeer].pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+        if(signal.ice && signal.ice.length){
+          for(const cand of signal.ice){
+            try{ await connections[toPeer].pc.addIceCandidate(new RTCIceCandidate(cand)); }catch(e){}
+          }
+        }
+      }
+    }
+
+    function refreshSignalPreview(peerId){
+      const conn = connections[peerId];
+      if(!conn || !conn.pc) return;
+      const sig = {
+        type: 'offer',
+        from: localPeerId,
+        to: peerId,
+        sdp: conn.pc.localDescription,
+        ice: (iceCandidates[peerId] || [])
+      };
+      writeSignalToPreview(sig);
+    }
+
+    function writeSignalToPreview(obj){
+      signalPreview.textContent = JSON.stringify(obj, null, 2);
+      pendingSignals[obj.to] = obj;
+    }
+
+    function setupDataChannel(dc, remotePeerId){
+      dc.onopen = () => {
+        connections[remotePeerId] = connections[remotePeerId] || {};
+        connections[remotePeerId].dc = dc;
+        connections[remotePeerId].connected = true;
+      };
+      dc.onmessage = (ev) => {
+        try{
+          const data = JSON.parse(ev.data);
+          if(data.type === 'chat'){
+            ensureGroupExists(data.groupId);
+            appendMessage(data.groupId, data.sender, data.text);
+            if(currentGroupId !== data.groupId){
+              // show notification hint
+              flashGroup(currentGroupId);
+            }
+            renderMessages(data.groupId);
+            // simulate typing indicator on remote side
+            showTypingIndicator(false);
+          } else if(data.type === 'groupUpdate'){
+            const g = data.group;
+            groups[g.id] = g;
+            saveGroups();
+            renderGroups();
+            if(currentGroupId === g.id){
+              renderMessages(g.id);
+            }
+          }
+        }catch(e){
+          console.error('Invalid message', e);
+        }
+      };
+    }
+
+    function flashGroup(groupId){
+      if(!groupId) return;
+      const el = document.querySelector(`.groupItem${groupId ? '' : ''}`);
+      // quick visual hint by pulsing border of the group item if visible
+      // keep minimal to avoid heavy DOM ops
+      document.querySelectorAll('.groupItem').forEach(n => {
+        n.style.transition = 'box-shadow .4s ease';
+        n.style.boxShadow = 'none';
+      });
+      // apply glow to the group currently loaded
+      const idxs = Array.from(document.querySelectorAll('.groupItem'));
+      idxs.forEach(n => n.style.boxShadow = 'none');
+      // simply animate the main area
+      messageAreaEl.style.animation = 'pulse 0.4s ease';
+      messageAreaEl.style.setProperty('--pulse', '1');
+      setTimeout(() => {
+        messageAreaEl.style.animation = '';
+      }, 420);
+    }
+
+    function showTypingIndicator(show){
+      typingPeers.clear && typingPeers.clear();
+      if(show){
+        typingIndicator.style.display = 'inline-block';
+      }else{
+        typingIndicator.style.display = 'none';
+      }
+    }
+
+    // SENDING MESSAGES
+    function broadcastGroupMessage(groupId, text){
+      const group = groups[groupId];
+      if(!group){
+        alert('Unknown group');
+        return;
+      }
+      const msg = { type:'chat', groupId, sender: localPeerId, text, ts: Date.now() };
+      appendMessage(groupId, localPeerId, text);
+      renderMessages(groupId);
+      // Broadcast to connected peers who are members
+      Object.keys(connections).forEach(peerId => {
+        const conn = connections[peerId];
+        if(!conn || !conn.dc || !conn.connected) return;
+        // deliver if peer is in group
+        if(group.memberIds.includes(peerId) || peerId === localPeerId){
+          try{ conn.dc.send(JSON.stringify(msg)); }catch(e){}
+        }
+      });
+    }
+
+    // UI HANDLERS
+    btnNewGroup.addEventListener('click', () => {
+      const name = prompt('Enter group name:');
+      if(name){
+        const gid = addGroup(name);
+        currentGroupId = gid;
+        renderGroups();
+        renderMessages(gid);
+      }
+    });
+
+    btnCreateOffer.addEventListener('click', async () => {
+      const toPeer = inputPeerIdEl.value.trim();
+      if(!toPeer){
+        alert('Enter a remote peer ID to connect.');
+        return;
+      }
+      // Create Offer
+      const pc = new RTCPeerConnection({iceServers});
+      let dc;
+      pc.ondatachannel = (event) => {
+        dc = event.channel;
+        setupDataChannel(dc, toPeer);
+        connections[toPeer] = connections[toPeer] || {};
+        connections[toPeer].pc = pc;
+        connections[toPeer].dc = dc;
+        connections[toPeer].connected = false;
+      };
+      pc.onicecandidate = (e) => {
+        if(e.candidate){
+          iceCandidates[toPeer] = iceCandidates[toPeer] || [];
+          iceCandidates[toPeer].push(e.candidate);
+          refreshSignalPreview(toPeer);
+        }
+      };
+      pc.onconnectionstatechange = () => {
+        if(pc.connectionState === 'connected'){
+          connections[toPeer].connected = true;
+        }
+      };
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      connections[toPeer] = connections[toPeer] || {};
+      connections[toPeer].pc = pc;
+
+      const sig = {
+        type: 'offer',
+        from: localPeerId,
+        to: toPeer,
+        sdp: pc.localDescription,
+        ice: (iceCandidates[toPeer] || [])
+      };
+      writeSignalToPreview(sig);
+    });
+
+    btnApplySignal.addEventListener('click', async () => {
+      const raw = signalInput.value.trim();
+      if(!raw) {
+        alert('Paste a signaling JSON payload here.');
+        return;
+      }
+      try{
+        const obj = JSON.parse(raw);
+        await applySignal(obj);
+      }catch(e){
+        alert('Invalid signaling JSON: ' + e);
+      }
+    });
+
+    btnSend.addEventListener('click', () => {
+      const text = inputMessageEl.value.trim();
+      if(!text || !currentGroupId){
+        return;
+      }
+      // minimal typing-time simulation
+      inputMessageEl.value = '';
+      // simulate that the user is typing for a moment
+      showTypingIndicator(true);
+      setTimeout(() => {
+        showTypingIndicator(false);
+        broadcastGroupMessage(currentGroupId, text);
+      }, Math.min(600 + Math.random()*800, 1200));
+    });
+
+    document.getElementById('btnCopyLocalId').addEventListener('click', async () => {
+      try{
+        await navigator.clipboard.writeText(localPeerId);
+        alert('Your Peer ID copied to clipboard.');
+      }catch(e){
+        prompt('Copy your Peer ID:', localPeerId);
+      }
+    });
+
+    // Helpers
+    function ensureConnectionToPeer(peerId){
+      if(!connections[peerId]){
+        connections[peerId] = { pc: null, dc: null, connected: false };
+      }
+    }
+
+    // Start with a default group if none
+    function initState(){
+      if(Object.keys(groups).length === 0){
+        const gid = addGroup('General');
+        currentGroupId = gid;
+      } else {
+        currentGroupId = Object.keys(groups)[0];
+      }
+      renderGroups();
+      renderMessages(currentGroupId);
+    }
+
+    // Implement a basic styling fallback for keyboard users
+    inputMessageEl.addEventListener('keydown', (e) => {
+      if(e.key === 'Enter' && !e.shiftKey){
+        e.preventDefault();
+        btnSend.click();
+      }
+    });
+
+    // Persist changes on unload
+    window.addEventListener('beforeunload', () => {
+      saveGroups();
+      saveMessages();
+      saveConnections();
+    });
+
+    // INITIALIZATION
+    // Persisted content might exist
+    function loadFromStorage(){
+      groups = JSON.parse(localStorage.getItem(LS.GROUPS) || '{}');
+      messagesStore = JSON.parse(localStorage.getItem(LS.MESSAGES) || '{}');
+      connections = JSON.parse(localStorage.getItem(LS.CONNECTIONS) || '{}');
+    }
+    // ensure some UI state
+    loadFromStorage();
+    // render on first frame
+    initState();
+
+    // Simple CSS-only pulse for new messages (handled by appear animation)
+  </script>
+</body>
+</html>
