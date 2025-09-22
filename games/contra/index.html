@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mini Contra-like Shoot'em'up</title>
+<style>
+  * {
+    margin: 0; padding: 0; box-sizing: border-box;
+  }
+  body, html {
+    background: #111;
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+    user-select: none;
+  }
+  canvas {
+    display: block;
+    margin: 0 auto;
+    background: linear-gradient(to top, #264026 0%, #87ceeb 100%);
+    image-rendering: pixelated;
+    border: 3px solid #555;
+  }
+</style>
+</head>
+<body>
+<canvas id="game" width="480" height="270"></canvas>
+<script>
+(() => {
+  /*
+  Mini pixel shoot'em'up side scrolling game inspired by CONTRA.
+  Controls:
+    - Arrow Left/Right: Move left/right
+    - Arrow Up: Jump
+    - Z / Ctrl / X: Shoot
+  */
+
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width;
+  const H = canvas.height;
+
+  // Pixel art scale so rendering looks crisp on HD screens
+  const SCALE = 2;
+
+  // Game constants
+  const GRAVITY = 0.6;
+  const FRICTION = 0.75;
+  const MAX_ENEMIES = 6;
+  const ENEMY_SPAWN_INTERVAL = 2000;
+  const LEVEL_LENGTH = 4000; // px
+
+  // Input keys pressed
+  const keys = {};
+  window.addEventListener('keydown', e => {
+    keys[e.code] = true;
+    // prevent scrolling on arrow keys
+    if(['ArrowLeft','ArrowRight','ArrowUp','Space'].includes(e.code)) e.preventDefault();
+  });
+  window.addEventListener('keyup', e => {
+    keys[e.code] = false;
+  });
+
+  // Helper pixel function to draw rects scaled with pixel-art style
+  function pfill(x,y,w,h,color){
+    ctx.fillStyle = color;
+    ctx.fillRect(x|0, y|0, w, h);
+  }
+  // Helper to draw pixel "sprite" from pattern array
+  // pattern: array of strings, eg: ['..X..','XXX..'] where X = pixel
+  // color: fill color of pixel
+  // px: pixel size
+  function drawPattern(x,y,pattern,color,px=2){
+    ctx.fillStyle = color;
+    pattern.forEach((row,iy) => {
+      [...row].forEach((ch,ix) => {
+        if(ch !== '.' && ch !== ' ') {
+          ctx.fillRect(x + ix*px, y + iy*px, px, px);
+        }
+      });
+    });
+  }
+
+  // Classes
+
+  class Entity {
+    constructor(x,y,w,h){
+      this.x = x;
+      this.y = y;
+      this.w = w;
+      this.h = h;
+      this.vx = 0;
+      this.vy = 0;
+      this.dead = false;
+      this.hp = 1;
+    }
+    get left(){return this.x;}
+    get right(){return this.x+this.w;}
+    get top(){return this.y;}
+    get bottom(){return this.y+this.h;}
+    intersects(other){
+      return !(this.left > other.right || this.right < other.left ||
+               this.top > other.bottom || this.bottom < other.top);
+    }
+  }
+
+  // Player class
+  class Player extends Entity {
+    constructor(x,y){
+      super(x,y,14,16);
+      this.speed = 2.6;
+      this.jumpPower = -10.5;
+      this.canJump = false;
+      this.color = '#0f0';
+      this.shootCooldown = 0;
+      this.direction = 1; // 1 = right, -1 = left
+      this.dead = false;
+      this.hp = 3;
+      this.invulnTimer = 0;
+    }
+    update(){
+      if(this.dead) return;
+
+      // Horizontal movement
+      if(keys['ArrowLeft']){
+        this.vx = -this.speed;
+        this.direction = -1;
+      }
+      else if(keys['ArrowRight']){
+        this.vx = this.speed;
+        this.direction = 1;
+      } else {
+        this.vx *= FRICTION;
+        if(Math.abs(this.vx)<0.15) this.vx=0;
+      }
+
+      // Jump
+      if(keys['ArrowUp'] && this.canJump){
+        this.vy = this.jumpPower;
+        this.canJump = false;
+      }
+
+      // Gravity
+      this.vy += GRAVITY;
+
+      // Move
+      this.x += this.vx;
+      this.y += this.vy;
+
+      // Collision with floor
+      if(this.y + this.h > groundLevel){
+        this.y = groundLevel - this.h;
+        this.vy = 0;
+        this.canJump = true;
+      }
+
+      // Keep inside screen horizontally (camera will move but player somewhat limited)
+      if(this.x < cameraX) this.x = cameraX;
+      if(this.x + this.w > cameraX + W) this.x = cameraX + W - this.w;
+
+      // Shoot
+      if(this.shootCooldown > 0) this.shootCooldown--;
+      if((keys['KeyZ'] || keys['ControlLeft'] || keys['KeyX']) && this.shootCooldown <= 0){
+        shootBullet(this.x + this.w/2, this.y+6, this.direction);
+        this.shootCooldown = 15; // cooldown frames
+      }
+
+      if(this.invulnTimer > 0) this.invulnTimer--;
+
+      if(this.hp <= 0 && !this.dead){
+        gameOver();
+        this.dead = true;
+      }
+    }
+    draw(){
+      if(this.dead) {
+        // Draw dead player as red block flicker
+        if((performance.now()/100)%500 < 250){
+          pfill(this.x - cameraX, this.y, this.w, this.h, '#f00');
+        }
+        return;
+      }
+      // Simple player pixel figure facing direction
+      const px = 2;
+      const x = this.x - cameraX;
+      const y = this.y;
+
+      // Flicker if invulnerable
+      if(this.invulnTimer > 0 && Math.floor(this.invulnTimer/5) % 2 === 0) return;
+
+      // Basic sprite: head, body, legs
+      // Head
+      drawPattern(x+4,y, [
+        "..XX..",
+        ".XXXX.",
+        "XXXXXX",
+        "XX..XX",
+      ], '#0f0', px);
+
+      // Body with arm (directional)
+      const bodyPatternRight = [
+        "..XX..",
+        "..XX..",
+        "..XX..",
+        "..XX..",
+      ];
+      const armX = x + (this.direction === 1 ? 10 : 0);
+      const armY = y + 8;
+
+      drawPattern(x+4,y+8, bodyPatternRight, '#0a0', px);
+      // Arm
+      pfill(armX, armY, px*2, px*3, '#0a0');
+
+      // Legs
+      drawPattern(x+4,y+14, [
+        ".X..X.",
+        "X....X",
+      ], '#070', px);
+    }
+  }
+
+  // Bullet class fired by player or enemy
+  class Bullet extends Entity {
+    constructor(x,y,direction,speed=7,color='#ff0',fromEnemy=false){
+      super(x,y,4,2);
+      this.vx = speed*direction;
+      this.color = color;
+      this.fromEnemy = fromEnemy;
+      this.life = 70;
+    }
+    update(){
+      this.x += this.vx;
+      this.life--;
+      if(this.life<=0) this.dead=true;
+      // Remove if out of level bounds
+      if(this.x < 0 || this.x > LEVEL_LENGTH) this.dead=true;
+    }
+    draw(){
+      pfill(this.x - cameraX, this.y, this.w, this.h, this.color);
+    }
+  }
+
+  // Enemy class - simple soldier type
+  class Enemy extends Entity {
+    constructor(x,y){
+      super(x,y,14,16);
+      this.speed = 1;
+      this.direction = -1;
+      this.color = '#f00';
+      this.shootCooldown = 0;
+      this.hp = 2;
+      this.dead = false;
+      this.vy = 0;
+      this.canJump = false;
+    }
+    update(){
+      // Simple AI: move back and forth in a range of 60px
+      if(this.dead) return;
+
+      // Gravity
+      this.vy += GRAVITY;
+      this.y += this.vy;
+      if(this.y + this.h > groundLevel){
+        this.y = groundLevel - this.h;
+        this.vy = 0;
+        this.canJump = true;
+      }
+
+      this.x += this.speed*this.direction;
+
+      if(this.x < this.spawnX - 30){
+        this.direction = 1;
+      } else if(this.x > this.spawnX + 30){
+        this.direction = -1;
+      }
+
+      // Shoot at player if on screen and cooldown over, shooting towards player
+      if(this.shootCooldown > 0) this.shootCooldown--;
+      if(this.shootCooldown <= 0 && this.x > cameraX && this.x < cameraX+W){
+        const px = player.x + player.w/2;
+        const py = player.y + player.h/2;
+        const ex = this.x + this.w/2;
+        const ey = this.y + this.h/2;
+
+        if(Math.abs(py - ey) < 40){ 
+          let dir = px > ex ? 1 : -1;
+          enemyShoot(this.x + this.w/2, this.y+6, dir);
+          this.shootCooldown = 90;
+        }
+      }
+
+      // Keep in bounds of level
+      if(this.x < 0) this.x = 0;
+      if(this.x + this.w > LEVEL_LENGTH) this.x = LEVEL_LENGTH - this.w;
+
+      if(this.hp <=0){
+        this.dead = true;
+        score += 100;
+      }
+    }
+    draw(){
+      if(this.dead) return;
+      const px = 2;
+      const x = this.x - cameraX;
+      const y = this.y;
+
+      // Basic enemy sprite (red soldier)
+      drawPattern(x+4,y, [
+        "..XX..",
+        ".XXXX.",
+        "XXXXXX",
+        "XX..XX",
+      ], '#f00', px);
+
+      drawPattern(x+4,y+8, [
+        "..XX..",
+        "..XX..",
+        "..XX..",
+        "..XX..",
+      ], '#a00', px);
+
+      pfill(x + (this.direction === 1 ? 10 : 0), y + 8, px*2, px*3, '#a00');
+
+      drawPattern(x+4,y+14, [
+        ".X..X.",
+        "X....X",
+      ], '#700', px);
+    }
+  }
+
+  // Platforms/ground simple line
+  const groundLevel = 230;
+
+  // Game state
+  const player = new Player(20, groundLevel - 16);
+  let bullets = [];
+  let enemies = [];
+  let enemyBullets = [];
+  let cameraX = 0;
+  let score = 0;
+  let gameRunning = true;
+  let gameEnded = false;
+  let levelEnd = LEVEL_LENGTH - W - 50;
+
+  // Spawn some enemies upfront
+  function spawnEnemies(){
+    enemies = [];
+    for(let i=0; i<MAX_ENEMIES; i++){
+      let ex = 300 + i*250 + Math.random()*50;
+      let enemy = new Enemy(ex, groundLevel - 16);
+      enemy.spawnX = ex;
+      enemies.push(enemy);
+    }
+  }
+  spawnEnemies();
+
+  // Shoot bullet from player
+  function shootBullet(x,y,direction){
+    const b = new Bullet(x,y,direction,9,'#ff0',false);
+    bullets.push(b);
+  }
+
+  // Enemy shoots bullets
+  function enemyShoot(x,y,direction){
+    const b = new Bullet(x,y,direction,5,'#f80',true);
+    enemyBullets.push(b);
+  }
+
+  // Handle collisions
+  function handleCollisions(){
+    // Player bullets hit enemies
+    bullets.forEach(b => {
+      enemies.forEach(e => {
+        if(!b.dead && !e.dead && b.intersects(e)){
+          e.hp--;
+          b.dead = true;
+        }
+      });
+    });
+
+    // Enemy bullets hit player
+    enemyBullets.forEach(b => {
+      if(!b.dead && !player.dead && b.intersects(player) && player.invulnTimer<=0){
+        player.hp--;
+        player.invulnTimer = 60;
+        b.dead = true;
+      }
+    });
+
+    // Enemies touching player hurts player
+    enemies.forEach(e => {
+      if(!e.dead && !player.dead && e.intersects(player) && player.invulnTimer<=0){
+        player.hp--;
+        player.invulnTimer = 60;
+        // Knockback player a bit
+        player.vx = e.direction * -4;
+        player.vy = -6;
+      }
+    });
+  }
+
+  // Game over
+  function gameOver(){
+    gameRunning = false;
+    gameEnded = true;
+  }
+
+  // Restart game
+  function restartGame(){
+    player.x = 20;
+    player.y = groundLevel - player.h;
+    player.hp = 3;
+    player.dead = false;
+    player.invulnTimer = 0;
+    bullets = [];
+    enemyBullets = [];
+    cameraX = 0;
+    score = 0;
+    spawnEnemies();
+    gameRunning = true;
+    gameEnded = false;
+  }
+
+  // Draw HUD
+  function drawHUD(){
+    ctx.fillStyle = '#fff';
+    ctx.font = '12px monospace';
+    ctx.fillText(`HP: ${player.hp}`, 5, 15);
+    ctx.fillText(`Score: ${score}`, 5, 30);
+
+    if(gameEnded){
+      ctx.fillStyle = '#000a';
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#f00';
+      ctx.font = '30px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('GAME OVER', W/2, H/2 - 20);
+      ctx.fillStyle = '#fff';
+      ctx.font = '18px monospace';
+      ctx.fillText('Press R to Restart', W/2, H/2 + 20);
+      ctx.textAlign = 'left';
+    }
+  }
+
+  // Main game loop
+  function loop(){
+    ctx.clearRect(0,0,W,H);
+
+    if(gameRunning){
+
+      // Update player
+      player.update();
+
+      // Update bullets
+      bullets.forEach(b => b.update());
+      bullets = bullets.filter(b => !b.dead);
+
+      enemyBullets.forEach(b => b.update());
+      enemyBullets = enemyBullets.filter(b => !b.dead);
+
+      // Update enemies
+      enemies.forEach(e => e.update());
+
+      // Collisions
+      handleCollisions();
+
+      // Camera follows player horizontally with margin
+      let cameraTargetX = player.x - W/3;
+      cameraTargetX = Math.max(0, Math.min(LEVEL_LENGTH - W, cameraTargetX));
+      cameraX += (cameraTargetX - cameraX) * 0.1;
+
+      // Draw ground (simple green strip)
+      pfill(0, groundLevel, W, H - groundLevel, '#145214');
+
+      // Draw some simple background hills (parallax)
+      let hillsOffset = cameraX * 0.3;
+      for(let i=-1;i<10;i++){
+        let hx = (i*250 - hillsOffset) % 480;
+        ctx.beginPath();
+        ctx.moveTo(hx, groundLevel);
+        ctx.lineTo(hx+120, groundLevel);
+        ctx.lineTo(hx+60, groundLevel - 40);
+        ctx.closePath();
+        ctx.fillStyle = '#356935';
+        ctx.fill();
+      }
+
+      // Draw player bullets
+      bullets.forEach(b => b.draw());
+
+      // Draw enemy bullets
+      enemyBullets.forEach(b => b.draw());
+
+      // Draw enemies
+      enemies.forEach(e => e.draw());
+
+      // Draw player
+      player.draw();
+
+      // Draw HUD
+      drawHUD();
+
+      // Win condition: reach near level end
+      if(player.x >= levelEnd){
+        gameRunning = false;
+      }
+    } else {
+      // Show win or prompt
+      pfill(0, 0, W, H, '#000a');
+      ctx.fillStyle = '#fff';
+      ctx.font = '20px monospace';
+      ctx.textAlign = 'center';
+      if(gameEnded){
+        // game over shown in HUD already
+      } else {
+        ctx.fillText('Level Complete!', W/2, H/2 - 10);
+        ctx.fillText(`Score: ${score}`, W/2, H/2 + 15);
+        ctx.fillText('Press R to Restart', W/2, H/2 + 45);
+      }
+      ctx.textAlign = 'left';
+    }
+
+    // Restart if R pressed
+    if(gameEnded || !gameRunning){
+      if(keys['KeyR']){
+        restartGame();
+      }
+    }
+
+    requestAnimationFrame(loop);
+  }
+
+
+  loop();
+
+})();
+</script>
+</body>
+</html>
