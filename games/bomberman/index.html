@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mini Bomberman Clone</title>
+<style>
+  * {
+    box-sizing: border-box;
+    margin: 0; padding: 0;
+  }
+  body {
+    background: #222;
+    color: #eee;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    user-select: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 10px;
+  }
+  h1 {
+    margin-bottom: 10px;
+  }
+  #game {
+    position: relative;
+    margin-top: 10px;
+  }
+  canvas {
+    background: #111;
+    image-rendering: pixelated;
+    border: 2px solid #555;
+  }
+  #info {
+    margin-top: 10px;
+    font-size: 14px;
+  }
+  #messages {
+    margin-top: 8px;
+    min-height: 20px;
+    height: 20px;
+    font-weight: bold;
+    color: #f44;
+  }
+  #footer {
+    margin-top: 20px;
+    font-size: 12px;
+    color: #666;
+  }
+</style>
+</head>
+<body>
+<h1>Mini Bomberman Clone</h1>
+<div id="game">
+  <canvas id="canvas" width="352" height="352"></canvas>
+</div>
+<div id="info">
+  <div>Level: <span id="level">1</span> &nbsp;&nbsp; Lives: <span id="lives">3</span> &nbsp;&nbsp; Bombs: <span id="bombCount">1</span></div>
+  <div>Use arrow keys or WASD to move, Space to place bomb</div>
+</div>
+<div id="messages"></div>
+<div id="footer">Made with JavaScript in a single HTML file</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+
+  // Constants
+  const TILE_SIZE = 32;
+  const MAP_COLS = 11;
+  const MAP_ROWS = 11;
+
+  // Tiles
+  const TILE_EMPTY = 0;
+  const TILE_WALL = 1;
+  const TILE_BLOCK = 2; // destructible block
+  const TILE_BOMB = 3; // placed bomb (we'll keep bomb info elsewhere too)
+  const TILE_FIRE = 4;
+
+  // Directions for movement & explosions
+  const DIRS = [
+    { x: 0, y: -1 }, // up
+    { x: 0, y: 1 },  // down
+    { x: -1, y: 0 }, // left
+    { x: 1, y: 0 },  // right
+  ];
+
+  // Game state variables
+  let map = [];
+  let player = {
+    x: 1,
+    y: 1,
+    lives: 3,
+    bombCount: 1,
+    bombPower: 2,
+    alive: true,
+  };
+  let enemies = [];
+  let bombs = [];
+  let fires = [];
+  let level = 1;
+  const MAX_LEVEL = 10;
+  let gameOver = false;
+  let win = false;
+
+  // Timing & controls
+  let keysDown = {};
+  let moveCooldown = 0; // to regulate player speed
+  const MOVE_COOLDOWN_TIME = 120; // ms between moves
+
+  // Enemy AI speed
+  const ENEMY_MOVE_INTERVAL = 800; // ms
+  let enemyMoveTimer = 0;
+
+  // Bomb timing
+  const BOMB_FUSE = 2000; // 2 seconds fuse
+  const FIRE_DURATION = 500; // fire remains half sec
+
+  const levelElem = document.getElementById('level');
+  const livesElem = document.getElementById('lives');
+  const bombCountElem = document.getElementById('bombCount');
+  const messagesElem = document.getElementById('messages');
+
+  // Images or colors for tiles and entities
+  // We'll do simple shapes/colors/patterns for everything
+
+  // Generate a maze-like map for each level
+  // Maze generation:
+  // We'll create a grid with perimeter walls, plus fixed walls in a pattern,
+  // then scatter destructible blocks randomly except near spawn.
+
+  function generateMap() {
+    // Initialize empty map
+    let newMap = new Array(MAP_ROWS);
+    for (let y = 0; y < MAP_ROWS; y++) {
+      newMap[y] = new Array(MAP_COLS).fill(TILE_EMPTY);
+    }
+
+    // Border walls
+    for(let x=0; x<MAP_COLS; x++) {
+      newMap[0][x] = TILE_WALL;
+      newMap[MAP_ROWS-1][x] = TILE_WALL;
+    }
+    for(let y=0; y<MAP_ROWS; y++) {
+      newMap[y][0] = TILE_WALL;
+      newMap[y][MAP_COLS-1] = TILE_WALL;
+    }
+
+    // Place inner fixed walls in a grid pattern (even coords)
+    for (let y = 2; y < MAP_ROWS - 2; y += 2) {
+      for (let x = 2; x < MAP_COLS - 2; x += 2) {
+        newMap[y][x] = TILE_WALL;
+      }
+    }
+
+    // Place destructible blocks randomly
+    const blockCount = 35; // adjustable number of blocks
+
+    // We'll avoid spawn positions around player and initial enemy zones
+
+    const safeZone = new Set([
+      '1,1','1,2','2,1',
+      'MAP_ROWS -2, MAP_COLS -2' // bottom right corner roughly for enemy spawn safety
+    ]);
+
+    function isSafeToPlaceBlock(x,y) {
+      // Avoid player starting area (1,1), (1,2), (2,1)
+      if ((x <= 2 && y <= 2) || (x >= MAP_COLS-3 && y >= MAP_ROWS-3)) return false;
+      // Avoid walls
+      if (newMap[y][x] !== TILE_EMPTY) return false;
+      return true;
+    }
+
+    let placed = 0;
+    while (placed < blockCount) {
+      let x = 1 + Math.floor(Math.random() * (MAP_COLS - 2));
+      let y = 1 + Math.floor(Math.random() * (MAP_ROWS - 2));
+      if (isSafeToPlaceBlock(x,y)) {
+        newMap[y][x] = TILE_BLOCK;
+        placed++;
+      }
+    }
+
+    return newMap;
+  }
+
+  // Spawn enemies in random empty positions away from player
+  function spawnEnemies() {
+    enemies = [];
+    // We want 4 enemies per level
+    let tries = 0;
+    while (enemies.length < 4 && tries < 1000) {
+      tries++;
+      let x = 1 + Math.floor(Math.random() * (MAP_COLS - 2));
+      let y = 1 + Math.floor(Math.random() * (MAP_ROWS - 2));
+      if ((x === player.x && y === player.y) || (map[y][x] !== TILE_EMPTY)) continue;
+      // Avoid placing too close to player start
+      if (Math.abs(x - player.x) + Math.abs(y - player.y) < 4) continue;
+      // Also avoid enemies overlapping each other
+      if (enemies.some(e => e.x === x && e.y === y)) continue;
+      enemies.push({ x, y, alive: true, moveCooldown: 0, dir: {x:0,y:0} });
+    }
+  }
+
+  // Reset / start new level
+  function startLevel(lv) {
+    level = lv;
+    levelElem.textContent = level;
+    player.x = 1; player.y = 1;
+    player.alive = true;
+    player.bombCount = 1;
+    bombs = [];
+    fires = [];
+    gameOver = false;
+    win = false;
+    messagesElem.textContent = '';
+    map = generateMap();
+    spawnEnemies();
+    livesElem.textContent = player.lives;
+    bombCountElem.textContent = player.bombCount;
+  }
+
+  function posToPixel(x, y) {
+    return { px: x * TILE_SIZE, py: y * TILE_SIZE };
+  }
+
+  // Draw everything
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Draw map
+    for(let y=0; y < MAP_ROWS; y++) {
+      for(let x=0; x < MAP_COLS; x++) {
+        const tile = map[y][x];
+        const {px, py} = posToPixel(x,y);
+
+        switch(tile) {
+          case TILE_EMPTY:
+            ctx.fillStyle = '#222';
+            ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+            break;
+          case TILE_WALL:
+            ctx.fillStyle = '#555';
+            ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+            // Draw wall pattern
+            ctx.strokeStyle = '#888';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(px+6, py+6, TILE_SIZE-12, TILE_SIZE-12);
+            break;
+          case TILE_BLOCK:
+            ctx.fillStyle = '#a0522d';
+            ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+            ctx.strokeStyle = '#6b3e1a';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(px+3, py+3, TILE_SIZE-6, TILE_SIZE-6);
+            break;
+          case TILE_FIRE:
+            ctx.fillStyle = '#ff6a00';
+            ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+            // small flicker effect
+            ctx.fillStyle = 'rgba(255, 255, 0, 0.6)';
+            ctx.beginPath();
+            ctx.arc(px + TILE_SIZE/2 + (Math.sin(Date.now()/80 + (x+y)*100)*4), py + TILE_SIZE/2, TILE_SIZE/3, 0, Math.PI*2);
+            ctx.fill();
+            break;
+        }
+      }
+    }
+
+    // Draw bombs
+    bombs.forEach(bomb => {
+      if (!bomb.exploding) {
+        const {px, py} = posToPixel(bomb.x, bomb.y);
+        ctx.fillStyle = '#000';
+        ctx.beginPath();
+        ctx.arc(px + TILE_SIZE/2, py + TILE_SIZE/2, TILE_SIZE/3, 0, Math.PI*2);
+        ctx.fill();
+        // highlight bomb fuse progress
+        const fusePercent = (bomb.fuseEnd - Date.now()) / BOMB_FUSE;
+        ctx.fillStyle = `rgba(255,0,0,${fusePercent < 0 ? 0 : fusePercent})`;
+        ctx.beginPath();
+        ctx.arc(px + TILE_SIZE/2, py + TILE_SIZE/2, TILE_SIZE/3 * fusePercent, 0, Math.PI*2);
+        ctx.fill();
+      }
+    });
+
+    // Draw fires (over map)
+    // (Already drawn on tile FIRE color)
+
+    // Draw enemies
+    enemies.forEach(enemy => {
+      if (!enemy.alive) return;
+      const {px, py} = posToPixel(enemy.x, enemy.y);
+      ctx.fillStyle = '#f00';
+      ctx.beginPath();
+      ctx.ellipse(px + TILE_SIZE/2, py + TILE_SIZE/2, TILE_SIZE/3, TILE_SIZE/2.4, 0, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = '#600';
+      ctx.beginPath();
+      ctx.ellipse(px + TILE_SIZE/2, py + TILE_SIZE/2.8, TILE_SIZE/4, TILE_SIZE/6, 0, 0, Math.PI*2);
+      ctx.fill();
+      // eyes
+      ctx.fillStyle = 'white';
+      ctx.beginPath();
+      ctx.ellipse(px + TILE_SIZE/2 - 5, py + TILE_SIZE/2 - 5, 4, 5, 0, 0, Math.PI*2);
+      ctx.ellipse(px + TILE_SIZE/2 + 5, py + TILE_SIZE/2 - 5, 4, 5, 0, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = '#900';
+      ctx.beginPath();
+      ctx.ellipse(px + TILE_SIZE/2 - 5, py + TILE_SIZE/2 - 5, 2.5, 3, 0, 0, Math.PI*2);
+      ctx.ellipse(px + TILE_SIZE/2 + 5, py + TILE_SIZE/2 - 5, 2.5, 3, 0, 0, Math.PI*2);
+      ctx.fill();
+    });
+
+    // Draw player
+    if (player.alive) {
+      const {px, py} = posToPixel(player.x, player.y);
+      ctx.fillStyle = '#0af';
+      ctx.beginPath();
+      ctx.ellipse(px + TILE_SIZE/2, py + TILE_SIZE/2, TILE_SIZE/3.5, TILE_SIZE/2.2, 0, 0, Math.PI*2);
+      ctx.fill();
+      // eyes
+      ctx.fillStyle = '#ccf';
+      ctx.beginPath();
+      ctx.ellipse(px + TILE_SIZE/2 - 6, py + TILE_SIZE/2 - 5, 4, 5, 0, 0, Math.PI*2);
+      ctx.ellipse(px + TILE_SIZE/2 + 6, py + TILE_SIZE/2 - 5, 4, 5, 0, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = '#000';
+      ctx.beginPath();
+      ctx.ellipse(px + TILE_SIZE/2 - 6, py + TILE_SIZE/2 - 5, 1.8, 2.5, 0, 0, Math.PI*2);
+      ctx.ellipse(px + TILE_SIZE/2 + 6, py + TILE_SIZE/2 - 5, 1.8, 2.5, 0, 0, Math.PI*2);
+      ctx.fill();
+      // mouth
+      ctx.strokeStyle = '#046';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(px + TILE_SIZE/2 - 6, py + TILE_SIZE/2 + 6);
+      ctx.lineTo(px + TILE_SIZE/2 + 6, py + TILE_SIZE/2 + 6);
+      ctx.stroke();
+    }
+  }
+
+  // Check if a tile can be moved into
+  function canWalk(x, y) {
+    if (x < 0 || y < 0 || x >= MAP_COLS || y >= MAP_ROWS) return false;
+    if (map[y][x] === TILE_WALL) return false;
+    if (map[y][x] === TILE_BLOCK) return false;
+    // Bombs block movement
+    if (bombs.some(b => b.x === x && b.y === y && !b.exploding)) return false;
+    return true;
+  }
+
+  // Player move function, with cooldown
+  function tryMovePlayer(dx, dy) {
+    const nx = player.x + dx;
+    const ny = player.y + dy;
+    if (canWalk(nx, ny)) {
+      player.x = nx;
+      player.y = ny;
+    }
+  }
+
+  // Place bomb at player position if possible
+  function placeBomb() {
+    // max simultaneous bombs = player.bombCount
+    const activeBombs = bombs.filter(b => !b.exploding);
+    if (activeBombs.length >= player.bombCount) return;
+
+    // Check no existing bomb in same tile
+    if (bombs.some(b => b.x === player.x && b.y === player.y && !b.exploding)) return;
+
+    bombs.push({
+      x: player.x,
+      y: player.y,
+      fuseEnd: Date.now() + BOMB_FUSE,
+      exploding: false,
+      exploded: false,
+    });
+  }
+
+  // Explode bomb: produce fire and damage tiles/enemies/player
+  function explodeBomb(bomb) {
+    if (bomb.exploding) return;
+    bomb.exploding = true;
+
+    const explosionCoords = [];
+    explosionCoords.push({x: bomb.x, y: bomb.y});
+    // Explosion radius horizontally and vertically with player.bombPower range
+    for(let dir of DIRS) {
+      for(let p=1; p<=player.bombPower; p++) {
+        let tx = bomb.x + dir.x * p;
+        let ty = bomb.y + dir.y * p;
+        if (tx < 0 || ty < 0 || tx >= MAP_COLS || ty >= MAP_ROWS) break;
+        if (map[ty][tx] === TILE_WALL) break;
+        explosionCoords.push({x: tx, y: ty});
+        // Stop at first block encountered, break wall if destructible
+        if (map[ty][tx] === TILE_BLOCK) break;
+      }
+    }
+
+    // Create fire for FIRE_DURATION at calculated coords
+    explosionCoords.forEach(pos => {
+      fires.push({ x: pos.x, y: pos.y, expire: Date.now() + FIRE_DURATION });
+    });
+
+    // Destroy destructible blocks (turn into empty)
+    explosionCoords.forEach(({x,y})=>{
+      if (map[y][x] === TILE_BLOCK) {
+        map[y][x] = TILE_EMPTY;
+      }
+    });
+
+    // Damage enemies & player if in explosion
+    enemies.forEach(enemy => {
+      if (!enemy.alive) return;
+      if (explosionCoords.some(c => c.x === enemy.x && c.y === enemy.y)) {
+        enemy.alive = false;
+      }
+    });
+
+    if (player.alive && explosionCoords.some(c => c.x === player.x && c.y === player.y)) {
+      player.alive = false;
+      player.lives--;
+      livesElem.textContent = player.lives;
+      if (player.lives <= 0) {
+        gameOver = true;
+        messagesElem.textContent = "GAME OVER - Press R to Restart";
+      } else {
+        messagesElem.textContent = "You lost a life! Respawning...";
+        // Respawn player after short delay
+        setTimeout(() => {
+          player.alive = true;
+          player.x = 1;
+          player.y = 1;
+          messagesElem.textContent = '';
+        }, 1500);
+      }
+    }
+
+    bomb.exploded = true;
+    setTimeout(() => {
+      // Remove bomb after explosion
+      bombs = bombs.filter(b => b !== bomb);
+    }, FIRE_DURATION);
+  }
+
+  // Update fires - remove expired
+  function updateFires() {
+    const now = Date.now();
+    fires = fires.filter(f => f.expire > now);
+  }
+
+  // Update bombs - check for fuse expiration
+  function updateBombs() {
+    const now = Date.now();
+    bombs.forEach(bomb => {
+      if (!bomb.exploding && bomb.fuseEnd <= now) {
+        explodeBomb(bomb);
+      }
+    });
+  }
+
+  // Enemy AI pathfinding and movement:
+  // Very basic: random directions that do not collide with walls or bombs
+  // If enemy gets stuck, it tries another direction in next tick
+
+  function enemyCanMove(x,y) {
+    if (x < 0 || y < 0 || x >= MAP_COLS || y >= MAP_ROWS) return false;
+    if (map[y][x] === TILE_WALL) return false;
+    if (map[y][x] === TILE_BLOCK) return false;
+    if (bombs.some(b => b.x === x && b.y === y && !b.exploding)) return false;
+    // Also can't move onto other enemies
+    if (enemies.some(e => e.x === x && e.y === y && e.alive)) return false;
+    // Player doesn't block enemy movement (for challenge)
+    return true;
+  }
+
+  function updateEnemies(dt) {
+    enemyMoveTimer += dt;
+    if (enemyMoveTimer < ENEMY_MOVE_INTERVAL) return;
+    enemyMoveTimer = 0;
+
+    enemies.forEach(enemy => {
+      if (!enemy.alive) return;
+      // Pick direction if dir is 0 or blocked
+      let nx = enemy.x + enemy.dir.x;
+      let ny = enemy.y + enemy.dir.y;
+      if (!enemyCanMove(nx, ny)) {
+        // Pick new random direction
+        const possibleDirs = DIRS.filter(d => enemyCanMove(enemy.x + d.x, enemy.y + d.y));
+        if (possibleDirs.length > 0) {
+          enemy.dir = possibleDirs[Math.floor(Math.random() * possibleDirs.length)];
+          enemy.x += enemy.dir.x;
+          enemy.y += enemy.dir.y;
+        } else {
+          enemy.dir = {x: 0, y: 0}; // stuck
+        }
+      } else {
+        enemy.x += enemy.dir.x;
+        enemy.y += enemy.dir.y;
+      }
+    });
+  }
+
+  // Check collisions between player and enemies
+  function checkPlayerEnemyCollision() {
+    if (!player.alive) return;
+    enemies.forEach(enemy => {
+      if (!enemy.alive) return;
+      if (enemy.x === player.x && enemy.y === player.y) {
+        player.alive = false;
+        player.lives--;
+        livesElem.textContent = player.lives;
+        if (player.lives <= 0) {
+          gameOver = true;
+          messagesElem.textContent = "GAME OVER - Press R to Restart";
+        } else {
+          messagesElem.textContent = "You lost a life! Respawning...";
+          setTimeout(()=>{
+            player.alive = true;
+            player.x = 1;
+            player.y = 1;
+            messagesElem.textContent = '';
+          },1500);
+        }
+      }
+    });
+  }
+
+  // Check if level is cleared (all enemies dead)
+  function checkLevelComplete() {
+    if (enemies.every(e => !e.alive)) {
+      if (level >= MAX_LEVEL) {
+        win = true;
+        messagesElem.textContent = "YOU WIN! Press R to Restart";
+      } else {
+        messagesElem.textContent = "Level Cleared! Next Level in 2s...";
+        setTimeout(() => {
+          messagesElem.textContent = "";
+          startLevel(level + 1);
+        }, 2000);
+      }
+    }
+  }
+
+
+  // Main loop and time keeping
+  let lastTime = 0;
+  function loop(timestamp=0) {
+    if(!lastTime) lastTime = timestamp;
+    const delta = timestamp - lastTime;
+    lastTime = timestamp;
+
+    if (!gameOver && !win) {
+      moveCooldown -= delta;
+      if (moveCooldown < 0) moveCooldown = 0;
+
+      // Handle player input for movement
+      if (moveCooldown === 0 && player.alive) {
+        if (keysDown['ArrowUp'] || keysDown['w']) { tryMovePlayer(0, -1); moveCooldown = MOVE_COOLDOWN_TIME; }
+        else if (keysDown['ArrowDown'] || keysDown['s']) { tryMovePlayer(0, 1); moveCooldown = MOVE_COOLDOWN_TIME; }
+        else if (keysDown['ArrowLeft'] || keysDown['a']) { tryMovePlayer(-1, 0); moveCooldown = MOVE_COOLDOWN_TIME; }
+        else if (keysDown['ArrowRight'] || keysDown['d']) { tryMovePlayer(1, 0); moveCooldown = MOVE_COOLDOWN_TIME; }
+      }
+
+      updateBombs();
+      updateFires();
+      updateEnemies(delta);
+      checkPlayerEnemyCollision();
+      checkLevelComplete();
+
+      bombCountElem.textContent = player.bombCount;
+      livesElem.textContent = player.lives;
+    }
+
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  // Keyboard event handlers
+  window.addEventListener('keydown', e => {
+    if (gameOver || win) {
+      if (e.key === 'r' || e.key === 'R') {
+        player.lives = 3;
+        startLevel(1);
+        gameOver = false;
+        win = false;
+        messagesElem.textContent = '';
+      }
+      return;
+    }
+    keysDown[e.key] = true;
+
+    if (e.key === ' ' || e.key === 'Spacebar') {
+      placeBomb();
+      e.preventDefault();
+    }
+  });
+  window.addEventListener('keyup', e => {
+    delete keysDown[e.key];
+  });
+
+  startLevel(1);
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
