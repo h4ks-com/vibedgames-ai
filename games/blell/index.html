@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mini Browser VM with htop-like Monitoring</title>
+<style>
+  /* Basic reset */
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    margin: 0;
+    background: #1e1e1e;
+    color: #cfcfcf;
+    font-family: monospace, monospace;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+  #terminal {
+    flex-grow: 1;
+    padding: 10px;
+    background: #1e1e1e;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    outline: none;
+  }
+  #input-line {
+    display: flex;
+    border-top: 1px solid #555;
+  }
+  #prompt {
+    padding: 0 10px;
+    background: #333;
+    color: #0f0;
+    user-select: none;
+  }
+  #command-input {
+    flex-grow: 1;
+    background: #1e1e1e;
+    border: none;
+    color: #cfcfcf;
+    font-family: monospace, monospace;
+    font-size: 1em;
+    padding: 6px 10px;
+  }
+  #command-input:focus {
+    outline: none;
+  }
+  /* Scrollbar styling */
+  #terminal::-webkit-scrollbar {
+    width: 8px;
+  }
+  #terminal::-webkit-scrollbar-thumb {
+    background: #555;
+    border-radius: 4px;
+  }
+  #terminal::-webkit-scrollbar-track {
+    background: #1e1e1e;
+  }
+  /* htop table styles */
+  .htop-header {
+    color: #0f0;
+  }
+  .htop-row {
+    font-variant-numeric: tabular-nums;
+  }
+  .htop-bar {
+    display: inline-block;
+    height: 1em;
+    background: #0f0;
+    vertical-align: middle;
+  }
+  .htop-bar-bg {
+    background: #444;
+    display: inline-block;
+    height: 1em;
+    vertical-align: middle;
+    width: 20ch;
+  }
+  /* Error text */
+  .error {
+    color: #f44;
+  }
+</style>
+</head>
+<body>
+<div id="terminal" tabindex="0" aria-label="Terminal output" role="log" aria-live="polite"></div>
+<div id="input-line">
+  <span id="prompt">$</span>
+  <input type="text" id="command-input" aria-label="Command input" autocomplete="off" spellcheck="false" />
+</div>
+<script>
+(() => {
+  // VM filesystem & utilities simulation
+  const terminal = document.getElementById('terminal');
+  const input = document.getElementById('command-input');
+  const promptStr = '$';
+
+  // Simple file system structure (mock)
+  let fileSystem = {
+    '/': {
+      type: 'dir',
+      contents: {
+        'bin': {type: 'dir', contents: {}},
+        'usr': {type: 'dir', contents: {}},
+        'home': {type: 'dir', contents: {
+          'user': {type: 'dir', contents: {
+            'readme.txt': {type: 'file', content: "Welcome to the Mini Browser VM!\nType 'htop' to show system info.\nTry usual commands: ls, cat, echo, help, clear."}
+          }}
+        }},
+      }
+    }
+  };
+
+  // Current working directory
+  let cwd = '/home/user';
+
+  // Utility functions
+  function pathToArray(path) {
+    if (!path) return [];
+    return path.split('/').filter(x => x.length);
+  }
+  function resolvePath(p) {
+    if (!p) return cwd;
+    if (p.startsWith('/')) {
+      // Absolute path
+      return '/' + pathToArray(p).join('/');
+    } else {
+      // Relative path
+      let c = pathToArray(cwd);
+      let parts = pathToArray(p);
+      for (let part of parts) {
+        if (part === '.') continue;
+        if (part === '..') {
+          if (c.length > 0) c.pop();
+          continue;
+        }
+        c.push(part);
+      }
+      return '/' + c.join('/');
+    }
+  }
+  function getNode(path) {
+    let parts = pathToArray(path);
+    let node = fileSystem['/'];
+    for (let p of parts) {
+      if (!node.contents || !node.contents[p]) return null;
+      node = node.contents[p];
+    }
+    return node;
+  }
+  function isDir(path) {
+    let node = getNode(path);
+    return node && node.type === 'dir';
+  }
+  function isFile(path) {
+    let node = getNode(path);
+    return node && node.type === 'file';
+  }
+
+  // Print helpers
+  function printLine(txt = '') {
+    terminal.textContent += txt + '\n';
+    terminal.scrollTop = terminal.scrollHeight;
+  }
+  function clearScreen() {
+    terminal.textContent = '';
+  }
+
+  // Command implementations
+
+  // 'help' command
+  function cmd_help(args) {
+    printLine(`Available commands:
+  help         Show this help
+  clear        Clear the terminal
+  ls [dir]     List directory
+  cd [dir]     Change directory
+  pwd          Print working directory
+  cat file     Show file contents
+  echo args    Print args
+  htop         Show browser memory & CPU info
+  date         Show current date/time
+  uname [-a]   Show system info
+  exit         Clear terminal
+`);
+  }
+
+  // 'ls' command
+  function cmd_ls(args) {
+    let target = args[0] ? resolvePath(args[0]) : cwd;
+    let node = getNode(target);
+    if (!node) {
+      printLine(`ls: cannot access '${args[0] || ''}': No such file or directory`);
+      return;
+    }
+    if (node.type === 'file') {
+      printLine(args[0]);
+      return;
+    }
+    let entries = Object.keys(node.contents).sort();
+    printLine(entries.join('  '));
+  }
+
+  // 'cd' command
+  function cmd_cd(args) {
+    let target = args[0] ? resolvePath(args[0]) : '/home/user';
+    let node = getNode(target);
+    if (!node || node.type !== 'dir') {
+      printLine(`cd: no such file or directory: ${args[0] || ''}`);
+      return;
+    }
+    cwd = target;
+  }
+
+  // 'pwd' command
+  function cmd_pwd(args) {
+    printLine(cwd);
+  }
+
+  // 'cat' command
+  function cmd_cat(args) {
+    if (!args[0]) {
+      printLine('cat: missing operand');
+      return;
+    }
+    let target = resolvePath(args[0]);
+    let node = getNode(target);
+    if (!node) {
+      printLine(`cat: ${args[0]}: No such file or directory`);
+      return;
+    }
+    if (node.type !== 'file') {
+      printLine(`cat: ${args[0]}: Is a directory`);
+      return;
+    }
+    printLine(node.content);
+  }
+
+  // 'echo' command
+  function cmd_echo(args) {
+    printLine(args.join(' '));
+  }
+  // 'clear' command
+  function cmd_clear() {
+    clearScreen();
+  }
+
+  // 'date' command
+  function cmd_date() {
+    printLine(new Date().toString());
+  }
+
+  // 'uname' command
+  function cmd_uname(args) {
+    /*
+    Options:
+    -a : all info
+    */
+    const nav = navigator;
+    if (args.length && args[0] === '-a') {
+      printLine(`Linux mini-vm 5.0.0-0-browser #1 SMP Fri Jun 7 12:00:00 UTC 2024 x86_64 GNU/Linux
+Browser: ${nav.appName} ${nav.appVersion}
+Platform: ${nav.platform}
+UserAgent: ${nav.userAgent}`);
+    } else {
+      printLine('Linux');
+    }
+  }
+
+  // 'exit' command (just clear)
+  function cmd_exit() {
+    clearScreen();
+    printLine('Session ended. Refresh to restart.');
+    input.disabled = true;
+  }
+
+  // 'htop' command: show simulated system usage from browser APIs
+  // We will try to show CPU usage and memory info by sampling performance
+  // Use performance.memory if available (Chrome mostly)
+  // CPU usage approximated by event loop blocking/fps info from requestAnimationFrame?
+
+  // We'll create a dynamic htop like display that updates for 5 seconds,
+  // then stops.
+
+  function cmd_htop() {
+    clearScreen();
+
+    printLine('htop - Mini Browser VM System Monitor');
+    printLine('(refreshing for 5 seconds, then returning to prompt)');
+    printLine('');
+
+    // Prepare live updating output area
+    let intervalId = null;
+    let count = 0;
+    const maxCount = 50; // 5 seconds @ 100ms update
+
+    // CPU usage estimation: measure event-loop delay
+    let lastTime = performance.now();
+    let delays = [];
+
+    // Get memory info if available
+    function getMemInfo() {
+      if (performance && performance.memory) {
+        let mem = performance.memory;
+        // mem.usedJSHeapSize, totalJSHeapSize, jsHeapSizeLimit all in bytes
+        return {
+          used: mem.usedJSHeapSize,
+          total: mem.jsHeapSizeLimit,
+        };
+      }
+      return null;
+    }
+
+    // Format bytes
+    function formatBytes(bytes) {
+      if (bytes < 1024) return bytes + ' B';
+      let kb = bytes / 1024;
+      if (kb < 1024) return kb.toFixed(1) + ' KB';
+      let mb = kb / 1024;
+      return mb.toFixed(2) + ' MB';
+    }
+
+    // draw loadbars
+    function bar(percentage, length=20) {
+      let fullBlocks = Math.round((percentage / 100) * length);
+      if (fullBlocks > length) fullBlocks = length;
+      let emptyBlocks = length - fullBlocks;
+      return '\x1b[42m' + ' '.repeat(fullBlocks) + '\x1b[0m' + ' '.repeat(emptyBlocks);
+    }
+
+    function drawBar(percentage, length=20) {
+      // We'll simulate a green bar inside brackets using unicode block elements and CSS styling:
+      // But terminal is plain text - we can simulate with █ and ░
+
+      let fullLength = Math.round((percentage / 100) * length);
+      let emptyLength = length - fullLength;
+      let fullBar = '█'.repeat(fullLength);
+      let emptyBar = '░'.repeat(emptyLength);
+      return fullBar + emptyBar;
+    }
+
+    function printHtop() {
+      // Clear terminal for every redraw (simulate clear)
+      terminal.textContent = '';
+      printLine('htop - Mini Browser VM System Monitor');
+      printLine('');
+
+      // CPU Usage calculated from event-loop delays
+
+      let meanDelay = 0;
+      if (delays.length > 0) {
+        let sum = 0;
+        for (let d of delays) sum += d;
+        meanDelay = sum / delays.length;
+      }
+
+      // Typical frame budget ~16ms for 60fps
+      // event-loop delay >16ms means CPU busy or slow
+
+      let loadPercent = Math.min(100, (meanDelay / 16) * 100);
+      if (loadPercent < 0) loadPercent = 0;
+
+      // Print CPU usage bar
+      printLine(`CPU Usage:` + ' ' + drawBar(loadPercent, 30) + ` ${loadPercent.toFixed(0)}%`);
+
+      // Memory info
+      let mem = getMemInfo();
+      if (mem) {
+        let usedPercent = (mem.used / mem.total) * 100;
+        printLine(`Memory Usage:` + ' ' + drawBar(usedPercent, 30) + ` ${formatBytes(mem.used)} / ${formatBytes(mem.total)} (${usedPercent.toFixed(0)}%)`);
+      } else {
+        printLine('Memory Usage: Not supported in this browser.');
+      }
+
+      // Print seconds elapsed (fake uptime)
+      printLine('');
+      printLine(`Uptime: ${(count*0.1).toFixed(1)} s`);
+
+      printLine('');
+      printLine(`Press Ctrl+C or wait 5 seconds to exit htop.`);
+    }
+
+    // We use requestAnimationFrame to track event loop lag
+
+    function rafTick(now) {
+      let delay = now - lastTime - 16; // expected 16 ms frame duration
+      if (delay < 0) delay = 0;
+      delays.push(delay);
+      if (delays.length > 20) delays.shift(); // keep last 20 samples
+      lastTime = now;
+      count++;
+      printHtop();
+
+      if (count >= maxCount) {
+        clearInterval(intervalId);
+        printLine('\nhtop ended.\n');
+        printLine(promptStr + ' ');
+        input.disabled = false;
+        input.focus();
+        return;
+      }
+      rafId = requestAnimationFrame(rafTick);
+    }
+    // Disable input while htop runs
+    input.disabled = true;
+    input.value = '';
+    input.blur();
+
+    let rafId;
+
+    // Start rAF loop
+    lastTime = performance.now();
+    rafId = requestAnimationFrame(rafTick);
+
+    // Also allow user to exit htop by Ctrl+C
+    function onKeydown(e) {
+      if (e.ctrlKey && e.key === 'c') {
+        if (rafId) cancelAnimationFrame(rafId);
+        clearInterval(intervalId);
+        document.removeEventListener('keydown', onKeydown);
+        printLine('\nhtop interrupted by user.\n');
+        printLine(promptStr + ' ');
+        input.disabled = false;
+        input.focus();
+      }
+    }
+    document.addEventListener('keydown', onKeydown);
+  }
+
+  // Command Map
+  const commands = {
+    'help': cmd_help,
+    'clear': cmd_clear,
+    'ls': cmd_ls,
+    'cd': cmd_cd,
+    'pwd': cmd_pwd,
+    'cat': cmd_cat,
+    'echo': cmd_echo,
+    'date': cmd_date,
+    'uname': cmd_uname,
+    'exit': cmd_exit,
+    'htop': cmd_htop,
+  };
+
+  // Interpret and run command line text
+  function runCommand(line) {
+    line = line.trim();
+    if (!line) return;
+    printLine(promptStr + ' ' + line);
+    let tokens = [];
+    let word = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      let ch = line[i];
+      if (ch === '"') {
+        inQuotes = !inQuotes;
+        continue;
+      }
+      if (!inQuotes && /\s/.test(ch)) {
+        if (word.length) {
+          tokens.push(word);
+          word = '';
+        }
+      } else {
+        word += ch;
+      }
+    }
+    if (word.length) tokens.push(word);
+    if (tokens.length === 0) return;
+
+    let cmd = tokens[0];
+    let args = tokens.slice(1);
+    if (commands[cmd]) {
+      commands[cmd](args);
+    } else {
+      printLine(`${cmd}: command not found`);
+    }
+  }
+
+
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      let val = input.value;
+      runCommand(val);
+      input.value = '';
+      // Keep focus for next command
+      e.preventDefault();
+    }
+  });
+
+  // On page load, print welcome screen and focus input
+  clearScreen();
+  printLine('Welcome to the Mini Browser VM!');
+  printLine('Type "help" to see available commands.');
+  printLine('');
+  input.focus();
+})();
+</script>
+</body>
+</html>
