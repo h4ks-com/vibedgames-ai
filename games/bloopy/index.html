@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Infinite Recursive Mini Roguelike</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-family: monospace, monospace;
+    user-select: none;
+    overflow: hidden;
+    background: #000;
+  }
+  #game {
+    width: 320px;
+    height: 320px;
+    display: grid;
+    grid-template-columns: repeat(16, 1fr);
+    grid-template-rows: repeat(16, 1fr);
+    gap: 1px;
+    box-shadow: 0 0 15px #000 inset;
+    background: #111;
+    border: 3px solid #222;
+    position: relative;
+  }
+  .cell {
+    width: 100%;
+    height: 100%;
+    background: #222;
+  }
+  .floor {
+    background: #444;
+  }
+  .wall {
+    background: #111;
+  }
+  .player {
+    background: limegreen;
+  }
+  .goal {
+    background: gold;
+  }
+  #info {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    right: 2px;
+    color: white;
+    font-size: 14px;
+    text-align: center;
+    user-select: none;
+    pointer-events: none;
+    line-height: 1.2;
+  }
+  #subdomain {
+    font-weight: bold;
+  }
+</style>
+</head>
+<body>
+<div id="game" tabindex="0" aria-label="Mini roguelike game" role="application">
+  <div id="info" aria-live="polite" aria-atomic="true"></div>
+</div>
+
+<script>
+(() => {
+  const SIZE = 16;
+  const WALL_CHANCE = 0.2;
+
+  // Random color background function - pastel
+  function randomPastelColor() {
+    const r = 150 + Math.floor(Math.random() * 105);
+    const g = 150 + Math.floor(Math.random() * 105);
+    const b = 150 + Math.floor(Math.random() * 105);
+    return `rgb(${r},${g},${b})`;
+  }
+
+  // Generate a random short subdomain string a-z, len 3-7
+  function randomSubdomain() {
+    const letters = "abcdefghijklmnopqrstuvwxyz";
+    const length = 3 + Math.floor(Math.random()*5);
+    let s = "";
+    for(let i=0;i<length;i++) s += letters[Math.floor(Math.random()*letters.length)];
+    return s;
+  }
+
+  // Maze generation (simple random walls with guaranteed path)
+  // We'll carve a simple guaranteed path from player to goal
+
+  // Player and goal positions
+  // Player at top-left (0,0)
+  // Goal at bottom-right (SIZE-1, SIZE-1)
+
+  function generateMap() {
+    let map = [];
+    for(let y=0; y<SIZE; y++) {
+      map[y] = [];
+      for(let x=0;x<SIZE;x++) {
+        map[y][x] = Math.random() < WALL_CHANCE ? 1 : 0; // 1=wall,0=floor
+      }
+    }
+    // Clear player and goal spots
+    map[0][0] = 0;
+    map[SIZE-1][SIZE-1] = 0;
+
+    // Carve guaranteed PATH from (0,0) to (SIZE-1,SIZE-1) - diagonal simple path
+    let cx=0, cy=0;
+    while(cx < SIZE-1 || cy < SIZE-1) {
+      map[cy][cx] = 0;
+      if(cx < SIZE-1 && cy < SIZE-1) {
+        if(Math.random()<0.5) cx++; else cy++;
+      } else if(cx < SIZE-1) cx++;
+      else if(cy < SIZE-1) cy++;
+      else break;
+    }
+    map[SIZE-1][SIZE-1] = 0;
+
+    return map;
+  }
+
+  // Each new game instance is defined by:
+  // player pos, map, background color, subdomain
+
+  function createNewGame() {
+    // Generate background color and subdomain
+    const bgColor = randomPastelColor();
+    const subdomain = randomSubdomain();
+
+    // Map
+    const map = generateMap();
+
+    // Player pos
+    const player = {x:0,y:0};
+
+    return { bgColor, subdomain, map, player, moves: 0 };
+  }
+
+  // Render game to DOM
+  function renderGame(game) {
+    const container = document.getElementById("game");
+    container.innerHTML = ""; // Clear previous cells and info
+
+    container.style.background = game.bgColor;
+
+    // Placing grid cells:
+    // We'll create SIZE*SIZE divs with classes based on map.
+    // Priority: player cell, goal cell, wall or floor.
+
+    for(let y=0; y<SIZE; y++) {
+      for(let x=0; x<SIZE; x++) {
+        const cell = document.createElement("div");
+        cell.classList.add("cell");
+
+        if(game.player.x === x && game.player.y === y) {
+          cell.classList.add("player");
+          cell.textContent = "@";
+          cell.style.color = "#000";
+          cell.style.textAlign = "center";
+          cell.style.lineHeight = "20px";
+          cell.style.fontWeight = "bold";
+          cell.style.fontSize = "18px";
+          cell.style.userSelect = "none";
+        } else if(x===SIZE-1 && y===SIZE-1) {
+          cell.classList.add("goal");
+          cell.textContent = "X";
+          cell.style.color = "#000";
+          cell.style.textAlign = "center";
+          cell.style.lineHeight = "20px";
+          cell.style.fontWeight = "bold";
+          cell.style.fontSize = "18px";
+          cell.style.userSelect = "none";
+        } else if(game.map[y][x]===1) {
+          cell.classList.add("wall");
+        } else {
+          cell.classList.add("floor");
+        }
+
+        container.appendChild(cell);
+      }
+    }
+
+    // Info display
+    const info = document.createElement("div");
+    info.id = "info";
+    info.innerHTML = `
+      Subdomain: <span id="subdomain">${game.subdomain}</span><br>
+      Moves made: ${game.moves}<br>
+      Use arrow keys or WASD to move.<br>
+      Reach the goal (X) to win.<br>
+      Every move restarts a new game with different background & subdomain.
+    `;
+    container.appendChild(info);
+    container.focus(); // Keep focus for keyboard
+  }
+
+  // Move player if valid
+  function tryMove(game, dx, dy) {
+    const nx = game.player.x + dx;
+    const ny = game.player.y + dy;
+    if(nx < 0 || nx >= SIZE || ny < 0 || ny >= SIZE) return false;
+    if(game.map[ny][nx] === 1) return false;
+    game.player.x = nx;
+    game.player.y = ny;
+    game.moves++;
+    return true;
+  }
+
+  // The recursive rule:
+  // "every move made the player invokes the function that creates a new game,
+  // causing a new game to be created with the following properties..."
+  //
+  // So on each valid player move, we create a brand new game instance afresh
+  // with new background, subdomain, and fresh map & player pos.
+  //
+  // So effectively after a move, the previous game is replaced with a completely new one.
+  //
+  // This means the player's position is always reset to 0,0 on each new game,
+  // but player can try to move again and get a new game that might have maybe better/worse map.
+
+  // Implementation: on key press,
+  // attempt move on current game (we can imagine a single temporary game state),
+  // then discard old and create a completely new game.
+
+  // The 'movement' will just "simulate" a move on current game to decide if move possible,
+  // but then discard old game and start brand new game.
+
+  // However to avoid confusion:
+  // If move invalid, no new game created, stay on current one.
+  // If move valid, create new game.
+
+  // If after move, player position is at goal, display victory for a moment before new move.
+
+  // We'll keep the game instance in closure
+
+  let currentGame = createNewGame();
+
+  function onKey(e) {
+    const KEYMAP = {
+      37: [-1,0], // left
+      38: [0,-1], // up
+      39: [1,0],  // right
+      40: [0,1],  // down
+      65: [-1,0], // a
+      87: [0,-1], // w
+      68: [1,0],  // d
+      83: [0,1],  // s
+    };
+    if (!(e.keyCode in KEYMAP)) return;
+    e.preventDefault();
+    const [dx, dy] = KEYMAP[e.keyCode];
+
+    // Test move: if invalid, do nothing
+    const nx = currentGame.player.x + dx;
+    const ny = currentGame.player.y + dy;
+    if(nx < 0 || nx >= SIZE || ny < 0 || ny >= SIZE) return;
+    if(currentGame.map[ny][nx] === 1) return;
+
+    // Move is valid => create new game
+    currentGame = createNewGame();
+
+    // For fun, carry over moves+1 (or reset moves?)
+    // Spec not totally clear. We'll reset moves to 0 always.
+    // Place player where? Always 0,0 as per createNewGame.
+
+    renderGame(currentGame);
+  }
+
+  // Initial render
+  renderGame(currentGame);
+
+  // Listen keys
+  const container = document.getElementById('game');
+  container.addEventListener("keydown", onKey);
+
+  // Ensure focus on click to get keyboard input
+  container.addEventListener("click", () => container.focus());
+})();
+</script>
+</body>
+</html>
