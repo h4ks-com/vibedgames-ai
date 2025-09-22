@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mini MUD WebSocket Client</title>
+<style>
+  body {
+    font-family: monospace, monospace;
+    background: #111;
+    color: #eee;
+    margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh;
+  }
+  #output {
+    background: #222;
+    padding: 1rem;
+    flex: 1 1 auto;
+    overflow-y: auto;
+    white-space: pre-wrap;
+  }
+  #input-form {
+    display: flex;
+    border-top: 1px solid #444;
+  }
+  #input {
+    flex: 1 1 auto;
+    font-family: monospace;
+    font-size: 1rem;
+    padding: 0.5rem;
+    border: none;
+    background: #111;
+    color: #eee;
+  }
+  #input:focus {
+    outline: none;
+  }
+  #send-button {
+    background: #33aa33;
+    color: #111;
+    border: none;
+    padding: 0 1rem;
+    font-weight: bold;
+    cursor: pointer;
+  }
+  #send-button:disabled {
+    background: #666;
+    cursor: not-allowed;
+  }
+  #status {
+    font-size: 0.8rem;
+    background: #222;
+    padding: 0.3rem 1rem;
+    color: #ccc;
+  }
+</style>
+</head>
+<body>
+<div id="status">Connecting to the server...</div>
+<div id="output"></div>
+<form id="input-form">
+  <input id="input" autocomplete="off" placeholder="Enter command (e.g., north, look)" />
+  <button id="send-button" type="submit" disabled>Send</button>
+</form>
+
+<script>
+(() => {
+  /**
+   * This is a minimal multi-user dungeon client that connects to a backend via WebSocket.
+   * The backend must implement a simple protocol:
+   * - On connection, server sends a JSON describing initial room:
+   *   { type: "room", title: "...", description: "...", exits: { north: "roomId", ... } }
+   * - When client sends a command (e.g., "north", "look"), server responds with a room update or message:
+   *   { type: "room", title: "...", description: "...", exits: { ... } } OR
+   *   { type: "message", text: "You can't go that way." }
+   * 
+   * The client shows the room title, description, exits, and chat-like messages.
+   */
+
+  // Replace with your actual backend WebSocket URL
+  const WS_URL = "wss://your-mud-backend.example/ws";
+
+  const statusEl = document.getElementById("status");
+  const outputEl = document.getElementById("output");
+  const inputForm = document.getElementById("input-form");
+  const inputEl = document.getElementById("input");
+  const sendButton = document.getElementById("send-button");
+
+  let socket = null;
+  let connected = false;
+
+  // Print message to output area (with optional class for styling)
+  function printLine(text, className) {
+    const div = document.createElement("div");
+    if (className) div.className = className;
+    div.textContent = text;
+    outputEl.appendChild(div);
+    outputEl.scrollTop = outputEl.scrollHeight;
+  }
+
+  // Render room info
+  function renderRoom(room) {
+    outputEl.innerHTML = ""; // clear previous
+    printLine(room.title, "room-title");
+    printLine(room.description);
+    const exits = Object.keys(room.exits || {});
+    printLine("");
+    if (exits.length === 0) {
+      printLine("There are no obvious exits.");
+    } else {
+      printLine("Exits: " + exits.map(e => e.toUpperCase()).join(", "));
+    }
+    outputEl.scrollTop = outputEl.scrollHeight;
+  }
+
+  // Render informational messages
+  function renderMessage(text) {
+    printLine(text, "message");
+  }
+
+  // Connect to backend
+  function connect() {
+    socket = new WebSocket(WS_URL);
+    statusEl.textContent = "Connecting to server...";
+    sendButton.disabled = true;
+    inputEl.disabled = true;
+
+    socket.addEventListener("open", () => {
+      connected = true;
+      statusEl.textContent = "Connected. Use directions: north, south, east, west, up, down or 'look'.";
+      sendButton.disabled = false;
+      inputEl.disabled = false;
+      inputEl.focus();
+    });
+
+    socket.addEventListener("message", evt => {
+      try {
+        const msg = JSON.parse(evt.data);
+        if (msg.type === "room") {
+          renderRoom(msg);
+        } else if (msg.type === "message") {
+          renderMessage(msg.text);
+        } else {
+          renderMessage("Unknown message from server: " + evt.data);
+        }
+      } catch(e) {
+        renderMessage("Error parsing message from server: " + evt.data);
+      }
+    });
+
+    socket.addEventListener("close", () => {
+      connected = false;
+      statusEl.textContent = "Disconnected from server.";
+      sendButton.disabled = true;
+      inputEl.disabled = true;
+    });
+
+    socket.addEventListener("error", () => {
+      statusEl.textContent = "Connection error.";
+    });
+  }
+
+  inputForm.addEventListener("submit", evt => {
+    evt.preventDefault();
+    if (!connected) return;
+    const cmd = inputEl.value.trim();
+    if (!cmd) return;
+    printLine("> " + cmd, "user-command");
+    try {
+      socket.send(cmd);
+    } catch (e) {
+      printLine("Error sending command.");
+    }
+    inputEl.value = "";
+  });
+
+  // Start connection
+  connect();
+})();
+</script>
+</body>
+</html>
