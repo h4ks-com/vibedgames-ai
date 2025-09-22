@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Interactive Turning Gears</title>
+<style>
+  body {
+    margin: 0;
+    overflow: hidden;
+    background: #222;
+    user-select: none;
+    font-family: sans-serif;
+  }
+  #canvas {
+    display: block;
+    background: #111;
+    cursor: crosshair;
+  }
+  #instructions {
+    position: fixed;
+    top: 10px;
+    left: 10px;
+    color: #eee;
+    background: rgba(30,30,30,0.8);
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 14px;
+    max-width: 300px;
+    line-height: 1.3;
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="instructions">
+  Click anywhere to place a gear.<br/>
+  Drag a gear to move it.<br/>
+  Click on a gear to select it, then click another to connect them.<br/>
+  Connected gears turn in opposite directions.<br/>
+  Use mouse wheel over a gear to resize it.<br/>
+  Press <b>Delete</b> or <b>Backspace</b> to remove selected gear.<br/>
+  <br/>
+  Gears are shown side-view with simple line animation.
+</div>
+<script>
+(() => {
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  let W, H;
+
+  // Resize canvas
+  function resize() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = W * devicePixelRatio;
+    canvas.height = H * devicePixelRatio;
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.scale(devicePixelRatio, devicePixelRatio);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Gear class
+  class Gear {
+    constructor(x, y, radius = 50, teeth = 12) {
+      this.x = x;
+      this.y = y;
+      this.radius = radius; // radius to gear base edge
+      this.teeth = teeth; // number of teeth
+      this.angle = 0; // current rotation angle in radians
+      this.angularVelocity = 0; // radians per frame
+      this.connected = []; // array of connected gears
+      this.selected = false;
+      this.dragging = false;
+      this.dragOffsetX = 0;
+      this.dragOffsetY = 0;
+    }
+    isPointInside(px, py) {
+      const dx = px - this.x;
+      const dy = py - this.y;
+      return Math.sqrt(dx*dx + dy*dy) <= this.radius + 8; // 8 px margin for teeth
+    }
+    // Connect gear to another gear
+    connectTo(other) {
+      if (other === this) return;
+      if (this.connected.includes(other)) return;
+      this.connected.push(other);
+      other.connected.push(this);
+      this.updateAngularVelocities();
+    }
+    disconnectFrom(other) {
+      this.connected = this.connected.filter(g => g !== other);
+      other.connected = other.connected.filter(g => g !== this);
+      this.updateAngularVelocities();
+    }
+    updateAngularVelocities() {
+      // We want to set angular velocities so connected gears rotate accordingly,
+      // opposite direction and proportional speed inverse to radius.
+      const visited = new Set();
+      const queue = [];
+      // start from this gear with angularVelocity if 0, assign a default
+      let startGear = gears[0] || this;
+      // If none have angular velocity set, give one a default spin
+      if (gears.every(g => g.angularVelocity === 0)) startGear.angularVelocity = 0.015;
+      queue.push(startGear);
+      visited.add(startGear);
+
+      while(queue.length){
+        const g = queue.shift();
+        for (let other of g.connected){
+          if (visited.has(other)) continue;
+          // opposite direction
+          other.angularVelocity = -g.angularVelocity * (g.radius / other.radius);
+          visited.add(other);
+          queue.push(other);
+        }
+      }
+    }
+    // Remove this gear from all connections
+    removeConnections() {
+      for (let other of this.connected) {
+        other.connected = other.connected.filter(g => g !== this);
+      }
+      this.connected = [];
+    }
+    draw(ctx) {
+      ctx.save();
+      ctx.translate(this.x, this.y);
+      ctx.rotate(this.angle);
+
+      // Draw base circle
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = this.selected ? '#4af' : '#ddd';
+      ctx.fillStyle = '#333';
+      ctx.beginPath();
+      ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      // Draw teeth - simple line style side-view gear teeth
+      const teethCount = this.teeth;
+      const toothWidth = (2 * Math.PI * this.radius) / (teethCount * 3);
+      const toothHeight = this.radius * 0.15;
+
+      for(let i=0; i<teethCount; i++){
+        const angleTooth = (i / teethCount) * Math.PI * 2;
+        // Tooth base start
+        const baseAngleStart = angleTooth - toothWidth/this.radius;
+        const baseAngleEnd = angleTooth + toothWidth/this.radius;
+
+        // Draw tooth outline
+        ctx.beginPath();
+        // Tooth base arc on base circle radius
+        ctx.moveTo(Math.cos(baseAngleStart)*this.radius, Math.sin(baseAngleStart)*this.radius);
+        ctx.lineTo(Math.cos(baseAngleStart)*(this.radius + toothHeight*0.3), Math.sin(baseAngleStart)*(this.radius + toothHeight*0.3));
+        ctx.lineTo(Math.cos(angleTooth)*(this.radius + toothHeight), Math.sin(angleTooth)*(this.radius + toothHeight));
+        ctx.lineTo(Math.cos(baseAngleEnd)*(this.radius + toothHeight*0.3), Math.sin(baseAngleEnd)*(this.radius + toothHeight*0.3));
+        ctx.lineTo(Math.cos(baseAngleEnd)*this.radius, Math.sin(baseAngleEnd)*this.radius);
+        ctx.closePath();
+
+        ctx.fillStyle = '#555';
+        ctx.fill();
+        ctx.strokeStyle = '#aaa';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // Simple animation detail: vertical "line" moves back and forth on each tooth to simulate motion
+        // We'll draw a vertical line sliding along the tooth height
+        ctx.strokeStyle = '#88c';
+        ctx.lineWidth = 2;
+        const slide = (Math.sin(this.angle * 10 + i) + 1)/2; // 0 to 1 oscillation
+        const lineX = Math.cos(angleTooth)* (this.radius + slide * toothHeight);
+        const lineY = Math.sin(angleTooth)* (this.radius + slide * toothHeight);
+        const baseX = Math.cos(angleTooth)* (this.radius + toothHeight*0.3);
+        const baseY = Math.sin(angleTooth)* (this.radius + toothHeight*0.3);
+        ctx.beginPath();
+        ctx.moveTo(baseX, baseY);
+        ctx.lineTo(lineX, lineY);
+        ctx.stroke();
+      }
+
+      // Draw center hole
+      ctx.beginPath();
+      ctx.fillStyle = '#111';
+      ctx.arc(0, 0, this.radius * 0.3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#666';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.restore();
+    }
+  }
+
+  // Global state
+  let gears = [];
+  let selectedGear = null;
+  let connectFromGear = null;
+  let dragGear = null;
+
+  // Helpers
+  function findGearAt(x, y) {
+    for(let i = gears.length - 1; i >= 0; i--){
+      if(gears[i].isPointInside(x, y)){
+        return gears[i];
+      }
+    }
+    return null;
+  }
+
+  // Mouse & interaction events
+  canvas.addEventListener('mousedown', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const gear = findGearAt(mx, my);
+    if(gear){
+      // Drag start
+      dragGear = gear;
+      dragGear.dragging = true;
+      dragGear.dragOffsetX = mx - gear.x;
+      dragGear.dragOffsetY = my - gear.y;
+
+      // Select gear and prepare for connection or removal
+      if(selectedGear === gear){
+        // deselect on second click
+        selectedGear = null;
+        connectFromGear = null;
+      } else {
+        if(connectFromGear && connectFromGear !== gear){
+          // Connect gears
+          // Check if gears are touching or will be touching - we allow 'connection' even separated for demo, but ideally just if close
+          const dx = connectFromGear.x - gear.x;
+          const dy = connectFromGear.y - gear.y;
+          const dist = Math.sqrt(dx*dx + dy*dy);
+          const idealDist = connectFromGear.radius + gear.radius;
+          if(Math.abs(dist - idealDist) < 30){
+            connectFromGear.connectTo(gear);
+            connectFromGear = null;
+            selectedGear = null;
+          } else {
+            // Too far to connect, just select new gear
+            selectedGear = gear;
+            connectFromGear = gear;
+          }
+        } else {
+          selectedGear = gear;
+          connectFromGear = gear;
+        }
+      }
+    } else {
+      // Place new gear
+      const newGear = new Gear(mx, my, 50, 12);
+      gears.push(newGear);
+      selectedGear = newGear;
+      connectFromGear = newGear;
+    }
+  });
+
+  canvas.addEventListener('mouseup', (e) => {
+    if(dragGear){
+      dragGear.dragging = false;
+      dragGear = null;
+    }
+  });
+
+  canvas.addEventListener('mousemove', (e) => {
+    if(dragGear && dragGear.dragging){
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      dragGear.x = mx - dragGear.dragOffsetX;
+      dragGear.y = my - dragGear.dragOffsetY;
+
+      // When moving gear, ensure connected gears stay connected by repositioning connected gears accordingly
+      // We will reposition connected gears so their edges touch perfectly to this gear.
+      // To keep it simple, only update immediate connections without recursion.
+      for(let other of dragGear.connected){
+        const dx = other.x - dragGear.x;
+        const dy = other.y - dragGear.y;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        const desiredDist = dragGear.radius + other.radius;
+        if(dist === 0) continue; // avoid zero division
+        const diff = desiredDist - dist;
+        // move connected gear along vector to maintain touching
+        other.x += (dx / dist) * diff;
+        other.y += (dy / dist) * diff;
+      }
+    }
+  });
+
+  // Resize gear by mouse wheel over gear
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const gear = findGearAt(mx, my);
+    if(gear){
+      const delta = e.deltaY > 0 ? -2 : 2;
+      gear.radius = Math.min(Math.max(10, gear.radius + delta), 100);
+      // After resizing, update angular velocities as ratio changed
+      for(let g of gears) g.updateAngularVelocities();
+    }
+  }, { passive: false });
+
+  // Keyboard events for deletion
+  window.addEventListener('keydown', e => {
+    if(selectedGear && (e.key === 'Delete' || e.key === 'Backspace')){
+      // Remove connections
+      selectedGear.removeConnections();
+      // Remove gear
+      gears = gears.filter(g => g !== selectedGear);
+      selectedGear = null;
+      connectFromGear = null;
+    }
+  });
+
+  // Animation loop
+  function animate(){
+    ctx.clearRect(0, 0, W, H);
+
+    // Update angles
+    for(let gear of gears){
+      gear.angle += gear.angularVelocity;
+    }
+
+    // Draw connections (visible lines between gear centers)
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(70, 130, 180, 0.6)';
+    for(let gear of gears){
+      for(let other of gear.connected){
+        if(gear.x < other.x || (gear.x === other.x && gear.y < other.y)){
+          ctx.beginPath();
+          ctx.moveTo(gear.x, gear.y);
+          ctx.lineTo(other.x, other.y);
+          ctx.stroke();
+        }
+      }
+    }
+
+    // Draw gears
+    for(let gear of gears){
+      gear.draw(ctx);
+    }
+
+    requestAnimationFrame(animate);
+  }
+
+  animate();
+})();
+</script>
+</body>
+</html>
