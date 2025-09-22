@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mini Roguelike</title>
+<style>
+  body {
+    background-color: #111;
+    color: #eee;
+    font-family: monospace, monospace;
+    margin: 0;
+    padding: 0;
+    display:flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100vh;
+    user-select: none;
+  }
+  #game {
+    margin-top: 10px;
+    line-height: 1;
+  }
+  #map {
+    background-color: #222;
+    border: 2px solid #666;
+    display: inline-block;
+    image-rendering: pixelated;
+  }
+  #log {
+    width: 480px;
+    height: 120px;
+    background-color: #222;
+    border: 2px solid #666;
+    margin-top: 10px;
+    overflow-y: auto;
+    padding: 4px;
+    font-size: 0.9rem;
+  }
+  #stats {
+    margin-top: 6px;
+    border: 2px solid #666;
+    padding: 6px 12px;
+    width: 480px;
+    background-color: #222;
+  }
+  .tile {
+    width: 16px;
+    height: 16px;
+    display: inline-block;
+    font-weight: bold;
+    text-align: center;
+    vertical-align: middle;
+    line-height: 16px;
+    font-size: 16px;
+  }
+  .wall { color: #888; }
+  .floor { color: #ccc; }
+  .player { color: #0f0; }
+  .item { color: #ff0; }
+  .enemy { color: #f66; }
+</style>
+</head>
+<body>
+<h1>Mini Roguelike</h1>
+
+<div id="game">
+  <div id="map"></div>
+  <div id="stats"></div>
+  <div id="log"></div>
+</div>
+
+<script>
+(() => {
+  const mapWidth = 30;
+  const mapHeight = 20;
+
+  // Tiles:
+  // '#' = wall
+  // '.' = floor
+  // Player = '@'
+  // Enemies = 'E'
+  // Items = letters or '*'
+
+  let map = [];
+  let player = {x:1, y:1, hp: 20, maxHp: 20, atk: 5, def: 2, inventory: []};
+  let enemies = [];
+  let items = [];
+
+  // Random helpers
+  function randInt(min, max) {
+    return Math.floor(Math.random()*(max-min+1)) + min;
+  }
+
+  // Map generation: simple room with random walls around
+
+  function generateMap() {
+    // Fill with floor
+    map = [];
+    for(let y=0; y<mapHeight; y++) {
+      let row = [];
+      for(let x=0; x<mapWidth; x++) {
+        if (x === 0 || y === 0 || x === mapWidth-1 || y === mapHeight-1) {
+          row.push('#'); // border wall
+        } else {
+          row.push('.');
+        }
+      }
+      map.push(row);
+    }
+
+    // add random inner walls
+    for(let i=0; i<70; i++) {
+      let wx = randInt(1, mapWidth-2);
+      let wy = randInt(1, mapHeight-2);
+      map[wy][wx] = '#';
+    }
+  }
+
+  // Check if tile is walkable
+  function isWalkable(x,y) {
+    if(x < 0 || y < 0 || x >= mapWidth || y >= mapHeight) return false;
+    if(map[y][x] === '#') return false;
+    for (let e of enemies) if(e.x === x && e.y === y) return false;
+    return true;
+  }
+
+  // Items definition and random generation
+
+  const itemTypes = [
+    {name:"Health Potion", symbol:"!", effect:(player)=> {player.hp = Math.min(player.maxHp, player.hp+10); log("You drink the Health Potion. +10 HP.");}},
+    {name:"Sword", symbol:"/", effect:null, atkBonus: 3},
+    {name:"Shield", symbol:"[", effect:null, defBonus: 2},
+    {name:"Armor", symbol:"(", effect:null, defBonus: 3},
+    {name:"Gold Coin", symbol:"$", effect:(player)=> {log("Just some shiny coin.");}},
+    {name:"Fire Scroll", symbol:"~", effect:(player,enemy)=>{enemy.hp -= 8; log("You cast fire scroll and burn the enemy for 8 damage!");}},
+  ];
+
+  function createRandomItem(x,y) {
+    const baseItem = itemTypes[randInt(0, itemTypes.length-1)];
+    // Clone object so each item is unique (for inventory)
+    const newItem = {...baseItem, x, y};
+    if (!newItem.atkBonus) newItem.atkBonus = 0;
+    if (!newItem.defBonus) newItem.defBonus = 0;
+    return newItem;
+  }
+
+  // Enemies generation
+
+  function createEnemy(x,y) {
+    return {x, y, hp: 10, atk: 3, def: 1};
+  }
+
+  // Place enemies randomly free places
+  function populateEnemies(count) {
+    enemies = [];
+    let tries = 0;
+    while(enemies.length < count && tries < 200) {
+      let x = randInt(1, mapWidth-2);
+      let y = randInt(1, mapHeight-2);
+      if(map[y][x] === '.' && !(player.x === x && player.y === y) && !enemies.some(e=>e.x===x && e.y===y)) {
+        enemies.push(createEnemy(x,y));
+      }
+      tries++;
+    }
+  }
+
+  // Place items randomly free places
+  function populateItems(count) {
+    items = [];
+    let tries = 0;
+    while(items.length < count && tries < 200) {
+      let x = randInt(1, mapWidth-2);
+      let y = randInt(1, mapHeight-2);
+      if(map[y][x] === '.' && !(player.x === x && player.y === y) && !items.some(i=>i.x===x && i.y===y) && !enemies.some(e=>e.x===x && e.y===y)) {
+        items.push(createRandomItem(x,y));
+      }
+      tries++;
+    }
+  }
+
+  // Logging helper
+  function log(txt) {
+    const logDiv = document.getElementById('log');
+    logDiv.textContent += txt + '\n';
+    logDiv.scrollTop = logDiv.scrollHeight;
+  }
+
+  // Draw map and entities
+
+  function draw() {
+    const mapDiv = document.getElementById('map');
+    // clear
+    mapDiv.innerHTML = '';
+    for(let y=0; y<mapHeight; y++) {
+      for(let x=0; x<mapWidth; x++) {
+        let span = document.createElement('span');
+        span.classList.add('tile');
+        let ch = map[y][x];
+        if (ch === '#') span.classList.add('wall');
+        else span.classList.add('floor');
+
+        // Check if player here
+        if(player.x === x && player.y === y) {
+          span.textContent = '@';
+          span.classList.add('player');
+        } else {
+          // Check if enemy here
+          let enemyHere = enemies.find(e=>e.x===x && e.y===y);
+          if(enemyHere) {
+            span.textContent = 'E';
+            span.classList.add('enemy');
+          } else {
+            // Check if item here
+            let itemHere = items.find(i=>i.x===x && i.y===y);
+            if(itemHere) {
+              span.textContent = itemHere.symbol;
+              span.classList.add('item');
+              span.title = itemHere.name;
+            } else {
+              span.textContent = ch;
+            }
+          }
+        }
+        mapDiv.appendChild(span);
+      }
+      // line break
+      mapDiv.appendChild(document.createElement('br'));
+    }
+    updateStats();
+  }
+
+  // Update stats panel
+
+  function updateStats() {
+    const statsDiv = document.getElementById('stats');
+    let invNames = player.inventory.map(i=>{
+      let name = i.name;
+      if(i.atkBonus) name += ` (Atk+${i.atkBonus})`;
+      if(i.defBonus) name += ` (Def+${i.defBonus})`;
+      return name;
+    });
+    let statsHtml = `
+    HP: ${player.hp} / ${player.maxHp} | Atk: ${player.atk} | Def: ${player.def} <br />
+    Inventory (${player.inventory.length}): ${invNames.length > 0 ? invNames.join(', ') : "Empty"}
+    <br>
+    Use arrow keys or WASD to move. Press 'G' to pick up item. Press 'U' to use Health Potion. 
+    `;
+    statsDiv.innerHTML = statsHtml;
+  }
+
+  // Player attack enemy
+
+  function playerAttack(enemy) {
+    let damage = Math.max(0, player.atk - enemy.def);
+    enemy.hp -= damage;
+    log(`You hit the enemy for ${damage} damage.`);
+    if(enemy.hp <= 0) {
+      log("Enemy is killed!");
+      enemies = enemies.filter(e=>e!==enemy);
+      return true;
+    }
+    return false;
+  }
+
+  // Enemy AI for one turn: moves towards player if close, else random move
+
+  function enemyTurn() {
+    for(let e of enemies) {
+      if(Math.abs(e.x - player.x) + Math.abs(e.y - player.y) === 1) {
+        // attack player
+        let dmg = Math.max(0, e.atk - player.def);
+        player.hp -= dmg;
+        log(`Enemy hits you for ${dmg} damage!`);
+        if(player.hp <= 0) {
+          log("You died! Game over.");
+          window.removeEventListener('keydown', keyHandler);
+        }
+        continue;
+      }
+
+      // Move enemy closer if possible
+      let dx = 0, dy =0;
+      if(e.x < player.x) dx = 1;
+      else if(e.x > player.x) dx = -1;
+      if(e.y < player.y) dy = 1;
+      else if(e.y > player.y) dy = -1;
+
+      // try move in dx,0 or 0,dy or dx,dy order
+      let possibleMoves = [];
+      if(dx!==0) possibleMoves.push({x:e.x+dx, y:e.y});
+      if(dy!==0) possibleMoves.push({x:e.x, y:e.y+dy});
+      if(dx!==0 && dy!==0) possibleMoves.push({x:e.x+dx, y:e.y+dy});
+      possibleMoves = possibleMoves.filter(m=>isWalkable(m.x,m.y));
+      if(possibleMoves.length>0) {
+        let m = possibleMoves[0];
+        e.x = m.x;
+        e.y = m.y;
+      }
+    }
+  }
+
+  // Pick up item
+
+  function tryPickup() {
+    let item = items.find(i => i.x === player.x && i.y === player.y);
+    if(!item) {
+      log("Nothing here to pick up.");
+      return;
+    }
+    player.inventory.push(item);
+    // Apply bonuses immediately to player if equip type
+    if(item.atkBonus) {
+      player.atk += item.atkBonus;
+      log(`You picked up a sword. Attack +${item.atkBonus}`);
+    }
+    if(item.defBonus) {
+      player.def += item.defBonus;
+      log(`You picked up armor. Defense +${item.defBonus}`);
+    }
+    items = items.filter(i => i !== item);
+    draw();
+  }
+
+  // Use a health potion from inventory
+  function tryUsePotion() {
+    let idx = player.inventory.findIndex(i=>i.name === "Health Potion");
+    if(idx === -1) {
+      log("You have no Health Potion to use.");
+      return;
+    }
+    let potion = player.inventory[idx];
+    potion.effect(player);
+    player.inventory.splice(idx,1);
+    draw();
+  }
+
+  // Handle player move and interaction
+
+  function playerMove(dx, dy) {
+    if(player.hp <= 0) return; // dead
+    let nx = player.x + dx;
+    let ny = player.y + dy;
+    if(nx < 0 || ny < 0 || nx >= mapWidth || ny >= mapHeight) return;
+    if(map[ny][nx] === '#') return;
+
+    // Check enemy
+    let enemy = enemies.find(e=>e.x === nx && e.y === ny);
+    if(enemy) {
+      // attack instead of moving
+      let enemyKilled = playerAttack(enemy);
+      if(enemyKilled) {
+        draw();
+      }
+    } else {
+      player.x = nx;
+      player.y = ny;
+      draw();
+    }
+
+    // After move or attack, enemies take turn
+    if(enemies.length > 0) enemyTurn();
+
+    if(player.hp <= 0) {
+      log("You died! Refresh page to play again.");
+    }
+    draw();
+  }
+
+  // Input handler
+
+  function keyHandler(e) {
+    e.preventDefault();
+
+    if(player.hp <= 0) return;
+
+    switch(e.key) {
+      case 'ArrowUp':
+      case 'w':
+      case 'W':
+        playerMove(0,-1);
+        break;
+      case 'ArrowDown':
+      case 's':
+      case 'S':
+        playerMove(0,1);
+        break;
+      case 'ArrowLeft':
+      case 'a':
+      case 'A':
+        playerMove(-1,0);
+        break;
+      case 'ArrowRight':
+      case 'd':
+      case 'D':
+        playerMove(1,0);
+        break;
+      case 'g':
+      case 'G':
+        tryPickup();
+        break;
+      case 'u':
+      case 'U':
+        tryUsePotion();
+        break;
+    }
+  }
+
+  // Initialize game
+
+  function init() {
+    generateMap();
+    player.x = 1;
+    player.y = 1;
+    player.hp = player.maxHp;
+    player.atk = 5;
+    player.def = 2;
+    player.inventory = [];
+    populateEnemies(8);
+    populateItems(12);
+    draw();
+    log("Welcome to Mini Roguelike!");
+    log("Move with arrows or WASD. Pick up items with G, use potion with U.");
+  }
+
+  window.addEventListener('keydown', keyHandler);
+  init();
+
+})();
+</script>
+</body>
+</html>
