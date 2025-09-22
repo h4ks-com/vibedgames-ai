@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Get Well Soon Card</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@700&display=swap');
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #111;
+    overflow: hidden;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-family: 'Poppins', sans-serif;
+    perspective: 800px;
+    user-select: none;
+  }
+  #container {
+    position: relative;
+    width: 400px;
+    height: 200px;
+    background: linear-gradient(135deg, #ff416c, #ff4b2b);
+    border-radius: 20px;
+    box-shadow:
+      0 0 15px 5px rgba(255,75,43,.65),
+      inset 0 0 60px 12px rgba(255,75,43,.6);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: white;
+    font-size: 2.4rem;
+    font-weight: 700;
+    text-align: center;
+    line-height: 1.2;
+    text-shadow:
+      0 0 6px #fff7,
+      0 0 14px #ff6347cc,
+      0 0 22px #ff6347cc,
+      0 0 30px #ff6347cc;
+    transform-style: preserve-3d;
+    cursor: pointer;
+    user-select: none;
+    box-sizing: border-box;
+  }
+
+  #message {
+    position: relative;
+    z-index: 10;
+  }
+
+  canvas {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+  <div id="container" tabindex="0" aria-label="Get well soon card with particle effects">
+    <div id="message">Get well soon, Valware &lt;3</div>
+    <canvas id="canvas"></canvas>
+  </div>
+
+<script>
+(() => {
+  const container = document.getElementById('container');
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+
+  let W, H;
+  function resize() {
+    W = container.clientWidth;
+    H = container.clientHeight;
+    canvas.width = W * devicePixelRatio;
+    canvas.height = H * devicePixelRatio;
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.scale(devicePixelRatio, devicePixelRatio);
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  // Utility: random float in [min,max)
+  function rf(min, max) { return Math.random() * (max - min) + min }
+
+  // Particle classes
+
+  class Particle {
+    constructor(x, y, vx, vy, life, size, color, type='particle') {
+      this.x = x;
+      this.y = y;
+      this.vx = vx;
+      this.vy = vy;
+      this.life = life;
+      this.size = size;
+      this.color = color;
+      this.age = 0;
+      this.type = type;
+
+      // extra for 3D-ish:
+      this.z = 0;
+      this.vz = rf(-0.5,0.5);
+      this.angle = rf(0,Math.PI*2);
+      this.va = rf(-0.1,0.1);
+    }
+    update(dt) {
+      this.x += this.vx * dt;
+      this.y += this.vy * dt;
+      this.z += this.vz * dt;
+      this.angle += this.va * dt;
+      this.vy += 50 * dt; // gravity
+      this.age += dt;
+
+      // fade out
+      this.alpha = 1 - this.age / this.life;
+      if(this.alpha < 0) this.alpha = 0;
+    }
+    draw(ctx) {
+      const a = this.alpha;
+      if(this.type === 'particle') {
+        ctx.save();
+        ctx.translate(this.x, this.y - this.z * 3);
+        ctx.rotate(this.angle);
+        const radius = this.size * (0.5 + a/2);
+        const gradient = ctx.createRadialGradient(0,0,radius*0.1, 0,0,radius);
+        gradient.addColorStop(0, `rgba(${this.color.r},${this.color.g},${this.color.b},${a})`);
+        gradient.addColorStop(1, `rgba(${this.color.r},${this.color.g},${this.color.b},0)`);
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(0, 0, radius, 0, Math.PI*2);
+        ctx.fill();
+        ctx.restore();
+      }
+      else if(this.type === 'fireball') {
+        // fireball: a glowing circle with flickering texture
+        ctx.save();
+        ctx.translate(this.x, this.y - this.z * 3);
+        ctx.rotate(this.angle);
+        const radius = this.size * (0.8 + 0.4*Math.sin(this.age*30));
+        // Outer glow
+        const glow = ctx.createRadialGradient(0,0,radius*0.3,0,0,radius);
+        glow.addColorStop(0, `rgba(255,140,0,${a})`);
+        glow.addColorStop(0.7, `rgba(255,69,0,${a*0.3})`);
+        glow.addColorStop(1, 'rgba(255,69,0,0)');
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(0, 0, radius, 0, Math.PI*2);
+        ctx.fill();
+        // Inner flame
+        const innerFlame = ctx.createRadialGradient(0,0,radius*0.15,0,0,radius*0.6);
+        innerFlame.addColorStop(0, `rgba(255,255,160,${a})`);
+        innerFlame.addColorStop(1, `rgba(255,69,0,0)`);
+        ctx.fillStyle = innerFlame;
+        ctx.beginPath();
+        ctx.arc(0, 0, radius*0.6, 0, Math.PI*2);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+    isDead() {
+      return this.age >= this.life;
+    }
+  }
+
+  let particles = [];
+
+  // 3D explosion effect:
+  // When clicking or tapping, spawn two simultaneous explosions: particles and fireballs
+
+  function createExplosion(x, y) {
+    const totalParticles = 40;
+    const totalFireballs = 8;
+
+    // Particle color: soft pink/orange for warm effect
+    for(let i=0; i < totalParticles; i++) {
+      const angle = (Math.PI * 2) * (i / totalParticles) + rf(-0.15,0.15);
+      const speed = rf(80, 250);
+      const vx = Math.cos(angle) * speed;
+      const vy = Math.sin(angle) * speed * 0.8 + rf(-20,20);
+      const size = rf(3,6);
+      const life = rf(0.9,1.3);
+      const color = {r: rf(240,255), g: rf(150,100), b: rf(75,40)};
+      particles.push(new Particle(x,y,vx,vy,life,size,color,'particle'));
+    }
+
+    // Fireball explosions: bigger, fewer, glowing orange/yellow orbs
+    for(let i=0; i < totalFireballs; i++) {
+      const angle = (Math.PI * 2) * (i / totalFireballs) + rf(-0.3,0.3);
+      const speed = rf(50, 110);
+      const vx = Math.cos(angle) * speed * 0.7;
+      const vy = Math.sin(angle) * speed * 0.6 - rf(30,50);
+      const size = rf(15,25);
+      const life = rf(1.1,1.5);
+      const color = {r:255, g:140, b:0};
+      particles.push(new Particle(x,y,vx,vy,life,size,color,'fireball'));
+    }
+  }
+
+  // Automatically trigger 3 initial explosions for show
+  function burstCenter() {
+    createExplosion(W/2, H/2);
+  }
+  burstCenter();
+
+  // Also create random slow bursts every 3s
+  let burstInterval = setInterval(() => {
+    const x = rf(W*0.25, W*0.75);
+    const y = rf(H*0.3, H*0.7);
+    createExplosion(x,y);
+  }, 3000);
+
+  // Also on click/tap
+  container.addEventListener('click', e => {
+    const rect = container.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    createExplosion(mx, my);
+  });
+
+  let last = 0;
+  function animate(t=0) {
+    if(!last) last = t;
+    const dt = (t - last)/1000;
+    last = t;
+
+    ctx.clearRect(0, 0, W, H);
+
+    // Update and draw particles
+    particles = particles.filter(p => {
+      p.update(dt);
+      if(!p.isDead()){
+        p.draw(ctx);
+        return true;
+      }
+      return false;
+    });
+
+    requestAnimationFrame(animate);
+  }
+  animate();
+})();
+</script>
+</body>
+</html>
