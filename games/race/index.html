@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Infinite Track Racing</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Infinite Track Racing - Cars Only</title>
 <style>
   /* Reset and base */
   * {
@@ -11,7 +11,8 @@
     margin: 0;
     padding: 0;
   }
-  body {
+  html, body {
+    height: 100%;
     background: #111;
     overflow: hidden;
     font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
@@ -21,15 +22,20 @@
     -ms-user-select: none;
   }
   #game {
-    display: block;
-    margin: 0 auto;
-    background: linear-gradient(to top, #222 20%, #555 80%);
-    border: 3px solid #666;
     position: relative;
+    margin: 0 auto;
+    width: 480px;
+    height: 100vh;
+    max-height: 100%;
+    border: 3px solid #666;
+    background: linear-gradient(to top, #222 20%, #555 80%);
+    overflow: hidden;
   }
   canvas {
     display: block;
     background: #222;
+    width: 100%;
+    height: 100%;
   }
   #ui {
     position: absolute;
@@ -38,10 +44,11 @@
     transform: translateX(-50%);
     color: #eee;
     font-weight: bold;
-    font-size: 1.2rem;
+    font-size: 1.4rem;
     text-shadow: 0 0 4px #000;
     pointer-events: none;
     user-select: none;
+    line-height: 1.3;
   }
   #message {
     position: absolute;
@@ -54,6 +61,7 @@
     text-align: center;
     text-shadow: 0 0 6px #900;
     user-select: none;
+    display: none;
   }
   #restartBtn {
     margin-top: 1rem;
@@ -62,7 +70,7 @@
     border: none;
     padding: 0.5rem 1.5rem;
     font-weight: 700;
-    font-size: 1rem;
+    font-size: 1.1rem;
     border-radius: 5px;
     cursor: pointer;
     user-select: none;
@@ -76,10 +84,10 @@
 </style>
 </head>
 <body>
-<div id="game" style="position: relative; width: 480px; height: 640px;">
-  <canvas id="canvas" width="480" height="640"></canvas>
+<div id="game">
+  <canvas id="canvas"></canvas>
   <div id="ui">Score: 0<br>Crashes: 0/3</div>
-  <div id="message" style="display: none;">
+  <div id="message">
     YOU CRASHED!<br />
     <button id="restartBtn">Restart</button>
   </div>
@@ -87,18 +95,22 @@
 
 <script>
 (() => {
+  const gameDiv = document.getElementById("game");
   const canvas = document.getElementById("canvas");
   const ctx = canvas.getContext("2d");
   const ui = document.getElementById("ui");
   const message = document.getElementById("message");
   const restartBtn = document.getElementById("restartBtn");
 
-  const WIDTH = canvas.width;
-  const HEIGHT = canvas.height;
+  // Dimensions
+  const WIDTH = 480;
+  const HEIGHT = window.innerHeight;
 
-  // Game constants
+  canvas.width = WIDTH;
+  canvas.height = HEIGHT;
+
+  // Constants
   const TRACK_WIDTH = WIDTH * 0.7;
-  const TRACK_LINE_WIDTH = 4;
   const ROAD_SIDE_WIDTH = (WIDTH - TRACK_WIDTH) / 2;
 
   const CAR_WIDTH = 36;
@@ -108,27 +120,25 @@
 
   const MAX_CRASHES = 3;
 
-  // Speed and difficulty tuning
-  const BASE_SPEED = 4;
-  const MAX_SPEED = 20;
-  const ACCELERATION = 0.0015; // speed increase per frame
+  // Speed parameters (logarithmic scaling with score)
+  // speed = minSpeed + log10(1 + score / 200) * scaleSpeed
+  const MIN_SPEED = 0; // Start from zero speed
+  const MAX_SPEED = 20; // cap max speed
+  const SPEED_SCALE = 8; // how fast it increases with score
 
-  const OBSTACLE_WIDTH = 40;
-  const OBSTACLE_HEIGHT = 72;
+  // Speed recovery after crash timing (in ms)
+  const RECOVERY_TIME = 2000;
 
+  // Lanes setup
+  const LANES = 3;
+  const laneWidth = TRACK_WIDTH / LANES;
+  const laneX = (lane) => ROAD_SIDE_WIDTH + laneWidth * lane + laneWidth / 2;
+
+  // Red other cars color
   const OTHER_CAR_COLOR = "#b53535";
-  const OBSTACLE_COLOR = "#444";
-
-  const LINE_COLOR = "#ccc";
-  const SIDE_STRIPE_COLOR = "#bbb";
-
-  const FINISH_LINE_FREQ = 15000; // ms to spawn a brief finishing line, no game ending here, just effect
 
   // Input state
-  let input = {
-    left: false,
-    right: false,
-  };
+  let input = { left: false, right: false };
 
   // Game state
   let player = {
@@ -136,78 +146,57 @@
     y: PLAYER_START_Y,
     width: CAR_WIDTH,
     height: CAR_HEIGHT,
-    speed: BASE_SPEED,
   };
 
   let obstacles = [];
-  let otherCars = [];
-  let roadLines = [];
   let crashes = 0;
   let score = 0;
-  let speed = BASE_SPEED;
   let frames = 0;
   let gameOver = false;
 
-  // Lane Calculation
-  // We'll divide the track into 3 lanes to organize cars neatly
-  const LANES = 3;
-  const laneWidth = TRACK_WIDTH / LANES;
-  const laneX = (lane) => ROAD_SIDE_WIDTH + laneWidth * lane + laneWidth / 2;
+  // Speed control variables
+  let displayedSpeed = 0; // speed used for moving obstacles etc (smoothly interpolated)
+  let targetSpeed = 0;    // speed player is aiming for based on score
+  let recoveryStartTime = null; // when crash recovery started (null if not recovering)
+
+  // Player horizontal movement
+  const PLAYER_MOVE_SPEED = 7;
 
   class Obstacle {
-    constructor(type, lane, y, speedMultiplier = 1) {
-      this.type = type; // "static" or "car"
+    constructor(lane, y, speedMultiplier = 1) {
+      this.type = "car";
       this.lane = lane;
-      this.width = OBSTACLE_WIDTH;
-      this.height = OBSTACLE_HEIGHT;
+      this.width = CAR_WIDTH;
+      this.height = CAR_HEIGHT;
       this.x = laneX(lane);
-      this.y = y; // y position on screen (vertical)
-      this.speedMultiplier = speedMultiplier; // for other cars to go slightly slower / faster to add challenge
-      this.passed = false;
+      this.y = y;
+      this.speedMultiplier = speedMultiplier;
     }
-    update(gameSpeed) {
-      this.y += gameSpeed * this.speedMultiplier;
+    update(speed) {
+      this.y += speed * this.speedMultiplier;
     }
     draw(ctx) {
       ctx.save();
       ctx.translate(this.x, this.y);
-      if (this.type === "car") {
-        // Draw other car (red rectangle with windows)
-        ctx.fillStyle = OTHER_CAR_COLOR;
-        ctx.shadowColor = "#700";
-        ctx.shadowBlur = 10;
-        ctx.fillRect(-this.width / 2, -this.height / 2, this.width, this.height);
-        // windows
-        ctx.fillStyle = "#fff";
-        ctx.fillRect(-this.width / 3, -this.height / 3, this.width / 6, this.height / 8);
-        ctx.fillRect(this.width / 6, -this.height / 3, this.width / 6, this.height / 8);
-        // wheels
-        ctx.fillStyle = "#222";
-        ctx.fillRect(-this.width / 2 + 5, this.height / 2 - 10, 10, 5);
-        ctx.fillRect(this.width / 2 - 15, this.height / 2 - 10, 10, 5);
-      } else {
-        // Static obstacle - dark grey boulder shape
-        ctx.fillStyle = OBSTACLE_COLOR;
-        ctx.shadowColor = "#222";
-        ctx.shadowBlur = 10;
-        ctx.beginPath();
-        ctx.ellipse(0, 0, this.width / 2, this.height / 3, 0, 0, Math.PI * 2);
-        ctx.fill();
-        // Cracks
-        ctx.strokeStyle = "#666";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(-10, 0);
-        ctx.lineTo(0, -10);
-        ctx.lineTo(10, 0);
-        ctx.lineTo(0, 10);
-        ctx.stroke();
-      }
+      ctx.fillStyle = OTHER_CAR_COLOR;
+      ctx.shadowColor = "#700";
+      ctx.shadowBlur = 10;
+      ctx.fillRect(-this.width / 2, -this.height / 2, this.width, this.height);
+
+      // windows
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(-this.width / 3, -this.height / 3, this.width / 6, this.height / 8);
+      ctx.fillRect(this.width / 6, -this.height / 3, this.width / 6, this.height / 8);
+
+      // wheels
+      ctx.fillStyle = "#222";
+      ctx.fillRect(-this.width / 2 + 5, this.height / 2 - 10, 10, 5);
+      ctx.fillRect(this.width / 2 - 15, this.height / 2 - 10, 10, 5);
+
       ctx.restore();
     }
   }
 
-  // Player car drawing (simple blueish sport motorbike from back view)
   function drawPlayer(ctx, x, y) {
     ctx.save();
     ctx.translate(x, y);
@@ -240,9 +229,8 @@
     ctx.restore();
   }
 
-  // Draw track sides & stripes
   function drawTrack(ctx, scroll) {
-    // Draw grass side
+    // Draw grass sides
     ctx.fillStyle = "#0a470a";
     ctx.fillRect(0, 0, ROAD_SIDE_WIDTH, HEIGHT);
     ctx.fillRect(WIDTH - ROAD_SIDE_WIDTH, 0, ROAD_SIDE_WIDTH, HEIGHT);
@@ -252,10 +240,10 @@
     ctx.fillRect(ROAD_SIDE_WIDTH, 0, TRACK_WIDTH, HEIGHT);
 
     // Side white stripes (dashed)
-    ctx.strokeStyle = SIDE_STRIPE_COLOR;
+    ctx.strokeStyle = "#bbb";
     ctx.lineWidth = 8;
     ctx.setLineDash([40, 30]);
-    ctx.lineDashOffset = -scroll * speed * 15;
+    ctx.lineDashOffset = -scroll * displayedSpeed * 15;
     // Left
     ctx.beginPath();
     ctx.moveTo(ROAD_SIDE_WIDTH + 4, 0);
@@ -270,10 +258,10 @@
     ctx.setLineDash([]);
 
     // Middle dashed lines between lanes (2 lines)
-    ctx.strokeStyle = LINE_COLOR;
-    ctx.lineWidth = TRACK_LINE_WIDTH;
+    ctx.strokeStyle = "#ccc";
+    ctx.lineWidth = 4;
     ctx.setLineDash([20, 30]);
-    ctx.lineDashOffset = -scroll * speed * 30;
+    ctx.lineDashOffset = -scroll * displayedSpeed * 30;
 
     for (let i = 1; i < LANES; i++) {
       let x = ROAD_SIDE_WIDTH + i * laneWidth;
@@ -286,71 +274,49 @@
     ctx.setLineDash([]);
   }
 
-  // Spawn obstacles dynamically
-  // Goal: keep difficulty balanced: starting slow frequency, slowly increasing with speed
-
+  // Spawn only red cars, controlled so they don't cluster and not too many
   function spawnObstacles() {
-    // To keep challenge balanced, probability based on speed and frames.
-    // We keep constant approx obstacle density ~ one per 140 px vertical at low speed, ~ one per 80px at high speed.
-
-    // Calculate spawn chance per frame
-    // The faster, the higher the spawn chance (max ~0.04 chance/frame)
-    // At low speed 4, chance ~0.01 per frame
-
-    const baseChance = 0.01;
+    // Frequency base chance, influenced by targetSpeed but capped for challenge balance
+    const baseChance = 0.012;
     const maxChance = 0.035;
-    const speedFactor = (speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED);
-    const chance = baseChance + (maxChance - baseChance) * speedFactor;
+    // Speed factor from 0 to 1 relative to max speed (targetSpeed capped)
+    const speedFactor = Math.min(targetSpeed / MAX_SPEED, 1);
+    const spawnChance = baseChance + (maxChance - baseChance) * speedFactor;
 
-    if (Math.random() < chance) {
-      // Choose random lane
+    if (Math.random() < spawnChance) {
       let lane = Math.floor(Math.random() * LANES);
 
-      // Decide obstacle type: mostly other cars, some static obstacles
-      // 70% other cars, 30% static obstacles
-      let isCar = Math.random() < 0.7;
+      // Spawn obstacle y above screen so it scrolls down
+      let y = -CAR_HEIGHT;
 
-      // Spawn far above visible area so obstacle scrolls down
-      let y = -OBSTACLE_HEIGHT;
-      let speedMultiplier = 1;
+      // other cars can have speed multipliers 0.85 to 1.15 to add challenge (random)
+      let speedMultiplier = 0.85 + Math.random() * 0.3;
 
-      if (isCar) {
-        // other cars can have speed multiplier around 0.8 - 1.1 to add challenge
-        speedMultiplier = 0.85 + Math.random() * 0.5;
-      }
-
-      // Check for overlapping with existing obstacles in nearby y position
-      // so obstacles don't stack too close for impossible situations
-      let safeToSpawn = true;
+      // Avoid overlapping with existing cars in the same lane close by
       for (let ob of obstacles) {
-        if (
-          ob.lane === lane &&
-          Math.abs(ob.y - y) < OBSTACLE_HEIGHT * 3 // vertical buffer
-        ) {
-          safeToSpawn = false;
-          break;
+        if (ob.lane === lane && Math.abs(ob.y - y) < CAR_HEIGHT * 3) {
+          return; // skip spawn this frame
         }
       }
-      if (!safeToSpawn) return;
 
-      obstacles.push(new Obstacle(isCar ? "car" : "static", lane, y, speedMultiplier));
+      obstacles.push(new Obstacle(lane, y, speedMultiplier));
     }
   }
 
-  // Check collision between player and obstacles
+  // Collision check between player and obstacles
   function checkCollisions() {
     for (let ob of obstacles) {
-      if (ob.y > HEIGHT + OBSTACLE_HEIGHT) continue; // ignore out of screen
+      if (ob.y > HEIGHT + CAR_HEIGHT) continue;
 
       let dx = Math.abs(ob.x - player.x);
       let dy = Math.abs(ob.y - player.y);
 
-      // Using rectangles. Player box slightly smaller horizontally (for better fairness)
-      let pw = player.width * 0.7;
-      let ph = player.height * 0.9;
+      // Rectangular collision box
+      const pw = player.width * 0.7;
+      const ph = player.height * 0.9;
 
-      let ow = ob.width;
-      let oh = ob.height;
+      const ow = ob.width;
+      const oh = ob.height;
 
       if (dx < (pw / 2 + ow / 2) && dy < (ph / 2 + oh / 2)) {
         return true;
@@ -359,18 +325,18 @@
     return false;
   }
 
-  // Handle input
+  // Input handlers
   window.addEventListener("keydown", (e) => {
     if (gameOver) return;
     if (e.code === "ArrowLeft" || e.code === "KeyA") input.left = true;
-    else if (e.code === "ArrowRight" || e.code === "KeyD") input.right = true;
+    if (e.code === "ArrowRight" || e.code === "KeyD") input.right = true;
   });
   window.addEventListener("keyup", (e) => {
     if (e.code === "ArrowLeft" || e.code === "KeyA") input.left = false;
-    else if (e.code === "ArrowRight" || e.code === "KeyD") input.right = false;
+    if (e.code === "ArrowRight" || e.code === "KeyD") input.right = false;
   });
 
-  // Mobile touch controls - simple left/right half screen touch
+  // Touch controls (left/right half of canvas)
   canvas.addEventListener("touchstart", (e) => {
     if (gameOver) return;
     e.preventDefault();
@@ -379,13 +345,12 @@
       if (x < WIDTH / 2) input.left = true;
       else input.right = true;
     }
-  });
+  }, { passive: false });
   canvas.addEventListener("touchend", (e) => {
     e.preventDefault();
-    // Reset both on any touchend, simple logic
     input.left = false;
     input.right = false;
-  });
+  }, { passive: false });
   canvas.addEventListener("touchcancel", () => {
     input.left = false;
     input.right = false;
@@ -396,95 +361,102 @@
     resetGame();
   });
 
+  // Utility: calculate target speed from score (logarithmic)
+  // speed = MIN_SPEED + SPEED_SCALE * log10(1 + score/200)
+  // capped by MAX_SPEED
+  function getTargetSpeed(score) {
+    return Math.min(
+      MIN_SPEED + SPEED_SCALE * Math.log10(1 + score / 200),
+      MAX_SPEED
+    );
+  }
+
   // Reset game state
   function resetGame() {
     obstacles = [];
     crashes = 0;
     score = 0;
-    speed = BASE_SPEED;
+    displayedSpeed = 0;
+    targetSpeed = 0;
+    recoveryStartTime = null;
     player.x = PLAYER_START_X;
     player.y = PLAYER_START_Y;
     gameOver = false;
-    message.style.display = "none";
     ui.style.display = "block";
+    message.style.display = "none";
     lastSpawnTime = 0;
-    lastFinishLineTime = 0;
-    roadScroll = 0;
     frames = 0;
+    roadScroll = 0;
     requestAnimationFrame(gameLoop);
   }
 
-  // Road lines to simulate movement (like Enduro)
+  // Road scroll to simulate movement
   let roadScroll = 0;
 
-  // Finish line effect spawn timing
-  let lastFinishLineTime = 0;
-
-  function drawFinishLine(yPosition) {
-    // thick white stripes across the road to mimic finish line
-    ctx.save();
-    ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 14;
-    ctx.shadowColor = "#fff";
-    ctx.shadowBlur = 12;
-    ctx.setLineDash([]);
-    const stripes = 8;
-    const stripeWidth = TRACK_WIDTH / stripes;
-    const lineHeight = 16;
-    let startY = yPosition;
-
-    for (let i = 0; i < stripes; i++) {
-      if (i % 2 === 0) {
-        ctx.fillStyle = "#fff";
-      } else {
-        ctx.fillStyle = "#333";
-      }
-      ctx.fillRect(
-        ROAD_SIDE_WIDTH + i * stripeWidth,
-        startY - lineHeight / 2,
-        stripeWidth,
-        lineHeight
-      );
-    }
-    ctx.restore();
-  }
+  // Timing for spawning obstacles
+  let lastSpawnTime = 0;
 
   // Game loop
   function gameLoop(timestamp) {
     if (gameOver) return;
 
     frames++;
-    roadScroll += speed;
 
-    // Clear screen
-    ctx.clearRect(0, 0, WIDTH, HEIGHT);
-
-    // Draw track and road lines
-    drawTrack(ctx, roadScroll);
-
-    // Spawn finish line every ~15 seconds for visual effect
-    if (!lastFinishLineTime) lastFinishLineTime = performance.now();
-    if (performance.now() - lastFinishLineTime > FINISH_LINE_FREQ) {
-      // Animate finish line appearing from top
-      const finishLineSpeed = speed * 2;
-      const finishLineHeight = 20;
-      let finishLineY = ((performance.now() - lastFinishLineTime) / 10) - finishLineHeight * 2;
-
-      if (finishLineY < HEIGHT + finishLineHeight) {
-        drawFinishLine(finishLineY);
-      } else {
-        lastFinishLineTime = performance.now();
+    // Update target speed based on score unless recovering from crash
+    if (!recoveryStartTime) {
+      targetSpeed = getTargetSpeed(score);
+    } else {
+      // Recovery mode: interpolate displayedSpeed from 0 to targetSpeed over RECOVERY_TIME
+      const elapsed = timestamp - recoveryStartTime;
+      const progress = Math.min(elapsed / RECOVERY_TIME, 1);
+      displayedSpeed = progress * targetSpeed;
+      if (progress >= 1) {
+        recoveryStartTime = null;
+        displayedSpeed = targetSpeed;
       }
     }
 
-    // Spawn obstacles
-    spawnObstacles();
+    // When NOT recovering, smoothly approach targetSpeed (for small frame jitter)
+    if (!recoveryStartTime) {
+      const speedDiff = targetSpeed - displayedSpeed;
+      displayedSpeed += speedDiff * 0.06; // smooth lerp for minor changes
+      if (Math.abs(speedDiff) < 0.02) displayedSpeed = targetSpeed;
+    }
 
-    // Update obstacles positions
+    // Move player left/right based on input
+    if (!gameOver) {
+      if (input.left) {
+        player.x -= PLAYER_MOVE_SPEED;
+      }
+      if (input.right) {
+        player.x += PLAYER_MOVE_SPEED;
+      }
+
+      const leftBound = ROAD_SIDE_WIDTH + CAR_WIDTH / 2;
+      const rightBound = WIDTH - ROAD_SIDE_WIDTH - CAR_WIDTH / 2;
+
+      if (player.x < leftBound) player.x = leftBound;
+      if (player.x > rightBound) player.x = rightBound;
+    }
+
+    // Clear canvas
+    ctx.clearRect(0, 0, WIDTH, HEIGHT);
+
+    // Draw track with scroll offset
+    roadScroll += displayedSpeed;
+    drawTrack(ctx, roadScroll);
+
+    // Spawn obstacles (cars) - limit spawn rate by timestamp
+    if (timestamp - lastSpawnTime > 600) {
+      spawnObstacles();
+      lastSpawnTime = timestamp;
+    }
+
+    // Update obstacles
     for (let i = obstacles.length - 1; i >= 0; i--) {
-      obstacles[i].update(speed);
-      // Remove off-screen obstacles
-      if (obstacles[i].y > HEIGHT + OBSTACLE_HEIGHT) {
+      obstacles[i].update(displayedSpeed);
+      // Remove if off screen
+      if (obstacles[i].y > HEIGHT + CAR_HEIGHT) {
         obstacles.splice(i, 1);
       }
     }
@@ -494,46 +466,24 @@
       ob.draw(ctx);
     }
 
-    // Handle input & update player position
-    const laneLeftBound = ROAD_SIDE_WIDTH + CAR_WIDTH / 2;
-    const laneRightBound = WIDTH - ROAD_SIDE_WIDTH - CAR_WIDTH / 2;
-    // Player horizontal speed factor (pixels/frame)
-    const playerMoveSpeed = 7;
-
-    if (input.left) {
-      player.x -= playerMoveSpeed;
-      if (player.x < laneLeftBound) player.x = laneLeftBound;
-    }
-    if (input.right) {
-      player.x += playerMoveSpeed;
-      if (player.x > laneRightBound) player.x = laneRightBound;
-    }
-
     // Draw player
     drawPlayer(ctx, player.x, player.y);
 
-    // Increase speed gradually until max
-    if (speed < MAX_SPEED) {
-      speed += ACCELERATION;
-      speed = Math.min(speed, MAX_SPEED);
-    }
+    // Update score proportional to displayedSpeed; faster means quicker scoring
+    // Formula: score += displayedSpeed^1.3 * 0.15
+    score += Math.pow(displayedSpeed, 1.3) * 0.15;
 
-    // Increase score proportional to speed (e.g. speed^1.3 for bigger reward with speed)
-    score += 0.15 * Math.pow(speed, 1.3);
-
-    // Check collisions
-    if (checkCollisions()) {
+    // Check collisions only if not recovering or gameover
+    if (!recoveryStartTime && !gameOver && checkCollisions()) {
       crashes++;
-      // Remove obstacles close to player that collided to avoid multiple count in same frame
-      obstacles = obstacles.filter(
-        (ob) =>
-          Math.abs(ob.x - player.x) > OBSTACLE_WIDTH * 1.1 ||
-          Math.abs(ob.y - player.y) > OBSTACLE_HEIGHT * 1.1
-      );
       if (crashes >= MAX_CRASHES) {
         gameOver = true;
         ui.style.display = "none";
         message.style.display = "block";
+      } else {
+        // Start recovery speed reset
+        recoveryStartTime = timestamp;
+        displayedSpeed = 0;
       }
     }
 
@@ -543,6 +493,16 @@
     if (!gameOver) requestAnimationFrame(gameLoop);
   }
 
+  // Adjust canvas height on resize
+  function onResize() {
+    const h = window.innerHeight;
+    gameDiv.style.height = h + "px";
+    canvas.height = h;
+  }
+  window.addEventListener("resize", onResize);
+  onResize();
+
+  // Start game initially
   resetGame();
 })();
 </script>
