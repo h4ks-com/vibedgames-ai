@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Infinite Track Racing</title>
+<style>
+  /* Reset and base */
+  * {
+    box-sizing: border-box;
+  }
+  body, html {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: linear-gradient(#3a9df8, #0a2d62);
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    user-select: none;
+  }
+  #gameCanvas {
+    display: block;
+    margin: 0 auto;
+    background: #222;
+    background-image:
+      radial-gradient(circle at 50% 150%, #555 20%, transparent 70%);
+    image-rendering: pixelated;
+    border: 3px solid #666;
+    border-radius: 8px;
+  }
+  #ui {
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: #eee;
+    font-weight: 700;
+    text-shadow: 0 0 6px #0008;
+    font-size: 18px;
+    user-select: none;
+  }
+  #message {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: #e33;
+    font-size: 36px;
+    font-weight: 900;
+    text-shadow: 0 0 12px #900b;
+    pointer-events: none;
+    user-select: none;
+  }
+  #restartInstructions {
+    position: absolute;
+    top: calc(50% + 50px);
+    left: 50%;
+    transform: translateX(-50%);
+    color: #eee;
+    font-size: 16px;
+    font-weight: 600;
+    text-shadow: 0 0 6px #0008;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas" width="480" height="640"></canvas>
+<div id="ui">
+  <span id="score">Score: 0</span>
+  &nbsp;&nbsp;&nbsp;
+  <span id="crashes">Crashes: 0 / 3</span>
+  &nbsp;&nbsp;&nbsp;
+  <span id="speed">Speed: 0</span>
+</div>
+<div id="message" style="display:none;">GAME OVER</div>
+<div id="restartInstructions" style="display:none;">Press SPACE to Restart</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width;
+  const H = canvas.height;
+
+  // UI elements
+  const scoreEl = document.getElementById('score');
+  const crashesEl = document.getElementById('crashes');
+  const speedEl = document.getElementById('speed');
+  const messageEl = document.getElementById('message');
+  const restartInstructionsEl = document.getElementById('restartInstructions');
+
+  // Game states
+  let running = true;
+
+  // Constants
+  const TRACK_WIDTH = 320;
+  const TRACK_MARGIN = (W - TRACK_WIDTH) / 2;
+  const LANE_COUNT = 3;
+  const LANE_WIDTH = TRACK_WIDTH / LANE_COUNT;
+  const PLAYER_WIDTH = 28;
+  const PLAYER_HEIGHT = 48;
+  const OBSTACLE_WIDTH = 26;
+  const OBSTACLE_HEIGHT = 40;
+  const OBSTACLE_SPEED_BASE = 0.5;  // Base speed for obstacles relative to player speed
+
+  const MAX_CRASHES = 3;
+  const OBSTACLE_SPAWN_INTERVAL_MIN = 500; // ms
+  const OBSTACLE_SPAWN_INTERVAL_MAX = 1200; // ms
+
+  const MAX_OBSTACLES_ON_SCREEN = 7; // Fine tuning
+
+  // Game variables
+  let score = 0;
+  let crashes = 0;
+  let speed = 4;  // == pixels per frame, will increase progressively.
+  let speedMax = 16;
+  let speedIncRate = 0.0017; // Increase speed per frame - tuning for challenge progression
+
+  // Player car (horizontal lane)
+  // lanes indexed 0..2 -> x position = TRACK_MARGIN + lane * LANE_WIDTH + (LANE_WIDTH - PLAYER_WIDTH)/2
+  let playerLane = 1; // middle lane default
+  let playerX = TRACK_MARGIN + playerLane * LANE_WIDTH + (LANE_WIDTH - PLAYER_WIDTH) / 2;
+  const playerY = H - PLAYER_HEIGHT - 12;
+
+  // Obstacles - array with objects {lane, y, type}
+  // type: 0 = static obstacle, 1 = opponent car
+  let obstacles = [];
+
+  // For obstacle spawn timing controlled to not overspawn:
+  let obstacleTimer = 0;
+  let nextObstacleInterval = randomRange(OBSTACLE_SPAWN_INTERVAL_MIN, OBSTACLE_SPAWN_INTERVAL_MAX);
+
+  // Input state
+  const keys = {
+    left: false,
+    right: false,
+  };
+
+  // Load assets as simple shapes since single file requested (draw shapes)
+  // Colors
+  const COLORS = {
+    trackMarking: '#eee',
+    roadSide: '#111',
+    grass: '#063013',
+    playerCar: '#f44',
+    obstacleStatic: '#a3a3a3',
+    obstacleCar: '#ffaa00',
+    shadow: 'rgba(0,0,0,0.35)',
+  };
+
+  // Background road stripes positions for animation
+  // We'll draw dashed white stripes for lane markings
+  // and side road borders
+  // Use vertical offset to create moving illusion
+
+  let stripesOffset = 0;
+
+  // Functions
+
+  function randomRange(min, max) {
+    return Math.random() * (max - min) + min;
+  }
+
+  function clamp(v, min, max) {
+    return Math.min(Math.max(v, min), max);
+  }
+
+  function lanesToX(lane) {
+    return TRACK_MARGIN + lane * LANE_WIDTH + (LANE_WIDTH - PLAYER_WIDTH) / 2;
+  }
+
+  function drawRoad() {
+    // Grass
+    ctx.fillStyle = COLORS.grass;
+    ctx.fillRect(0, 0, W, H);
+
+    // Road
+    ctx.fillStyle = '#222';
+    ctx.fillRect(TRACK_MARGIN, 0, TRACK_WIDTH, H);
+
+    // Road sides
+    ctx.fillStyle = COLORS.roadSide;
+    ctx.fillRect(0, 0, TRACK_MARGIN, H);
+    ctx.fillRect(TRACK_MARGIN + TRACK_WIDTH, 0, TRACK_MARGIN, H);
+
+    // Lane markings (center stripes)
+    ctx.strokeStyle = COLORS.trackMarking;
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
+    ctx.setLineDash([20, 30]); // dash pattern
+
+    // Draw lane separators (2 lines)
+    for (let i = 1; i < LANE_COUNT; i++) {
+      let x = TRACK_MARGIN + i * LANE_WIDTH;
+      ctx.beginPath();
+      ctx.moveTo(x, -stripesOffset);
+      ctx.lineTo(x, H + stripesOffset);
+      ctx.stroke();
+    }
+
+    // Solid white line for right/left border inside road area (slightly inset)
+    ctx.setLineDash([]);
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = '#ddd';
+    // Left border line
+    ctx.beginPath();
+    ctx.moveTo(TRACK_MARGIN + 2, 0);
+    ctx.lineTo(TRACK_MARGIN + 2, H);
+    ctx.stroke();
+    // Right border line
+    ctx.beginPath();
+    ctx.moveTo(TRACK_MARGIN + TRACK_WIDTH - 2, 0);
+    ctx.lineTo(TRACK_MARGIN + TRACK_WIDTH - 2, H);
+    ctx.stroke();
+  }
+
+  function drawPlayer() {
+    // Draw shadow ellipse under car
+    ctx.fillStyle = COLORS.shadow;
+    ctx.beginPath();
+    ctx.ellipse(playerX + PLAYER_WIDTH/2, playerY + PLAYER_HEIGHT - 6, PLAYER_WIDTH*0.55, 8, 0, 0, 2 * Math.PI);
+    ctx.fill();
+
+    // Car body - red rectangle with rounded corners
+    ctx.fillStyle = COLORS.playerCar;
+    roundRect(ctx, playerX, playerY, PLAYER_WIDTH, PLAYER_HEIGHT, 8);
+    ctx.fill();
+
+    // Windows front and top (light blue)
+    ctx.fillStyle = '#68c8ff';
+    ctx.fillRect(playerX + 5, playerY + 8, PLAYER_WIDTH - 10, 16); // windshield
+    ctx.fillRect(playerX + 7, playerY + 30, PLAYER_WIDTH - 14, 8);  // roof window
+
+    // Headlights - small white rectangles front bottom
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(playerX + 5, playerY + PLAYER_HEIGHT - 14, 6, 6);
+    ctx.fillRect(playerX + PLAYER_WIDTH - 11, playerY + PLAYER_HEIGHT - 14, 6, 6);
+  }
+
+  function roundRect(ctx,x,y,width,height,radius){
+    ctx.beginPath();
+    ctx.moveTo(x+radius,y);
+    ctx.lineTo(x+width-radius,y);
+    ctx.quadraticCurveTo(x+width,y,x+width,y+radius);
+    ctx.lineTo(x+width,y+height-radius);
+    ctx.quadraticCurveTo(x+width,y+height,x+width-radius,y+height);
+    ctx.lineTo(x+radius,y+height);
+    ctx.quadraticCurveTo(x,y+height,x,y+height-radius);
+    ctx.lineTo(x,y+radius);
+    ctx.quadraticCurveTo(x,y,x+radius,y);
+    ctx.closePath();
+  }
+
+  function drawObstacle(obs) {
+    let x = lanesToX(obs.lane);
+    let y = obs.y;
+
+    // Draw shadow ellipse
+    ctx.fillStyle = COLORS.shadow;
+    ctx.beginPath();
+    ctx.ellipse(x + OBSTACLE_WIDTH / 2, y + OBSTACLE_HEIGHT - 6, OBSTACLE_WIDTH * 0.55, 8, 0, 0, 2 * Math.PI);
+    ctx.fill();
+
+    if (obs.type === 0) {
+      // Static obstacle - gray rock with some texture (circle with darker spots)
+      ctx.fillStyle = COLORS.obstacleStatic;
+      ctx.beginPath();
+      const cx = x + OBSTACLE_WIDTH / 2;
+      const cy = y + OBSTACLE_HEIGHT / 2;
+      ctx.ellipse(cx, cy, OBSTACLE_WIDTH / 2, OBSTACLE_HEIGHT / 2, 0, 0, 2 * Math.PI);
+      ctx.fill();
+
+      ctx.fillStyle = '#777';
+      ctx.beginPath();
+      ctx.ellipse(cx - 6, cy - 7, 6, 5, 0.3, 0, 2 * Math.PI);
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.ellipse(cx + 7, cy + 5, 5, 3, -0.4, 0, 2 * Math.PI);
+      ctx.fill();
+
+    } else if (obs.type === 1) {
+      // Opponent car - orange rectangle with windows
+      ctx.fillStyle = COLORS.obstacleCar;
+      roundRect(ctx, x, y, OBSTACLE_WIDTH, OBSTACLE_HEIGHT, 6);
+      ctx.fill();
+
+      ctx.fillStyle = '#cc8e00';
+      ctx.fillRect(x + 5, y + 10, OBSTACLE_WIDTH - 10, 12); // windshield
+
+      ctx.fillStyle = '#ffeb7c';
+      ctx.fillRect(x + 6, y + 30, OBSTACLE_WIDTH - 12, 6); // roof window
+
+      // Headlights (front bottom)
+      ctx.fillStyle = '#fff8b0';
+      ctx.fillRect(x + 6, y + OBSTACLE_HEIGHT - 14, 5, 5);
+      ctx.fillRect(x + OBSTACLE_WIDTH - 12, y + OBSTACLE_HEIGHT - 14, 5, 5);
+    }
+  }
+
+  function updateObstacles(deltaTime) {
+    const speedFactor = speed / 4; // base speed is 4
+    // Move each obstacle down depending on speed and type
+    // Opponent cars move slightly slower (towards player)
+    for (let i = obstacles.length -1; i >= 0; i--) {
+      let o = obstacles[i];
+      if (o.type === 1) {
+        // opponent car - moves slower than player speed but down
+        o.y += speed * (1 - OBSTACLE_SPEED_BASE * 0.7);
+      } else {
+        // static obstacles move exactly down at player speed
+        o.y += speed;
+      }
+      // Remove obstacles that have gone past bottom
+      if (o.y > H + 50) {
+        obstacles.splice(i, 1);
+      }
+    }
+
+    // Spawn new obstacles based on timer & density tuning
+
+    obstacleTimer += deltaTime * 1000;
+    // dynamically adjust spawn rate based on speed and number of obstacles on screen.
+    // keep between min and max interval but reduce interval as speed increases (harder)
+    let interval = lerp(OBSTACLE_SPAWN_INTERVAL_MAX, OBSTACLE_SPAWN_INTERVAL_MIN, (speed - 4) / (speedMax - 4));
+    // limit spawn if too many obstacles on screen
+    if (obstacles.length >= MAX_OBSTACLES_ON_SCREEN) {
+      interval = interval * 1.5;
+    }
+
+    if (obstacleTimer > interval) {
+      obstacleTimer = 0;
+      // Spawn an obstacle
+      // Decide obstacle type probabilities:
+      // static obstacles: 65%, cars: 35%, adjusted for fun balance
+      const typeRand = Math.random();
+      let type = (typeRand < 0.65) ? 0 : 1;
+
+      // Pick a lane without obstacle currently near spawn position
+      const lanesBlocked = obstacles.filter(o => o.y < 100).map(o => o.lane);
+      const candidateLanes = [];
+      for(let i=0; i<LANE_COUNT; i++) {
+        if (!lanesBlocked.includes(i)) candidateLanes.push(i);
+      }
+      if (candidateLanes.length === 0) {
+        // all lanes blocked near spawn? just pick random lane anyway
+        candidateLanes.push(randomInt(0, LANE_COUNT - 1));
+      }
+      const lane = candidateLanes[randomInt(0, candidateLanes.length -1)];
+
+      const newObstacle = { lane: lane, y: -OBSTACLE_HEIGHT - randomRange(0, 100), type: type };
+      obstacles.push(newObstacle);
+    }
+  }
+
+  // Utility: linear interpolation
+  function lerp(a, b, t) {
+    return a + (b - a) * t;
+  }
+
+  function randomInt(min, max) {
+    return Math.floor(randomRange(min, max + 1));
+  }
+
+  function detectCollisions() {
+    for (const o of obstacles) {
+      if (o.lane !== playerLane) continue;
+      // bounding box collision check
+      let ox = lanesToX(o.lane);
+      let oy = o.y;
+      // simple rect overlap test:
+      if (
+        playerY < oy + OBSTACLE_HEIGHT - 6 &&
+        playerY + PLAYER_HEIGHT - 12 > oy + 6 &&
+        playerX < ox + OBSTACLE_WIDTH - 4 &&
+        playerX + PLAYER_WIDTH - 4 > ox
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function onCrash() {
+    crashes++;
+    crashesEl.textContent = `Crashes: ${crashes} / ${MAX_CRASHES}`;
+    // Flash screen red quickly
+    flashRed = 10;
+
+    if (crashes >= MAX_CRASHES) {
+      gameOver();
+    }
+  }
+
+  function gameOver() {
+    running = false;
+    messageEl.style.display = 'block';
+    restartInstructionsEl.style.display = 'block';
+  }
+
+  // Control handler
+  window.addEventListener('keydown', e => {
+    if (!running) {
+      if (e.code === 'Space') {
+        resetGame();
+        return;
+      }
+      return;
+    }
+    switch (e.code) {
+      case 'ArrowLeft':
+      case 'KeyA':
+        keys.left = true;
+        break;
+      case 'ArrowRight':
+      case 'KeyD':
+        keys.right = true;
+        break;
+    }
+  });
+  window.addEventListener('keyup', e => {
+    switch (e.code) {
+      case 'ArrowLeft':
+      case 'KeyA':
+        keys.left = false;
+        break;
+      case 'ArrowRight':
+      case 'KeyD':
+        keys.right = false;
+        break;
+    }
+  });
+
+  let flashRed = 0;
+
+  // Main game loop
+  let lastTimeStamp = 0;
+  function loop(time = 0) {
+    if (!lastTimeStamp) lastTimeStamp = time;
+    const deltaTime = (time - lastTimeStamp) / 1000; // seconds
+    lastTimeStamp = time;
+
+    if (running) {
+      // Update speed with progressive acceleration, capped
+      speed = clamp(speed + speedIncRate, 4, speedMax);
+
+      // Update player lane based on input (smooth lane switching maybe?)
+      if (keys.left && playerLane > 0) {
+        playerLane--;
+        keys.left = false; // prevent continuous lane switch, only on press
+      }
+      if (keys.right && playerLane < LANE_COUNT - 1) {
+        playerLane++;
+        keys.right = false;
+      }
+      playerX = lanesToX(playerLane);
+
+      stripesOffset += speed * 4;
+      if (stripesOffset > 50) stripesOffset -= 50;
+
+      // Update obstacles
+      updateObstacles(deltaTime);
+
+      // Update score proportional to speed
+      // Score increase = speed * deltaTime * factor (scaled for challenge)
+      score += speed * deltaTime * 20;
+      scoreEl.textContent = 'Score: ' + Math.floor(score);
+
+      crashesEl.textContent = `Crashes: ${crashes} / ${MAX_CRASHES}`;
+      speedEl.textContent = 'Speed: ' + speed.toFixed(1);
+
+      // Detect collisions
+      if (detectCollisions()) {
+        onCrash();
+        // remove collided obstacles to avoid multi counts
+        obstacles = obstacles.filter(o => !(o.lane === playerLane && o.y + OBSTACLE_HEIGHT > playerY && o.y < playerY + PLAYER_HEIGHT));
+      }
+    }
+
+    // DRAW
+
+    // Clear
+    ctx.clearRect(0, 0, W, H);
+
+    // Draw background road/tracks
+    drawRoad();
+
+    // Draw obstacles
+    obstacles.forEach(drawObstacle);
+
+    // Draw player car
+    drawPlayer();
+
+    // Flash red on crash
+    if (flashRed > 0) {
+      ctx.fillStyle = `rgba(255,0,0,${flashRed / 10 * 0.5})`;
+      ctx.fillRect(0, 0, W, H);
+      flashRed--;
+    }
+
+    requestAnimationFrame(loop);
+  }
+
+  function resetGame() {
+    score = 0;
+    crashes = 0;
+    speed = 4;
+    playerLane = 1;
+    playerX = lanesToX(playerLane);
+    obstacles = [];
+    obstacleTimer = 0;
+    nextObstacleInterval = randomRange(OBSTACLE_SPAWN_INTERVAL_MIN, OBSTACLE_SPAWN_INTERVAL_MAX);
+    running = true;
+    messageEl.style.display = 'none';
+    restartInstructionsEl.style.display = 'none';
+  }
+
+  loop();
+
+})();
+</script>
+</body>
+</html>
