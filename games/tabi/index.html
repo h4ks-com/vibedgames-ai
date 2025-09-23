@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Unique ID Page</title>
+<title>64-Character Unique ID Page</title>
 <style>
   body {
     font-family: Arial, sans-serif;
@@ -21,6 +21,8 @@
   #unique-id {
     font-weight: bold;
     color: #1a73e8;
+    font-family: 'Courier New', Courier, monospace;
+    word-break: break-all;
   }
   a.button {
     display: inline-block;
@@ -40,86 +42,181 @@
 </head>
 <body>
 <header>
-  <h1>Unique Page ID</h1>
-  <div>This page's unique ID is: <span id="unique-id"></span></div>
+  <h1>64-Character Unique Page ID</h1>
+  <div>This page's unique ID is:<br/><code id="unique-id"></code></div>
 </header>
 
 <a href="#" id="open-new-tab" class="button">Open New Tab with Derived Unique ID</a>
 
 <script>
 (() => {
-  // Helper: Generate a random integer 0 <= n < max
-  function randInt(max) {
-    return Math.floor(Math.random() * max);
-  }
+  // Base64 URL-safe alphabet for encoding
+  const base64urlChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
-  // Generate a unique ID based on random number + current time, format: <random 8 hex digits>-<timestamp in ms base36>
-  function generateRootId() {
-    // random 4 bytes hex
-    const r = randInt(0xffffffff).toString(16).padStart(8,"0");
-    const t = Date.now().toString(36);
-    return r + '-' + t;
-  }
-
-  // Generate a derived unique ID based on originID + current time
-  // Format: originID + substr(hash) + timestamp-base36
-  // Hash originID with simple hash function (FNV-1a 32bit) for a short hex string
-  function fnv1aHash(str) {
-    let hash = 2166136261;
-    for(let i=0; i < str.length; i++) {
-      hash ^= str.charCodeAt(i);
-      hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+  // Generate random bytes
+  function randomBytes(length) {
+    if (window.crypto && window.crypto.getRandomValues) {
+      const arr = new Uint8Array(length);
+      window.crypto.getRandomValues(arr);
+      return arr;
     }
-    // convert to unsigned 32bit
-    return (hash >>> 0).toString(16).padStart(8, "0");
+    // fallback (not cryptographically secure)
+    const arr = new Uint8Array(length);
+    for(let i=0;i<length;i++) arr[i] = Math.floor(Math.random()*256);
+    return arr;
   }
 
-  function generateDerivedId(originId) {
-    const hash = fnv1aHash(originId).slice(0,6); // 6 hex chars hash fragment
-    const t = Date.now().toString(36);
-    return originId + '-' + hash + '-' + t;
+  // Convert byte array (Uint8Array) to base64url string (without padding)
+  function bytesToBase64Url(bytes) {
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    let base64 = btoa(binary);
+    // Convert base64 to base64url
+    return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   }
 
-  // Location hash will store the unique id for the page
-  // If no hash, generate a root id and set location.hash = rootId (using history.replaceState)
-  // If hash exists, show it
+  // Convert ArrayBuffer/Uint8Array to string UTF-8 encoded
+  function ab2str(buf) {
+    return new TextDecoder().decode(buf);
+  }
 
+  // Convert string to Uint8Array UTF-8 encoded
+  function str2ab(str) {
+    return new TextEncoder().encode(str);
+  }
+
+  // Async SHA-256 hashing of a Uint8Array or string (returns Uint8Array)
+  async function sha256(data) {
+    let buffer;
+    if (data instanceof Uint8Array) {
+      buffer = data.buffer;
+    } else if (typeof data === "string") {
+      buffer = str2ab(data).buffer;
+    } else if (data instanceof ArrayBuffer) {
+      buffer = data;
+    } else {
+      throw new Error("Unsupported data type for sha256");
+    }
+    const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+    return new Uint8Array(hashBuffer);
+  }
+
+  // Encode Uint8Array to base64url with custom length control
+  // We want exactly 64 alphanumeric chars from [A-Za-z0-9] (no symbols)
+  // Base64url has - and _, so we must convert those to alphanumeric safely:
+  // Let's create a custom base62 encoding from the SHA256 output.
+  // SHA256 is 32 bytes = 256 bits.
+  // Base62 uses 62 possible chars => each char encodes ~5.954 bits.
+  // To make length 64 chars at base62 encoding => 64 * 5.954 = 380.9 bits needed,
+  // but SHA256 only 256 bits.
+  // We'll do: hash origin+time + random salt (at least 6 bytes), so total input around 38 bytes.
+  // Then hash that, and encode to base62 to get 64 chars output.
+
+  // So we need base62 encoding function:
+  const base62chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+  // Converts Uint8Array to a BigInt
+  function bytesToBigInt(bytes) {
+    let bi = 0n;
+    for(let i = 0; i < bytes.length; i++) {
+      bi = (bi << 8n) + BigInt(bytes[i]);
+    }
+    return bi;
+  }
+
+  // Convert BigInt to base62 string of fixed length by padding:
+  function bigIntToBase62(bi, length) {
+    let base = 62n;
+    let chars = [];
+    while(bi > 0n) {
+      let rem = bi % base;
+      bi = bi / base;
+      chars.push(base62chars[Number(rem)]);
+    }
+    while(chars.length < length) chars.push('0'); // pad with '0'
+    return chars.reverse().join('');
+  }
+
+  // Derive 64-char alphanumeric ID from arbitrary input string
+  // by hashing input + random salt, then base62 encoding
+  async function deriveId(inputStr) {
+    // inputStr + timestamp + 6 random bytes
+    const timestamp = Date.now().toString();
+    // Generate 6 random bytes salt (~48 bits)
+    const salt = randomBytes(6);
+    // Compose input buffer: inputStr UTF8 bytes + timestamp UTF8 bytes + salt
+    const inputBytes = str2ab(inputStr + timestamp);
+    const combined = new Uint8Array(inputBytes.length + salt.length);
+    combined.set(inputBytes, 0);
+    combined.set(salt, inputBytes.length);
+
+    // Hash combined input
+    const hash = await sha256(combined);
+
+    // Convert hash (32 bytes) + salt(6 bytes) = 38 bytes total
+    const totalBytes = new Uint8Array(hash.length + salt.length);
+    totalBytes.set(hash, 0);
+    totalBytes.set(salt, hash.length);
+    // totalBytes length = 38 bytes = 304 bits
+
+    const bi = bytesToBigInt(totalBytes);
+
+    // base62 encode to 64 chars (64 chars * ~5.95 bits = 380 bits, we have 304 bits, so pad)
+    // The number might be shorter, so pad with zeros to length 64
+    return bigIntToBase62(bi, 64);
+  }
+
+  // Generate root ID similarly: random 38 bytes -> base62 to 64 chars
+  async function generateRootId() {
+    // random 38 bytes
+    const rand = randomBytes(38);
+    const bi = bytesToBigInt(rand);
+    return bigIntToBase62(bi, 64);
+  }
+
+  // Get current ID from location.hash (expect 64 chars alphanumeric)
   function getIdFromHash() {
     let h = location.hash;
-    if(h && h.startsWith('#') && h.length > 1) {
-      return decodeURIComponent(h.slice(1));
+    if (h && h.startsWith('#') && h.length > 1) {
+      const id = decodeURIComponent(h.slice(1));
+      if (/^[0-9A-Za-z]{64}$/.test(id)) return id;
     }
     return null;
   }
 
+  // Set or replace location.hash
   function setHashId(id, replace = false) {
-    const newHash = '#' + encodeURIComponent(id);
-    if(replace) {
-      history.replaceState(null, '', newHash);
+    if (replace) {
+      history.replaceState(null, '', '#' + encodeURIComponent(id));
     } else {
-      location.hash = newHash;
+      location.hash = '#' + encodeURIComponent(id);
     }
   }
 
-  // Initialize
-  let currentId = getIdFromHash();
-  if(!currentId) {
-    currentId = generateRootId();
-    setHashId(currentId, true);
+  async function main() {
+    let currentId = getIdFromHash();
+    if (!currentId) {
+      currentId = await generateRootId();
+      setHashId(currentId, true);
+    }
+
+    const idSpan = document.getElementById('unique-id');
+    idSpan.textContent = currentId;
+
+    document.getElementById('open-new-tab').addEventListener('click', async e => {
+      e.preventDefault();
+
+      // Derive new ID from currentId + current time
+      const newId = await deriveId(currentId);
+
+      const url = location.origin + location.pathname + '#' + encodeURIComponent(newId);
+      window.open(url, '_blank');
+    });
   }
 
-  // Show ID in UI
-  const idSpan = document.getElementById('unique-id');
-  idSpan.textContent = currentId;
-
-  // On click open new tab with derived ID
-  document.getElementById('open-new-tab').addEventListener('click', e => {
-    e.preventDefault();
-    const newId = generateDerivedId(currentId);
-    // Construct URL with new hash
-    const url = location.origin + location.pathname + '#' + encodeURIComponent(newId);
-    window.open(url, '_blank');
-  });
+  main();
 })();
 </script>
 </body>
