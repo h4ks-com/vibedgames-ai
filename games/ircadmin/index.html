@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en" :class="{'dark': settings.darkMode}" x-data="adminPanel()" class="bg-gray-100 min-h-screen font-sans dark:bg-gray-900">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>IRC Admin Panel</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+</head>
+<body class="p-4" x-init="init()">
+  <div class="max-w-6xl mx-auto bg-white rounded-lg shadow-lg p-4 dark:bg-gray-800">
+    <h1 class="text-2xl font-bold mb-4 text-center text-gray-900 dark:text-gray-100">IRC Admin Panel</h1>
+    <!-- Tabs -->
+    <div class="flex border-b mb-4">
+      <button
+        class="px-4 py-2 -mb-px border-b-2 font-semibold transition-all"
+        :class="{'border-blue-500 text-blue-600 dark:text-blue-400': activeTab==='channels', 'border-transparent text-gray-600 dark:text-gray-400': activeTab!=='channels'}"
+        @click="activeTab='channels'"
+      >Channels</button>
+      <button
+        class="px-4 py-2 -mb-px border-b-2 font-semibold transition-all"
+        :class="{'border-blue-500 text-blue-600 dark:text-blue-400': activeTab==='users', 'border-transparent text-gray-600 dark:text-gray-400': activeTab!=='users'}"
+        @click="activeTab='users'"
+      >Users</button>
+      <button
+        class="px-4 py-2 -mb-px border-b-2 font-semibold transition-all"
+        :class="{'border-blue-500 text-blue-600 dark:text-blue-400': activeTab==='settings', 'border-transparent text-gray-600 dark:text-gray-400': activeTab!=='settings'}"
+        @click="activeTab='settings'"
+      >Settings</button>
+    </div>
+
+    <!-- Channels Tab -->
+    <div x-show="activeTab==='channels'" class="space-y-4" x-transition>
+      <div class="flex justify-between items-center mb-2">
+        <h2 class="text-xl font-semibold text-gray-900 dark:text-gray-100">Channels</h2>
+        <button @click="openAddChannel()" class="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded">Add Channel</button>
+      </div>
+      <ul class="border rounded-lg divide-y divide-gray-200 dark:divide-gray-700">
+        <template x-for="(channel, index) in channels" :key="index">
+          <li class="flex justify-between items-center px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-700">
+            <div>
+              <span class="font-semibold" x-text="channel.name"></span>
+              <span class="text-sm text-gray-500 dark:text-gray-400" x-text="'(' + channel.users.length + ' users)'"></span>
+            </div>
+            <div class="space-x-2">
+              <button class="text-sm text-blue-500 hover:underline dark:text-blue-400" @click="editChannel(index)">Edit</button>
+              <button class="text-sm text-red-500 hover:underline dark:text-red-400" @click="deleteChannel(index)">Delete</button>
+            </div>
+          </li>
+        </template>
+        <li x-show="channels.length === 0" class="px-4 py-2 text-gray-400 dark:text-gray-500">No channels available.</li>
+      </ul>
+      
+      <!-- Add/Edit Channel Modal -->
+      <div x-show="showAddChannel || showEditChannel" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" x-transition>
+        <div class="bg-white dark:bg-gray-700 p-6 rounded-lg w-96 shadow-lg" @click.away="closeChannelModal()">
+          <h3 class="text-xl font-semibold mb-4 text-gray-900 dark:text-gray-100" x-text="showEditChannel ? 'Edit Channel' : 'Add Channel'"></h3>
+          <div class="mb-2">
+            <label class="block text-gray-700 dark:text-gray-300 text-sm mb-1">Channel Name</label>
+            <input type="text" x-model="channelForm.name" class="w-full border px-3 py-2 rounded bg-gray-100 dark:bg-gray-600 text-gray-900 dark:text-gray-100" placeholder="e.g., #general" />
+          </div>
+          <div class="mb-2">
+            <label class="block text-gray-700 dark:text-gray-300 text-sm mb-1">Select Users</label>
+            <div class="border rounded px-2 py-1 max-h-48 overflow-y-auto bg-gray-50 dark:bg-gray-600">
+              <template x-for="(user, uIndex) in users" :key="uIndex">
+                <div class="flex items-center mb-1">
+                  <input
+                    type="checkbox"
+                    :id="'user-' + uIndex + '-channel'"
+                    :value="user.id"
+                    @change="toggleUserInChannel(user.id)"
+                    :checked="channelForm.users.includes(user.id)"
+                    class="mr-2"
+                  />
+                  <label :for="'user-' + uIndex + '-channel'" class="text-gray-700 dark:text-gray-200 text-sm" x-text="user.name"></label>
+                </div>
+              </template>
+            </div>
+          </div>
+          <div class="flex justify-end space-x-2 mt-4">
+            <button class="bg-gray-300 hover:bg-gray-400 px-3 py-1 rounded" @click="closeChannelModal()">Cancel</button>
+            <button class="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded" @click="saveChannel()">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Users Tab -->
+    <div x-show="activeTab==='users'" class="space-y-4" x-transition>
+      <div class="flex justify-between items-center mb-2">
+        <h2 class="text-xl font-semibold text-gray-900 dark:text-gray-100">Users</h2>
+        <button @click="showAddUser = true" class="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded">Add User</button>
+      </div>
+      <ul class="border rounded-lg divide-y divide-gray-200 dark:divide-gray-700">
+        <template x-for="(user, index) in users" :key="index">
+          <li class="flex justify-between items-center px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-700">
+            <div>
+              <span class="font-semibold" x-text="user.name"></span>
+              <span class="text-sm text-gray-500 dark:text-gray-400" x-text="'(' + user.status + ')'"></span>
+            </div>
+            <div class="space-x-2">
+              <button class="text-sm text-blue-500 hover:underline dark:text-blue-400" @click="editUser(index)">Edit</button>
+              <button class="text-sm text-red-500 hover:underline dark:text-red-400" @click="deleteUser(index)">Delete</button>
+            </div>
+          </li>
+        </template>
+        <li x-show="users.length === 0" class="px-4 py-2 text-gray-400 dark:text-gray-500">No users available.</li>
+      </ul>
+
+      <!-- Add/Edit User Modal -->
+      <div x-show="showAddUser || showEditUser" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" x-transition>
+        <div class="bg-white dark:bg-gray-700 p-6 rounded-lg w-96 shadow-lg" @click.away="closeUserModal()">
+          <h3 class="text-xl font-semibold mb-4" x-text="showEditUser ? 'Edit User' : 'Add User'"></h3>
+          <div class="mb-2">
+            <label class="block text-gray-700 dark:text-gray-300 text-sm mb-1">User Name</label>
+            <input type="text" x-model="userForm.name" class="w-full border px-3 py-2 rounded bg-gray-100 dark:bg-gray-600 text-gray-900 dark:text-gray-100" placeholder="Username" />
+          </div>
+          <div class="mb-2">
+            <label class="block text-gray-700 dark:text-gray-300 text-sm mb-1">Status</label>
+            <select x-model="userForm.status" class="w-full border px-3 py-2 rounded bg-gray-100 dark:bg-gray-600 text-gray-900 dark:text-gray-100">
+              <option value="online">Online</option>
+              <option value="offline">Offline</option>
+              <option value="away">Away</option>
+            </select>
+          </div>
+          <div class="flex justify-end space-x-2 mt-4">
+            <button class="bg-gray-300 hover:bg-gray-400 px-3 py-1 rounded" @click="closeUserModal()">Cancel</button>
+            <button class="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded" @click="saveUser()">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings Tab -->
+    <div x-show="activeTab==='settings'" class="space-y-4" x-transition>
+      <h2 class="text-xl font-semibold mb-2">Settings</h2>
+      <div class="border rounded-lg p-4 space-y-4 bg-gray-50 dark:bg-gray-800">
+        <div class="flex items-center justify-between">
+          <label class="font-semibold" for="notifications">Enable Notifications</label>
+          <input type="checkbox" id="notifications" x-model="settings.notifications" @change="saveSettings()" class="w-4 h-4" />
+        </div>
+        <div class="flex items-center justify-between">
+          <label class="font-semibold" for="darkMode">Dark Mode</label>
+          <input type="checkbox" id="darkMode" x-model="settings.darkMode" @change="saveSettings()" class="w-4 h-4" />
+        </div>
+        <div class="flex items-center justify-between">
+          <label class="font-semibold" for="showAvatars">Show User Avatars</label>
+          <input type="checkbox" id="showAvatars" x-model="settings.showAvatars" @change="saveSettings()" class="w-4 h-4" />
+        </div>
+        <button @click="resetSettings()" class="mt-2 bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded">Reset to Defaults</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function adminPanel() {
+      return {
+        activeTab: 'channels',
+        // Users data
+        users: [
+          { id: 'u1', name: 'Alice', status: 'online' },
+          { id: 'u2', name: 'Bob', status: 'away' },
+          { id: 'u3', name: 'Charlie', status: 'offline' },
+          { id: 'u4', name: 'Dave', status: 'online' },
+          { id: 'u5', name: 'Eve', status: 'offline' }
+        ],
+        // Channels data with user IDs
+        channels: [
+          { name: '#general', users: ['u1', 'u2', 'u3'] },
+          { name: '#random', users: ['u4', 'u5'] }
+        ],
+        showAddChannel: false,
+        showEditChannel: false,
+        channelForm: { name: '', users: [] },
+        editIndex: null,
+        // User form for editing/adding
+        showAddUser: false,
+        showEditUser: false,
+        userForm: { name: '', status: 'online' },
+        editUserIndex: null,
+        // Settings
+        settings: {
+          notifications: true,
+          darkMode: false,
+          showAvatars: true
+        },
+
+        init() {
+          if (localStorage.getItem('settings')) {
+            this.settings = JSON.parse(localStorage.getItem('settings'))
+          }
+          if (localStorage.getItem('channels')) {
+            this.channels = JSON.parse(localStorage.getItem('channels'))
+          }
+          if (localStorage.getItem('users')) {
+            this.users = JSON.parse(localStorage.getItem('users'))
+          }
+        },
+
+        saveSettings() {
+          localStorage.setItem('settings', JSON.stringify(this.settings));
+        },
+
+        // Toggle user in channel by user id
+        toggleUserInChannel(userId) {
+          if (!this.channelForm.users.includes(userId)) {
+            this.channelForm.users.push(userId);
+          } else {
+            this.channelForm.users = this.channelForm.users.filter(u => u !== userId);
+          }
+        },
+
+        // Channel methods
+        openAddChannel() {
+          this.channelForm = { name: '', users: [] };
+          this.showAddChannel = true;
+        },
+        editChannel(index) {
+          this.editIndex = index;
+          const ch = this.channels[index];
+          this.channelForm = {
+            name: ch.name,
+            users: [...ch.users]
+          };
+          this.showEditChannel = true;
+        },
+        deleteChannel(index) {
+          if (confirm(`Delete channel ${this.channels[index].name}?`)) {
+            this.channels.splice(index, 1);
+          }
+        },
+        saveChannel() {
+          if (!this.channelForm.name.trim()) return;
+          if (this.showAddChannel) {
+            this.channels.push({ name: this.channelForm.name, users: [...this.channelForm.users] });
+          } else if (this.showEditChannel && this.editIndex !== null) {
+            this.channels[this.editIndex] = {
+              name: this.channelForm.name,
+              users: [...this.channelForm.users]
+            };
+          }
+          localStorage.setItem('channels', JSON.stringify(this.channels));
+          this.closeChannelModal();
+        },
+        closeChannelModal() {
+          this.showAddChannel = false;
+          this.showEditChannel = false;
+          this.editIndex = null;
+        },
+
+        // User methods
+        openAddUser() {
+          this.userForm = { name: '', status: 'online' };
+          this.showAddUser = true;
+        },
+        editUser(index) {
+          this.editUserIndex = index;
+          this.userForm = { ...this.users[index] };
+          this.showEditUser = true;
+        },
+        deleteUser(index) {
+          if (confirm(`Delete user ${this.users[index].name}?`)) {
+            this.users.splice(index, 1);
+          }
+        },
+        saveUser() {
+          if (!this.userForm.name.trim()) return;
+          if (this.showAddUser) {
+            const newId = 'u' + (this.users.length + 1);
+            this.users.push({ id: newId, ...this.userForm });
+          } else if (this.showEditUser && this.editUserIndex !== null) {
+            this.users[this.editUserIndex] = { ...this.userForm };
+          }
+          localStorage.setItem('users', JSON.stringify(this.users));
+          this.closeUserModal();
+        },
+        closeUserModal() {
+          this.showAddUser = false;
+          this.showEditUser = false;
+          this.editUserIndex = null;
+        },
+
+        // Reset settings
+        resetSettings() {
+          this.settings = {
+            notifications: true,
+            darkMode: false,
+            showAvatars: true
+          };
+          this.saveSettings();
+        }
+      }
+    }
+  </script>
+</body>
+</html>
