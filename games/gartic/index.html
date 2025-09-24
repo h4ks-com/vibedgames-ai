@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gartic Clone</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+        }
+        #canvas {
+            border: 1px solid black;
+            margin-bottom: 20px;
+        }
+        button {
+            margin: 5px;
+        }
+        #messages {
+            width: 300px;
+            height: 200px;
+            border: 1px solid black;
+            overflow-y: scroll;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <input id="session-id" type="text" placeholder="Enter session ID" />
+    <button id="join-session">Join Session</button>
+    <canvas id="canvas" width="400" height="400"></canvas>
+    <button id="clear-canvas">Clear Canvas</button>
+    <div>
+        <textarea id="message" placeholder="Type your message here..."></textarea>
+        <button id="send-msg">Send Message</button>
+    </div>
+    <div id="messages"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/peerjs@1.3.1/dist/peerjs.min.js"></script>
+    <script>
+        const sessionIdInput = document.getElementById('session-id');
+        const joinSessionButton = document.getElementById('join-session');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const messageInput = document.getElementById('message');
+        const sendMsgButton = document.getElementById('send-msg');
+        const messagesDiv = document.getElementById('messages');
+        const clearCanvasButton = document.getElementById('clear-canvas');
+
+        let peer;
+        let conn;
+        let isDrawing = false;
+        let lastX, lastY;
+
+        joinSessionButton.onclick = () => {
+            const sessionId = sessionIdInput.value || generateRandomId();
+            peer = new Peer(sessionId, { host: '/', port: 443, secure: true });
+
+            peer.on('open', (id) => {
+                console.log('My peer ID is: ' + id);
+            });
+
+            peer.on('connection', (connection) => {
+                conn = connection;
+                conn.on('data', handleMessage);
+            });
+
+            conn = peer.connect(sessionId);
+            conn.on('open', () => {
+                conn.on('data', handleMessage);
+            });
+        }
+
+        function handleMessage(data) {
+            if (typeof data === "string") {
+                displayMessage(data);
+            } else {
+                drawImage(data);
+            }
+        }
+
+        sendMsgButton.onclick = () => {
+            const message = messageInput.value;
+            displayMessage(message);
+            conn.send(message);
+            messageInput.value = '';
+        }
+
+        clearCanvasButton.onclick = () => {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            conn.send({ clear: true });
+        }
+
+        function displayMessage(msg) {
+            const messageElement = document.createElement('div');
+            messageElement.textContent = msg;
+            messagesDiv.appendChild(messageElement);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        canvas.addEventListener('mousedown', (e) => {
+            isDrawing = true;
+            [lastX, lastY] = [e.offsetX, e.offsetY];
+        });
+
+        canvas.addEventListener('mouseup', () => {
+            isDrawing = false;
+            ctx.beginPath(); // Reset
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            if (!isDrawing) return;
+
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 5;
+            ctx.beginPath();
+            ctx.moveTo(lastX, lastY);
+            ctx.lineTo(e.offsetX, e.offsetY);
+            ctx.stroke();
+            [lastX, lastY] = [e.offsetX, e.offsetY];
+
+            conn.send({
+                x: lastX,
+                y: lastY,
+                prevX: lastX,
+                prevY: lastY
+            });
+        });
+
+        function drawImage(data) {
+            ctx.lineWidth = 5;
+            ctx.strokeStyle = 'black';
+            ctx.beginPath();
+            ctx.moveTo(data.prevX, data.prevY);
+            ctx.lineTo(data.x, data.y);
+            ctx.stroke();
+        }
+
+        function generateRandomId() {
+            return 'game_' + Math.random().toString(36).substr(2, 15);
+        }
+    </script>
+</body>
+</html>
