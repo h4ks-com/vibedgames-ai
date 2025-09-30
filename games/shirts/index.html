@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>4x4 Shirt Wallpaper Groups</title>
+<style>
+  html,body { height:100%; margin:0; background:#111; display:flex; align-items:center; justify-content:center; font-family:monospace; }
+  .grid { display:grid; grid-template-columns: repeat(4, 240px); grid-gap:20px; padding:20px; }
+  .cell { width:240px; height:300px; display:flex; align-items:center; justify-content:center; background:linear-gradient(180deg,#222,#151515); border-radius:8px; box-shadow:0 6px 18px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,0.02); }
+  svg { width:200px; height:240px; }
+  .label { position:relative; top:-18px; text-align:center; color:#ddd; font-size:12px; }
+</style>
+</head>
+<body>
+<div class="grid" id="grid"></div>
+
+<script>
+(function(){
+
+// Wallpaper group names (16 of 17)
+const GROUPS = ["p1","p2","pm","pg","cm","pmm","pmg","pgg","cmm","p3","p3m1","p31m","p4","p4m","p4g","p6"];
+
+// Parameters
+const seedSize = 16;            // 16x16 seed bitmap
+const pixelScale = 6;           // scale for rendering seed -> base tile (16*6 = 96)
+const baseSize = seedSize * pixelScale; // 96
+const tileScale = 1;            // additional magnification for tile canvases
+const tileBase = Math.floor(baseSize * tileScale); // base tile size
+
+// Utility: create a palette of 256 distinct colors (HSL)
+function makePalette(n=256){
+  const palette = [];
+  for(let i=0;i<n;i++){
+    const hue = Math.round(360 * i / n);
+    const sat = 55 + Math.floor(25 * Math.sin(i));
+    const light = 45 + Math.floor(15 * Math.cos(i*1.3));
+    palette.push(`hsl(${hue} ${sat}% ${light}%)`);
+  }
+  return palette;
+}
+
+// Create a random 16x16 seed (each pixel is chosen from palette)
+function makeSeed(palette){
+  const w = seedSize, h = seedSize;
+  const pixels = new Array(w*h);
+  for(let y=0;y<h;y++){
+    for(let x=0;x<w;x++){
+      const idx = Math.floor(Math.random()*palette.length);
+      pixels[y*w + x] = palette[idx];
+    }
+  }
+  return {w,h,pixels};
+}
+
+// Render seed into a scaled canvas (nearest neighbor pixel art)
+function seedToCanvas(seed, scale){
+  const cvs = document.createElement('canvas');
+  cvs.width = seed.w * scale;
+  cvs.height = seed.h * scale;
+  const ctx = cvs.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  for(let y=0;y<seed.h;y++){
+    for(let x=0;x<seed.w;x++){
+      ctx.fillStyle = seed.pixels[y*seed.w + x];
+      ctx.fillRect(x*scale, y*scale, scale, scale);
+    }
+  }
+  return cvs;
+}
+
+// Helpers to clone a canvas
+function canvasCopy(src, w, h){
+  const cvs = document.createElement('canvas');
+  cvs.width = w||src.width;
+  cvs.height = h||src.height;
+  const ctx = cvs.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(src, 0, 0);
+  return cvs;
+}
+
+// Transform-draw helper
+function drawTransformed(targetCtx, drawFn, tx=0, ty=0, rotate=0, scaleX=1, scaleY=1){
+  targetCtx.save();
+  targetCtx.translate(tx, ty);
+  if(rotate) targetCtx.rotate(rotate);
+  targetCtx.scale(scaleX, scaleY);
+  drawFn();
+  targetCtx.restore();
+}
+
+// Create different wallpaper-style tiles based on group name
+function makeTileForGroup(group, baseCanvas){
+  // Many groups produce tile sizes as multiples of base
+  let tileW = baseCanvas.width;
+  let tileH = baseCanvas.height;
+  let tile = null;
+  const bW = baseCanvas.width, bH = baseCanvas.height;
+
+  const ctxDrawImg = (ctx, img, x, y, w=bW, h=bH) => {
+    ctx.drawImage(img, x, y, w, h);
+  };
+
+  switch(group){
+    case "p1":
+      tileW = bW; tileH = bH;
+      tile = document.createElement('canvas'); tile.width = tileW; tile.height = tileH;
+      tile.getContext('2d').drawImage(baseCanvas,0,0);
+      break;
+
+    case "p2":
+      // 2x2 block with 180-degree alternation
+      tileW = bW*2; tileH = bH*2;
+      tile = document.createElement('canvas'); tile.width = tileW; tile.height = tileH;
+      const c2 = tile.getContext('2d'); c2.imageSmoothingEnabled=false;
+      c2.drawImage(baseCanvas,0,0);
+      // top-right rotated 180
+      drawTransformed(c2, ()=>ctxDrawImg(c2, baseCanvas,-bW,-bH), bW*2, 0, Math.PI);
+      // bottom-left rotated 180
+      drawTransformed(c2, ()=>ctxDrawImg(c2, baseCanvas,-bW,-bH), 0, bH, Math.PI);
+      // bottom-right same as top-left
+      c2.drawImage(baseCanvas,bW,bH);
+      break;
+
+    case "pm":
+      // vertical mirror axis between tiles: tile width = 2*base, right half mirrored
+      tileW = bW*2; tileH = bH;
+      tile = document.createElement('canvas'); tile.width = tileW; tile.height = tileH;
+      const cpm = tile.getContext('2d'); cpm.imageSmoothingEnabled=false;
+      cpm.drawImage(baseCanvas,0,0);
+      // mirror horizontally (scaleX=-1) and place in right half
+      cpm.save();
+      cpm.translate(tileW,0);
+      cpm.scale(-1,1);
+      cpm.drawImage(baseCanvas,0,0);
+      cpm.restore();
+      break;
+
+    case "pg":
+      // glide reflection: alternate rows shifted half tile and mirrored
+      tileW = bW*2; tileH = bH*2;
+      tile = document.createElement('canvas'); tile.width = tileW; tile.height = tileH;
+      const cpg = tile.getContext('2d'); cpg.imageSmoothingEnabled=false;
+      // top row: left base, right base mirrored
+      cpg.drawImage(baseCanvas,0,0);
+      cpg.save(); cpg.translate(bW*2,0); cpg.scale(-1,1); cpg.drawImage(baseCanvas,0,0); cpg.restore();
+      // bottom row shifted half tile and mirrored to create glide
+      cpg.save(); cpg.translate(bW/2,bH); cpg.drawImage(baseCanvas,0,0); cpg.restore();
+      cpg.save(); cpg.translate(bW/2 + bW*2,bH); cpg.scale(-1,1); cpg.drawImage(baseCanvas,0,0); cpg.restore();
+      break;
+
+    case "cm":
+      // centered mirror: brick-like with vertical mirrors and offset
+      tileW = bW*2; tileH = bH;
+      tile = document.createElement('canvas'); tile.width = tileW; tile.height = tileH;
+      const ccm = tile.getContext('2d'); ccm.imageSmoothingEnabled=false;
+      // left: base; right: base mirrored
+      ccm.drawImage(baseCanvas,0,0);
+      ccm.save(); ccm.translate(tileW,0); ccm.scale(-1,1); ccm.drawImage(baseCanvas,0,0); ccm.restore();
+      // overlay a half-shifted mirrored copy to create centering illusion
+      ccm.save(); ccm.globalAlpha = 0.15; ccm.drawImage(baseCanvas, bW/2, 0, bW, bH); ccm.restore();
+      break;
+
+    case "pmm":
+      // reflections across both axes: 2x2 symmetric
+      tileW = bW*2; tileH = bH*2;
+      tile = document.createElement('canvas'); tile.width = tileW; tile.height = tileH;
+      const cpmm = tile.getContext('2d'); cpmm.imageSmoothingEnabled=false;
+      // top-left original
+      cpmm.drawImage(baseCanvas,0,0);
+      // top-right reflected vertically
+      cpmm.save(); cpmm.translate(tileW,0); cpmm.scale(-1,1); cpmm.drawImage(baseCanvas,0,0); cpmm.restore();
+      // bottom-left reflected horizontally
+      cpmm.save(); cpmm.translate(0,tileH); cpmm.scale(1,-1); cpmm.drawImage(baseCanvas,0,0); cpmm.restore();
+      // bottom-right rotated 180
+      cpmm.save(); cpmm.translate(tileW,tileH); cpmm.scale(-1,-1); cpmm.drawImage(baseCanvas,0,0); cpmm.restore();
+      break;
+
+    case "pmg":
+      // vertical reflection combined with a glide/displaced reflections
+      tileW = bW*2; tileH = bH*2;
+      tile = document.createElement('canvas'); tile.width = tileW; tile.height = tileH;
+      const cpmg = tile.getContext('2d'); cpmg.imageSmoothingEnabled=false;
+      // top-left base
+      cpmg.drawImage(baseCanvas,0,0);
+      // top-right mirrored
+      cpmg.save(); cpmg.translate(tileW,0); cpmg.scale(-1,1); cpmg.drawImage(baseCanvas,0,0); cpmg.restore();
+      // bottom-left shifted and mirrored horizontally to create glide-like effect
+      cpmg.save(); cpmg.translate(bW/2,bH); cpmg.drawImage(baseCanvas,0,0); cpmg.restore();
+      cpmg.save(); cpmg.translate(bW/2 + tileW,bH); cpmg.scale(-1,1); cpmg.drawImage(baseCanvas,0,0); cpmg.restore();
+      break;
+
+    case "pgg":
+      // glide reflections both directions: mirrored blocks with offsets
+      tileW = bW*2; tileH = bH*2;
+      tile = document.createElement('canvas'); tile.width = tileW; tile.height = tileH;
+      const cpgg = tile.getContext('2d'); cpgg.imageSmoothingEnabled=false;
+      // arrange 4 tiles with alternating mirroring and half-shifts
+      cpgg.drawImage(baseCanvas,0,0);
+      cpgg.save(); cpgg.translate(tileW/2,0); cpgg.scale(-1,1); cpgg.drawImage(baseCanvas,0,0); cpgg.restore();
+      cpgg.save(); cpgg.translate(0,tileH/2); cpgg.scale(1,-1); cpgg.drawImage(baseCanvas,0,0); cpgg.restore();
+      cpgg.save(); cpgg.translate(tileW/2,tileH/2); cpgg.scale(-1,-1); cpgg.drawImage(baseCanvas,0,0); cpgg.restore();
+      break;
+
+    case "cmm":
+      // centered rectangular symmetry: reflect both axes but with center offsets
+      tileW = bW*2; tileH = bH*2;
+      tile = document.createElement('canvas'); tile.width = tileW; tile.height = tileH;
+      const ccmm = tile.getContext('2d'); ccmm.imageSmoothingEnabled=false;
+      // place base quadrants with reflections
+      ccmm.drawImage(baseCanvas,0,0);
+      ccmm.save(); ccmm.translate(tileW,0); ccmm.scale(-1,1); ccmm.drawImage(baseCanvas,0,0); ccmm.restore();
+      ccmm.save(); ccmm.translate(0,tileH); ccmm.scale(1,-1); ccmm.drawImage(baseCanvas,0,0); ccmm.restore();
+      ccmm.save(); ccmm.translate(tileW,tileH); ccmm.scale(-1,-1); ccmm.drawImage(baseCanvas,0,0); ccmm.restore();
+      // soft overlay for centering
+      ccmm.globalAlpha = 0.12;
+      ccmm.drawImage(baseCanvas, bW/2, bH/2);
+      ccmm.globalAlpha = 1;
+      break;
+
+    case "p3":
+      // 3-fold rotation lattice: create triangular arrangement with rotations 120/240
+      tileW = bW*3; tileH = bH*3;
+      tile = document.createElement('canvas'); tile.width = tileW; tile.height = tileH;
+      const cp3 = tile.getContext('2d'); cp3.imageSmoothingEnabled=false;
+      // place rotated versions around centers
+      const placeRot = (cx,cy,angle)=>{
+        cp3.save();
+        cp3.translate(cx,cy);
+        cp3.rotate(angle);
+        cp3.drawImage(baseCanvas, -bW/2, -bH/2);
+        cp3.restore();
+      };
+      // grid of centers giving triangular lattice
+      placeRot(bW, bH, 0);
+      placeRot(bW*1.5, bH*1.5, 2*Math.PI/3);
+      placeRot(bW*0.5, bH*1.5, 4*Math.PI/3);
+      placeRot(bW*2.5, bH*0.5, 2*Math.PI/3);
+      placeRot(bW*1.5, bH*0.5, 4*Math.PI/3);
+      break;
+
+    case "p3m1":
+      // 3-fold with mirrors: rotate + reflect some
+      tileW = bW*3; tileH = bH*3;
+      tile = document.createElement('canvas'); tile.width = tileW; tile.height = tileH;
+      const cp3m1 = tile.getContext('2d'); cp3m1.imageSmoothingEnabled=false;
+      // rotations
+      const pr = (cx,cy,a)=>{ cp3m1.save(); cp3m1.translate(cx,cy); cp3m1.rotate(a); cp3m1.drawImage(baseCanvas,-bW/2,-bH/2); cp3m1.restore(); };
+      pr(bW, bH, 0); pr(bW*1.5, bH*1.5, 2*Math.PI/3); pr(bW*0.5, bH*1.5, 4*Math.PI/3);
+      // add mirrors across verticals
+      cp3m1.save(); cp3m1.translate(tileW,0); cp3m1.scale(-1,1); cp3m1.globalAlpha = 0.4; cp3m1.drawImage(tile,0,0); cp3m1.restore();
+      cp3m1.globalAlpha = 1;
+      break;
+
+    case "p31m":
+      // another 3-fold with different mirror lattice: combine rotations with diagonal mirror
+      tileW = bW*3; tileH = bH*3;
+      tile = document.createElement('canvas'); tile.width = tileW; tile.height = tileH;
+      const cp31m = tile.getContext('2d'); cp31m.imageSmoothingEnabled=false;
+      const pr2 = (cx,cy,a)=>{ cp31m.save(); cp31m.translate(cx,cy); cp31m.rotate(a); cp31m.drawImage(baseCanvas,-bW/2,-bH/2); cp31m.restore(); };
+      pr2(bW, bH, 0); pr2(bW*1.5, bH*1.5, 2*Math.PI/3); pr2(bW*0.5, bH*1.5, 4*Math.PI/3);
+      // diagonal mirror overlay lightly
+      cp31m.save(); cp31m.translate(tileW/2, tileH/2); cp31m.rotate(Math.PI/4); cp31m.scale(-1,1); cp31m.globalAlpha = 0.2; cp31m.drawImage(baseCanvas,-bW/2,-bH/2); cp31m.restore();
+      cp31m.globalAlpha = 1;
+      break;
+
+    case "p4":
+      // square 4-fold: 2x2 with rotations 90 deg each quadrant
+      tileW = bW*2; tileH = bH*2;
+      tile = document.createElement('canvas'); tile.width = tileW; tile.height = tileH;
+      const cp4 = tile.getContext('2d'); cp4.imageSmoothingEnabled=false;
+      // top-left original
+      cp4.drawImage(baseCanvas,0,0);
+      // top-right rotated 90
+      cp4.save(); cp4.translate(bW*2,0); cp4.rotate(Math.PI/2); cp4.drawImage(baseCanvas,0,-bH); cp4.restore();
+      // bottom-left rotated 270
+      cp4.save(); cp4.translate(0,bH*2); cp4.rotate(-Math.PI/2); cp4.drawImage(baseCanvas,0,-bH); cp4.restore();
+      // bottom-right rotated 180
+      cp4.save(); cp4.translate(bW*2,bH*2); cp4.rotate(Math.PI); cp4.drawImage(baseCanvas, -bW, -bH); cp4.restore();
+      break;
+
+    case "p4m":
+      // 4-fold with mirror lines: combine rotations and diagonal mirrors
+      tileW = bW*2; tileH = bH*2;
+      tile = document.createElement('canvas'); tile.width = tileW; tile.height = tileH;
+      const cp4m = tile.getContext('2d'); cp4m.imageSmoothingEnabled=false;
+      cp4m.drawImage(baseCanvas,0,0);
+      cp4m.save(); cp4m.translate(tileW,0); cp4m.rotate(Math.PI/2); cp4m.drawImage(baseCanvas,0,-bH); cp4m.restore();
+      cp4m.save(); cp4m.translate(0,tileH); cp4m.rotate(-Math.PI/2); cp4m.drawImage(baseCanvas,0,-bH); cp4m.restore();
+      cp4m.save(); cp4m.translate(tileW,tileH); cp4m.rotate(Math.PI); cp4m.drawImage(baseCanvas,-bW,-bH); cp4m.restore();
+      // diagonal reflections to emphasize symmetry
+      cp4m.save(); cp4m.translate(tileW/2,tileH/2); cp4m.rotate(Math.PI/4); cp4m.globalAlpha=0.18; cp4m.drawImage(baseCanvas,-bW/2,-bH/2); cp4m.restore();
+      cp4m.globalAlpha=1;
+      break;
+
+    case "p4g":
+      // 4-fold with glide reflections: rotate and reflect alternating tiles
+      tileW = bW*2; tileH = bH*2;
+      tile = document.createElement('canvas'); tile.width = tileW; tile.height = tileH;
+      const cp4g = tile.getContext('2d'); cp4g.imageSmoothingEnabled=false;
+      cp4g.drawImage(baseCanvas,0,0);
+      cp4g.save(); cp4g.translate(bW,0); cp4g.scale(-1,1); cp4g.drawImage(baseCanvas,0,0); cp4g.restore();
+      cp4g.save(); cp4g.translate(0,bH); cp4g.rotate(Math.PI); cp4g.drawImage(baseCanvas, -bW, -bH); cp4g.restore();
+      cp4g.save(); cp4g.translate(bW,bH); cp4g.rotate(Math.PI/2); cp4g.drawImage(baseCanvas,-bW/2,-bH/2); cp4g.restore();
+      break;
+
+    case "p6":
+      // hexagonal / 6-fold: rotate base by 60-degree increments around center points in triangular grid
+      tileW = bW*3; tileH = bH*3;
+      tile = document.createElement('canvas'); tile.width = tileW; tile.height = tileH;
+      const cp6 = tile.getContext('2d'); cp6.imageSmoothingEnabled=false;
+      const placeRot6 = (cx,cy,ang)=>{
+        cp6.save(); cp6.translate(cx,cy); cp6.rotate(ang); cp6.drawImage(baseCanvas,-bW/2,-bH/2); cp6.restore();
+      };
+      // center cluster
+      const cx = tileW/2, cy = tileH/2;
+      for(let k=0;k<6;k++){
+        placeRot6(cx + Math.cos(k*Math.PI/3)*(bW*0.6), cy + Math.sin(k*Math.PI/3)*(bH*0.6), k*Math.PI/3);
+      }
+      // center itself
+      cp6.drawImage(baseCanvas, cx - bW/2, cy - bH/2);
+      break;
+
+    default:
+      // fallback: just base
+      tile = canvasCopy(baseCanvas);
+      break;
+  }
+
+  // final safety: ensure tile exists
+  if(!tile){
+    tile = canvasCopy(baseCanvas);
+  }
+  return tile;
+}
+
+
+// Shirt path (stylized) - returns an SVG path string
+function shirtPath(){
+  // A simple stylized shirt outline path scaled to viewBox 0 0 200 240
+  return "M50 20 Q70 6 100 20 Q130 6 150 20 L170 40 Q190 46 182 72 L150 88 Q152 120 152 140 L152 200 Q152 212 142 218 L58 218 Q48 212 48 200 L48 140 Q48 120 50 88 L18 72 Q10 46 30 40 Z";
+}
+
+// Build the SVGs and patterns
+function build(){
+  const grid = document.getElementById('grid');
+  const palette = makePalette(256);
+
+  GROUPS.forEach((group, idx) => {
+    // generate seed and base canvas
+    const seed = makeSeed(palette);
+    const baseCanvas = seedToCanvas(seed, pixelScale);
+    // generate tile for group
+    const tileCanvas = makeTileForGroup(group, baseCanvas);
+    // convert tile to data URL
+    const dataURL = tileCanvas.toDataURL("image/png");
+    // create cell container
+    const cell = document.createElement('div');
+    cell.className = 'cell';
+    // create SVG
+    const ns = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox','0 0 200 240');
+    // defs pattern
+    const defs = document.createElementNS(ns, 'defs');
+    const pattern = document.createElementNS(ns, 'pattern');
+    const pid = "pattern_" + idx + "_" + group;
+    pattern.setAttribute('id', pid);
+    // patternUnits = userSpaceOnUse to use pixel sizes
+    pattern.setAttribute('patternUnits','userSpaceOnUse');
+    // set pattern width/height to tileCanvas size scaled down to match SVG units
+    // We'll map canvas pixels so that tileCanvas.width -> 60 SVG units approx for good density
+    const displayTileW = 60;
+    const displayTileH = Math.round(displayTileW * (tileCanvas.height / tileCanvas.width));
+    pattern.setAttribute('width', displayTileW);
+    pattern.setAttribute('height', displayTileH);
+    pattern.setAttribute('patternContentUnits','userSpaceOnUse');
+
+    const image = document.createElementNS(ns, 'image');
+    image.setAttributeNS('http://www.w3.org/1999/xlink','href', dataURL);
+    image.setAttribute('x','0');
+    image.setAttribute('y','0');
+    image.setAttribute('width', displayTileW);
+    image.setAttribute('height', displayTileH);
+    image.setAttribute('preserveAspectRatio','none');
+    pattern.appendChild(image);
+    defs.appendChild(pattern);
+    svg.appendChild(defs);
+
+    // shirt path filled with pattern
+    const path = document.createElementNS(ns, 'path');
+    path.setAttribute('d', shirtPath());
+    path.setAttribute('fill', `url(#${pid})`);
+    path.setAttribute('stroke', 'rgba(0,0,0,0.6)');
+    path.setAttribute('stroke-width', '3');
+    path.setAttribute('stroke-linejoin', 'round');
+    path.setAttribute('stroke-linecap', 'round');
+    svg.appendChild(path);
+
+    // small collar highlight using translucent fill for depth
+    const collar = document.createElementNS(ns,'path');
+    collar.setAttribute('d','M78 28 Q100 18 122 28 L120 40 Q100 30 80 40 Z');
+    collar.setAttribute('fill','rgba(255,255,255,0.06)');
+    collar.setAttribute('stroke','rgba(255,255,255,0.04)');
+    collar.setAttribute('stroke-width','1');
+    svg.appendChild(collar);
+
+    // append label text below (group name)
+    const wrapper = document.createElement('div');
+    wrapper.style.display = 'flex';
+    wrapper.style.flexDirection = 'column';
+    wrapper.style.alignItems = 'center';
+    wrapper.style.gap = '6px';
+    wrapper.appendChild(svg);
+
+    const label = document.createElement('div');
+    label.className = 'label';
+    label.textContent = group;
+    wrapper.appendChild(label);
+
+    cell.appendChild(wrapper);
+    grid.appendChild(cell);
+  });
+}
+
+build();
+
+})();
+</script>
+</body>
+</html>
