@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Mondrian Avatars</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    html,body{height:100%;margin:0;display:flex;align-items:center;justify-content:center;background:#fafafa;font-family:sans-serif}
+    .wrap{display:flex;gap:20px;align-items:center}
+    .card{display:flex;flex-direction:column;gap:8px;align-items:center}
+    img.avatar{width:128px;height:128px;image-rendering:pixelated;border:4px solid #222;background:#fff}
+    a.link{display:inline-block;padding:6px 10px;background:#222;color:#fff;text-decoration:none;border-radius:6px;font-size:13px}
+    button{padding:8px 12px;border-radius:6px;border:0;background:#0077cc;color:#fff;cursor:pointer}
+    .controls{display:flex;flex-direction:column;gap:8px;align-items:center;margin-left:20px}
+    small{color:#666}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div id="avatars" style="display:flex;gap:18px"></div>
+    <div class="controls">
+      <button id="regen">Regenerate</button>
+      <a id="downloadAll" class="link" href="#" download="mondrian-avatars.zip">Download ZIP</a>
+      <small>Each PNG is 64×64</small>
+    </div>
+  </div>
+
+  <script>
+  // Generates Mondrian-style 64x64 avatars, shows them and provides download links.
+  (function(){
+    const SIZE = 64;
+    const LINE = 4; // black line thickness in px
+    const palette = ['#F94144','#F9C74F','#577590','#FFFFFF','#E9ECEF']; // red, yellow, blue, white, light gray
+
+    function randInt(min, max){ return Math.floor(Math.random()*(max-min+1))+min; }
+    function shuffle(a){ for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]} return a }
+
+    function makeSplits(minParts, maxParts){
+      const parts = randInt(minParts, maxParts);
+      const points = [0];
+      // generate (parts-1) internal splits between 12 and SIZE-12 to avoid too tiny cells
+      for(let i=0;i<parts-1;i++){
+        points.push(randInt(8, SIZE-8));
+      }
+      points.push(SIZE);
+      points.sort((a,b)=>a-b);
+      // ensure unique and minimal gap
+      let cleaned = [points[0]];
+      for(let i=1;i<points.length;i++){
+        if(points[i]-cleaned[cleaned.length-1] < 8){
+          // push further to keep gap, average them
+          const avg = Math.floor((points[i]+cleaned[cleaned.length-1])/2);
+          cleaned[cleaned.length-1] = Math.max(0, avg-4);
+          cleaned.push(Math.min(SIZE, avg+4));
+        } else cleaned.push(points[i]);
+      }
+      cleaned[0]=0; cleaned[cleaned.length-1]=SIZE;
+      return cleaned;
+    }
+
+    function drawMondrian(ctx){
+      // clear
+      ctx.clearRect(0,0,SIZE,SIZE);
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0,0,SIZE,SIZE);
+
+      const vSplits = makeSplits(2,4); // vertical boundaries array including 0 and SIZE
+      const hSplits = makeSplits(2,4); // horizontal boundaries
+      // Fill each cell
+      for(let i=0;i<vSplits.length-1;i++){
+        const x = vSplits[i], w = vSplits[i+1]-vSplits[i];
+        for(let j=0;j<hSplits.length-1;j++){
+          const y = hSplits[j], h = hSplits[j+1]-hSplits[j];
+          // choose color probabilities: white more likely, then occasional color
+          let weight = Math.random();
+          let color;
+          if(weight < 0.6) color = '#FFFFFF';
+          else if(weight < 0.8) color = palette[randInt(0,2)]; // pick among R,Y,B
+          else color = palette[4]; // light grey
+          // sometimes make a big rectangle colored by merging adjacent cells
+          ctx.fillStyle = color;
+          ctx.fillRect(x, y, w, h);
+        }
+      }
+
+      // Draw black lines
+      ctx.fillStyle = '#000000';
+      // verticals (skip 0 and SIZE)
+      for(let k=1;k<vSplits.length-1;k++){
+        const vx = vSplits[k] - Math.floor(LINE/2);
+        ctx.fillRect(vx, 0, LINE, SIZE);
+      }
+      // horizontals
+      for(let k=1;k<hSplits.length-1;k++){
+        const hy = hSplits[k] - Math.floor(LINE/2);
+        ctx.fillRect(0, hy, SIZE, LINE);
+      }
+      // outer border slightly thicker
+      ctx.fillRect(0,0,SIZE,Math.max(LINE,2));
+      ctx.fillRect(0,SIZE-Math.max(LINE,2),SIZE,Math.max(LINE,2));
+      ctx.fillRect(0,0,Math.max(LINE,2),SIZE);
+      ctx.fillRect(SIZE-Math.max(LINE,2),0,Math.max(LINE,2),SIZE);
+    }
+
+    function createAvatarBlobURL(canvas){
+      // return data URL and blob
+      const dataURL = canvas.toDataURL('image/png');
+      // create blob
+      const bstr = atob(dataURL.split(',')[1]);
+      let n = bstr.length;
+      const u8 = new Uint8Array(n);
+      while(n--) u8[n] = bstr.charCodeAt(n);
+      const blob = new Blob([u8], {type:'image/png'});
+      return {dataURL, blob};
+    }
+
+    function generateThree(){
+      const container = document.getElementById('avatars');
+      container.innerHTML = '';
+      const items = [];
+      for(let i=0;i<3;i++){
+        const canvas = document.createElement('canvas');
+        canvas.width = SIZE; canvas.height = SIZE;
+        const ctx = canvas.getContext('2d');
+        drawMondrian(ctx);
+
+        const {dataURL, blob} = createAvatarBlobURL(canvas);
+        const img = document.createElement('img');
+        img.className = 'avatar';
+        img.src = dataURL;
+        img.alt = 'avatar';
+
+        const link = document.createElement('a');
+        link.className = 'link';
+        link.href = dataURL;
+        link.download = 'mondrian-' + (i+1) + '.png';
+        link.textContent = 'Download PNG';
+
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.appendChild(img);
+        card.appendChild(link);
+        container.appendChild(card);
+
+        items.push({name: link.download, blob});
+      }
+      prepareZip(items);
+    }
+
+    // Tiny ZIP builder (minimal, in-memory) to pack the three PNGs for download without external libs.
+    // Implements a simple ZIP with store (no compression).
+    function prepareZip(items){
+      // helper to build central directory and local file headers
+      let files = [];
+      let offset = 0;
+      const encoder = new TextEncoder();
+
+      function u32(v){ return [v & 0xFF, (v>>8)&0xFF, (v>>16)&0xFF, (v>>24)&0xFF]; }
+      function u16(v){ return [v & 0xFF, (v>>8)&0xFF]; }
+
+      const fileRecords = [];
+
+      items.forEach((it)=>{
+        const nameBuf = encoder.encode(it.name);
+        const blob = it.blob;
+        // read blob as Uint8Array synchronously via FileReader is async; use slice + arrayBuffer
+        // But we are in sync context; we will instead use FileReader with Promise and rebuild zip after all are read.
+      });
+
+      // Use async path: read all blobs as arrayBuffers then build zip.
+      Promise.all(items.map(it => it.blob.arrayBuffer().then(buf => ({name: it.name, buf: new Uint8Array(buf)}))))
+        .then(list => {
+          let parts = [];
+          let centralParts = [];
+          let localOffset = 0;
+          list.forEach(file => {
+            const nameBytes = encoder.encode(file.name);
+            const data = file.buf;
+            const crc32 = crc32Of(data);
+            const compressedSize = data.length;
+            const uncompressedSize = data.length;
+            // local file header
+            const localHeader = [
+              // local file header signature
+              ...u32(0x04034b50),
+              // version needed to extract
+              ...u16(20),
+              // general purpose bit flag
+              ...u16(0),
+              // compression method (0 = store)
+              ...u16(0),
+              // last mod file time/date
+              ...u16(0), ...u16(0),
+              // crc32
+              ...u32(crc32),
+              // compressed size
+              ...u32(compressedSize),
+              // uncompressed size
+              ...u32(uncompressedSize),
+              // filename length
+              ...u16(nameBytes.length),
+              // extra field length
+              ...u16(0)
+            ];
+            parts.push(new Uint8Array(localHeader));
+            parts.push(nameBytes);
+            parts.push(data);
+            // central directory header
+            const centralHeader = [
+              ...u32(0x02014b50),
+              ...u16(0x14), // version made by
+              ...u16(20), // version needed
+              ...u16(0), // gp bit
+              ...u16(0), // compression
+              ...u16(0), ...u16(0),
+              ...u32(crc32),
+              ...u32(compressedSize),
+              ...u32(uncompressedSize),
+              ...u16(nameBytes.length),
+              ...u16(0), // extra
+              ...u16(0), // file comment length
+              ...u16(0), // disk number start
+              ...u16(0), // internal file attrs
+              ...u32(0), // external file attrs
+              ...u32(localOffset)
+            ];
+            centralParts.push(new Uint8Array(centralHeader));
+            centralParts.push(nameBytes);
+            localOffset += localHeader.length + nameBytes.length + data.length;
+          });
+
+          const centralSize = centralParts.reduce((s,p)=>s+(p.byteLength||p.length),0);
+          const centralOffset = parts.reduce((s,p)=>s+(p.byteLength||p.length),0);
+
+          const endRecord = [
+            ...u32(0x06054b50), // end of central dir signature
+            ...u16(0), // disk number
+            ...u16(0), // disk with start
+            ...u16(items.length), // entries this disk
+            ...u16(items.length), // total entries
+            ...u32(centralSize), // size of central dir
+            ...u32(centralOffset), // offset of central dir
+            ...u16(0) // comment length
+          ];
+          const allParts = parts.concat(centralParts).concat([new Uint8Array(endRecord)]);
+          const totalLen = allParts.reduce((s,p)=>s + p.byteLength, 0);
+          const output = new Uint8Array(totalLen);
+          let ptr = 0;
+          allParts.forEach(p=>{
+            output.set(new Uint8Array(p.buffer || p), ptr);
+            ptr += p.byteLength || p.length;
+          });
+          const zipBlob = new Blob([output], {type:'application/zip'});
+          const url = URL.createObjectURL(zipBlob);
+          const dl = document.getElementById('downloadAll');
+          dl.href = url;
+          dl.download = 'mondrian-avatars.zip';
+        });
+
+    }
+
+    // CRC32 helper
+    function crc32Of(u8){
+      let table = crc32Of.table;
+      if(!table){
+        table = crc32Of.table = new Uint32Array(256);
+        for(let i=0;i<256;i++){
+          let c = i;
+          for(let k=0;k<8;k++){
+            c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+          }
+          table[i] = c >>> 0;
+        }
+      }
+      let crc = 0xFFFFFFFF;
+      for(let i=0;i<u8.length;i++){
+        crc = (crc >>> 8) ^ table[(crc ^ u8[i]) & 0xFF];
+      }
+      return (crc ^ 0xFFFFFFFF) >>> 0;
+    }
+
+    document.getElementById('regen').addEventListener('click', generateThree);
+
+    // initial
+    generateThree();
+  })();
+  </script>
+</body>
+</html>
