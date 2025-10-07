@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Hanb: Universe Weaver — Single File</title>
+  <style>
+    :root{--bg:#0b1020;--card:#0f1724;--accent:#7dd3fc;--muted:#9ca3af;--glass: rgba(255,255,255,0.03)}
+    html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,'Helvetica Neue',Arial}
+    body{background:linear-gradient(180deg,#041025 0%, #071428 60%);color:#e6eef8;display:flex;gap:16px;padding:18px;box-sizing:border-box}
+    .app{display:flex;gap:16px;flex:1}
+    .pane{background:var(--card);border-radius:12px;padding:12px;box-shadow:0 6px 30px rgba(2,6,23,0.6);min-width:260px}
+    .left{flex:0 0 360px;display:flex;flex-direction:column;gap:12px}
+    .main{flex:1;display:flex;flex-direction:column;gap:12px;align-items:center}
+    h1{margin:6px 0;font-size:18px}
+    label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+    input[type=text],select,button{width:100%;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:var(--glass);color:inherit}
+    .controls{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .stat{display:flex;justify-content:space-between;align-items:center;padding:8px;border-radius:8px;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));}
+    .hex-wrap{width:960px;max-width:100%;background:linear-gradient(180deg, rgba(255,255,255,0.012), transparent);padding:12px;border-radius:12px}
+    svg{width:100%;height:auto;display:block}
+    .cell{cursor:pointer;transition:transform 120ms ease}
+    .cell:hover{transform:scale(1.06)}
+    .legend{display:flex;gap:8px;flex-wrap:wrap}
+    .emoji{font-size:20px;line-height:1}
+    .log{max-height:220px;overflow:auto;padding:8px;border-radius:8px;background:rgba(0,0,0,0.08);font-size:13px}
+    .btn-primary{background:linear-gradient(90deg,var(--accent),#60a5fa);border:none;color:#041025;font-weight:700}
+    .small{font-size:13px}
+    footer{font-size:12px;color:var(--muted);text-align:center;margin-top:8px}
+    @media(max-width:900px){.left{display:none}.hex-wrap{width:100%}}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="pane left">
+      <h1>Hanb: Universe Weaver</h1>
+      <div>
+        <label>Weaver Name</label>
+        <input id="weaverName" placeholder="Your Weaver (e.g. Silvia)" value="Silvia" />
+      </div>
+      <div>
+        <label>Seed (text or 64-char recommended)</label>
+        <input id="seedIn" placeholder="paste or generate seed" />
+      </div>
+      <div class="controls">
+        <button id="genSeed">Generate 64-char Seed</button>
+        <select id="scaleSelect" title="Board scale">
+          <option value="K">K (person)</option>
+          <option value="M">M (neighborhood)</option>
+          <option value="O" selected>O (city)</option>
+          <option value="R">R (planet)</option>
+          <option value=".">. (universe)</option>
+        </select>
+      </div>
+
+      <div style="margin-top:8px">
+        <div class="stat small"><span>Weave Points</span><strong id="weavePoints">0</strong></div>
+        <div class="stat small" style="margin-top:8px"><span>Current Scale</span><strong id="currentScale">O</strong></div>
+      </div>
+
+      <div style="margin-top:8px">
+        <label>Dice / Event</label>
+        <div style="display:flex;gap:8px">
+          <input id="eventString" placeholder="event string (optional)" />
+          <button id="rollBtn" class="btn-primary">Roll</button>
+        </div>
+      </div>
+
+      <div style="margin-top:8px">
+        <label>Log</label>
+        <div id="log" class="log"></div>
+      </div>
+
+      <footer>Single-file demo • Paper + Dice friendly • Seeds deterministic</footer>
+    </div>
+
+    <div class="pane main">
+      <div style="display:flex;gap:12px;width:100%;align-items:center;justify-content:space-between">
+        <div>
+          <label>Board Renderer</label>
+          <div class="small" id="boardInfo">61-hex board (radius 4) • click a cell to zoom</div>
+        </div>
+        <div>
+          <label>Legend</label>
+          <div class="legend" id="legend"></div>
+        </div>
+      </div>
+
+      <div class="hex-wrap">
+        <svg id="hexSVG" viewBox="0 0 1200 900" preserveAspectRatio="xMidYMid meet"></svg>
+      </div>
+
+    </div>
+  </div>
+
+<script>
+/*
+  Hanb: Universe Weaver - single-file implementation (simplified)
+  - deterministic seeded RNG
+  - 61-hex board (radius=4)
+  - seed -> emoji mapping
+  - click to zoom into a cell (creates derived seed)
+  - dice roll comparing event string vs cell string (simple logic)
+*/
+
+// ---------- Utilities ----------
+function hashStringToUint32(str){
+  let h=2166136261;
+  for(let i=0;i<str.length;i++){h ^= str.charCodeAt(i); h += (h<<1) + (h<<4) + (h<<7) + (h<<8) + (h<<24);} 
+  return h >>> 0;
+}
+function makeRng(seedText){
+  let state = hashStringToUint32(seedText || Date.now().toString());
+  return function(){ state ^= state << 13; state ^= state >>> 17; state ^= state << 5; return (state >>> 0) / 4294967295; };
+}
+
+// axial hex coordinates (q,r). radius 4 -> 61 cells (1 + 3r(r+1), r=4)
+function generateHexCoords(radius){
+  const out=[];
+  for(let q=-radius;q<=radius;q++){
+    let r1 = Math.max(-radius, -q-radius);
+    let r2 = Math.min(radius, -q+radius);
+    for(let r=r1;r<=r2;r++) out.push({q,r});
+  }
+  return out;
+}
+
+function axialToPixel(q,r,size,center){
+  const x = size * (Math.sqrt(3) * q + Math.sqrt(3)/2 * r) + center.x;
+  const y = size * (3/2 * r) + center.y;
+  return {x,y};
+}
+
+function hexPolygon(cx,cy,size){
+  let pts=[];
+  for(let i=0;i<6;i++){ const ang = Math.PI/180*(60*i-30); pts.push(`${cx + size*Math.cos(ang)},${cy + size*Math.sin(ang)}`); }
+  return pts.join(' ');
+}
+
+// map characters to emojis (simple palette)
+const EMOJI_PALETTE = [ '🌌','⭐','🌠','🌙','☄️','🏙️','🏡','🌳','🌲','🌊','🔥','⛰️','🏰','🔧','🔮','💎','🪨','🌾','🪐','🧬','🤖','👾','🧭','⚙️','🕳️','✨','🪶','🐈','🐀','🐉','🪴','🍎','🍞','🛖','🚪','🔒','⚡','💥','🧱','🚀','🛰️','🪟','🪤','🧪','🧿','🎭','📜','🔮','🔑','🎇','🧩','🗺️','⛏️','🛡️' ];
+
+function seedToCellString(seed, index, length){
+  // derive deterministic string from seed and index
+  const rng = makeRng(seed + '|' + index);
+  let s='';
+  for(let i=0;i< (length||16); i++){
+    const v = Math.floor(rng()*256);
+    s += ('00' + v.toString(16)).slice(-2);
+  }
+  return s;
+}
+
+function charToEmoji(ch){
+  const code = ch.charCodeAt(0);
+  return EMOJI_PALETTE[code % EMOJI_PALETTE.length];
+}
+
+function stringToEmojiCell(s){
+  // choose emoji from string chars
+  const idx = (s.split('').reduce((a,c)=>a + c.charCodeAt(0),0)) % EMOJI_PALETTE.length;
+  return EMOJI_PALETTE[idx];
+}
+
+// ---------- App State ----------
+const state = {
+  radius:4,
+  seed: 'aaaaaKKKsaMKMLaaNaaOaaKaLNMaaOaLaKNMaaaaKKNMKaaaaaNaaLaaLKLaaaLLAK',
+  scale: 'O',
+  weaver: 'Silvia',
+  path: [], // stack of zoomed seeds
+  weavePoints: 0
+};
+
+// ---------- DOM ----------
+const svg = document.getElementById('hexSVG');
+const seedIn = document.getElementById('seedIn');
+const genSeedBtn = document.getElementById('genSeed');
+const scaleSelect = document.getElementById('scaleSelect');
+const boardInfo = document.getElementById('boardInfo');
+const legendDiv = document.getElementById('legend');
+const weavePointsEl = document.getElementById('weavePoints');
+const currentScaleEl = document.getElementById('currentScale');
+const weaverName = document.getElementById('weaverName');
+const logEl = document.getElementById('log');
+const rollBtn = document.getElementById('rollBtn');
+const eventStringInput = document.getElementById('eventString');
+
+seedIn.value = state.seed;
+weaverName.value = state.weaver;
+scaleSelect.value = state.scale;
+
+// ---------- Render Legend ----------
+function renderLegend(){
+  legendDiv.innerHTML = '';
+  for(let i=0;i<8;i++){
+    const e = document.createElement('div'); e.className='emoji'; e.textContent = EMOJI_PALETTE[i]; legendDiv.appendChild(e);
+  }
+}
+renderLegend();
+
+// ---------- Board Generation & Render ----------
+function renderBoard(seed){
+  svg.innerHTML = '';
+  const coords = generateHexCoords(state.radius);
+  const size = 32; // hex size
+  const center = {x:600,y:430};
+  coords.forEach((c,idx)=>{
+    const p = axialToPixel(c.q,c.r,size,center);
+    const poly = document.createElementNS('http://www.w3.org/2000/svg','polygon');
+    poly.setAttribute('points', hexPolygon(p.x,p.y,size-2));
+    poly.setAttribute('class','cell');
+    poly.setAttribute('fill','rgba(255,255,255,0.02)');
+    poly.setAttribute('stroke','rgba(255,255,255,0.06)');
+    poly.setAttribute('data-idx', idx);
+    poly.style.filter = 'drop-shadow(0 2px 6px rgba(3,10,20,0.6))';
+
+    const cellStr = seedToCellString(seed, idx, 12);
+    poly.dataset.cell = cellStr;
+
+    poly.addEventListener('click', ()=>onCellClick(idx, cellStr, seed));
+
+    const text = document.createElementNS('http://www.w3.org/2000/svg','text');
+    text.setAttribute('x', p.x); text.setAttribute('y', p.y+6);
+    text.setAttribute('text-anchor','middle'); text.setAttribute('font-size','22');
+    text.setAttribute('class','emoji');
+    text.textContent = stringToEmojiCell(cellStr);
+
+    svg.appendChild(poly); svg.appendChild(text);
+  });
+
+  // title
+  const title = document.createElementNS('http://www.w3.org/2000/svg','text');
+  title.setAttribute('x',40); title.setAttribute('y',40); title.setAttribute('font-size',16); title.setAttribute('fill','#9fbedd');
+  title.textContent = `${weaverName.value || 'Weaver'} • seed: ${seed.slice(0,24)}${seed.length>24?'…':''}`;
+  svg.appendChild(title);
+}
+
+function onCellClick(idx, cellStr, parentSeed){
+  // zoom into cell -> derived seed
+  const derived = (parentSeed||state.seed) + '>' + idx + ':' + cellStr.slice(0,12);
+  state.path.push({seed: parentSeed, idx});
+  state.seed = derived;
+  seedIn.value = state.seed;
+  log(`Zoomed into cell ${idx}. Derived seed: ${derived.slice(0,30)}…`);
+  // award weave pts for exploration
+  state.weavePoints += 1; updateUI();
+  renderBoard(state.seed);
+}
+
+// ---------- Events & Resolution ----------
+function rollEvent(){
+  const eve = eventStringInput.value || '';
+  const rng = makeRng(state.seed + '|' + Date.now());
+  const roll = Math.floor(rng()*100) + 1;
+  // derive target from a random cell
+  const targetIdx = Math.floor(rng()*61);
+  const targetCell = seedToCellString(state.seed, targetIdx, 12);
+
+  log(`Roll: ${roll} vs target cell ${targetIdx} (${targetCell.slice(0,6)}...)`);
+
+  // simple bitwise comparison: success if shared nibble count > threshold
+  const matches = countHexMatches(eve, targetCell);
+  const threshold = 3; // simple
+  const success = matches >= threshold || roll > 75;
+
+  if(success){
+    state.weavePoints += 2;
+    log(`✅ Success! matches=${matches}. Weave +2.`);
+  } else {
+    // failure cascades: remove last path (scale decay)
+    log(`❌ Failure. matches=${matches}. Scale flicker!`);
+    if(state.path.length>0){
+      const popped = state.path.pop();
+      state.seed = popped.seed;
+      seedIn.value = state.seed;
+      log(`→ Scale collapse: returned to parent seed. (${state.path.length} levels remain)`);
+    } else {
+      state.weavePoints = Math.max(0, state.weavePoints - 1);
+      log('→ Unable to recover. Weave -1.');
+    }
+    renderBoard(state.seed);
+  }
+  updateUI();
+}
+
+function countHexMatches(a,b){
+  if(!a||!b) return 0;
+  let A = a.toString(); let B = b.toString();
+  let n = Math.min(A.length,B.length); let cnt=0;
+  for(let i=0;i<n;i++) if(A.charCodeAt(i)%16 === B.charCodeAt(i)%16) cnt++;
+  return cnt;
+}
+
+// ---------- UI Helpers ----------
+function log(msg){
+  const t = document.createElement('div'); t.textContent = `[${(new Date()).toLocaleTimeString()}] ${msg}`; logEl.prepend(t);
+}
+
+function updateUI(){
+  weavePointsEl.textContent = state.weavePoints;
+  currentScaleEl.textContent = state.scale;
+}
+
+// ---------- Controls ----------
+genSeedBtn.addEventListener('click', ()=>{
+  // generate 64-char hex seed
+  const rng = makeRng(Date.now().toString());
+  let s=''; for(let i=0;i<64;i++) s += Math.floor(rng()*16).toString(16);
+  seedIn.value = s;
+  state.seed = s; seedIn.dispatchEvent(new Event('change'));
+  renderBoard(state.seed);
+});
+
+seedIn.addEventListener('change', ()=>{ state.seed = seedIn.value || state.seed; renderBoard(state.seed); });
+scaleSelect.addEventListener('change', ()=>{ state.scale = scaleSelect.value; updateUI(); log(`Scale set to ${state.scale}`); });
+weaverName.addEventListener('change', ()=>{ state.weaver = weaverName.value; renderBoard(state.seed); });
+rollBtn.addEventListener('click', ()=>{ rollEvent(); });
+
+// initial render
+renderBoard(state.seed);
+updateUI();
+
+// extras: keyboard shortcuts
+window.addEventListener('keydown',(e)=>{
+  if(e.key === 'z' && (e.ctrlKey||e.metaKey)){
+    // undo zoom
+    if(state.path.length>0){
+      const p = state.path.pop(); state.seed = p.seed; seedIn.value = state.seed; renderBoard(state.seed); log('Undid zoom (scale stepped up)'); updateUI();
+    }
+  }
+});
+
+</script>
+</body>
+</html>
