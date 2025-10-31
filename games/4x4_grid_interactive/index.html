@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>4x4 Grid Interactive — Enhanced</title>
+  <style>
+    :root{
+      --light: #f0d9b5;
+      --dark:  #b58863;
+      --board-border: #333;
+      --hover: rgba(255,255,0,.5);
+      --accent: #4cd1ff;
+      --win: #6effa0;
+      --text: #fff;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto;
+      background: #101418;
+      color: var(--text);
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+    }
+
+    .wrapper {
+      padding: 12px;
+      width: min(92vmin, 900px);
+    }
+
+    /* Toolbar with actions and status */
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      border: 1px solid #2a2a2a;
+      border-radius: 12px;
+      background: linear-gradient(#1a1f2e, #141923);
+      box-shadow: 0 6px 20px rgba(0,0,0,.25);
+      margin-bottom: 12px;
+    }
+    .toolbar .group { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .toolbar button {
+      background: linear-gradient(#2a2a2a, #1a1a1a);
+      color: #fff;
+      border: 1px solid #3a3a3a;
+      padding: 8px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: transform .15s ease, background .2s ease;
+    }
+    .toolbar button:hover { transform: translateY(-1px); background: #2f2f2f; }
+    .toolbar button:active { transform: scale(0.98); }
+    .toolbar .info {
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono";
+      font-size: 14px;
+      color: #e8e8e8;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: #2a2a2a;
+      border: 1px solid #444;
+      font-size: 12px;
+    }
+
+    /* Layout: left axis + board side-by-side, bottom axis below the board */
+    .board-area {
+      display: flex;
+      align-items: stretch;
+      justify-content: center;
+      gap: 16px;
+      width: 100%;
+    }
+
+    /* Left axis showing ranks 4..1 from top to bottom to match coordinates */
+    .left-axis {
+      width: 52px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 0;
+      user-select: none;
+      color: #eee;
+      font-weight: 600;
+    }
+    .left-axis span {
+      line-height: 1;
+    }
+
+    /* Board grid: 4x4, squares are responsive and square via aspect-ratio */
+    .board {
+      --board-size: 1; /* placeholder, using aspect-ratio to stay square */
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      grid-template-rows: repeat(4, 1fr);
+      border: 3px solid var(--board-border);
+      background: #0000;
+      border-radius: 6px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .cell {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      display: block;
+      border: 1px solid rgba(0,0,0,.25);
+      transition: transform .15s ease;
+      cursor: pointer;
+    }
+    .cell.light { background: var(--light); }
+    .cell.dark  { background: var(--dark); }
+
+    /* Hover highlights a square */
+    .cell:hover {
+      outline: 4px solid var(--hover);
+      outline-offset: -4px;
+    }
+
+    /* Marker dot inside a square */
+    .dot {
+      position: absolute;
+      width: 58%;
+      height: 58%;
+      background: rgba(0,0,0,0.85);
+      border-radius: 50%;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      display: none;
+      animation: pop 260ms ease-out;
+    }
+    .cell.has-dot .dot { display: block; }
+
+    @keyframes pop {
+      0% { transform: translate(-50%, -50%) scale(0.6); opacity: 0; }
+      60% { transform: translate(-50%, -50%) scale(1.08); opacity: 1; }
+      100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+    }
+
+    /* Bottom axis under the board: a-d labels */
+    .bottom-axis {
+      width: 100%;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0;
+      margin-top: 8px;
+      padding-left: 52px; /* align with board's left axis width */
+    }
+    .bottom-axis .col-label {
+      text-align: center;
+      padding: 6px 0;
+      font-weight: 700;
+      color: #e9e9e9;
+    }
+
+    /* Hint highlight class (temporary) */
+    .cell.hint {
+      outline: 2px dashed rgba(0,255,0,.9);
+      outline-offset: -3px;
+      animation: hintPulse 1s ease-in-out;
+      animation-iteration-count: 1;
+    }
+    @keyframes hintPulse {
+      0% { box-shadow: 0 0 0 rgba(0,255,0,.0); }
+      50% { box-shadow: 0 0 24px rgba(0,255,0,.8); }
+      100% { box-shadow: 0 0 0 rgba(0,255,0,.0); }
+    }
+
+    /* Win glow effect */
+    .board.win {
+      animation: boardWin 0.9s ease-out;
+    }
+    @keyframes boardWin {
+      0% { filter: saturate(1); transform: scale(1); }
+      50% { filter: saturate(1.6); transform: scale(1.01); }
+      100% { filter: saturate(1); transform: scale(1); }
+    }
+
+    /* Responsive typography for small screens */
+    @media (max-width: 520px) {
+      .left-axis { width: 46px; font-size: 12px; }
+      .bottom-axis { padding-left: 46px; font-size: 12px; }
+      .toolbar { flex-direction: column; align-items: stretch; }
+    }
+
+    /* Confetti overlay canvas styling (hidden by default) */
+    #confettiCanvas {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      pointer-events: none;
+      z-index: 9999;
+    }
+
+  </style>
+</head>
+<body>
+  <div class="wrapper" id="app">
+    <div class="toolbar" id="toolbar" aria-label="Controls">
+      <div class="group" style="flex:1;">
+        <button data-action="new" title="Start a fresh pattern">New Pattern</button>
+        <button data-action="clear" title="Clear all selections">Clear</button>
+        <button data-action="randomize" title="Fill the grid randomly">Randomize</button>
+        <button data-action="undo" title="Undo last move">Undo</button>
+        <button data-action="redo" title="Redo last undone move">Redo</button>
+        <button data-action="hint" title="Show hints for target pattern">Hint</button>
+      </div>
+      <div class="group" aria-label="Status">
+        <span class="badge" id="movesBadge" title="Number of cell toggles">Moves: 0</span>
+        <span class="badge" id="statusLabel" title="Pattern status">Pattern: In progress</span>
+      </div>
+    </div>
+
+    <div class="board-area" aria-label="4x4 grid with axes">
+      <div class="left-axis" id="leftAxis" aria-label="Ranks (left)">
+        <span>4</span><span>3</span><span>2</span><span>1</span>
+      </div>
+      <div class="board" id="board" aria-label="Board grid"></div>
+    </div>
+
+    <div class="bottom-axis" id="bottomAxis" aria-label="Files (bottom)">
+      <!-- labels a d will be populated by JS to ensure alignment -->
+    </div>
+  </div>
+
+  <canvas id="confettiCanvas"></canvas>
+
+  <script>
+    // Enhanced 4x4 grid with interactive features, undo/redo, hints, and win celebration
+    (function init() {
+      const board = document.getElementById('board');
+      const bottomAxis = document.getElementById('bottomAxis');
+      const movesBadge = document.getElementById('movesBadge');
+      const statusLabel = document.getElementById('statusLabel');
+      const confettiCanvas = document.getElementById('confettiCanvas');
+      const ctx = confettiCanvas.getContext('2d');
+      const GRID = 4;
+      const TOTAL = GRID * GRID;
+
+      // Target pattern: a checker-like symmetrical design
+      const TARGET = [
+        true, false, true, false,
+        false, true, false, true,
+        true, false, true, false,
+        false, true, false, true
+      ];
+
+      // State
+      let grid = new Array(TOTAL).fill(false);
+      let undoStack = [];
+      let redoStack = [];
+      let moves = 0;
+      let winFlag = false;
+
+      // Create grid cells
+      for (let i = 0; i < TOTAL; i++) {
+        const cell = document.createElement('div');
+        cell.className = 'cell';
+        // Color parity: (x+y) even -> light, odd -> dark
+        const y = Math.floor(i / GRID);
+        const x = i % GRID;
+        const isLight = ((x + y) % 2 === 0);
+        cell.classList.add(isLight ? 'light' : 'dark');
+        cell.dataset.index = i;
+
+        // Dot element
+        const dot = document.createElement('div');
+        dot.classList.add('dot');
+        cell.appendChild(dot);
+
+        // Click toggles cell
+        cell.addEventListener('click', () => {
+          if (winFlag) return; // prevent changes after win
+          toggleCell(i);
+        });
+
+        // Keyboard accessibility
+        cell.setAttribute('tabindex', '0');
+        cell.addEventListener('keydown', (e) => {
+          const idx = i;
+          if (e.key === ' ' || e.key === 'Enter') {
+            e.preventDefault();
+            toggleCell(idx);
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault(); moveFocusTo(indexTo(i, -GRID)); // up
+          } else if (e.key === 'ArrowDown') {
+            e.preventDefault(); moveFocusTo(indexTo(i, GRID)); // down
+          } else if (e.key === 'ArrowLeft') {
+            e.preventDefault(); moveFocusTo(indexTo(i, -1)); // left
+          } else if (e.key === 'ArrowRight') {
+            e.preventDefault(); moveFocusTo(indexTo(i, 1)); // right
+          }
+        });
+
+        board.appendChild(cell);
+      }
+
+      // Build bottom axis labels a-d
+      const letters = ['a','b','c','d'];
+      for (let i = 0; i < GRID; i++) {
+        const lab = document.createElement('div');
+        lab.className = 'col-label';
+        lab.textContent = letters[i];
+        bottomAxis.appendChild(lab);
+      }
+
+      // Initialize by rendering starting grid
+      render();
+
+      // Toolbar actions
+      document.getElementById('toolbar').addEventListener('click', (e) => {
+        const btn = e.target.closest('button');
+        if (!btn) return;
+        const action = btn.getAttribute('data-action');
+        switch(action) {
+          case 'new': newPattern(); break;
+          case 'clear': clearGrid(); break;
+          case 'randomize': randomizeGrid(); break;
+          case 'undo': undoMove(); break;
+          case 'redo': redoMove(); break;
+          case 'hint': showHint(); break;
+        }
+      });
+
+      // Helpers
+      function indexTo(idx, delta) {
+        const x = idx % GRID;
+        const y = Math.floor(idx / GRID);
+        const nx = x + (delta % GRID);
+        const ny = y + Math.floor(delta / GRID);
+        const clampX = Math.max(0, Math.min(GRID - 1, nx));
+        // For delta that crosses rows, just clamp within bounds
+        const desiredIdx = ny * GRID + clampX;
+        if (desiredIdx < 0 || desiredIdx >= TOTAL) return -1;
+        return desiredIdx;
+      }
+
+      function moveFocusTo(targetIdx) {
+        if (targetIdx >= 0 && targetIdx < TOTAL) {
+          const cell = board.children[targetIdx];
+          if (cell) cell.focus();
+        }
+      }
+
+      function pushUndo(prevGrid) {
+        undoStack.push(prevGrid.slice());
+        // Clear redo on new action
+        redoStack = [];
+      }
+
+      function toggleCell(i) {
+        const prevGrid = grid.slice();
+        grid[i] = !grid[i];
+        pushUndo(prevGrid);
+        // visual
+        renderCell(i, grid[i]);
+        // animate
+        animateFlip(board.children[i]);
+        moves++;
+        updateStatus();
+        checkWin();
+      }
+
+      function renderCell(i, val) {
+        const cell = board.children[i];
+        if (!cell) return;
+        if (val) cell.classList.add('has-dot');
+        else cell.classList.remove('has-dot');
+      }
+
+      function render() {
+        for (let i = 0; i < TOTAL; i++) {
+          renderCell(i, grid[i]);
+        }
+      }
+
+      function animateFlip(el) {
+        if (!el) return;
+        el.style.transform = 'scale(0.92)';
+        requestAnimationFrame(() => {
+          el.style.transition = 'transform .15s ease';
+          el.style.transform = 'scale(1)';
+        });
+        setTimeout(() => {
+          el.style.transition = '';
+        }, 180);
+      }
+
+      function updateStatus(text) {
+        movesBadge.textContent = 'Moves: ' + moves;
+        // update progress vs target
+        const diff = grid.map((g, i) => g === TARGET[i]).filter(x => x).length;
+        // rough percentage
+        const matchCount = grid.reduce((acc, v, idx) => acc + (v === TARGET[idx] ? 1 : 0), 0);
+        statusLabel.textContent = `Pattern: ${matchCount}/${TOTAL} matching`;
+      }
+
+      function newPattern() {
+        const snapshot = grid.slice();
+        undoStack.push(snapshot); // allow undo to previous
+        redoStack = [];
+        grid = new Array(TOTAL).fill(false);
+        render();
+        moves = 0;
+        updateStatus();
+        clearWinState();
+      }
+
+      function clearGrid() {
+        const snapshot = grid.slice();
+        undoStack.push(snapshot);
+        redoStack = [];
+        grid.fill(false);
+        render();
+        moves = 0;
+        updateStatus();
+        clearWinState();
+      }
+
+      function randomizeGrid() {
+        const snapshot = grid.slice();
+        undoStack.push(snapshot);
+        redoStack = [];
+        for (let i = 0; i < TOTAL; i++) {
+          grid[i] = Math.random() < 0.5;
+        }
+        render();
+        moves += 5; // rough increment
+        updateStatus();
+        checkWin();
+      }
+
+      function undoMove() {
+        if (undoStack.length === 0) return;
+        const prev = undoStack.pop();
+        redoStack.push(grid.slice());
+        grid = prev.slice();
+        render();
+        moves = Math.max(0, moves - 1);
+        updateStatus();
+        clearWinState();
+      }
+
+      function redoMove() {
+        if (redoStack.length === 0) return;
+        const next = redoStack.pop();
+        undoStack.push(grid.slice());
+        grid = next.slice();
+        render();
+        moves += 1;
+        updateStatus();
+        checkWin();
+      }
+
+      function showHint() {
+        // highlight cells where grid != TARGET
+        const toHighlight = [];
+        for (let i = 0; i < TOTAL; i++) {
+          if (grid[i] !== TARGET[i]) toHighlight.push(i);
+        }
+        // apply hint class briefly
+        toHighlight.forEach(idx => {
+          const el = board.children[idx];
+          if (el) el.classList.add('hint');
+        });
+        setTimeout(() => {
+          toHighlight.forEach(idx => {
+            const el = board.children[idx];
+            if (el) el.classList.remove('hint');
+          });
+        }, 900);
+      }
+
+      function checkWin() {
+        let ok = true;
+        for (let i = 0; i < TOTAL; i++) {
+          if (grid[i] !== TARGET[i]) { ok = false; break; }
+        }
+        if (ok) {
+          winFlag = true;
+          statusLabel.textContent = 'Pattern matched! You win!';
+          board.classList.add('win');
+          launchConfetti();
+          // After win, disable further interaction for a moment
+          setTimeout(() => board.classList.remove('win'), 1000);
+        }
+      }
+
+      function clearWinState() {
+        winFlag = false;
+        statusLabel.textContent = 'Pattern: In progress';
+        board.classList.remove('win');
+      }
+
+      function launchConfetti() {
+        // Simple canvas-based confetti
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        confettiCanvas.width = w;
+        confettiCanvas.height = h;
+        const ctx = confettiCanvas.getContext('2d');
+        const pieces = 90;
+        const colors = ['#ff3a3a','#ffd33a','#3aff8f','#4ea8ff','#b84fff','#ff6bd6'];
+        const confettis = [];
+        for (let i = 0; i < pieces; i++) {
+          confettis.push({
+            x: Math.random() * w,
+            y: -Math.random() * h * 0.2,
+            vx: (Math.random() - 0.5) * 6,
+            vy: Math.random() * 6 + 2,
+            r: Math.random() * 6 + 4,
+            color: colors[Math.floor(Math.random() * colors.length)],
+            tilt: Math.random() * 0.5 - 0.25,
+            tiltV: Math.random() * 0.04,
+            life: Math.random() * 60 + 60
+          });
+        }
+
+        let t0 = performance.now();
+        function frame(now) {
+          const dt = (now - t0) / 16;
+          t0 = now;
+          ctx.clearRect(0,0,w,h);
+          confettis.forEach(p => {
+            p.x += p.vx * dt;
+            p.y += p.vy * dt;
+            p.vy += 0.15 * dt; // gravity
+            p.tilt += p.tiltV * dt;
+            p.life -= dt;
+            ctx.save();
+            ctx.translate(p.x, p.y);
+            ctx.rotate(p.tilt);
+            ctx.fillStyle = p.color;
+            ctx.fillRect(-p.r, -p.r/2, p.r * 2, p.r);
+            ctx.restore();
+          });
+          // remove dead
+          while (confettis.length && confettis[confettis.length - 1].life <= 0) confettis.pop();
+          if (confettis.length > 0) {
+            requestAnimationFrame(frame);
+          } else {
+            // cleanup
+            confettiCanvas.style.display = 'none';
+            ctx.clearRect(0,0,w,h);
+          }
+        }
+        confettiCanvas.style.display = 'block';
+        requestAnimationFrame(frame);
+      }
+
+      // Initial render
+      render();
+      updateStatus();
+
+      // Accessibility: focus first cell
+      if (board.children.length > 0) board.children[0].focus();
+
+    })();
+  </script>
+</body>
+</html>
