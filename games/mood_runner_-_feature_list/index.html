@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mood Runner</title>
+  <style>
+    :root {
+      --bg: #030312;
+      --panel: rgba(10, 10, 20, 0.6);
+      --text: #e6f7ff;
+      --muted: #9fb6c8;
+      --btn: #0b1a2b;
+      --glow: 0 0 20px rgba(0,255,255,0.8);
+    }
+    html, body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      background: #000;
+      color: var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+      overflow: hidden;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      background: #000;
+    }
+    /* HUD */
+    #hud {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      right: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      pointer-events: none;
+      z-index: 10;
+    }
+    #hud .panel {
+      background: rgba(0,0,0,0.25);
+      padding: 8px 12px;
+      border-radius: 10px;
+      backdrop-filter: blur(6px);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      pointer-events: auto;
+      box-shadow: 0 0 14px rgba(0,255,255,0.25);
+    }
+    #score {
+      font-weight: 700;
+      letter-spacing: .5px;
+    }
+    #moodLabel { font-weight: 700; text-transform: capitalize; }
+    .btn {
+      background: linear-gradient(#0f1b2a, #0a1322);
+      color: #e6feff;
+      border: 0;
+      padding: 8px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: transform 0.1s ease;
+    }
+    .btn:active { transform: scale(0.97); }
+    #muteBtn.active { box-shadow: var(--glow); }
+    #restartBtn { margin-left: 6px; }
+    #shareBtn { margin-left: 6px; }
+
+    /* Mood selector */
+    #moodSelector {
+      position: fixed;
+      left: 50%;
+      transform: translateX(-50%);
+      bottom: 12px;
+      z-index: 10;
+      display: inline-flex;
+      background: rgba(0,0,0,0.25);
+      border-radius: 999px;
+      padding: 6px;
+      gap: 6px;
+      pointer-events: auto;
+      backdrop-filter: blur(6px);
+    }
+    .moodBtn {
+      padding: 8px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.15);
+      background: rgba(255,255,255,0.04);
+      color: #e8f9ff;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      min-width: 72px;
+    }
+    .moodBtn.active {
+      background: rgba(0, 200, 255, 0.9);
+      color: #00131a;
+      box-shadow: 0 0 14px rgba(0,255,255,0.8);
+    }
+
+    /* Overlay for pause / game over */
+    #overlay {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0,0,0,0.5);
+      z-index: 20;
+      text-align: center;
+      padding: 20px;
+    }
+    #overlay.active { display: flex; }
+    #overlay .card {
+      background: rgba(0,0,0,0.75);
+      border: 1px solid rgba(255,255,255,0.15);
+      padding: 24px;
+      border-radius: 12px;
+      max-width: 90vw;
+    }
+    #overlay h1 { margin: 0 0 8px; font-size: 28px; }
+    #overlay p { color: #cbdff0; margin: 0 0 16px; }
+    @media (max-width: 700px) {
+      #hud { top: 8px; left: 8px; right: 8px; }
+      #moodSelector { bottom: 8px; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas"></canvas>
+
+  <div id="hud" aria-label="HUD">
+    <div class="panel" id="leftPanel">
+      <span id="moodLabel" style="margin-right:6px;">Mood: Calm</span>
+      <span id="score">Score: 0</span>
+    </div>
+    <div class="panel" id="rightPanel" style="gap:8px;">
+      <button class="btn" id="pauseBtn" title="Pause/Resume">Pause</button>
+      <button class="btn" id="muteBtn" title="Mute/Unmute">Mute</button>
+      <button class="btn" id="restartBtn" title="Restart">Restart</button>
+      <button class="btn" id="shareBtn" title="Share">Share</button>
+    </div>
+  </div>
+
+  <div id="moodSelector" aria-label="Mood Selector">
+    <button class="moodBtn" data-mood="calm" id="btnCalm">Calm</button>
+    <button class="moodBtn" data-mood="focus" id="btnFocus">Focus</button>
+    <button class="moodBtn" data-mood="energetic" id="btnEnergetic">Energetic</button>
+  </div>
+
+  <div id="overlay" role="dialog" aria-label="Game overlay">
+    <div class="card">
+      <h1 id="overlayTitle">Paused</h1>
+      <p id="overlayText" style="opacity:.9">Tap to resume. Jump with a tap anywhere.</p>
+      <div style="margin-top: 12px;">
+        <button class="btn" id="overlayResume" aria-label="Resume">Resume</button>
+        <button class="btn" id="overlayRestart" aria-label="Restart" style="margin-left:6px;">Restart</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Mood Runner - Vanilla JS
+
+    // Canvas setup
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    let W = window.innerWidth;
+    let H = window.innerHeight;
+    function resize() {
+      W = window.innerWidth;
+      H = window.innerHeight;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.style.width = W + 'px';
+      canvas.style.height = H + 'px';
+      canvas.width = Math.floor(W * dpr);
+      canvas.height = Math.floor(H * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      // Recompute ground level
+      groundY = H - 72;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // Mood definitions
+    const moods = {
+      calm: {
+        name: 'calm',
+        speed: 180,
+        gravity: 2100,
+        jumpVel: 820,
+        colorTop: '#2b6fb1',
+        colorBottom: '#0a1c3d',
+        bgTint: '#0a0f2b',
+        parallax: { clouds: 0.08, mountains: 0.03 },
+        obstacleChance: 0.6
+      },
+      focus: {
+        name: 'focus',
+        speed: 240,
+        gravity: 2000,
+        jumpVel: 880,
+        colorTop: '#4ac4ff',
+        colorBottom: '#1a0f2b',
+        bgTint: '#091a2b',
+        parallax: { clouds: 0.12, mountains: 0.04 },
+        obstacleChance: 0.75
+      },
+      energetic: {
+        name: 'energetic',
+        speed: 320,
+        gravity: 1800,
+        jumpVel: 980,
+        colorTop: '#ffd23a',
+        colorBottom: '#a41412',
+        bgTint: '#1b0c0a',
+        parallax: { clouds: 0.18, mountains: 0.06 },
+        obstacleChance: 0.9
+      }
+    };
+
+    // State
+    let currentMood = moods.calm;
+    let score = 0;
+    let dist = 0;
+    let paused = false;
+    let over = false;
+
+    // Audio
+    let audioCtx = null;
+    let soundOn = true;
+    function ensureAudio() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+    }
+    function beep(freq=440, duration=0.08) {
+      if (!soundOn) return;
+      ensureAudio();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.value = 0.08;
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      setTimeout(() => { osc.stop(); }, duration * 1000);
+    }
+    function toggleMute() {
+      soundOn = !soundOn;
+      const btn = document.getElementById('muteBtn');
+      if (soundOn) btn.classList.remove('active');
+      else btn.classList.add('active');
+    }
+
+    // Input
+    let jumpRequested = false;
+    function requestJump() {
+      jumpRequested = true;
+    }
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Space' || e.code === 'ArrowUp') {
+        if (!over && !paused) {
+          requestJump();
+        } else if (paused) {
+          resumeGame();
+        }
+      }
+    });
+    window.addEventListener('mousedown', () => {
+      if (!over && !paused) requestJump();
+      else if (paused) resumeGame();
+    });
+    window.addEventListener('touchstart', () => {
+      if (!over && !paused) requestJump();
+      else if (paused) resumeGame();
+    }, {passive:true});
+
+    // Entities
+    let groundY = H - 72;
+
+    const player = {
+      x: 120,
+      y: 0,
+      w: 42,
+      h: 58,
+      vy: 0,
+      onGround: false,
+      color: '#fff'
+    };
+
+    function resetPlayer() {
+      player.x = 120;
+      player.y = groundY - player.h;
+      player.vy = 0;
+      player.onGround = true;
+      player.color = '#fff';
+    }
+
+    const obstacles = [];
+    let obstacleTimer = 0;
+    function spawnObstacle() {
+      // random width/height
+      const w = 20 + Math.floor(Math.random() * 40);
+      const h = 28 + Math.floor(Math.random() * 60);
+      const x = W + Math.random() * 120;
+      const y = groundY - h;
+      obstacles.push({ x, y, w, h, passed: false, hue: Math.floor(Math.random()*360) });
+    }
+
+    // Background parallax
+    const clouds = [];
+    const mountains = [];
+    function initBackground() {
+      clouds.length = 0;
+      mountains.length = 0;
+      for (let i = 0; i < 6; i++) {
+        clouds.push({ x: Math.random() * W, y: 60 + Math.random()*80, s: 0.6 + Math.random()*0.8 });
+      }
+      for (let i = 0; i < 4; i++) {
+        mountains.push({ x: Math.random() * W, y: groundY - 60 - i*20, s: 0.8 + Math.random()*0.8 });
+      }
+    }
+    initBackground();
+
+    // Overlay and UI
+    const moodLabel = document.getElementById('moodLabel');
+    const scoreLabel = document.getElementById('score');
+    const pauseBtn = document.getElementById('pauseBtn');
+    const muteBtn = document.getElementById('muteBtn');
+    const restartBtn = document.getElementById('restartBtn');
+    const shareBtn = document.getElementById('shareBtn');
+    const overlay = document.getElementById('overlay');
+    const overlayTitle = document.getElementById('overlayTitle');
+    const overlayText = document.getElementById('overlayText');
+    const overlayResume = document.getElementById('overlayResume');
+    const overlayRestart = document.getElementById('overlayRestart');
+    const moodButtons = {
+      calm: document.getElementById('btnCalm'),
+      focus: document.getElementById('btnFocus'),
+      energetic: document.getElementById('btnEnergetic')
+    };
+    function setMood(moodName) {
+      currentMood = moods[moodName];
+      // update UI
+      Object.values(moodButtons).forEach(btn => btn.classList.remove('active'));
+      moodButtons[moodName].classList.add('active');
+      moodLabel.textContent = 'Mood: ' + currentMood.name;
+      // color tint refresh
+      // We will recolor player
+      player.color = moodName === 'calm' ? '#7bd5ff' : moodName === 'focus' ? '#a0fff2' : '#ffd966';
+      // reset spawn rate by obstacleChance
+      obstacleTimer = 0;
+    }
+    setMood('calm');
+    moodButtons.calm.classList.add('active');
+    moodButtons.calm.addEventListener('click', () => setMood('calm'));
+    moodButtons.focus.addEventListener('click', () => setMood('focus'));
+    moodButtons.energetic.addEventListener('click', () => setMood('energetic'));
+
+    function showOverlay(title, text) {
+      overlayTitle.textContent = title;
+      overlayText.textContent = text;
+      overlay.classList.add('active');
+      paused = true;
+    }
+    function hideOverlay() {
+      overlay.classList.remove('active');
+      // Do not modify paused here
+    }
+
+    overlayResume.addEventListener('click', resumeGame);
+    overlayRestart.addEventListener('click', restartGame);
+
+    function pauseGame() {
+      if (over) return;
+      paused = true;
+      showOverlay('Paused', 'Tap to resume. Jump with a tap anywhere.');
+    }
+
+    function resumeGame() {
+      if (over) return;
+      paused = false;
+      hideOverlay();
+      // resume audio context if suspended
+      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    }
+
+    pauseBtn.addEventListener('click', () => {
+      if (paused) resumeGame(); else pauseGame();
+    });
+
+    muteBtn.addEventListener('click', toggleMute);
+    restartBtn.addEventListener('click', restartGame);
+    shareBtn.addEventListener('click', async () => {
+      const text = `Mood Runner score: ${Math.floor(score)}. Mood: ${currentMood.name}. Can you beat it?`;
+      if (navigator.canShare) {
+        try {
+          await navigator.share({ title: 'Mood Runner', text });
+        } catch (e) {
+          // ignore
+        }
+      } else {
+        try {
+          await navigator.clipboard.writeText(text);
+          alert('Score copied to clipboard!');
+        } catch (e) {
+          // ignore
+        }
+      }
+    });
+
+    function restartGame() {
+      resetGame();
+      hideOverlay();
+    }
+
+    // Reset game
+    function resetGame() {
+      score = 0;
+      dist = 0;
+      obstacles.length = 0;
+      obstacleTimer = 0;
+      spawnObstacleIfNeeded(); // seed
+      resetPlayer();
+      initBackground();
+      over = false;
+      paused = false;
+      lastTime = performance.now();
+      // Start loop if not running
+    }
+
+    // Game loop
+    let lastTime = performance.now();
+
+    function update(dt) {
+      // dt clamped
+      const speed = currentMood.speed;
+      // Jump input
+      if (jumpRequested && player.onGround) {
+        player.vy = -currentMood.jumpVel;
+        player.onGround = false;
+        beep(520, 0.08);
+      }
+      jumpRequested = false;
+
+      // Gravity and position
+      player.vy += currentMood.gravity * dt;
+      player.y += player.vy * dt;
+
+      // Ground collision
+      if (player.y + player.h >= groundY) {
+        player.y = groundY - player.h;
+        player.vy = 0;
+        player.onGround = true;
+      }
+
+      // Move world and obstacles to the left
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        obstacles[i].x -= speed * dt;
+        // collision
+        const obs = obstacles[i];
+        if (!obs.passed && obs.x + obs.w < player.x) {
+          obs.passed = true;
+          // reward
+          dist += 1;
+        }
+        // remove
+        if (obs.x + obs.w < -10) {
+          obstacles.splice(i, 1);
+        }
+      }
+
+      // Spawn obstacles
+      obstacleTimer -= dt;
+      const minGap = 0.6;
+      if (obstacleTimer <= 0) {
+        // probability influenced by mood
+        const r = Math.random();
+        if (r < currentMood.obstacleChance * 0.6) {
+          spawnObstacle();
+        } else if (r < currentMood.obstacleChance) {
+          spawnObstacle();
+          // additional quick spawn
+          if (Math.random() < 0.4) spawnObstacle();
+        } else {
+          // small chance to spawn none
+        }
+        obstacleTimer = 0.9 + Math.random() * 0.8;
+      }
+
+      // Boundaries
+      if (player.y > groundY - player.h + 1) {
+        player.y = groundY - player.h;
+        player.vy = 0;
+        player.onGround = true;
+      }
+
+      // Score progress
+      dist += speed * dt * 0.8;
+      score = Math.floor(dist);
+
+      // Collisions with obstacles
+      for (let i = 0; i < obstacles.length; i++) {
+        const o = obstacles[i];
+        if (player.x < o.x + o.w && player.x + player.w > o.x &&
+            player.y < o.y + o.h && player.y + player.h > o.y) {
+          // game over
+          over = true;
+          paused = true;
+          showOverlay('Game Over', 'Tap Restart to try again.');
+          beep(120, 0.25);
+        }
+      }
+
+      // Simple particle-ish trail on jump
+      if (!player.onGround && Math.random() < 0.15) {
+        // little dust particle
+        spawnDust(player.x, player.y + player.h - 8);
+      }
+
+      // Update background parallax
+      for (let c of clouds) {
+        c.x -= currentMood.parallax.clouds * speed * dt;
+        if (c.x < -60) c.x = W + Math.random() * 200;
+        c.y += Math.sin(performance.now() * 0.001 + c.x) * 0.3;
+      }
+      for (let m of mountains) {
+        m.x -= currentMood.parallax.mountains * speed * dt;
+        if (m.x < -100) m.x = W + Math.random() * 600;
+      }
+
+      // Nice glow color change
+      player.color = moodColor(currentMood.name);
+
+      // Ensure groundY updated on resize
+      groundY = H - 72;
+    }
+
+    // Dust particles
+    const particles = [];
+    function spawnDust(x, y) {
+      particles.push({ x, y, life: 0.6, vx: -Math.random()*20 - 20, vy: -Math.random()*20, r: Math.random()*2+1 });
+    }
+
+    function updateDust(dt) {
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.vy += 40 * dt;
+        p.life -= dt;
+        if (p.life <= 0) particles.splice(i, 1);
+      }
+    }
+
+    // Rendering
+    function render() {
+      // background gradient
+      const mood = currentMood;
+      const grad = ctx.createLinearGradient(0, 0, 0, H);
+      grad.addColorStop(0, mood.colorTop);
+      grad.addColorStop(1, mood.colorBottom);
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, H);
+
+      // subtle vignette
+      ctx.fillStyle = 'rgba(0,0,0,0.08)';
+      ctx.fillRect(0, 0, W, H);
+
+      // parallax layers
+      // clouds
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      for (const c of clouds) {
+        ctx.globalAlpha = 0.8;
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, 18 * c.s, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        // cloud puff
+        ctx.fillStyle = 'rgba(255,255,255,0.6)';
+        ctx.beginPath();
+        ctx.arc(c.x + 14, c.y - 6, 10 * c.s, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+      }
+
+      // mountains
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      for (const m of mountains) {
+        const baseY = groundY - 60 * m.s;
+        ctx.beginPath();
+        ctx.moveTo(m.x, baseY);
+        ctx.lineTo(m.x + 80 * m.s, baseY - 40 * m.s);
+        ctx.lineTo(m.x + 160 * m.s, baseY);
+        ctx.lineTo(m.x + 80 * m.s, baseY + 60 * m.s);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      // ground stripe
+      ctx.fillStyle = 'rgba(20,20,20,0.6)';
+      ctx.fillRect(0, groundY, W, H - groundY);
+
+      // obstacles
+      for (const o of obstacles) {
+        ctx.fillStyle = 'hsl(' + o.hue + ', 70%, 50%)';
+        ctx.fillRect(o.x, o.y, o.w, o.h);
+      }
+
+      // player
+      ctx.fillStyle = player.color;
+      ctx.fillRect(player.x, player.y, player.w, player.h);
+
+      // jump trail particles
+      updateDust(dt);
+      for (const p of particles) {
+        ctx.fillStyle = 'rgba(255,255,255,' + (p.life) + ')';
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // HUD overlay not drawn here; DOM handles HUD
+      // score
+      scoreLabel.textContent = 'Score: ' + score;
+    }
+
+    function moodColor(name) {
+      if (name === 'calm') return '#a9e3ff';
+      if (name === 'focus') return '#6bfff0';
+      return '#ffd966';
+    }
+
+    function obstacleCollisionCheck() {
+      // handled in update
+    }
+
+    // Spawn one extra obstacle at start
+    function spawnObstacleIfNeeded() {
+      if (obstacles.length === 0) {
+        spawnObstacle();
+      }
+    }
+
+    // Main loop
+    function loop(now) {
+      if (!lastTime) lastTime = now;
+      const dt = Math.min(0.033, (now - lastTime) / 1000);
+      lastTime = now;
+
+      if (!paused && !over) {
+        update(dt);
+      }
+      render();
+      requestAnimationFrame(loop);
+    }
+
+    // Initialize
+    function init() {
+      // initial positions
+      groundY = Math.max(groundY, H - 72);
+      resetPlayer();
+      spawnObstacleIfNeeded();
+      requestJump(); // small action to show input
+      // Start loop
+      requestAnimationFrame(loop);
+    }
+
+    // Keyboard focus hint
+    window.addEventListener('click', () => {
+      // resume on first interaction if over/paused
+      if (paused && !over) {
+        resumeGame();
+      }
+    });
+
+    // Start
+    init();
+
+    // Expose jump via public function (used by input)
+    function requestJumpPublic() {
+      requestJump();
+    }
+
+    // Bind jump to canvas taps for accessibility
+    canvas.addEventListener('click', () => {
+      if (!paused && !over) requestJumpPublic();
+    });
+
+    // Make the canvas focusable for accessibility
+    canvas.setAttribute('tabindex', '0');
+    canvas.addEventListener('focus', () => {
+      // hint
+    });
+  </script>
+</body>
+</html>
