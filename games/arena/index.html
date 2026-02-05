@@ -3,58 +3,359 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Simple Web App</title>
+    <title>Robo-Wobble Chaos 3000</title>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            background-color: #f0f0f0;
-            margin: 0;
-            padding: 20px;
-        }
-        h1 {
-            color: #333;
-        }
-        #app {
-            background-color: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-            padding: 20px;
-            max-width: 600px;
-            margin: auto;
-        }
-        button {
-            background-color: #007bff;
-            color: white;
-            border: none;
-            padding: 10px 15px;
-            border-radius: 5px;
-            cursor: pointer;
-        }
-        button:hover {
-            background-color: #0056b3;
-        }
-        #output {
-            margin-top: 20px;
-            padding: 10px;
-            border: 1px solid #ccc;
-            border-radius: 5px;
-            background-color: #fafafa;
-        }
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Comic Sans MS', 'Chalkboard SE', sans-serif; user-select: none; }
+        #ui { position: absolute; top: 20px; left: 20px; color: #0ff; pointer-events: none; text-shadow: 2px 2px #f0f; }
+        h1 { margin: 0; font-size: 2rem; transform: rotate(-2deg); }
+        p { font-size: 1.2rem; color: #ff0; }
+        #instructions { position: absolute; bottom: 20px; width: 100%; text-align: center; color: #fff; pointer-events: none; animation: pulse 1s infinite alternate; }
+        @keyframes pulse { from { transform: scale(1); } to { transform: scale(1.1); } }
     </style>
 </head>
 <body>
-    <div id="app">
-        <h1>Welcome to My Web App</h1>
-        <p>Click the button below to see a greeting message!</p>
-        <button onclick="showGreeting()">Click Me!</button>
-        <div id="output"></div>
+    <div id="ui">
+        <h1>ROBO-WOBBLE CHAOS</h1>
+        <p>Score: <span id="score">0</span></p>
     </div>
+    <div id="instructions">CLICK to DASH & SMASH • Don't fall off!</div>
 
-    <script>
-        function showGreeting() {
-            const outputDiv = document.getElementById('output');
-            outputDiv.textContent = 'Hello, welcome to the simple web app!';
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
         }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        // --- AUDIO SYSTEM (Synthesizer for silly sounds) ---
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        
+        function playSound(type) {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            osc.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            if (type === 'jump') {
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(600, audioCtx.currentTime + 0.1);
+                gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.1);
+            } else if (type === 'hit') {
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(100, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(10, audioCtx.currentTime + 0.2);
+                gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.2);
+            } else if (type === 'score') {
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(400, audioCtx.currentTime);
+                osc.frequency.linearRampToValueAtTime(1200, audioCtx.currentTime + 0.1);
+                gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.3);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.3);
+            }
+        }
+
+        // --- SCENE SETUP ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x220033);
+        scene.fog = new THREE.FogExp2(0x220033, 0.02);
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(0, 15, 15);
+        camera.lookAt(0, 0, 0);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.enableZoom = false;
+
+        // --- LIGHTING ---
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xff00ff, 2);
+        dirLight.position.set(10, 20, 10);
+        dirLight.castShadow = true;
+        scene.add(dirLight);
+
+        const blueLight = new THREE.PointLight(0x00ffff, 3, 20);
+        blueLight.position.set(-5, 5, -5);
+        scene.add(blueLight);
+
+        // --- GAME OBJECTS ---
+        
+        // The Arena
+        const arenaGeo = new THREE.CylinderGeometry(12, 12, 1, 32);
+        const arenaMat = new THREE.MeshStandardMaterial({ 
+            color: 0x333333, 
+            roughness: 0.1,
+            metalness: 0.5,
+            emissive: 0x111111 
+        });
+        const arena = new THREE.Mesh(arenaGeo, arenaMat);
+        arena.position.y = -0.5;
+        arena.receiveShadow = true;
+        scene.add(arena);
+
+        const gridHelper = new THREE.PolarGridHelper(12, 16, 8, 64, 0xff00ff, 0x00ffff);
+        gridHelper.position.y = 0.01;
+        scene.add(gridHelper);
+
+        // Player Robot
+        const player = new THREE.Group();
+        
+        // Body (Wobbly Box)
+        const bodyGeo = new THREE.BoxGeometry(1.5, 1.5, 1.5);
+        const bodyMat = new THREE.MeshStandardMaterial({ color: 0xffff00 });
+        const body = new THREE.Mesh(bodyGeo, bodyMat);
+        body.castShadow = true;
+        player.add(body);
+
+        // Eyes (Googly)
+        const eyeGroup = new THREE.Group();
+        const eyeGeo = new THREE.SphereGeometry(0.4, 16, 16);
+        const eyeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        const pupilGeo = new THREE.SphereGeometry(0.15, 16, 16);
+        const pupilMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
+
+        function createEye(xPos) {
+            const eye = new THREE.Mesh(eyeGeo, eyeMat);
+            const pupil = new THREE.Mesh(pupilGeo, pupilMat);
+            pupil.position.z = 0.35;
+            eye.add(pupil);
+            eye.position.set(xPos, 0.2, 0.6);
+            return eye;
+        }
+
+        const leftEye = createEye(-0.4);
+        const rightEye = createEye(0.4);
+        eyeGroup.add(leftEye);
+        eyeGroup.add(rightEye);
+        player.add(eyeGroup);
+
+        scene.add(player);
+
+        // Enemies
+        const enemies = [];
+        const enemyGeo = new THREE.SphereGeometry(0.8, 16, 16);
+        const enemyMat = new THREE.MeshStandardMaterial({ color: 0xff0000, roughness: 0.2 });
+
+        function spawnEnemy() {
+            const enemy = new THREE.Mesh(enemyGeo, enemyMat);
+            // Random position on arena
+            const angle = Math.random() * Math.PI * 2;
+            const radius = Math.random() * 8 + 2;
+            enemy.position.set(Math.cos(angle) * radius, 0.8, Math.sin(angle) * radius);
+            enemy.castShadow = true;
+            
+            // Random velocity
+            enemy.userData = {
+                vel: new THREE.Vector3((Math.random()-0.5)*0.2, 0, (Math.random()-0.5)*0.2),
+                active: true
+            };
+            
+            scene.add(enemy);
+            enemies.push(enemy);
+        }
+
+        for(let i=0; i<5; i++) spawnEnemy();
+
+        // Particles
+        const particles = [];
+        const particleGeo = new THREE.BoxGeometry(0.2, 0.2, 0.2);
+        const particleMat = new THREE.MeshBasicMaterial({ color: 0x00ffff });
+
+        function createExplosion(pos, color) {
+            playSound('hit');
+            for(let i=0; i<10; i++) {
+                const mesh = new THREE.Mesh(particleGeo, new THREE.MeshBasicMaterial({ color: color }));
+                mesh.position.copy(pos);
+                mesh.userData = {
+                    vel: new THREE.Vector3((Math.random()-0.5)*0.5, Math.random()*0.5, (Math.random()-0.5)*0.5),
+                    life: 1.0
+                };
+                scene.add(mesh);
+                particles.push(mesh);
+            }
+        }
+
+        // --- GAME LOGIC ---
+        const mouse = new THREE.Vector2();
+        const raycaster = new THREE.Raycaster();
+        const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+        let targetPos = new THREE.Vector3(0, 0.75, 0);
+        let isDashing = false;
+        let dashTime = 0;
+        let score = 0;
+        const scoreEl = document.getElementById('score');
+
+        // Mouse Move
+        window.addEventListener('mousemove', (e) => {
+            mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+        });
+
+        // Click (Dash)
+        window.addEventListener('mousedown', () => {
+            if(!isDashing) {
+                isDashing = true;
+                dashTime = 0.2; // Dash duration
+                playSound('jump');
+                // Squash effect
+                body.scale.set(0.8, 1.4, 0.8);
+            }
+        });
+
+        // Resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Clock for animations
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = Math.min(clock.getDelta(), 0.1);
+            const time = clock.getElapsedTime();
+
+            // 1. Raycast to find target position on floor
+            raycaster.setFromCamera(mouse, camera);
+            const intersectPoint = new THREE.Vector3();
+            raycaster.ray.intersectPlane(plane, intersectPoint);
+            
+            if (intersectPoint) {
+                // Clamp to arena radius
+                const dist = Math.sqrt(intersectPoint.x**2 + intersectPoint.z**2);
+                if (dist > 10) intersectPoint.setLength(10);
+                targetPos.copy(intersectPoint);
+                targetPos.y = 0.75; // Keep player height
+            }
+
+            // 2. Player Movement (Drift/Ice physics)
+            const speed = isDashing ? 25 : 5;
+            const lerpFactor = isDashing ? 1.0 : 0.05;
+            
+            player.position.lerp(targetPos, delta * speed * lerpFactor);
+
+            // 3. The WOBBLE (Funny part)
+            body.rotation.x = (targetPos.z - player.position.z) * 0.2;
+            body.rotation.z = -(targetPos.x - player.position.x) * 0.2;
+            body.rotation.y += delta * 2; // Constant spin confusion
+
+            // Eye wobble
+            eyeGroup.position.y = Math.sin(time * 10) * 0.1;
+            leftEye.rotation.z = Math.sin(time * 15) * 0.2;
+            rightEye.rotation.z = Math.cos(time * 15) * 0.2;
+
+            // Handle Dash end
+            if(isDashing) {
+                dashTime -= delta;
+                if(dashTime <= 0) {
+                    isDashing = false;
+                    body.scale.set(1, 1, 1); // Reset squash
+                }
+            }
+
+            // 4. Enemy Logic & Collisions
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                const enemy = enemies[i];
+                if (!enemy.userData.active) continue;
+
+                // Move enemy
+                enemy.position.add(enemy.userData.vel);
+                
+                // Bounce off walls (Radius 12)
+                if (enemy.position.length() > 12) {
+                    enemy.userData.vel.reflect(enemy.position.clone().normalize());
+                }
+
+                // Player Collision
+                const distToPlayer = player.position.distanceTo(enemy.position);
+                if (distToPlayer < 1.5) {
+                    // Hit!
+                    const pushDir = enemy.position.clone().sub(player.position).normalize();
+                    enemy.userData.vel.add(pushDir.multiplyScalar(isDashing ? 1.5 : 0.5));
+                    
+                    // Spin enemy wildly
+                    enemy.rotation.x += 1;
+                    enemy.rotation.y += 1;
+
+                    // Screen shake (move camera slightly)
+                    camera.position.x += (Math.random()-0.5);
+                    camera.position.y += (Math.random()-0.5);
+
+                    if (isDashing) {
+                        createExplosion(enemy.position, 0xff0000);
+                    }
+                }
+
+                // Check if fell off
+                if (enemy.position.y < -5) {
+                    scene.remove(enemy);
+                    enemies.splice(i, 1);
+                    spawnEnemy(); // Replace
+                    score++;
+                    scoreEl.innerText = score;
+                    playSound('score');
+                    createExplosion(new THREE.Vector3(0, -5, 0), 0xffff00); // Confetti at bottom
+                }
+            }
+
+            // Check Player Fall
+            if (player.position.y < -5) {
+                score = 0;
+                scoreEl.innerText = score;
+                player.position.set(0, 10, 0);
+                playSound('hit');
+            }
+
+            // 5. Particles
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.userData.life -= delta;
+                p.position.add(p.userData.vel);
+                p.userData.vel.y -= delta * 2; // Gravity
+                p.rotation.x += delta;
+                p.scale.setScalar(p.userData.life);
+                
+                if (p.userData.life <= 0) {
+                    scene.remove(p);
+                    particles.splice(i, 1);
+                }
+            }
+
+            // Camera follow loosely
+            const camTarget = player.position.clone().add(new THREE.Vector3(0, 12, 12));
+            camera.position.lerp(camTarget, delta * 2);
+            camera.lookAt(player.position);
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        animate();
     </script>
 </body>
 </html>
