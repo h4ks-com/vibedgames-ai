@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Post-Apocalyptic Fetch & Survive (A-Frame)</title>
+<script src="https://aframe.io/releases/1.4.1/aframe.min.js"></script>
+<script src="https://unpkg.com/aframe-extras@6.1.1/dist/aframe-extras.min.js"></script>
+<script src="https://unpkg.com/aframe-super-hands-component@6.0.0/dist/aframe-super-hands.min.js"></script>
+<style>body { margin: 0; font-family: Arial, Helvetica, sans-serif; background: #000; color: #eee; } #hud { position: fixed; left: 12px; top: 12px; z-index: 999; background: rgba(6,10,12,0.6); padding:10px; border-radius:8px; font-size:14px; } #hud div{ margin-bottom:6px;} #overlay-instr { position: fixed; right: 12px; top: 12px; z-index:999; background: rgba(6,10,12,0.6); padding:10px; border-radius:8px; font-size:13px; max-width:320px; } a{color:#66d9ff}</style>
+</head>
+<body>
+<div id="hud">
+  <div><strong>Health:</strong> <span id="health">100</span></div>
+  <div><strong>Carrying:</strong> <span id="carrying">None</span></div>
+  <div><strong>Delivered:</strong> <span id="delivered">0</span></div>
+  <div><strong>Enemies alive:</strong> <span id="enemies">0</span></div>
+</div>
+<div id="overlay-instr">
+  Controls: VR controllers supported. Desktop: Left click = shoot, Right click = pick/drop, WASD to move, Space jump. <br/>
+  Objective: Find items (cans of beans, water, batteries), carry them in your left hand to the blue drop platform to deliver. Survive zombie and wild animal attacks.
+</div>
+
+<a-scene background="color: #101217" vr-mode-ui="enterVRButton: true" inspector="" renderer="colorManagement: true; physicallyCorrectLights: true">
+  <!-- Camera Rig -->
+  <a-entity id="playerRig" position="0 1.6 6">
+    <a-entity id="camera" camera look-controls wasd-controls="acceleration:30" position="0 0 0">
+      <a-entity cursor="fuse: false; rayOrigin: mouse" raycaster="objects: .interactable" visible="false"></a-entity>
+    </a-entity>
+
+    <!-- Left hand (for carrying) -->
+    <a-entity id="leftHand"
+              hand-controls="hand: left; handModelStyle: lowPoly; color: #FFFFFF"
+              super-hands="colliderEvent: raycaster-intersection; colliderEventProperty: intersects; grabStartButtons: grip; >
+              "
+              class="hand"
+              raycaster="objects: .interactable"
+              line="color: #66d9ff"
+              position="-0.25 0 -0.5"></a-entity>
+
+    <!-- Right hand (for gun) -->
+    <a-entity id="rightHand"
+              hand-controls="hand: right; handModelStyle: lowPoly; color: #FFFFFF"
+              class="hand"
+              position="0.25 0 -0.5"></a-entity>
+  </a-entity>
+
+  <!-- Lighting -->
+  <a-entity light="type: ambient; intensity: 0.6; color: #d7e6ff"></a-entity>
+  <a-entity light="type: directional; intensity: 0.7" position="-1 4 2"></a-entity>
+
+  <!-- Cityscape (simple block ruins) -->
+  <a-entity id="city" position="0 0 0">
+    <a-box position="-12 0.5 -12" depth="4" height="1" width="8" color="#2b2b2b"></a-box>
+    <a-box position="6 0.8 -10" depth="6" height="1.6" width="6" color="#333"></a-box>
+    <a-box position="-4 0.4 -6" depth="2" height="0.8" width="4" color="#2c2f33"></a-box>
+    <a-box position="10 0.6 -2" depth="2" height="1.2" width="6" color="#3a3838"></a-box>
+    <a-box position="-10 0.4 6" depth="6" height="0.8" width="4" color="#2b2b2b"></a-box>
+    <a-box position="4 0.6 10" depth="8" height="1.2" width="6" color="#393a3b"></a-box>
+
+    <!-- debris -->
+    <a-box position="0 0.1 -2" depth="1.4" height="0.2" width="1.4" color="#6b5e5e" rotation="10 20 0"></a-box>
+    <a-box position="1.8 0.1 -4" depth="0.6" height="0.2" width="0.6" color="#7b6f6f" rotation="0 40 5"></a-box>
+  </a-entity>
+
+  <!-- Ground -->
+  <a-plane rotation="-90 0 0" width="80" height="80" color="#2a2a2e" position="0 0 0"></a-plane>
+
+  <!-- Drop zone -->
+  <a-cylinder id="dropZone" position="0 0.02 -8" radius="1.2" height="0.04" color="#2b6fff" opacity="0.75"></a-cylinder>
+  <a-text value="DROP" position="0 0.12 -8" rotation="-90 0 0" color="#fff" align="center" width="2"></a-text>
+
+  <!-- Spawn container for dynamic objects -->
+  <a-entity id="spawns"></a-entity>
+
+  <!-- Enemy container -->
+  <a-entity id="enemiesRoot"></a-entity>
+
+  <!-- HUD helpers -->
+  <a-entity id="floatingUI" position="0 2 -1.5">
+    <a-text value="Post-Apocalyptic Fetch & Survive" color="#ffd080" align="center" width="2.8"></a-text>
+  </a-entity>
+
+  <!-- Components & Scripts -->
+  <script>
+    AFRAME.registerComponent('game-manager', {
+      schema: {},
+      init: function () {
+        const sceneEl = this.el.sceneEl;
+        // Game state
+        this.health = 100;
+        this.carried = null; // entity id
+        this.delivered = 0;
+        this.enemies = [];
+        this.spawnInterval = 7000;
+        this.animalInterval = 12000;
+        this.itemTypes = ['Beans', 'Water', 'Battery'];
+        this.spawnArea = { x: 18, z: 18 };
+        this.playerRig = document.querySelector('#playerRig');
+        this.leftHand = document.querySelector('#leftHand');
+        this.rightHand = document.querySelector('#rightHand');
+        this.spawns = document.querySelector('#spawns');
+        this.enemiesRoot = document.querySelector('#enemiesRoot');
+        this.dropZone = document.querySelector('#dropZone');
+
+        // HUD bindings
+        this.healthEl = document.getElementById('health');
+        this.carryEl = document.getElementById('carrying');
+        this.deliveredEl = document.getElementById('delivered');
+        this.enemiesEl = document.getElementById('enemies');
+
+        // Bind grab events (super-hands)
+        window.addEventListener('grab-start', (evt) => {
+          // event target is the element grabbed; detail.handEl is the hand entity
+          const grabbedEl = evt.detail ? evt.detail.handEl && evt.target === document.activeElement ? null : evt.target : evt.target;
+          // Determine grabbed element
+          const el = evt.target;
+          if (!el) return;
+          if (el.classList && el.classList.contains('collectible')) {
+            const handEl = (evt.detail && (evt.detail.handEl || evt.detail.hand)) || null;
+            const handId = handEl && handEl.id ? handEl.id : '';
+            // Only allow left hand to carry for scoring
+            if (handId.includes('left')) {
+              this.carried = el;
+              el.setAttribute('data-carried-by', 'left');
+              this.updateHUD();
+            } else {
+              // right hand grabbed; don't set carried for scoring, but still allow pick
+              el.setAttribute('data-carried-by', 'right');
+            }
+          }
+        });
+
+        window.addEventListener('grab-end', (evt) => {
+          const el = evt.target;
+          if (!el) return;
+          if (el.classList && el.classList.contains('collectible')) {
+            // if released near drop zone and was left-carried, deliver
+            const carriedBy = el.getAttribute('data-carried-by');
+            el.removeAttribute('data-carried-by');
+            if (carriedBy === 'left') {
+              // test distance to drop zone
+              const dzPos = this.dropZone.object3D.position;
+              const elPos = el.object3D.position;
+              const dist = dzPos.distanceTo(elPos);
+              if (dist < 1.6) {
+                // delivered
+                this.deliverItem(el);
+              }
+            }
+            // clear carried if it was our carried
+            if (this.carried === el) {
+              this.carried = null;
+              this.updateHUD();
+            }
+          }
+        });
+
+        // Right hand trigger to shoot
+        this.rightHand.addEventListener('triggerdown', () => {
+          this.shoot();
+        });
+
+        // Desktop mouse: left click shoot, right click pick/drop
+        sceneEl.canvas.addEventListener('mousedown', (e) => {
+          if (e.button === 0) { // left
+            this.shoot();
+          } else if (e.button === 2) { // right
+            // pick nearest collectible within range
+            this.desktopGrabOrDrop();
+          }
+        });
+
+        sceneEl.canvas.addEventListener('contextmenu', (e) => { e.preventDefault(); });
+
+        // Spawn initial items and enemies
+        this.spawnInitialItems();
+        this.enemySpawner = setInterval(()=> this.spawnZombie(), this.spawnInterval);
+        this.animalSpawner = setInterval(()=> this.spawnAnimal(), this.animalInterval);
+
+        // Update loop
+        this.tick = AFRAME.utils.throttleTick(this._tick.bind(this), 50);
+      },
+
+      updateHUD: function () {
+        this.healthEl.textContent = Math.max(0, Math.floor(this.health));
+        this.carryEl.textContent = this.carried ? this.carried.getAttribute('data-type') : 'None';
+        this.deliveredEl.textContent = this.delivered;
+        this.enemiesEl.textContent = this.enemies.length;
+      },
+
+      spawnInitialItems: function () {
+        const count = Math.max(6, parseInt(this.el.getAttribute('data') || 8));
+        for (let i = 0; i < count; i++) {
+          this.spawnCollectible();
+        }
+      },
+
+      spawnCollectible: function () {
+        const type = this.itemTypes[Math.floor(Math.random() * this.itemTypes.length)];
+        const x = (Math.random() - 0.5) * this.spawnArea.x;
+        const z = -4 + (Math.random() - 0.5) * this.spawnArea.z;
+        const y = 0.25;
+        const id = 'collect_' + Math.random().toString(36).substr(2, 9);
+        const wrapper = document.createElement('a-entity');
+        wrapper.setAttribute('class', 'collectible interactable');
+        wrapper.setAttribute('id', id);
+        wrapper.setAttribute('data-type', type);
+        wrapper.setAttribute('position', `${x} ${y} ${z}`);
+        // appearance: can-like for beans, bottle for water, box for battery
+        if (type === 'Beans') {
+          const can = document.createElement('a-cylinder');
+          can.setAttribute('radius', '0.18'); can.setAttribute('height', '0.28'); can.setAttribute('color', '#b3522a');
+          can.setAttribute('position', '0 0 0'); wrapper.appendChild(can);
+          const label = document.createElement('a-text'); label.setAttribute('value', 'BEANS'); label.setAttribute('align', 'center'); label.setAttribute('color', '#fff');
+          label.setAttribute('position', '0 0.22 0'); label.setAttribute('width', '0.6'); wrapper.appendChild(label);
+        } else if (type === 'Water') {
+          const bottle = document.createElement('a-cylinder'); bottle.setAttribute('radius', '0.12'); bottle.setAttribute('height', '0.36'); bottle.setAttribute('color', '#65b6ff');
+          bottle.setAttribute('position', '0 0 0'); wrapper.appendChild(bottle);
+        } else {
+          const box = document.createElement('a-box'); box.setAttribute('depth', '0.28'); box.setAttribute('width','0.28'); box.setAttribute('height','0.2'); box.setAttribute('color', '#9b9b9b');
+          wrapper.appendChild(box);
+          const label = document.createElement('a-text'); label.setAttribute('value', 'BAT'); label.setAttribute('align', 'center'); label.setAttribute('color', '#000');
+          label.setAttribute('position', '0 0.16 0'); label.setAttribute('width', '0.6'); wrapper.appendChild(label);
+        }
+        // make it grabbable via super-hands
+        wrapper.setAttribute('grabbable', '');
+        wrapper.setAttribute('stretchable', '');
+        wrapper.setAttribute('draggable', '');
+        wrapper.setAttribute('scale', '1 1 1');
+        this.spawns.appendChild(wrapper);
+      },
+
+      spawnZombie: function () {
+        // create a zombie entity that walks toward player
+        const x = (Math.random() - 0.5) * this.spawnArea.x;
+        const z = -4 + (Math.random() - 0.5) * this.spawnArea.z;
+        const id = 'z_' + Math.random().toString(36).substr(2, 9);
+        const zombie = document.createElement('a-entity');
+        zombie.setAttribute('position', `${x} 0 ${z}`);
+        zombie.setAttribute('id', id);
+        zombie.setAttribute('class', 'enemy');
+        zombie.setAttribute('health', '50');
+        // appearance: simple tall cylinder with red tint
+        const body = document.createElement('a-cylinder'); body.setAttribute('height', '1.6'); body.setAttribute('radius', '0.35'); body.setAttribute('color', '#6b2e2e'); body.setAttribute('position','0 0.8 0');
+        zombie.appendChild(body);
+        const head = document.createElement('a-sphere'); head.setAttribute('radius','0.25'); head.setAttribute('color','#8b5a5a'); head.setAttribute('position','0 1.6 0');
+        zombie.appendChild(head);
+        // movement component
+        zombie.setAttribute('zombie-ai', '');
+        this.enemiesRoot.appendChild(zombie);
+        this.enemies.push(zombie);
+        this.updateHUD();
+      },
+
+      spawnAnimal: function () {
+        // smaller faster attacker (wolf)
+        const x = (Math.random() - 0.5) * this.spawnArea.x;
+        const z = -4 + (Math.random() - 0.5) * this.spawnArea.z;
+        const id = 'a_' + Math.random().toString(36).substr(2, 9);
+        const animal = document.createElement('a-entity');
+        animal.setAttribute('position', `${x} 0 ${z}`);
+        animal.setAttribute('id', id);
+        animal.setAttribute('class', 'enemy animal');
+        animal.setAttribute('health', '30');
+        const body = document.createElement('a-box'); body.setAttribute('depth','0.6'); body.setAttribute('height','0.28'); body.setAttribute('width','0.9'); body.setAttribute('color','#444'); body.setAttribute('position','0 0.2 0');
+        animal.appendChild(body);
+        const head = document.createElement('a-box'); head.setAttribute('depth','0.3'); head.setAttribute('height','0.2'); head.setAttribute('width','0.2'); head.setAttribute('color','#222'); head.setAttribute('position','0.45 0.35 0');
+        animal.appendChild(head);
+        animal.setAttribute('animal-ai', '');
+        this.enemiesRoot.appendChild(animal);
+        this.enemies.push(animal);
+        this.updateHUD();
+      },
+
+      shoot: function () {
+        // fire a ray from rightHand forward
+        const origin = new THREE.Vector3();
+        const dir = new THREE.Vector3(0, 0, -1);
+        const rightHandObj = this.rightHand.object3D;
+        rightHandObj.getWorldPosition(origin);
+        rightHandObj.getWorldDirection(dir);
+        // find nearest enemy within cone and range
+        const maxDist = 25;
+        let target = null;
+        let bestScore = Infinity;
+        for (let i = 0; i < this.enemies.length; i++) {
+          const en = this.enemies[i];
+          if (!en.parentElement) continue;
+          const pos = en.object3D.position.clone();
+          en.object3D.getWorldPosition(pos);
+          const vecTo = pos.clone().sub(origin);
+          const dist = vecTo.length();
+          if (dist > maxDist) continue;
+          const angle = dir.angleTo(vecTo.normalize());
+          // accept small cone (~20 deg)
+          if (angle < 0.35) {
+            if (dist < bestScore) { bestScore = dist; target = en; }
+          }
+        }
+        // show muzzle flash line
+        const line = document.createElement('a-entity');
+        line.setAttribute('line', `start: ${origin.x} ${origin.y} ${origin.z}; end: ${origin.x + dir.x * 30} ${origin.y + dir.y * 30} ${origin.z + dir.z * 30}; color: #ffd89b`);
+        line.setAttribute('position', '0 0 0');
+        this.el.sceneEl.appendChild(line);
+        setTimeout(()=> line.parentNode && line.parentNode.removeChild(line), 80);
+        if (target) {
+          // reduce health
+          const h = parseFloat(target.getAttribute('health')) || 0;
+          const newH = h - (25 + Math.random() * 20);
+          target.setAttribute('health', newH);
+          if (newH <= 0) {
+            this.killEnemy(target);
+          } else {
+            // small knockback visual
+            target.object3D.position.x += (Math.random() - 0.5) * 0.1;
+            target.object3D.position.z += (Math.random() - 0.5) * 0.1;
+          }
+        }
+      },
+
+      killEnemy: function (enemyEl) {
+        // remove from scene with little animation
+        const idx = this.enemies.indexOf(enemyEl);
+        if (idx >= 0) this.enemies.splice(idx, 1);
+        enemyEl.setAttribute('visible', 'false');
+        setTimeout(()=> { if (enemyEl.parentNode) enemyEl.parentNode.removeChild(enemyEl); }, 600);
+        this.updateHUD();
+      },
+
+      deliverItem: function (el) {
+        // increment delivered count, remove item
+        this.delivered++;
+        this.updateHUD();
+        try { el.parentNode.removeChild(el); } catch(e){}
+        // spawn replacement
+        setTimeout(()=> this.spawnCollectible(), 700);
+      },
+
+      desktopGrabOrDrop: function () {
+        // attempt to pick nearest collectible within range 2.0
+        const cam = this.playerRig.object3D;
+        const origin = new THREE.Vector3();
+        cam.getWorldPosition(origin);
+        let nearest = null; let nd = 999;
+        const coll = Array.from(document.querySelectorAll('.collectible'));
+        coll.forEach(c => {
+          const p = c.object3D.position.clone(); c.object3D.getWorldPosition(p);
+          const d = p.distanceTo(origin);
+          if (d < 2.2 && d < nd) { nd = d; nearest = c; }
+        });
+        if (nearest) {
+          // pick or drop: if not carried, "carry" it
+          if (!this.carried) {
+            this.carried = nearest;
+            nearest.setAttribute('data-carried-by', 'left');
+            // attach to leftHand visually
+            this.leftHand.appendChild(nearest);
+            nearest.setAttribute('position', '0 -0.05 -0.2');
+            this.updateHUD();
+          } else {
+            // drop current carried
+            const cur = this.carried;
+            if (cur.parentNode === this.leftHand) {
+              // reparent to scene and place in front of player
+              cur.setAttribute('position', `${this.playerRig.object3D.position.x} 0.25 ${this.playerRig.object3D.position.z - 1.2}`);
+              document.querySelector('#spawns').appendChild(cur);
+            }
+            cur.removeAttribute('data-carried-by');
+            this.carried = null;
+            this.updateHUD();
+          }
+        }
+      },
+
+      _tick: function (time, delta) {
+        // process enemies approaching player and attacking
+        const playerPos = new THREE.Vector3();
+        this.playerRig.object3D.getWorldPosition(playerPos);
+        for (let i = this.enemies.length - 1; i >= 0; i--) {
+          const en = this.enemies[i];
+          if (!en.parentElement) { this.enemies.splice(i,1); continue; }
+          const enPos = en.object3D.position.clone(); en.object3D.getWorldPosition(enPos);
+          // step toward player
+          const dir = playerPos.clone().sub(enPos);
+          const dist = dir.length();
+          dir.normalize();
+          let speed = en.classList && en.classList.contains('animal') ? 0.14 : 0.06;
+          // animals faster
+          en.object3D.position.x += dir.x * speed;
+          en.object3D.position.z += dir.z * speed;
+          // rotate to face
+          const lookAt = new THREE.Vector3(playerPos.x, enPos.y + 0.6, playerPos.z);
+          en.object3D.lookAt(lookAt);
+          // if close enough, attack
+          if (dist < (en.classList && en.classList.contains('animal') ? 1.1 : 1.6)) {
+            // damage over time
+            if (!en.__lastAttack || (Date.now() - en.__lastAttack) > 800) {
+              en.__lastAttack = Date.now();
+              const damage = en.classList && en.classList.contains('animal') ? (8 + Math.random()*6) : (6 + Math.random()*8);
+              this.health -= damage;
+              this.updateHUD();
+              // small stun effect: move player back slightly
+              const rig = this.playerRig.object3D;
+              rig.position.x -= dir.x * 0.04;
+              rig.position.z -= dir.z * 0.04;
+              // if health <= 0, end game
+              if (this.health <= 0) {
+                this.endGame();
+                return;
+              }
+            }
+          }
+        }
+        // update HUD periodically
+        this.updateHUD();
+      },
+
+      endGame: function () {
+        // stop spawn loops
+        clearInterval(this.enemySpawner);
+        clearInterval(this.animalSpawner);
+        // show big game over text
+        const over = document.createElement('a-entity');
+        over.setAttribute('text', 'value: GAME OVER; align: center; width: 6; color: #ff6b6b;');
+        over.setAttribute('position', '0 2 -2');
+        this.el.sceneEl.appendChild(over);
+        log('Game Over. You delivered ' + this.delivered + ' items.');
+      }
+
+    });
+
+    AFRAME.registerComponent('zombie-ai', {
+      schema: {},
+      init: function () {
+        // nothing here; movement handled by game-manager tick
+      }
+    });
+
+    AFRAME.registerComponent('animal-ai', {
+      schema: {},
+      init: function () {}
+    });
+
+    // Attach game-manager to scene
+    document.addEventListener('DOMContentLoaded', () => {
+      const scene = document.querySelector('a-scene');
+      const gm = document.createElement('a-entity');
+      gm.setAttribute('game-manager', '');
+      scene.appendChild(gm);
+    });
+
+    // helper log for developer
+    function log(msg) {
+      const l = document.getElementById('logOutput');
+      console.log(msg);
+    }
+  </script>
+
+  <!-- Minimal ambient sound (wind) -->
+  <a-entity sound="src: https://cdn.aframe.io/basic-guide/audio/backgroundnoise.wav; autoplay: true; loop: true; volume: 0.2"></a-entity>
+
+  <!-- Sky -->
+  <a-sky color="#101215"></a-sky>
+</a-scene>
+</body>
+</html>
