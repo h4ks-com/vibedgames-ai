@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nag Simulator 3D</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Roboto:wght@400;700&display=swap');
+
+        :root {
+            --primary-color: #ff5252;
+            --secondary-color: #448aff;
+            --bg-overlay: rgba(0, 0, 0, 0.85);
+            --text-color: #ffffff;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: 'Roboto', sans-serif;
+            background-color: #1a1a1a;
+            user-select: none;
+        }
+
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* UI Overlay */
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        /* HUD */
+        .hud-top {
+            padding: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+
+        .meter-container {
+            background: rgba(0, 0, 0, 0.5);
+            padding: 10px 20px;
+            border-radius: 8px;
+            border: 2px solid #fff;
+            color: white;
+            font-family: 'Press Start 2P', cursive;
+            font-size: 12px;
+            min-width: 200px;
+        }
+
+        .meter-label {
+            margin-bottom: 5px;
+            display: block;
+        }
+
+        .meter-bar-bg {
+            width: 100%;
+            height: 20px;
+            background: #333;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        #laziness-bar {
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, #4caf50, #ffeb3b, #f44336);
+            transform-origin: left;
+            transition: width 0.3s ease-out;
+        }
+
+        /* Crosshair */
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 10px;
+            height: 10px;
+            background-color: rgba(255, 255, 255, 0.8);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            border: 2px solid black;
+            pointer-events: none;
+        }
+
+        /* Interaction Prompt */
+        #interaction-prompt {
+            position: absolute;
+            top: 55%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-family: 'Press Start 2P', cursive;
+            font-size: 10px;
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+
+        /* Dialogue Bubble */
+        #dialogue-box {
+            position: absolute;
+            bottom: 20%;
+            left: 50%;
+            transform: translate(-50%, 0);
+            background: white;
+            color: black;
+            padding: 15px 25px;
+            border-radius: 15px;
+            font-weight: bold;
+            font-size: 18px;
+            max-width: 400px;
+            text-align: center;
+            opacity: 0;
+            transition: opacity 0.3s, transform 0.3s;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            pointer-events: none;
+        }
+        
+        #dialogue-box::after {
+            content: '';
+            position: absolute;
+            bottom: -10px;
+            left: 50%;
+            transform: translateX(-50%);
+            border-width: 10px 10px 0;
+            border-style: solid;
+            border-color: white transparent transparent transparent;
+        }
+
+        /* Screens */
+        .screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: var(--bg-overlay);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: var(--text-color);
+            pointer-events: auto;
+            z-index: 10;
+            text-align: center;
+        }
+
+        h1 {
+            font-family: 'Press Start 2P', cursive;
+            color: var(--primary-color);
+            font-size: 40px;
+            margin-bottom: 20px;
+            text-shadow: 4px 4px 0px #000;
+            line-height: 1.5;
+        }
+
+        p {
+            font-size: 18px;
+            max-width: 600px;
+            margin-bottom: 30px;
+            line-height: 1.6;
+        }
+
+        button {
+            background: var(--secondary-color);
+            color: white;
+            border: none;
+            padding: 15px 40px;
+            font-size: 20px;
+            font-family: 'Press Start 2P', cursive;
+            cursor: pointer;
+            border-radius: 5px;
+            transition: transform 0.1s, background 0.2s;
+            box-shadow: 0 6px 0 #2c3e50;
+        }
+
+        button:hover {
+            background: #2979ff;
+            transform: translateY(-2px);
+        }
+
+        button:active {
+            transform: translateY(4px);
+            box-shadow: 0 0 0 #2c3e50;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        /* Shake effect class */
+        .shake {
+            animation: shake 0.5s cubic-bezier(.36,.07,.19,.97) both;
+        }
+
+        @keyframes shake {
+            10%, 90% { transform: translate3d(-1px, 0, 0); }
+            20%, 80% { transform: translate3d(2px, 0, 0); }
+            30%, 50%, 70% { transform: translate3d(-4px, 0, 0); }
+            40%, 60% { transform: translate3d(4px, 0, 0); }
+        }
+
+        .keys {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 20px;
+        }
+        .key {
+            border: 2px solid white;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-weight: bold;
+        }
+
+    </style>
+    <!-- Import Map for Three.js -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <div id="game-container">
+        <!-- WebGL Canvas will be injected here -->
+        
+        <!-- UI Overlay -->
+        <div id="ui-layer">
+            <div class="hud-top">
+                <div class="meter-container">
+                    <span class="meter-label">LAZINESS LEVEL</span>
+                    <div class="meter-bar-bg">
+                        <div id="laziness-bar" style="width: 100%;"></div>
+                    </div>
+                </div>
+                <div class="meter-container" style="text-align: right;">
+                    <span class="meter-label">NAGS</span>
+                    <span id="score-display" style="font-size: 20px; color: #ffeb3b;">0</span>
+                </div>
+            </div>
+
+            <div id="crosshair"></div>
+            <div id="interaction-prompt">CLICK TO YELL</div>
+            <div id="dialogue-box">...zzz...</div>
+        </div>
+
+        <!-- Start Screen -->
+        <div id="start-screen" class="screen">
+            <h1>NAG SIMULATOR<br>3D</h1>
+            <p>It's Sunday. The dishes are piling up. The trash needs to go out. And he's just... sitting there.</p>
+            <p>Walk around the apartment, find your lazy boyfriend, and yell at him until he does something.</p>
+            <div class="keys">
+                <span class="key">W</span>
+                <span class="key">A</span>
+                <span class="key">S</span>
+                <span class="key">D</span>
+                <span class="key">MOUSE</span>
+            </div>
+            <br>
+            <button id="start-btn">START NAGGING</button>
+        </div>
+
+        <!-- End Screen -->
+        <div id="end-screen" class="screen hidden">
+            <h1>MOTIVATION ACHIEVED!</h1>
+            <p id="end-msg">He finally got off the couch. The apartment is safe (for now).</p>
+            <p>Total Nags: <span id="final-score">0</span></p>
+            <button id="restart-btn">DO IT AGAIN</button>
+        </div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+
+        // --- Game Config ---
+        const PLAYER_HEIGHT = 1.7;
+        const MOVEMENT_SPEED = 5.0;
+        const RUN_SPEED = 8.0;
+        const ROOM_SIZE = { width: 10, depth: 12, height: 4 };
+        
+        // --- State ---
+        let scene, camera, renderer, controls;
+        let raycaster;
+        let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
+        let prevTime = performance.now();
+        let velocity = new THREE.Vector3();
+        let direction = new THREE.Vector3();
+        let isGameActive = false;
+        
+        // Game Logic State
+        let laziness = 100;
+        let nags = 0;
+        let boyfriendGroup;
+        let dialogueTimeout;
+        let isBoyfriendActive = true;
+        
+        // DOM Elements
+        const startScreen = document.getElementById('start-screen');
+        const endScreen = document.getElementById('end-screen');
+        const lazinessBar = document.getElementById('laziness-bar');
+        const scoreDisplay = document.getElementById('score-display');
+        const finalScoreDisplay = document.getElementById('final-score');
+        const dialogueBox = document.getElementById('dialogue-box');
+        const interactionPrompt = document.getElementById('interaction-prompt');
+        const startBtn = document.getElementById('start-btn');
+        const restartBtn = document.getElementById('restart-btn');
+
+        // --- Text Data ---
+        const NAGS_LIST = [
+            "DO THE DISHES!",
+            "YOU SAID AN HOUR AGO!",
+            "GET OFF THE PHONE!",
+            "TRASH! NOW!",
+            "I'M NOT YOUR MAID!",
+            "LOOK AT THIS MESS!",
+            "UNBELIEVABLE.",
+            "ARE YOU KIDDING ME?",
+            "GET A JOB!",
+            "WAKE UP!"
+        ];
+
+        const EXCUSES_LIST = [
+            "Chill, babe...",
+            "I'm resting.",
+            "In a minute.",
+            "What mess?",
+            "You're crazy.",
+            "My back hurts.",
+            "I'm watching this.",
+            "Let me finish this level.",
+            "It's Sunday!",
+            "Ugh, fine..."
+        ];
+
+        // --- Initialization ---
+        function init() {
+            // Scene Setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB); // Sky blue window light
+            scene.fog = new THREE.Fog(0x87CEEB, 0, 20);
+
+            // Camera
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.y = PLAYER_HEIGHT;
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.getElementById('game-container').appendChild(renderer.domElement);
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(5, 10, 5);
+            dirLight.castShadow = true;
+            dirLight.shadow.camera.top = 10;
+            dirLight.shadow.camera.bottom = -10;
+            dirLight.shadow.camera.left = -10;
+            dirLight.shadow.camera.right = 10;
+            scene.add(dirLight);
+
+            // Controls
+            controls = new PointerLockControls(camera, document.body);
+            
+            // Event Listeners for Controls
+            startBtn.addEventListener('click', startGame);
+            restartBtn.addEventListener('click', resetGame);
+            controls.addEventListener('lock', () => { isGameActive = true; });
+            controls.addEventListener('unlock', () => { if (laziness > 0) isGameActive = false; });
+
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('keyup', onKeyUp);
+            document.addEventListener('click', onMouseClick);
+            window.addEventListener('resize', onWindowResize);
+
+            // Raycaster
+            raycaster = new THREE.Raycaster();
+
+            // Build World
+            buildRoom();
+            buildFurniture();
+            buildBoyfriend();
+
+            // Start Loop
+            animate();
+        }
+
+        // --- World Building ---
+
+        function buildRoom() {
+            // Floor
+            const floorGeo = new THREE.PlaneGeometry(ROOM_SIZE.width, ROOM_SIZE.depth);
+            const floorMat = new THREE.MeshStandardMaterial({ 
+                color: 0x8d6e63, 
+                roughness: 0.8 
+            });
+            const floor = new THREE.Mesh(floorGeo, floorMat);
+            floor.rotation.x = -Math.PI / 2;
+            floor.receiveShadow = true;
+            scene.add(floor);
+
+            // Walls
+            const wallMat = new THREE.MeshStandardMaterial({ color: 0xf0e6d2 });
+            const wallHeight = ROOM_SIZE.height;
+
+            // Back Wall (Z is -depth/2)
+            const backWall = new THREE.Mesh(new THREE.BoxGeometry(ROOM_SIZE.width, wallHeight, 0.5), wallMat);
+            backWall.position.set(0, wallHeight/2, -ROOM_SIZE.depth/2);
+            backWall.receiveShadow = true;
+            scene.add(backWall);
+
+            // Front Wall (with opening for door - simplified)
+            const frontWall = new THREE.Mesh(new THREE.BoxGeometry(ROOM_SIZE.width, wallHeight, 0.5), wallMat);
+            frontWall.position.set(0, wallHeight/2, ROOM_SIZE.depth/2);
+            scene.add(frontWall);
+
+            // Left Wall
+            const leftWall = new THREE.Mesh(new THREE.BoxGeometry(0.5, wallHeight, ROOM_SIZE.depth), wallMat);
+            leftWall.position.set(-ROOM_SIZE.width/2, wallHeight/2, 0);
+            scene.add(leftWall);
+
+            // Right Wall
+            const rightWall = new THREE.Mesh(new THREE.BoxGeometry(0.5, wallHeight, ROOM_SIZE.depth), wallMat);
+            rightWall.position.set(ROOM_SIZE.width/2, wallHeight/2, 0);
+            scene.add(rightWall);
+        }
+
+        function buildFurniture() {
+            // Couch Group
+            const couchGroup = new THREE.Group();
+            
+            const couchMat = new THREE.MeshStandardMaterial({ color: 0x5d4037 });
+            
+            // Base
+            const base = new THREE.Mesh(new THREE.BoxGeometry(3, 0.5, 1.2), couchMat);
+            base.position.y = 0.25;
+            base.castShadow = true;
+            couchGroup.add(base);
+
+            // Back
+            const back = new THREE.Mesh(new THREE.BoxGeometry(3, 0.8, 0.2), couchMat);
+            back.position.set(0, 0.65, -0.5);
+            couchGroup.add(back);
+
+            // Arm Left
+            const armL = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.6, 1.2), couchMat);
+            armL.position.set(-1.4, 0.55, 0);
+            couchGroup.add(armL);
+
+            // Arm Right
+            const armR = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.6, 1.2), couchMat);
+            armR.position.set(1.4, 0.55, 0);
+            couchGroup.add(armR);
+
+            // Position Couch against wall
+            couchGroup.position.set(0, 0, -ROOM_SIZE.depth/2 + 1);
+            scene.add(couchGroup);
+
+            // TV Stand & TV
+            const standMat = new THREE.MeshStandardMaterial({ color: 0x3e2723 });
+            const tvStand = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.5, 0.8), standMat);
+            tvStand.position.set(0, 0.25, ROOM_SIZE.depth/2 - 1);
+            scene.add(tvStand);
+
+            const tvFrameMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+            const tvScreenMat = new THREE.MeshStandardMaterial({ color: 0x000000 }); // Off
+            const tvGroup = new THREE.Group();
+
+            const tvFrame = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.2, 0.1), tvFrameMat);
+            const tvScreen = new THREE.Mesh(new THREE.PlaneGeometry(2.0, 1.0), tvScreenMat);
+            tvScreen.position.z = 0.06;
+
+            tvGroup.add(tvFrame);
+            tvGroup.add(tvScreen);
+            tvGroup.position.set(0, 1.0, ROOM_SIZE.depth/2 - 1);
+            scene.add(tvGroup);
+        }
+
+        function buildBoyfriend() {
+            boyfriendGroup = new THREE.Group();
+
+            const skinMat = new THREE.MeshStandardMaterial({ color: 0xffccaa });
+            const shirtMat = new THREE.MeshStandardMaterial({ color: 0xeceff1 });
+            const pantsMat = new THREE.MeshStandardMaterial({ color: 0x3949ab });
+
+            // Legs (sitting)
+            const legL = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.4, 0.8), pantsMat);
+            legL.position.set(-0.25, 0.3, 0.4);
+            legL.rotation.x = -Math.PI / 6; // Knees up
+            boyfriendGroup.add(legL);
+
+            const legR = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.4, 0.8), pantsMat);
+            legR.position.set(0.25, 0.3, 0.4);
+            legR.rotation.x = -Math.PI / 6;
+            boyfriendGroup.add(legR);
+
+            // Torso
+            const torso = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.8, 0.4), shirtMat);
+            torso.position.set(0, 0.9, -0.2);
+            torso.rotation.x = -0.2; // Leaning back slightly
+            boyfriendGroup.add(torso);
+
+            // Head
+            const head = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), skinMat);
+            head.position.set(0, 1.5, -0.3);
+            head.rotation.x = -0.5; // Looking down at phone
+            boyfriendGroup.add(head);
+
+            // Arms (holding phone)
+            const armL = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.6, 0.2), skinMat);
+            armL.position.set(-0.45, 0.9, 0.1);
+            armL.rotation.x = -0.5;
+            boyfriendGroup.add(armL);
+            
+            const armR = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.6, 0.2), skinMat);
+            armR.position.set(0.45, 0.9, 0.1);
+            armR.rotation.x = -0.5;
+            boyfriendGroup.add(armR);
+
+            // Phone
+            const phone = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.25, 0.02), new THREE.MeshStandardMaterial({color: 0x333333}));
+            phone.position.set(0, 0.8, 0.2);
+            boyfriendGroup.add(phone);
+
+            // Position him on the couch
+            boyfriendGroup.position.set(0, 0.5, -ROOM_SIZE.depth/2 + 1); // On top of couch base
+            scene.add(boyfriendGroup);
+        }
+
+        // --- Game Logic ---
+
+        function startGame() {
+            startScreen.classList.add('hidden');
+            controls.lock();
+        }
+
+        function resetGame() {
+            laziness = 100;
+            nags = 0;
+            updateHUD();
+            endScreen.classList.add('hidden');
+            boyfriendGroup.visible = true;
+            isBoyfriendActive = true;
+            boyfriendGroup.rotation.set(0,0,0);
+            controls.lock();
+        }
+
+        function updateHUD() {
+            lazinessBar.style.width = laziness + '%';
+            // Change color based on laziness
+            if(laziness > 60) lazinessBar.style.background = "#f44336";
+            else if(laziness > 30) lazinessBar.style.background = "#ffeb3b";
+            else lazinessBar.style.background = "#4caf50";
+
+            scoreDisplay.innerText = nags;
+        }
+
+        function showDialogue(text, isPlayer) {
+            dialogueBox.innerText = text;
+            dialogueBox.style.opacity = '1';
+            dialogueBox.style.transform = isPlayer ? 'translate(-50%, 0) scale(1.1)' : 'translate(-50%, 0)';
+            dialogueBox.style.background = isPlayer ? '#ff5252' : 'white';
+            dialogueBox.style.color = isPlayer ? 'white' : 'black';
+
+            clearTimeout(dialogueTimeout);
+            dialogueTimeout = setTimeout(() => {
+                dialogueBox.style.opacity = '0';
+            }, 2000);
+        }
+
+        function onMouseClick() {
+            if (!isGameActive || !isBoyfriendActive) return;
+
+            // Raycast to check if looking at boyfriend
+            raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+            const intersects = raycaster.intersectObjects(boyfriendGroup.children);
+
+            if (intersects.length > 0) {
+                performNag();
+            }
+        }
+
+        function performNag() {
+            // Logic
+            laziness -= Math.floor(Math.random() * 5) + 2; // Reduce laziness by 2-7%
+            if (laziness < 0) laziness = 0;
+            nags++;
+            
+            updateHUD();
+
+            // Visuals
+            const randomNag = NAGS_LIST[Math.floor(Math.random() * NAGS_LIST.length)];
+            showDialogue(randomNag, true);
+
+            // Shake Screen
+            document.body.classList.add('shake');
+            setTimeout(() => document.body.classList.remove('shake'), 500);
+
+            // Boyfriend Reaction
+            setTimeout(() => {
+                if(isBoyfriendActive) {
+                    const randomExcuse = EXCUSES_LIST[Math.floor(Math.random() * EXCUSES_LIST.length)];
+                    showDialogue(randomExcuse, false);
+                    // Wobble boyfriend
+                    boyfriendGroup.rotation.z = 0.1;
+                    setTimeout(() => boyfriendGroup.rotation.z = -0.1, 100);
+                    setTimeout(() => boyfriendGroup.rotation.z = 0, 200);
+                }
+            }, 500);
+
+            // Check Win Condition
+            if (laziness <= 0) {
+                winGame();
+            }
+        }
+
+        function winGame() {
+            isBoyfriendActive = false;
+            setTimeout(() => {
+                controls.unlock();
+                endScreen.classList.remove('hidden');
+                finalScoreDisplay.innerText = nags;
+                
+                // Make boyfriend "leave" or stand up (visual trick)
+                boyfriendGroup.visible = false; 
+                // Create a text label in 3D or just rely on UI for win
+            }, 1500);
+        }
+
+        function onKeyDown(event) {
+            switch (event.code) {
+                case 'ArrowUp':
+                case 'KeyW': moveForward = true; break;
+                case 'ArrowLeft':
+                case 'KeyA': moveLeft = true; break;
+                case 'ArrowDown':
+                case 'KeyS': moveBackward = true; break;
+                case 'ArrowRight':
+                case 'KeyD': moveRight = true; break;
+            }
+        }
+
+        function onKeyUp(event) {
+            switch (event.code) {
+                case 'ArrowUp':
+                case 'KeyW': moveForward = false; break;
+                case 'ArrowLeft':
+                case 'KeyA': moveLeft = false; break;
+                case 'ArrowDown':
+                case 'KeyS': moveBackward = false; break;
+                case 'ArrowRight':
+                case 'KeyD': moveRight = false; break;
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function checkCollision(position) {
+            // Simple bounds checking for the room
+            // Room is -5 to 5 on X, -6 to 6 on Z
+            const padding = 0.5;
+            if (position.x < -ROOM_SIZE.width/2 + padding) position.x = -ROOM_SIZE.width/2 + padding;
+            if (position.x > ROOM_SIZE.width/2 - padding) position.x = ROOM_SIZE.width/2 - padding;
+            if (position.z < -ROOM_SIZE.depth/2 + padding) position.z = -ROOM_SIZE.depth/2 + padding;
+            if (position.z > ROOM_SIZE.depth/2 - padding) position.z = ROOM_SIZE.depth/2 - padding;
+            
+            // Furniture collision (Simple box for couch)
+            // Couch is at z = -5, x = -1.5 to 1.5
+            const couchMinZ = -ROOM_SIZE.depth/2 + 1 - 0.6; // Back of couch
+            const couchMaxZ = -ROOM_SIZE.depth/2 + 1 + 0.6; // Front of couch
+            const couchMinX = -1.6;
+            const couchMaxX = 1.6;
+
+            // If player is within couch Z bounds
+            if (position.z > couchMinZ && position.z < couchMaxZ) {
+                if (position.x > couchMinX && position.x < couchMaxX) {
+                    // Push out based on current velocity or relative position
+                    // Simple approach: if inside, push back to previous Z
+                    const depth = position.z - (couchMinZ + couchMaxZ)/2;
+                    if (Math.abs(depth) < 1.0) {
+                         // Determine if entering from front or back (simplified)
+                         if (position.z > (couchMinZ+couchMaxZ)/2) position.z = couchMaxZ + 0.2;
+                         else position.z = couchMinZ - 0.2;
+                    }
+                }
+            }
+
+            return position;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (isGameActive) {
+                const time = performance.now();
+                const delta = (time - prevTime) / 1000;
+
+                velocity.x -= velocity.x * 10.0 * delta;
+                velocity.z -= velocity.z * 10.0 * delta;
+
+                direction.z = Number(moveForward) - Number(moveBackward);
+                direction.x = Number(moveRight) - Number(moveLeft);
+                direction.normalize(); // this ensures consistent movements in all directions
+
+                if (moveForward || moveBackward) velocity.z -= direction.z * 400.0 * delta;
+                if (moveLeft || moveRight) velocity.x -= direction.x * 400.0 * delta;
+
+                controls.moveRight(-velocity.x * delta);
+                controls.moveForward(-velocity.z * delta);
+                
+                // Apply collision constraints to camera
+                const currentPos = camera.position;
+                const newPos = checkCollision(currentPos);
+                
+                // If collision happened, stop velocity in that axis (rudimentary)
+                if (newPos.x !== currentPos.x) velocity.x = 0;
+                if (newPos.z !== currentPos.z) velocity.z = 0;
+                
+                camera.position.copy(newPos);
+
+                // Check hover for interaction prompt
+                raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+                const intersects = raycaster.intersectObjects(boyfriendGroup.children);
+                
+                if (intersects.length > 0 && isBoyfriendActive) {
+                    interactionPrompt.style.opacity = 1;
+                    document.body.style.cursor = "pointer";
+                } else {
+                    interactionPrompt.style.opacity = 0;
+                    document.body.style.cursor = "default";
+                }
+
+                prevTime = time;
+            } else {
+                prevTime = performance.now(); // Prevent delta jump on resume
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // Boot
+        init();
+
+    </script>
+</body>
+</html>
