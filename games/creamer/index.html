@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Donut Fill — Stop Jeff!</title>
+<style>
+  :root{--bg:#0b0810; --panel:#0f0d17; --accent:#ff5dd1; --accent2:#00eaff; --muted:#9aa0b2}
+  html,body{height:100%;margin:0;background:linear-gradient(180deg,#070513 0%, #0b0810 55%), radial-gradient(1200px 600px at 10% 10%, rgba(0,255,200,0.03), transparent);font-family:Inter, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial;color:#eaf6ff;overflow:hidden}
+  canvas{display:block;width:100vw;height:100vh}
+  .ui {
+    position:fixed; left:18px; top:18px; z-index:30; display:flex; flex-direction:column; gap:8px;
+    background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+    border:1px solid rgba(255,255,255,0.04); padding:10px 12px; border-radius:12px; backdrop-filter: blur(6px);
+  }
+  .ui .row { display:flex; gap:10px; align-items:center; }
+  .title { font-weight:800; letter-spacing:1.2px; color:#fff; font-size:14px }
+  .muted { color:var(--muted); font-size:13px }
+  .big { font-size:18px; font-weight:700; color:var(--accent) }
+  .button {
+    background:linear-gradient(90deg,var(--accent2),var(--accent)); color:#05020a; padding:6px 10px; border-radius:10px;
+    font-weight:700; cursor:pointer; border:none;
+  }
+  .hint { position:fixed; right:18px; top:18px; z-index:30; color:#9fd; font-size:13px; background:rgba(0,0,0,0.18); padding:8px 10px; border-radius:10px; border:1px solid rgba(255,255,255,0.03);}
+  footer { position:fixed; left:50%; transform:translateX(-50%); bottom:14px; color:#7f9; font-size:12px; opacity:0.9 }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div class="ui" id="ui">
+  <div class="row"><div class="title">Donut Fill — Stop Jeff</div></div>
+  <div class="row"><div class="muted">Score</div><div class="big" id="score">0</div></div>
+  <div class="row"><div class="muted">Stolen</div><div id="stolen" class="muted">0</div></div>
+  <div class="row"><button id="restart" class="button">Restart</button><button id="slow" class="button">Slow Jeff (S)</button></div>
+  <div class="row muted" style="margin-top:6px;font-size:12px">Click & hold a donut to fill it. Prevent "Jeff" from stealing them.</div>
+</div>
+
+<div class="hint">Traps left: <span id="traps">3</span></div>
+<footer>Made with Canvas & JS — fictional "Jeff"</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/tone@14.7.77/build/Tone.min.js"></script>
+<script>
+(() => {
+  // Canvas setup
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d', { alpha: true });
+  function resize(){ canvas.width = innerWidth; canvas.height = innerHeight; }
+  addEventListener('resize', resize);
+  resize();
+
+  // Game state
+  let donuts = [];
+  let score = 0;
+  let stolen = 0;
+  let traps = 3;
+  const maxStolen = 5;
+  let running = true;
+  const uiScore = document.getElementById('score');
+  const uiStolen = document.getElementById('stolen');
+  const uiTraps = document.getElementById('traps');
+  const restartBtn = document.getElementById('restart');
+  const slowBtn = document.getElementById('slow');
+
+  // Sound (Tone.js)
+  const synth = new Tone.MembraneSynth({pitchDecay:0.02, octaves:2}).toDestination();
+  const pluck = new Tone.PluckSynth({dampening: 2000}).toDestination();
+  const success = () => { synth.triggerAttackRelease("C4", "8n"); pluck.triggerAttackRelease("G4", "16n"); };
+  const fail = () => { synth.triggerAttackRelease("C2", "16n"); };
+
+  // Player interaction
+  let mouse = { x:0, y:0, down:false };
+  canvas.addEventListener('pointerdown', e => { mouse.down = true; updateMouse(e); });
+  window.addEventListener('pointerup', e => { mouse.down = false; updateMouse(e); });
+  canvas.addEventListener('pointermove', updateMouse);
+  function updateMouse(e){ const r = canvas.getBoundingClientRect(); mouse.x = (e.clientX - r.left) * (canvas.width / r.width); mouse.y = (e.clientY - r.top) * (canvas.height / r.height); }
+
+  // Utility
+  function rand(min, max){ return Math.random()*(max-min)+min; }
+  function distance(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return Math.sqrt(dx*dx+dy*dy); }
+
+  // Donut factory
+  function spawnDonut() {
+    const r = rand(28,46);
+    const margin = 80;
+    const x = rand(margin, canvas.width - margin);
+    const y = rand(margin + 60, canvas.height - margin);
+    donuts.push({
+      x, y, r,
+      filled: 0, // 0..1
+      filling: false,
+      state: 'raw', // raw, filled, stolen
+      fillRate: rand(0.25, 0.55) // per second while held
+    });
+  }
+
+  // NPC: Jeff (fictional)
+  const jeff = {
+    x: canvas.width/2, y: canvas.height + 80, radius: 28,
+    speed: 56, // pixels per second
+    target: null,
+    slowUntil: 0
+  };
+
+  function resetGame() {
+    donuts = [];
+    score = 0;
+    stolen = 0;
+    traps = 3;
+    running = true;
+    uiScore.textContent = score;
+    uiStolen.textContent = stolen;
+    uiTraps.textContent = traps;
+    jeff.x = canvas.width/2;
+    jeff.y = canvas.height + 80;
+    jeff.speed = 56;
+    jeff.slowUntil = 0;
+    // spawn initial donuts
+    for(let i=0;i<7;i++) spawnDonut();
+  }
+
+  // Controls
+  restartBtn.addEventListener('click', () => {
+    resetGame();
+  });
+  slowBtn.addEventListener('click', useSlow);
+  window.addEventListener('keydown', e => {
+    if(e.key.toLowerCase() === 's') useSlow();
+  });
+  function useSlow(){
+    if(traps <= 0) return;
+    traps--;
+    uiTraps.textContent = traps;
+    // slow Jeff for 4 seconds (reduce speed)
+    jeff.slowUntil = performance.now() + 4000;
+  }
+
+  // Main loop
+  let last = performance.now();
+  function loop() {
+    const now = performance.now();
+    const dt = Math.min(0.05, (now - last)/1000);
+    last = now;
+    if(running) update(dt, now);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  // Update
+  function update(dt, now) {
+    // occasional donut spawn
+    if(Math.random() < dt * 0.8 && donuts.length < 14) spawnDonut();
+
+    // find donut under cursor
+    let hovered = null;
+    for(const d of donuts){
+      if(d.state !== 'raw' && d.state !== 'filling') continue;
+      const dist = Math.hypot(mouse.x - d.x, mouse.y - d.y);
+      if(dist < d.r) { hovered = d; break; }
+    }
+
+    // filling logic
+    for(const d of donuts){
+      d.filling = false;
+      if(d.state === 'raw' && mouse.down && hovered === d){
+        d.filling = true;
+        d.filled += d.fillRate * dt;
+        if(d.filled >= 1){
+          d.filled = 1;
+          d.state = 'filled';
+          score++;
+          uiScore.textContent = score;
+          success();
+        }
+      }
+    }
+
+    // Jeff targets the nearest non-filled donut
+    const targets = donuts.filter(d => d.state === 'raw' || d.state === 'filling');
+    if(targets.length > 0){
+      // find nearest
+      targets.sort((a,b) => distance(a, jeff) - distance(b, jeff));
+      jeff.target = targets[0];
+      // move toward target
+      const angle = Math.atan2(jeff.target.y - jeff.y, jeff.target.x - jeff.x);
+      const baseSpeed = jeff.speed;
+      const slowFactor = (now < jeff.slowUntil) ? 0.35 : 1.0;
+      const vx = Math.cos(angle) * baseSpeed * slowFactor * dt;
+      const vy = Math.sin(angle) * baseSpeed * slowFactor * dt;
+      jeff.x += vx; jeff.y += vy;
+
+      // if reached
+      if(distance(jeff, jeff.target) < jeff.target.r + 6){
+        // if target already filling/filled, decide action
+        if(jeff.target.state === 'filled') {
+          // Jeff sniffs and leaves (small penalty: lose one filled donut)
+          // For fairness, he won't un-fill a completed donut; just move on quickly
+          jeff.y += 20 * dt;
+        } else {
+          // steal: mark stolen
+          jeff.target.state = 'stolen';
+          stolen++;
+          uiStolen.textContent = stolen;
+          fail();
+          // Jeff recoils a bit
+          jeff.x += (Math.random()-0.5)*40;
+          jeff.y -= 20;
+          // check game over
+          if(stolen >= maxStolen){
+            running = false;
+            // short fanfare
+            for(let i=0;i<3;i++){ setTimeout(()=>synth.triggerAttackRelease("C2","8n"), i*60); }
+          }
+        }
+      }
+    } else {
+      // no targets: Jeff wanders off-screen and returns
+      if(jeff.y > canvas.height + 40) {
+        jeff.y -= 10 * dt;
+      } else {
+        // wander slowly upward-left
+        jeff.x += Math.sin(now*0.0006)*10*dt;
+        jeff.y -= 2*dt;
+      }
+    }
+
+    // small increase of Jeff speed over time
+    jeff.speed += dt * 0.6; // gradually more aggressive
+
+    // remove old stolen donuts after a time so player still has pace
+    for(let i = donuts.length-1; i>=0; i--){
+      const d = donuts[i];
+      if(d.state === 'stolen' || d.state === 'filled'){
+        // leave them briefly then remove
+        d._age = (d._age || 0) + dt;
+        if(d._age > 2.2) donuts.splice(i,1);
+      }
+    }
+
+    // If player is filling a donut and Jeff is nearby, Jeff can accelerate (challenge)
+    if(hovered && jeff.target && jeff.target === hovered){
+      jeff.speed += 20 * dt; // adrenaline boost to Jeff
+    }
+  }
+
+  // Draw
+  function draw() {
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    // background neon vignette
+    const g = ctx.createLinearGradient(0,0,0,canvas.height);
+    g.addColorStop(0, 'rgba(6,4,10,0.95)');
+    g.addColorStop(0.5, 'rgba(12,8,18,0.85)');
+    g.addColorStop(1, 'rgba(8,6,12,0.98)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    // subtle grid lines for retro vibe
+    ctx.save();
+    ctx.globalAlpha = 0.06;
+    ctx.strokeStyle = '#00eaff';
+    ctx.lineWidth = 1;
+    const gap = 36;
+    for(let x = - (Math.floor(canvas.width/gap)*gap); x < canvas.width + gap; x += gap){
+      ctx.beginPath(); ctx.moveTo(x + (Math.sin(performance.now()*0.0005)*8), 0); ctx.lineTo(x + (Math.sin(performance.now()*0.0005)*8), canvas.height); ctx.stroke();
+    }
+    for(let y = 0; y < canvas.height; y += gap){
+      ctx.beginPath(); ctx.moveTo(0, y + (Math.cos(performance.now()*0.0003)*6)); ctx.lineTo(canvas.width, y + (Math.cos(performance.now()*0.0003)*6)); ctx.stroke();
+    }
+    ctx.restore();
+
+    // draw donuts (under Jeff)
+    donuts.forEach(d => {
+      // base shadow
+      ctx.save();
+      const shadowGrad = ctx.createRadialGradient(d.x, d.y, d.r*0.3, d.x, d.y, d.r*1.6);
+      shadowGrad.addColorStop(0, 'rgba(0,0,0,0.0)');
+      shadowGrad.addColorStop(1, 'rgba(0,0,0,0.65)');
+      ctx.fillStyle = shadowGrad;
+      ctx.beginPath();
+      ctx.ellipse(d.x, d.y + d.r*0.7, d.r*1.2, d.r*0.35, 0, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+
+      // donut ring
+      const ringR = d.r;
+      const holeR = d.r * 0.45;
+      // base gradient
+      const g = ctx.createLinearGradient(d.x - ringR, d.y - ringR, d.x + ringR, d.y + ringR);
+      g.addColorStop(0, 'rgba(255,180,235,0.95)');
+      g.addColorStop(0.6, 'rgba(255,120,200,0.95)');
+      g.addColorStop(1, 'rgba(180,60,150,0.9)');
+      // draw outer
+      ctx.beginPath();
+      ctx.fillStyle = g;
+      ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+      ctx.lineWidth = 2;
+      ctx.arc(d.x, d.y, ringR, 0, Math.PI*2);
+      ctx.fill();
+      ctx.stroke();
+
+      // cut out hole
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.beginPath();
+      ctx.arc(d.x, d.y, holeR, 0, Math.PI*2);
+      ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
+
+      // topping/filling visualize: fill progress as a glossy blob in center
+      if(d.state === 'raw' || d.state === 'filling'){
+        const p = d.filled; // 0..1
+        // draw filling as a circle that grows
+        ctx.save();
+        const fillR = holeR * (0.2 + 0.75 * p);
+        const fg = ctx.createRadialGradient(d.x - fillR*0.2, d.y - fillR*0.2, fillR*0.2, d.x, d.y, fillR*1.2);
+        fg.addColorStop(0, 'rgba(255,255,255,0.9)');
+        fg.addColorStop(0.1, 'rgba(255,240,200,0.85)');
+        fg.addColorStop(0.5, 'rgba(255,200,120,0.85)');
+        fg.addColorStop(1, 'rgba(240,110,50,0.9)');
+        ctx.fillStyle = fg;
+        ctx.beginPath();
+        ctx.ellipse(d.x, d.y, fillR*1.1, fillR*0.9, Math.sin(performance.now()*0.001 + d.x)*0.12, 0, Math.PI*2);
+        ctx.fill();
+        // shine
+        ctx.globalAlpha = 0.25 + p*0.45;
+        ctx.fillStyle = 'rgba(255,255,255,0.8)';
+        ctx.beginPath();
+        ctx.ellipse(d.x - fillR*0.35, d.y - fillR*0.55, fillR*0.45, fillR*0.25, -0.5, 0, Math.PI*2);
+        ctx.fill();
+        ctx.restore();
+      } else if(d.state === 'filled') {
+        // extra shine
+        ctx.save();
+        ctx.fillStyle = 'rgba(255,255,255,0.08)';
+        ctx.beginPath();
+        ctx.ellipse(d.x, d.y - d.r*0.25, d.r*1, d.r*0.4, 0, 0, Math.PI*2);
+        ctx.fill();
+        ctx.restore();
+      } else if(d.state === 'stolen'){
+        // mark stolen with a little X
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,60,60,0.95)';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(d.x - 10, d.y - 10);
+        ctx.lineTo(d.x + 10, d.y + 10);
+        ctx.moveTo(d.x + 10, d.y - 10);
+        ctx.lineTo(d.x - 10, d.y + 10);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // hover highlight
+      if(d.filling){
+        ctx.save();
+        ctx.strokeStyle = 'rgba(0,230,255,0.9)';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(d.x, d.y, ringR + 6, 0, Math.PI*2);
+        ctx.stroke();
+        ctx.restore();
+      }
+    });
+
+    // draw Jeff (friendly but sneaky)
+    ctx.save();
+    // drop a neon shadow
+    ctx.beginPath();
+    ctx.fillStyle = 'rgba(0,230,255,0.06)';
+    ctx.ellipse(jeff.x, jeff.y + 34, jeff.radius*1.6, jeff.radius*0.5, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // body
+    ctx.translate(jeff.x, jeff.y);
+    // bobbing
+    const bob = Math.sin(performance.now()*0.002)*4;
+    ctx.translate(0, bob);
+    // legs shadow
+    ctx.fillStyle = '#1b1b1b';
+    ctx.beginPath();
+    ctx.ellipse(0, jeff.radius*0.9, jeff.radius*0.9, jeff.radius*0.6, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // torso
+    ctx.fillStyle = '#101010';
+    roundRect(ctx, -jeff.radius*1.1, -jeff.radius*0.4, jeff.radius*2.2, jeff.radius*1.4, 10);
+    ctx.fill();
+
+    // head
+    ctx.beginPath();
+    ctx.fillStyle = '#ffdcae';
+    ctx.arc(0, -jeff.radius*0.6, jeff.radius*0.7, 0, Math.PI*2);
+    ctx.fill();
+
+    // shades / eyes
+    ctx.fillStyle = 'rgba(20,20,30,0.98)';
+    ctx.fillRect(-jeff.radius*0.45, -jeff.radius*0.72, jeff.radius*0.9, jeff.radius*0.26);
+
+    // sly smile
+    ctx.strokeStyle = 'rgba(20,20,30,0.9)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, -jeff.radius*0.45, jeff.radius*0.28, 0.1, Math.PI-0.1);
+    ctx.stroke();
+
+    // cap
+    ctx.fillStyle = '#222';
+    ctx.beginPath();
+    ctx.ellipse(jeff.radius*0.02, -jeff.radius*1.05, jeff.radius*0.95, jeff.radius*0.6, 0, Math.PI, Math.PI*2);
+    ctx.fill();
+
+    ctx.restore();
+
+    // UI overlay messages
+    ctx.save();
+    ctx.fillStyle = 'rgba(255,255,255,0.03)';
+    ctx.fillRect(12, canvas.height - 88, 340, 66);
+    ctx.restore();
+
+    // game over overlay
+    if(!running) {
+      ctx.save();
+      ctx.fillStyle = 'rgba(3,3,6,0.7)';
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+      ctx.fillStyle = 'white';
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 44px Inter, system-ui, sans-serif';
+      ctx.fillStyle = '#ff5dd1';
+      ctx.fillText('Game Over — Jeff got too many donuts', canvas.width/2, canvas.height/2 - 10);
+      ctx.font = '18px Inter, system-ui, sans-serif';
+      ctx.fillStyle = '#cfe';
+      ctx.fillText(`Score: ${score}   |   Stolen: ${stolen}`, canvas.width/2, canvas.height/2 + 28);
+      ctx.restore();
+    }
+  }
+
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  // Start
+  resetGame();
+  loop();
+})();
+</script>
+</body>
+</html>
