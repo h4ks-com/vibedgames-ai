@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Strict Mama: Slipper Discipline</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1a1a1a; user-select: none; }
+        #game-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        
+        /* HUD Overlay */
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        .hud-top {
+            display: flex;
+            justify-content: space-between;
+            font-size: 24px;
+            color: #fff;
+            text-shadow: 2px 2px 0 #000;
+            font-weight: bold;
+        }
+
+        .stat-box {
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px 20px;
+            border: 2px solid #ffcc00;
+            border-radius: 8px;
+        }
+
+        #slipper-info { color: #ff3333; border-color: #ff3333; }
+        #score-info { color: #33ff33; border-color: #33ff33; }
+        
+        .hud-bottom {
+            display: flex;
+            justify-content: center;
+            align-items: flex-end;
+            padding-bottom: 20px;
+        }
+
+        #yell-cooldown {
+            width: 300px;
+            height: 20px;
+            background: #333;
+            border: 2px solid #fff;
+            border-radius: 10px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        #yell-fill {
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, #ff0000, #ffff00);
+            transform-origin: left;
+            transition: width 0.1s linear;
+        }
+
+        #yell-label {
+            color: white;
+            text-align: center;
+            font-size: 14px;
+            margin-bottom: 5px;
+            text-shadow: 1px 1px 0 #000;
+        }
+
+        /* Crosshair */
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 20px;
+            height: 20px;
+            border: 2px solid white;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+        }
+        #crosshair::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 4px;
+            height: 4px;
+            background: red;
+            transform: translate(-50%, -50%);
+            border-radius: 50%;
+        }
+
+        /* Screens */
+        #start-screen, #game-over-screen, #level-up-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.85);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            pointer-events: auto;
+            z-index: 10;
+        }
+
+        h1 { font-size: 4rem; margin: 0; color: #ffcc00; text-shadow: 4px 4px 0 #b8860b; text-align: center;}
+        h2 { font-size: 2rem; margin: 10px 0; color: #fff; text-align: center;}
+        p { font-size: 1.2rem; max-width: 600px; text-align: center; line-height: 1.5; }
+        
+        button {
+            margin-top: 30px;
+            padding: 15px 40px;
+            font-size: 1.5rem;
+            background: #ff3333;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            box-shadow: 0 5px 0 #b30000;
+            transition: transform 0.1s;
+            font-family: inherit;
+            font-weight: bold;
+        }
+        button:active { transform: translateY(5px); box-shadow: none; }
+
+        .hidden { display: none !important; }
+
+        #bubble {
+            position: absolute;
+            top: 20%;
+            left: 50%;
+            transform: translate(-50%, 0);
+            background: white;
+            color: black;
+            padding: 15px 25px;
+            border-radius: 20px;
+            font-weight: bold;
+            font-size: 1.5rem;
+            opacity: 0;
+            transition: opacity 0.3s;
+            pointer-events: none;
+            text-align: center;
+            border: 3px solid black;
+        }
+        #bubble::after {
+            content: '';
+            position: absolute;
+            bottom: -10px;
+            left: 50%;
+            border-width: 10px 10px 0;
+            border-style: solid;
+            border-color: black transparent;
+            display: block;
+            width: 0;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container"></div>
+    <div id="crosshair"></div>
+
+    <div id="ui-layer">
+        <div class="hud-top">
+            <div class="stat-box" id="slipper-info">Slipper: Lvl 1</div>
+            <div class="stat-box" id="score-info">Score: 0</div>
+        </div>
+        <div id="bubble">I work so hard for you!</div>
+        <div class="hud-bottom">
+            <div>
+                <div id="yell-label">PRESS [SPACE] TO YELL (STUN)</div>
+                <div id="yell-cooldown"><div id="yell-fill"></div></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Start Screen -->
+    <div id="start-screen">
+        <h1>STRICT MAMA</h1>
+        <h2>The Ultimate Education Simulator</h2>
+        <p>You are an Asian Mama. Your kids are playing games instead of studying.</p>
+        <p><strong>WASD</strong> to Move | <strong>MOUSE</strong> to Look<br>
+        <strong>CLICK</strong> to Attack with Slipper<br>
+        <strong>SPACE</strong> to Yell (Stuns kids)</p>
+        <button id="start-btn">DISCIPLINE THEM</button>
+    </div>
+
+    <!-- Level Up Screen -->
+    <div id="level-up-screen" class="hidden">
+        <h1 style="color: #33ff33; text-shadow: 4px 4px 0 #006600;">NEW SLIPPER UNLOCKED!</h1>
+        <h2 id="new-weapon-name">Level 2: The Thong</h2>
+        <p>The kids are getting lazier. Your weapon must evolve.</p>
+        <button id="next-level-btn">NEXT SEMESTER</button>
+    </div>
+
+    <!-- Game Over Screen -->
+    <div id="game-over-screen" class="hidden">
+        <h1 style="color: #ff3333;">KID DROP OUT</h1>
+        <p>The stress was too much. You failed to motivate them.</p>
+        <button id="restart-btn">TRY AGAIN</button>
+    </div>
+
+    <!-- Import Three.js as a module -->
+    <script type="module">
+        import * as THREE from 'https://unpkg.com/three@0.128.0/build/three.module.js';
+
+        // --- Game Config ---
+        const GAME_CONFIG = {
+            playerSpeed: 10,
+            runSpeed: 16,
+            playerHeight: 1.7,
+            gravity: 30,
+            yellCooldown: 3000, // ms
+            yellRadius: 15,
+            yellDuration: 2000, // ms
+            totalLevels: 10
+        };
+
+        const SLIPPER_LEVELS = [
+            { name: "Cheap Flip-Flop", color: 0xff0000, scale: 1, damage: 10, range: 2.5 },
+            { name: "Thick Sole", color: 0xcc0000, scale: 1.1, damage: 12, range: 2.6 },
+            { name: "Grandma's Crochet", color: 0xff00ff, scale: 1.2, damage: 15, range: 2.7 },
+            { name: "Office Slipper", color: 0x0000ff, scale: 1.3, damage: 18, range: 2.8 },
+            { name: "Wooden Clog", color: 0x8b4513, scale: 1.4, damage: 25, range: 3.0 },
+            { name: "The Frying Pan", color: 0x333333, scale: 1.5, damage: 30, range: 3.2 },
+            { name: "Golden Slipper", color: 0xffd700, scale: 1.6, damage: 35, range: 3.4 },
+            { name: "Jade Sandal", color: 0x00a86b, scale: 1.8, damage: 40, range: 3.6 },
+            { name: "Dragon Slipper", color: 0xff4500, scale: 2.0, damage: 50, range: 3.8 },
+            { name: "The Legendary Chancla", color: 0xffffff, scale: 2.5, damage: 100, range: 5.0, emissive: true }
+        ];
+
+        const YELL_PHRASES = [
+            "AIYAAA! STUDY HARDER!",
+            "WHY YOU NO DOCTOR YET?!",
+            "LOOK AT COUSIN MING!",
+            "COMPUTER TIME OVER!",
+            "I GIVE YOU EVERYTHING!",
+            "A MINUS IS FAILING!",
+            "SO DISAPPOINT!",
+            "CLEAN YOUR ROOM!",
+            "NO BOYFRIEND/GIRLFRIEND!",
+            "MATH IS EASY WHY YOU FAIL?!"
+        ];
+
+        // --- Global Variables ---
+        let scene, camera, renderer;
+        let player, weapon, handGroup;
+        let enemies = [];
+        let particles = [];
+        let clock = new THREE.Clock();
+        let lastTime = 0;
+        
+        // State
+        let isGameActive = false;
+        let currentLevel = 0; // 0-9 index
+        let score = 0;
+        let lastYellTime = 0;
+        let isYelling = false;
+        
+        // Input
+        const keys = { w: false, a: false, s: false, d: false, space: false };
+        const mouse = new THREE.Vector2();
+        let isMouseDown = false;
+        let isAttacking = false;
+        
+        // DOM Elements
+        const uiScore = document.getElementById('score-info');
+        const uiSlipper = document.getElementById('slipper-info');
+        const uiYellFill = document.getElementById('yell-fill');
+        const bubble = document.getElementById('bubble');
+        const startScreen = document.getElementById('start-screen');
+        const levelUpScreen = document.getElementById('level-up-screen');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const newWeaponName = document.getElementById('new-weapon-name');
+
+        // --- Initialization ---
+        function init() {
+            // Scene Setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB); // Sky blue
+            scene.fog = new THREE.Fog(0x87CEEB, 10, 50);
+
+            // Camera
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.getElementById('game-container').appendChild(renderer.domElement);
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(20, 50, 20);
+            dirLight.castShadow = true;
+            dirLight.shadow.camera.left = -50;
+            dirLight.shadow.camera.right = 50;
+            dirLight.shadow.camera.top = 50;
+            dirLight.shadow.camera.bottom = -50;
+            scene.add(dirLight);
+
+            // Environment (Apartment)
+            createEnvironment();
+
+            // Player
+            createPlayer();
+
+            // Event Listeners
+            window.addEventListener('resize', onWindowResize, false);
+            document.addEventListener('keydown', onKeyDown, false);
+            document.addEventListener('keyup', onKeyUp, false);
+            document.addEventListener('mousedown', () => { isMouseDown = true; });
+            document.addEventListener('mouseup', () => { isMouseDown = false; });
+            document.addEventListener('mousemove', onMouseMove, false);
+
+            // Button Listeners
+            document.getElementById('start-btn').addEventListener('click', startGame);
+            document.getElementById('next-level-btn').addEventListener('click', nextLevel);
+            document.getElementById('restart-btn').addEventListener('click', restartGame);
+
+            animate();
+        }
+
+        function createEnvironment() {
+            // Floor
+            const floorGeo = new THREE.PlaneGeometry(100, 100);
+            const floorMat = new THREE.MeshStandardMaterial({ color: 0x8B4513, roughness: 0.8 });
+            const floor = new THREE.Mesh(floorGeo, floorMat);
+            floor.rotation.x = -Math.PI / 2;
+            floor.receiveShadow = true;
+            scene.add(floor);
+
+            // Walls
+            const wallMat = new THREE.MeshStandardMaterial({ color: 0xFAF0E6 });
+            const wallGeo = new THREE.BoxGeometry(100, 10, 2);
+            
+            // Back Wall
+            const backWall = new THREE.Mesh(wallGeo, wallMat);
+            backWall.position.set(0, 5, -50);
+            scene.add(backWall);
+
+            // Side Walls
+            const sideWallGeo = new THREE.BoxGeometry(2, 10, 100);
+            const leftWall = new THREE.Mesh(sideWallGeo, wallMat);
+            leftWall.position.set(-50, 5, 0);
+            scene.add(leftWall);
+            const rightWall = new THREE.Mesh(sideWallGeo, wallMat);
+            rightWall.position.set(50, 5, 0);
+            scene.add(rightWall);
+
+            // Decor (Tables, etc)
+            const tableGeo = new THREE.BoxGeometry(4, 1, 3);
+            const tableMat = new THREE.MeshStandardMaterial({ color: 0x654321 });
+            for(let i=0; i<5; i++) {
+                const table = new THREE.Mesh(tableGeo, tableMat);
+                table.position.set((Math.random()-0.5)*40, 0.5, (Math.random()-0.5)*40);
+                table.castShadow = true;
+                table.receiveShadow = true;
+                scene.add(table);
+            }
+        }
+
+        function createPlayer() {
+            player = new THREE.Group();
+            scene.add(player);
+
+            // Body (Simple invisible capsule for collision logic if needed, but we just move group)
+            // Visuals not needed for FPS arms
+            player.position.set(0, GAME_CONFIG.playerHeight, 0);
+
+            // Hand & Weapon
+            handGroup = new THREE.Group();
+            handGroup.position.set(0.5, -0.4, -1); // Bottom right of screen
+            camera.add(handGroup);
+            player.add(camera); // Camera moves with player
+
+            updateWeaponModel();
+        }
+
+        function updateWeaponModel() {
+            if(handGroup.children.length > 0) handGroup.remove(handGroup.children[0]);
+
+            const data = SLIPPER_LEVELS[currentLevel];
+            
+            // Create Slipper
+            const soleGeo = new THREE.BoxGeometry(0.4 * data.scale, 0.05, 0.8 * data.scale);
+            let material = new THREE.MeshStandardMaterial({ color: data.color });
+            if(data.emissive) {
+                material.emissive = new THREE.Color(0xffd700);
+                material.emissiveIntensity = 0.5;
+            }
+            
+            const sole = new THREE.Mesh(soleGeo, material);
+            sole.castShadow = true;
+
+            // Thong/Strap
+            const strapGeo = new THREE.TorusGeometry(0.15 * data.scale, 0.03 * data.scale, 8, 20, Math.PI);
+            const strap = new THREE.Mesh(strapGeo, material);
+            strap.position.set(0, 0.05, -0.1 * data.scale);
+            strap.rotation.x = Math.PI / 2;
+            strap.rotation.z = Math.PI / 2; // Adjust orientation
+
+            const strap2 = new THREE.Mesh(strapGeo, material);
+            strap2.position.set(0, 0.05, -0.2 * data.scale);
+            strap2.rotation.x = Math.PI / 2;
+            strap2.rotation.z = Math.PI / 2;
+
+            const group = new THREE.Group();
+            group.add(sole);
+            group.add(strap);
+            group.add(strap2);
+
+            // Rotate to fit hand
+            group.rotation.z = -Math.PI / 4;
+            group.rotation.x = Math.PI / 6;
+
+            weapon = group;
+            handGroup.add(weapon);
+        }
+
+        function spawnKid() {
+            const geo = new THREE.CapsuleGeometry(0.4, 1, 4, 8);
+            const color = Math.random() > 0.5 ? 0x3366ff : 0xff66cc; // Blue or Pink shirt
+            const mat = new THREE.MeshStandardMaterial({ color: color });
+            const kid = new THREE.Mesh(geo, mat);
+            
+            // Spawn at random distance
+            const angle = Math.random() * Math.PI * 2;
+            const dist = 10 + Math.random() * 20;
+            kid.position.set(
+                player.position.x + Math.cos(angle) * dist,
+                0.9,
+                player.position.z + Math.sin(angle) * dist
+            );
+            
+            kid.castShadow = true;
+            
+            // Kid Data
+            kid.userData = {
+                health: 20 + (currentLevel * 10), // HP scales with level
+                speed: 3 + Math.random() * 2 + (currentLevel * 0.5),
+                stunnedUntil: 0,
+                id: Math.random().toString(36).substr(2, 9)
+            };
+
+            scene.add(kid);
+            enemies.push(kid);
+        }
+
+        function startGame() {
+            startScreen.classList.add('hidden');
+            document.body.requestPointerLock();
+            isGameActive = true;
+            score = 0;
+            currentLevel = 0;
+            updateUI();
+            spawnWave();
+        }
+
+        function spawnWave() {
+            const count = 3 + currentLevel; // More kids per level
+            for(let i=0; i<count; i++) {
+                spawnKid();
+            }
+        }
+
+        function nextLevel() {
+            levelUpScreen.classList.add('hidden');
+            document.body.requestPointerLock();
+            if(currentLevel < GAME_CONFIG.totalLevels - 1) {
+                currentLevel++;
+                updateWeaponModel();
+                updateUI();
+                spawnWave();
+                isGameActive = true;
+            } else {
+                // Game Won (looping)
+                currentLevel = 0;
+                score += 1000;
+                nextLevel();
+            }
+        }
+
+        function restartGame() {
+            gameOverScreen.classList.add('hidden');
+            startGame();
+        }
+
+        function gameOver() {
+            isGameActive = false;
+            document.exitPointerLock();
+            gameOverScreen.classList.remove('hidden');
+        }
+
+        function updateUI() {
+            const data = SLIPPER_LEVELS[currentLevel];
+            uiSlipper.innerText = `Slipper: ${data.name}`;
+            uiScore.innerText = `Score: ${score}`;
+        }
+
+        function showBubble(text) {
+            bubble.innerText = text;
+            bubble.style.opacity = 1;
+            setTimeout(() => {
+                bubble.style.opacity = 0;
+            }, 2000);
+        }
+
+        function speak(text) {
+            if ('speechSynthesis' in window) {
+                const utterance = new SpeechSynthesisUtterance(text);
+                // Try to find an asian-ish voice (randomly pick)
+                const voices = window.speechSynthesis.getVoices();
+                // Filter vaguely by language if possible, otherwise random
+                const preferred = voices.filter(v => v.lang.includes('zh') || v.lang.includes('ja') || v.lang.includes('ko'));
+                if (preferred.length > 0) utterance.voice = preferred[0];
+                utterance.rate = 1.2;
+                utterance.pitch = 1.5; // High pitch stress
+                window.speechSynthesis.speak(utterance);
+            }
+        }
+
+        // --- Logic & Physics ---
+
+        function onKeyDown(event) {
+            switch(event.code) {
+                case 'KeyW': keys.w = true; break;
+                case 'KeyA': keys.a = true; break;
+                case 'KeyS': keys.s = true; break;
+                case 'KeyD': keys.d = true; break;
+                case 'Space': 
+                    if(!keys.space && isGameActive) doYell();
+                    keys.space = true; 
+                    break;
+            }
+        }
+
+        function onKeyUp(event) {
+            switch(event.code) {
+                case 'KeyW': keys.w = false; break;
+                case 'KeyA': keys.a = false; break;
+                case 'KeyS': keys.s = false; break;
+                case 'KeyD': keys.d = false; break;
+                case 'Space': keys.space = false; break;
+            }
+        }
+
+        function onMouseMove(event) {
+            if (document.pointerLockElement === document.body && isGameActive) {
+                const sensitivity = 0.002;
+                player.rotation.y -= event.movementX * sensitivity;
+                // No vertical look for this simple FPS, keeps it stable
+            }
+        }
+
+        function doYell() {
+            const now = performance.now();
+            if (now - lastYellTime < GAME_CONFIG.yellCooldown) return;
+
+            lastYellTime = now;
+            isYelling = true;
+            
+            // Visual Cue
+            const phrase = YELL_PHRASES[Math.floor(Math.random() * YELL_PHRASES.length)];
+            showBubble(phrase);
+            speak(phrase);
+
+            // Logic
+            enemies.forEach(kid => {
+                const dist = player.position.distanceTo(kid.position);
+                if (dist < GAME_CONFIG.yellRadius) {
+                    kid.userData.stunnedUntil = now + GAME_CONFIG.yellDuration;
+                    // Visual stun indicator
+                    kid.material.color.setHex(0xffff00);
+                }
+            });
+
+            // Visual Shockwave (Simple scaling ring)
+            const ringGeo = new THREE.RingGeometry(0.1, 0.5, 32);
+            const ringMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8, side: THREE.DoubleSide });
+            const ring = new THREE.Mesh(ringGeo, ringMat);
+            ring.rotation.x = -Math.PI / 2;
+            ring.position.copy(player.position);
+            scene.add(ring);
+            
+            // Animate ring in loop or via tween logic (simple inline animation)
+            const startTime = performance.now();
+            function animateRing() {
+                const elapsed = performance.now() - startTime;
+                const progress = elapsed / 1000; // 1 second duration
+                if (progress < 1) {
+                    const s = 1 + progress * 10;
+                    ring.scale.set(s, s, s);
+                    ring.material.opacity = 0.8 * (1 - progress);
+                    requestAnimationFrame(animateRing);
+                } else {
+                    scene.remove(ring);
+                    ring.geometry.dispose();
+                    ring.material.dispose();
+                }
+            }
+            animateRing();
+        }
+
+        function doAttack() {
+            if (isAttacking) return;
+            isAttacking = true;
+
+            // Weapon Swing Animation
+            const startRot = weapon.rotation.z;
+            const endRot = startRot - 2; // Swing down
+            const duration = 200; // ms
+            const startTime = performance.now();
+
+            function swing() {
+                const now = performance.now();
+                const progress = Math.min((now - startTime) / duration, 1);
+                
+                if (progress < 0.5) {
+                    // Swing out
+                    weapon.rotation.z = startRot - (progress * 2 * 2); 
+                } else {
+                    // Return
+                    weapon.rotation.z = (startRot - 2) + ((progress - 0.5) * 2 * 2);
+                }
+
+                if (progress < 1) {
+                    requestAnimationFrame(swing);
+                } else {
+                    weapon.rotation.z = startRot;
+                    isAttacking = false;
+                }
+            }
+            swing();
+
+            // Hit Detection
+            const weaponData = SLIPPER_LEVELS[currentLevel];
+            const weaponPos = new THREE.Vector3();
+            weapon.getWorldPosition(weaponPos);
+            // Add a bit of forward offset
+            const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(player.quaternion);
+            weaponPos.add(forward.multiplyScalar(1.0));
+
+            enemies.forEach(kid => {
+                const dist = weaponPos.distanceTo(kid.position);
+                // Simple box/capsule check
+                if (dist < weaponData.range) {
+                    // Hit!
+                    damageKid(kid, weaponData.damage);
+                }
+            });
+        }
+
+        function damageKid(kid, dmg) {
+            kid.userData.health -= dmg;
+            
+            // Visual feedback
+            kid.material.color.setHex(0xff0000);
+            setTimeout(() => {
+                if(kid.parent) kid.material.color.setHex(0x3366ff); // Reset to blue (simplification)
+            }, 100);
+
+            // Floating text
+            createDamageText(kid.position, dmg);
+
+            if (kid.userData.health <= 0) {
+                // Kid defeated
+                score += 100;
+                scene.remove(kid);
+                enemies = enemies.filter(e => e !== kid);
+                updateUI();
+
+                if (enemies.length === 0) {
+                    // Wave Clear
+                    isGameActive = false;
+                    document.exitPointerLock();
+                    newWeaponName.innerText = `Level ${currentLevel + 2}: ${SLIPPER_LEVELS[currentLevel+1]?.name || 'MAX'}`;
+                    levelUpScreen.classList.remove('hidden');
+                }
+            }
+        }
+
+        function createDamageText(pos, dmg) {
+            const div = document.createElement('div');
+            div.style.position = 'absolute';
+            div.style.color = 'yellow';
+            div.style.fontWeight = 'bold';
+            div.style.fontSize = '20px';
+            div.style.textShadow = '1px 1px 0 #000';
+            div.style.pointerEvents = 'none';
+            div.innerText = `-${dmg}`;
+            document.body.appendChild(div);
+
+            // Project 3D to 2D
+            const vector = pos.clone();
+            vector.y += 2;
+            vector.project(camera);
+
+            const x = (vector.x * .5 + .5) * window.innerWidth;
+            const y = (-(vector.y * .5) + .5) * window.innerHeight;
+
+            div.style.left = `${x}px`;
+            div.style.top = `${y}px`;
+
+            // Animate
+            let opacity = 1;
+            let top = y;
+            function animateText() {
+                opacity -= 0.02;
+                top -= 1;
+                div.style.opacity = opacity;
+                div.style.top = `${top}px`;
+                if (opacity > 0) requestAnimationFrame(animateText);
+                else div.remove();
+            }
+            animateText();
+        }
+
+        function updatePlayer(dt) {
+            const speed = GAME_CONFIG.playerSpeed;
+            const direction = new THREE.Vector3();
+            const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(player.quaternion);
+            const right = new THREE.Vector3(1, 0, 0).applyQuaternion(player.quaternion);
+
+            if (keys.w) direction.add(forward);
+            if (keys.s) direction.sub(forward);
+            if (keys.a) direction.sub(right);
+            if (keys.d) direction.add(right);
+
+            if (direction.length() > 0) {
+                direction.normalize();
+                player.position.add(direction.multiplyScalar(speed * dt));
+            }
+
+            // Keep in bounds
+            player.position.x = Math.max(-48, Math.min(48, player.position.x));
+            player.position.z = Math.max(-48, Math.min(48, player.position.z));
+        }
+
+        function updateEnemies(dt) {
+            const now = performance.now();
+            enemies.forEach(kid => {
+                // Recover from stun
+                if (kid.userData.stunnedUntil > now) {
+                    // Wobble effect
+                    kid.position.y = 0.9 + Math.sin(now * 0.02) * 0.1;
+                    return;
+                } else {
+                    kid.position.y = 0.9;
+                }
+
+                // AI: Run away from player
+                const dist = kid.position.distanceTo(player.position);
+                const dir = new THREE.Vector3().subVectors(kid.position, player.position).normalize();
+                
+                // Simple obstacle avoidance would go here, but keeping it simple
+                if (dist < 15) {
+                    // Run away!
+                    kid.position.add(dir.multiplyScalar(kid.userData.speed * dt));
+                    kid.lookAt(player.position);
+                } else {
+                    // Wander
+                    if (Math.random() < 0.02) {
+                        kid.position.x += (Math.random()-0.5);
+                        kid.position.z += (Math.random()-0.5);
+                    }
+                }
+            });
+        }
+
+        function updateUIOverlay(dt) {
+            // Yell cooldown
+            const now = performance.now();
+            const diff = now - lastYellTime;
+            const pct = Math.min(diff / GAME_CONFIG.yellCooldown, 1);
+            uiYellFill.style.width = `${pct * 100}%`;
+
+            if (isMouseDown && !isAttacking) {
+                doAttack();
+                isMouseDown = false; // Semi-auto
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const dt = clock.getDelta();
+
+            if (isGameActive) {
+                updatePlayer(dt);
+                updateEnemies(dt);
+                updateUIOverlay(dt);
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // Start
+        init();
+
+    </script>
+</body>
+</html>
