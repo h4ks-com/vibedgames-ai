@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>SQLite REPL in Browser</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0f1724; --panel:#0b1220; --muted:#94a3b8; --accent:#60a5fa; --success:#34d399;
+    --glass: rgba(255,255,255,0.03);
+  }
+  *{box-sizing:border-box;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+  html,body{height:100%;margin:0;background:linear-gradient(180deg,#071023 0%, #081425 100%);color:#e6eef8;}
+  .wrap{max-width:1100px;margin:28px auto;padding:20px;border-radius:12px;background:linear-gradient(180deg,var(--panel),rgba(9,13,20,0.9));box-shadow:0 8px 30px rgba(2,6,23,0.6);}
+  header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:14px}
+  h1{font-size:18px;margin:0;font-weight:700;letter-spacing:0.2px}
+  .subtitle{color:var(--muted);font-size:13px}
+  .controls{display:flex;gap:8px;flex-wrap:wrap}
+  button, label.filebtn{background:var(--glass);border:1px solid rgba(255,255,255,0.04);color:var(--accent);padding:8px 12px;border-radius:8px;cursor:pointer;font-weight:600}
+  button.primary{background:linear-gradient(90deg,#2563eb,#60a5fa);color:white;border:none;box-shadow:0 6px 18px rgba(37,99,235,0.12)}
+  button.ghost{background:transparent;border:1px dashed rgba(255,255,255,0.04);color:var(--muted)}
+  .row{display:flex;gap:18px}
+  .col{flex:1;min-width:0}
+  #editorBox{height:320px;border-radius:10px;overflow:hidden;border:1px solid rgba(255,255,255,0.03)}
+  #aceEditor{height:100%;width:100%}
+  .rightPanel{width:360px;min-width:300px}
+  .panel{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,0.02)}
+  .panel h3{margin:0 0 10px 0;font-size:13px}
+  .out{margin-top:10px;max-height:320px;overflow:auto;border-radius:8px;padding:8px;background:rgba(2,6,23,0.6);border:1px solid rgba(255,255,255,0.02)}
+  table{border-collapse:collapse;width:100%}
+  table th, table td{padding:8px;border-bottom:1px solid rgba(255,255,255,0.03);font-size:13px;color:#e6eef8}
+  table th{background:rgba(255,255,255,0.02);text-align:left;font-weight:600;color:var(--muted)}
+  .muted{color:var(--muted);font-size:13px}
+  .list{display:flex;flex-direction:column;gap:8px}
+  .list .item{display:flex;justify-content:space-between;align-items:center;padding:8px;border-radius:8px;background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent)}
+  .item .name{font-weight:600}
+  .tiny{font-size:12px;color:var(--muted)}
+  .modal{position:fixed;inset:0;background:linear-gradient(90deg, rgba(2,6,23,0.7), rgba(2,6,23,0.85));display:flex;align-items:center;justify-content:center;padding:20px;z-index:50}
+  .dialog{width:min(1100px,98%);max-height:90vh;overflow:auto;background:linear-gradient(180deg,#071025,#07162a);border-radius:12px;padding:14px;border:1px solid rgba(255,255,255,0.03)}
+  .row-between{display:flex;justify-content:space-between;align-items:center}
+  footer{margin-top:12px;display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:12px}
+  input[type=file]{display:none}
+  .kbd{background:rgba(255,255,255,0.02);padding:6px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.03);font-weight:600;color:var(--muted)}
+  a.link{color:var(--accent);text-decoration:none}
+  .status{padding:6px 10px;border-radius:8px;background:rgba(255,255,255,0.02);font-weight:700;color:var(--success)}
+  @media (max-width:900px){
+    .row{flex-direction:column}
+    .rightPanel{width:100%;min-width:unset}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>SQLite REPL — in-browser</h1>
+      <div class="subtitle">Edit SQL, run, explore tables, and persist DB in your browser storage.</div>
+    </div>
+    <div class="controls">
+      <button id="btnRun" class="primary">Run (Ctrl+Enter)</button>
+      <button id="btnClear" class="ghost">Clear Output</button>
+      <button id="btnSave">Save DB</button>
+      <button id="btnLoad">Load DB</button>
+      <button id="btnNew">New DB</button>
+      <label class="filebtn" title="Import .sqlite file">
+        Import
+        <input id="fileInput" type="file" accept=".sqlite,.db,application/octet-stream">
+      </label>
+      <button id="btnExport">Export .sqlite</button>
+    </div>
+  </header>
+
+  <div class="row">
+    <div class="col">
+      <div id="editorBox" class="panel">
+        <div id="aceEditor"></div>
+      </div>
+
+      <div style="margin-top:10px" class="panel">
+        <div class="row-between">
+          <h3 style="margin:0">Output</h3>
+          <div class="tiny muted" id="status">Initializing...</div>
+        </div>
+        <div class="out" id="output">No results yet.</div>
+      </div>
+    </div>
+
+    <div class="rightPanel">
+      <div class="panel">
+        <div class="row-between">
+          <h3>Tables</h3>
+          <div class="tiny muted">pk = rowid if no primary key</div>
+        </div>
+        <div style="margin-top:10px" class="list" id="tableList">
+          <div class="muted">No DB loaded.</div>
+        </div>
+        <div style="margin-top:10px;display:flex;gap:8px">
+          <button id="btnListTables">Refresh</button>
+          <button id="btnExplore" class="ghost">Explore Selected</button>
+        </div>
+      </div>
+
+      <div style="margin-top:12px" class="panel">
+        <h3>Quick Samples</h3>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+          <button class="ghost" data-sql="CREATE TABLE people(id INTEGER PRIMARY KEY, name TEXT, age INTEGER);">Create people</button>
+          <button class="ghost" data-sql="INSERT INTO people(name,age) VALUES ('Alice',30),('Bob',28),('Carol',35);">Insert sample rows</button>
+          <button class="ghost" data-sql="SELECT * FROM people LIMIT 50;">Select people</button>
+          <button class="ghost" data-sql="CREATE TABLE notes(id INTEGER PRIMARY KEY, note TEXT, created_at TEXT);">Create notes</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <div class="muted">Database stored in IndexedDB key: <span class="kbd">sqlite-browser-db</span></div>
+    <div class="muted">sql.js (WASM) + Ace editor</div>
+  </footer>
+</div>
+
+<!-- Modal -->
+<div id="modal" style="display:none" class="modal" aria-hidden="true">
+  <div class="dialog">
+    <div class="row-between" style="margin-bottom:8px">
+      <h3 id="modalTitle">Table preview</h3>
+      <div>
+        <button id="modalClose" class="ghost">Close</button>
+      </div>
+    </div>
+    <div id="modalContent" style="overflow:auto;max-height:70vh"></div>
+  </div>
+</div>
+
+<!-- Dependencies -->
+<script src="https://cdn.jsdelivr.net/npm/sql.js@1.8.0/dist/sql-wasm.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/ace.js" integrity="sha512-kH4jM8NQ1Jb2b6AM2cu3n2X9LB7plxq2pI2y2nWZcYwIqgqk4b7v3nqYh8s1t6M6XYb0r2u6Wv3oW2lX1E6oNw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
+<script>
+(async function(){
+  // globals
+  let SQL; // initSqlJs
+  let db = null;
+  const IDB_KEY = 'sqlite-browser-db';
+  const DB_NAME = 'sqlite-browser-storage';
+  const STORE = 'files';
+
+  // init sql.js
+  const SQLWASM_BASE = 'https://cdn.jsdelivr.net/npm/sql.js@1.8.0/dist/';
+  const SQLmodule = await initSqlJs({ locateFile: file => SQLWASM_BASE + file });
+  SQL = SQLmodule;
+
+  // IndexedDB helpers
+  function idbPut(key, value){ // value: Uint8Array or null
+    return new Promise((res,rej)=>{
+      const open = indexedDB.open(DB_NAME, 1);
+      open.onupgradeneeded = ()=> open.result.createObjectStore(STORE);
+      open.onsuccess = ()=> {
+        const tx = open.result.transaction(STORE, 'readwrite');
+        tx.objectStore(STORE).put(value, key);
+        tx.oncomplete = ()=> { open.result.close(); res(true); };
+        tx.onerror = e => rej(e);
+      };
+      open.onerror = e => rej(e);
+    });
+  }
+  function idbGet(key){
+    return new Promise((res,rej)=>{
+      const open = indexedDB.open(DB_NAME, 1);
+      open.onupgradeneeded = ()=> open.result.createObjectStore(STORE);
+      open.onsuccess = ()=> {
+        const tx = open.result.transaction(STORE, 'readonly');
+        const req = tx.objectStore(STORE).get(key);
+        req.onsuccess = ()=> { open.result.close(); res(req.result || null); };
+        req.onerror = e => rej(e);
+      };
+      open.onerror = e => rej(e);
+    });
+  }
+
+  // UI wiring
+  const aceEditor = ace.edit("aceEditor", { value:'', theme:'ace/theme/tomorrow_night', mode:'ace/mode/sql', wrap:true });
+  aceEditor.setOptions({fontSize:14,showPrintMargin:false,enableBasicAutocompletion:true,enableLiveAutocompletion:true});
+  const btnRun = document.getElementById('btnRun');
+  const btnClear = document.getElementById('btnClear');
+  const btnSave = document.getElementById('btnSave');
+  const btnLoad = document.getElementById('btnLoad');
+  const btnNew = document.getElementById('btnNew');
+  const btnExport = document.getElementById('btnExport');
+  const fileInput = document.getElementById('fileInput');
+  const output = document.getElementById('output');
+  const statusEl = document.getElementById('status');
+  const tableList = document.getElementById('tableList');
+  const btnListTables = document.getElementById('btnListTables');
+  const btnExplore = document.getElementById('btnExplore');
+  const modal = document.getElementById('modal');
+  const modalTitle = document.getElementById('modalTitle');
+  const modalContent = document.getElementById('modalContent');
+  const modalClose = document.getElementById('modalClose');
+
+  // helpers
+  function setStatus(text, color = 'var(--muted)'){ statusEl.textContent = text; statusEl.style.color = color; }
+  function showOutput(html){ output.innerHTML = html; }
+  function renderResultSet(res){
+    if(!res || res.length===0) return '<div class="muted">No result</div>';
+    // sql.js returns array of result objects; show first result only if multiple
+    let html = '';
+    res.forEach((r, idx) => {
+      html += `<div style="margin-bottom:10px"><div class="tiny muted">Result ${idx+1}</div>`;
+      const cols = r.columns;
+      const values = r.values;
+      html += '<div style="overflow:auto"><table><thead><tr>';
+      for(const c of cols) html += `<th>${escapeHtml(c)}</th>`;
+      html += '</tr></thead><tbody>';
+      for(const row of values){
+        html += '<tr>';
+        for(const v of row) html += `<td>${escapeHtml(String(v===null? 'NULL': v))}</td>`;
+        html += '</tr>';
+      }
+      html += '</tbody></table></div></div>';
+    });
+    return html;
+  }
+  function escapeHtml(s){ return s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+
+  // DB lifecycle
+  function newDatabase(){
+    db = new SQL.Database();
+    setStatus('New DB', 'var(--accent)');
+    refreshTableList();
+  }
+  async function loadDatabaseFromBytes(bytes){
+    try{
+      db = bytes ? new SQL.Database(new Uint8Array(bytes)) : new SQL.Database();
+      setStatus('DB loaded', 'var(--accent)');
+      refreshTableList();
+    }catch(e){
+      setStatus('Load failed', 'tomato');
+      console.error(e);
+    }
+  }
+  async function saveDatabaseToIDB(){
+    if(!db){ setStatus('No DB to save', 'tomato'); return; }
+    const bytes = db.export();
+    await idbPut(IDB_KEY, bytes);
+    setStatus('Saved to IndexedDB', 'var(--success)');
+  }
+  async function loadDatabaseFromIDB(){
+    const bytes = await idbGet(IDB_KEY);
+    if(bytes){
+      await loadDatabaseFromBytes(bytes);
+    }else{
+      setStatus('No DB found in storage', 'var(--muted)');
+    }
+  }
+
+  // run SQL
+  function runSQL(sql){
+    if(!db){ setStatus('No DB - create or load one', 'tomato'); return; }
+    try{
+      // run statements in a transaction style: we'll attempt to exec and capture results
+      const trimmed = sql.trim();
+      if(trimmed === '') { setStatus('Empty query', 'var(--muted)'); return; }
+      const statements = splitStatements(sql);
+      let out = [];
+      for(const st of statements){
+        if(st.trim()==='') continue;
+        // try to exec, sql.js exec returns array of result sets for st
+        const res = db.exec(st);
+        if(res && res.length) out.push(...res);
+      }
+      showOutput(renderResultSet(out));
+      setStatus('Query ran', 'var(--success)');
+      refreshTableList();
+    }catch(err){
+      showOutput(`<div style="color:#ffb4b4"><b>Error:</b> ${escapeHtml(err.message || String(err))}</div>`);
+      setStatus('Error', 'tomato');
+      console.error(err);
+    }
+  }
+
+  function splitStatements(sql){
+    // naive split by semicolon but respect basic cases - keep it simple
+    // We'll split on ';' when not inside quotes
+    const out = [];
+    let cur = '', quote = null, prev = '';
+    for(let ch of sql){
+      cur += ch;
+      if((ch === '"' || ch === "'" || ch === '`')){
+        if(quote === ch) quote = null;
+        else if(!quote) quote = ch;
+      } else if(ch === ';' && !quote){
+        out.push(cur.replace(/;$/,''));
+        cur = '';
+      }
+      prev = ch;
+    }
+    if(cur.trim() !== '') out.push(cur);
+    return out;
+  }
+
+  // Tables listing + preview
+  function getTables(){
+    if(!db) return [];
+    try{
+      const res = db.exec("SELECT name, type, sql FROM sqlite_master WHERE (type='table' OR type='view') AND name NOT LIKE 'sqlite_%' ORDER BY name;");
+      if(!res || res.length===0) return [];
+      return res[0].values.map(r => ({ name: r[0], type: r[1], sql: r[2] }));
+    }catch(e){ console.error(e); return []; }
+  }
+  function refreshTableList(){
+    const tables = getTables();
+    tableList.innerHTML = '';
+    if(!db) {
+      tableList.innerHTML = '<div class="muted">No DB loaded.</div>';
+      return;
+    }
+    if(tables.length === 0){
+      tableList.innerHTML = '<div class="muted">No tables yet. Try sample SQL or CREATE TABLE.</div>';
+      return;
+    }
+    tables.forEach(t => {
+      const div = document.createElement('div');
+      div.className = 'item';
+      div.innerHTML = `<div>
+          <div class="name">${escapeHtml(t.name)}</div>
+          <div class="tiny muted">${escapeHtml(t.type)} • <span class="tiny muted">${escapeHtml(t.sql || '')}</span></div>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <button class="ghost" data-table="${escapeHtml(t.name)}">Preview</button>
+          <button class="ghost" data-drop="${escapeHtml(t.name)}" title="DROP table">Drop</button>
+        </div>`;
+      tableList.appendChild(div);
+    });
+  }
+
+  async function previewTable(name, limit=100){
+    if(!db) return;
+    try{
+      const stmt = `SELECT * FROM "${name.replace(/"/g,'""')}" LIMIT ${limit};`;
+      const res = db.exec(stmt);
+      modalTitle.textContent = `Preview: ${name} (limit ${limit})`;
+      modalContent.innerHTML = renderResultSet(res);
+      modal.style.display = 'flex';
+    }catch(e){
+      modalContent.innerHTML = `<div class="muted">Error: ${escapeHtml(e.message||String(e))}</div>`;
+    }
+  }
+
+  // export file
+  function exportDatabase(){
+    if(!db){ setStatus('No DB to export', 'tomato'); return; }
+    const bytes = db.export();
+    const blob = new Blob([bytes], {type:'application/x-sqlite3'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'browser-db.sqlite';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    setStatus('Exported .sqlite', 'var(--accent)');
+  }
+
+  // import file into DB and set as current
+  async function importFile(file){
+    const buf = await file.arrayBuffer();
+    await loadDatabaseFromBytes(buf);
+    setStatus(`Imported ${file.name}`, 'var(--accent)');
+  }
+
+  // UI events
+  btnRun.addEventListener('click', ()=> runSQL(aceEditor.getValue()));
+  btnClear.addEventListener('click', ()=> showOutput('No results yet.'));
+  btnSave.addEventListener('click', saveDatabaseToIDB);
+  btnLoad.addEventListener('click', loadDatabaseFromIDB);
+  btnNew.addEventListener('click', newDatabase);
+  btnExport.addEventListener('click', exportDatabase);
+  btnListTables.addEventListener('click', refreshTableList);
+  btnExplore.addEventListener('click', ()=>{
+    // pick first table as selected if none
+    const firstBtn = tableList.querySelector('button[data-table]');
+    if(firstBtn) previewTable(firstBtn.getAttribute('data-table'));
+    else setStatus('No tables to explore', 'var(--muted)');
+  });
+
+  // sample buttons
+  document.querySelectorAll('[data-sql]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      aceEditor.setValue(b.getAttribute('data-sql'), -1);
+    });
+  });
+
+  // table list actions (delegate)
+  tableList.addEventListener('click', async (ev)=>{
+    const tbtn = ev.target.closest('button[data-table]');
+    const dbtn = ev.target.closest('button[data-drop]');
+    if(tbtn){
+      const name = tbtn.getAttribute('data-table');
+      previewTable(name);
+    } else if(dbtn){
+      const name = dbtn.getAttribute('data-drop');
+      if(!confirm(`Drop table "${name}"? This cannot be undone.`)) return;
+      try{
+        db.run(`DROP TABLE IF EXISTS "${name.replace(/"/g,'""')}";`);
+        setStatus(`Dropped ${name}`, 'var(--accent)');
+        refreshTableList();
+      }catch(e){ setStatus('Drop failed', 'tomato'); console.error(e); }
+    }
+  });
+
+  modalClose.addEventListener('click', ()=> modal.style.display = 'none');
+  modal.addEventListener('click', (e)=> { if(e.target===modal) modal.style.display='none'; });
+
+  // file input
+  fileInput.addEventListener('change', async (ev)=>{
+    const f = ev.target.files[0];
+    if(f) await importFile(f);
+    fileInput.value = '';
+  });
+
+  // keyboard shortcut Ctrl+Enter to run
+  document.addEventListener('keydown', (e)=>{
+    if((e.ctrlKey || e.metaKey) && e.key === 'Enter'){
+      e.preventDefault();
+      runSQL(aceEditor.getValue());
+    }
+  });
+
+  // initial state: try load DB from IDB, else new DB
+  try{
+    const stored = await idbGet(IDB_KEY);
+    if(stored){ await loadDatabaseFromBytes(stored); setStatus('Loaded DB from storage', 'var(--accent)'); }
+    else { newDatabase(); setStatus('New DB ready', 'var(--muted)'); }
+  }catch(e){
+    console.error(e);
+    newDatabase();
+    setStatus('DB ready (storage error)', 'tomato');
+  }
+
+  // utility to show initial sample SQL
+  aceEditor.setValue("-- Example:\n-- CREATE TABLE test(id INTEGER PRIMARY KEY, name TEXT);\n-- INSERT INTO test(name) VALUES ('alice'),('bob');\n-- SELECT * FROM test;\n", -1);
+
+  // small helper for direct SQL console from URL hash (optional)
+  if(window.location.hash.startsWith('#q=')){
+    try{
+      const q = decodeURIComponent(window.location.hash.slice(3));
+      aceEditor.setValue(q, -1);
+    }catch(e){}
+  }
+
+})();
+</script>
+</body>
+</html>
