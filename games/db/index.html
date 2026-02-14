@@ -48,6 +48,10 @@
     .row{flex-direction:column}
     .rightPanel{width:100%;min-width:unset}
   }
+  /* fallback textarea styling */
+  .editor-textarea{
+    width:100%;height:100%;resize:none;background:transparent;color:#e6eef8;border:none;padding:12px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,monospace;font-size:13px;line-height:1.5;
+  }
 </style>
 </head>
 <body>
@@ -115,7 +119,7 @@
 
   <footer>
     <div class="muted">Database stored in IndexedDB key: <span class="kbd">sqlite-browser-db</span></div>
-    <div class="muted">sql.js (WASM) + Ace editor</div>
+    <div class="muted">sql.js (WASM) + Ace editor (fallback to textarea if unavailable)</div>
   </footer>
 </div>
 
@@ -134,24 +138,21 @@
 
 <!-- Dependencies -->
 <script src="https://cdn.jsdelivr.net/npm/sql.js@1.8.0/dist/sql-wasm.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/ace.js" integrity="sha512-kH4jM8NQ1Jb2b6AM2cu3n2X9LB7plxq2pI2y2nWZcYwIqgqk4b7v3nqYh8s1t6M6XYb0r2u6Wv3oW2lX1E6oNw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/ace.js"></script>
 
 <script>
 (async function(){
-  // globals
-  let SQL; // initSqlJs
+  let SQL;
   let db = null;
   const IDB_KEY = 'sqlite-browser-db';
   const DB_NAME = 'sqlite-browser-storage';
   const STORE = 'files';
 
-  // init sql.js
   const SQLWASM_BASE = 'https://cdn.jsdelivr.net/npm/sql.js@1.8.0/dist/';
   const SQLmodule = await initSqlJs({ locateFile: file => SQLWASM_BASE + file });
   SQL = SQLmodule;
 
-  // IndexedDB helpers
-  function idbPut(key, value){ // value: Uint8Array or null
+  function idbPut(key, value){
     return new Promise((res,rej)=>{
       const open = indexedDB.open(DB_NAME, 1);
       open.onupgradeneeded = ()=> open.result.createObjectStore(STORE);
@@ -178,32 +179,31 @@
     });
   }
 
-  // UI wiring
-  const aceEditor = ace.edit("aceEditor", { value:'', theme:'ace/theme/tomorrow_night', mode:'ace/mode/sql', wrap:true });
-  aceEditor.setOptions({fontSize:14,showPrintMargin:false,enableBasicAutocompletion:true,enableLiveAutocompletion:true});
+  // UI refs
+  const output = document.getElementById('output');
+  const statusEl = document.getElementById('status');
+  const tableList = document.getElementById('tableList');
+  const modal = document.getElementById('modal');
+  const modalTitle = document.getElementById('modalTitle');
+  const modalContent = document.getElementById('modalContent');
+  const modalClose = document.getElementById('modalClose');
+  const fileInput = document.getElementById('fileInput');
+
   const btnRun = document.getElementById('btnRun');
   const btnClear = document.getElementById('btnClear');
   const btnSave = document.getElementById('btnSave');
   const btnLoad = document.getElementById('btnLoad');
   const btnNew = document.getElementById('btnNew');
   const btnExport = document.getElementById('btnExport');
-  const fileInput = document.getElementById('fileInput');
-  const output = document.getElementById('output');
-  const statusEl = document.getElementById('status');
-  const tableList = document.getElementById('tableList');
   const btnListTables = document.getElementById('btnListTables');
   const btnExplore = document.getElementById('btnExplore');
-  const modal = document.getElementById('modal');
-  const modalTitle = document.getElementById('modalTitle');
-  const modalContent = document.getElementById('modalContent');
-  const modalClose = document.getElementById('modalClose');
 
-  // helpers
   function setStatus(text, color = 'var(--muted)'){ statusEl.textContent = text; statusEl.style.color = color; }
   function showOutput(html){ output.innerHTML = html; }
+  function escapeHtml(s){ return s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+
   function renderResultSet(res){
     if(!res || res.length===0) return '<div class="muted">No result</div>';
-    // sql.js returns array of result objects; show first result only if multiple
     let html = '';
     res.forEach((r, idx) => {
       html += `<div style="margin-bottom:10px"><div class="tiny muted">Result ${idx+1}</div>`;
@@ -221,9 +221,38 @@
     });
     return html;
   }
-  function escapeHtml(s){ return s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
 
-  // DB lifecycle
+  // Editor abstraction (ace or textarea fallback)
+  let editorAPI = null;
+  function createTextareaFallback(){
+    const parent = document.getElementById('aceEditor');
+    parent.innerHTML = '';
+    const ta = document.createElement('textarea');
+    ta.className = 'editor-textarea';
+    ta.spellcheck = false;
+    ta.value = "-- Example:\n-- CREATE TABLE test(id INTEGER PRIMARY KEY, name TEXT);\n-- INSERT INTO test(name) VALUES ('alice'),('bob');\n-- SELECT * FROM test;\n";
+    parent.appendChild(ta);
+    editorAPI = {
+      getValue: ()=> ta.value,
+      setValue: (v, pos)=> { ta.value = v; if(pos===-1) ta.selectionStart = ta.selectionEnd = 0; },
+      focus: ()=> ta.focus()
+    };
+  }
+
+  // initialize ace if available
+  if(window.ace){
+    const aceEditor = ace.edit("aceEditor", { value:'', theme:'ace/theme/tomorrow_night', mode:'ace/mode/sql', wrap:true });
+    aceEditor.setOptions({fontSize:14,showPrintMargin:false,enableBasicAutocompletion:true,enableLiveAutocompletion:true});
+    editorAPI = {
+      getValue: ()=> aceEditor.getValue(),
+      setValue: (v, pos)=> aceEditor.setValue(v, pos),
+      focus: ()=> aceEditor.focus()
+    };
+    // small keyboard help: Ctrl+Enter to run (handled globally)
+  } else {
+    createTextareaFallback();
+  }
+
   function newDatabase(){
     db = new SQL.Database();
     setStatus('New DB', 'var(--accent)');
@@ -254,18 +283,33 @@
     }
   }
 
-  // run SQL
+  function splitStatements(sql){
+    const out = [];
+    let cur = '', quote = null;
+    for(let i=0;i<sql.length;i++){
+      const ch = sql[i];
+      cur += ch;
+      if((ch === '"' || ch === "'" || ch === '`')){
+        if(quote === ch) quote = null;
+        else if(!quote) quote = ch;
+      } else if(ch === ';' && !quote){
+        out.push(cur.replace(/;$/,''));
+        cur = '';
+      }
+    }
+    if(cur.trim() !== '') out.push(cur);
+    return out;
+  }
+
   function runSQL(sql){
     if(!db){ setStatus('No DB - create or load one', 'tomato'); return; }
     try{
-      // run statements in a transaction style: we'll attempt to exec and capture results
       const trimmed = sql.trim();
       if(trimmed === '') { setStatus('Empty query', 'var(--muted)'); return; }
       const statements = splitStatements(sql);
       let out = [];
       for(const st of statements){
         if(st.trim()==='') continue;
-        // try to exec, sql.js exec returns array of result sets for st
         const res = db.exec(st);
         if(res && res.length) out.push(...res);
       }
@@ -279,27 +323,6 @@
     }
   }
 
-  function splitStatements(sql){
-    // naive split by semicolon but respect basic cases - keep it simple
-    // We'll split on ';' when not inside quotes
-    const out = [];
-    let cur = '', quote = null, prev = '';
-    for(let ch of sql){
-      cur += ch;
-      if((ch === '"' || ch === "'" || ch === '`')){
-        if(quote === ch) quote = null;
-        else if(!quote) quote = ch;
-      } else if(ch === ';' && !quote){
-        out.push(cur.replace(/;$/,''));
-        cur = '';
-      }
-      prev = ch;
-    }
-    if(cur.trim() !== '') out.push(cur);
-    return out;
-  }
-
-  // Tables listing + preview
   function getTables(){
     if(!db) return [];
     try{
@@ -324,7 +347,7 @@
       div.className = 'item';
       div.innerHTML = `<div>
           <div class="name">${escapeHtml(t.name)}</div>
-          <div class="tiny muted">${escapeHtml(t.type)} • <span class="tiny muted">${escapeHtml(t.sql || '')}</span></div>
+          <div class="tiny muted">${escapeHtml(t.type)} • <span class="tiny muted" style="display:block;max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(t.sql || '')}</span></div>
         </div>
         <div style="display:flex;gap:6px;align-items:center">
           <button class="ghost" data-table="${escapeHtml(t.name)}">Preview</button>
@@ -347,7 +370,6 @@
     }
   }
 
-  // export file
   function exportDatabase(){
     if(!db){ setStatus('No DB to export', 'tomato'); return; }
     const bytes = db.export();
@@ -363,7 +385,6 @@
     setStatus('Exported .sqlite', 'var(--accent)');
   }
 
-  // import file into DB and set as current
   async function importFile(file){
     const buf = await file.arrayBuffer();
     await loadDatabaseFromBytes(buf);
@@ -371,7 +392,7 @@
   }
 
   // UI events
-  btnRun.addEventListener('click', ()=> runSQL(aceEditor.getValue()));
+  btnRun.addEventListener('click', ()=> runSQL(editorAPI.getValue()));
   btnClear.addEventListener('click', ()=> showOutput('No results yet.'));
   btnSave.addEventListener('click', saveDatabaseToIDB);
   btnLoad.addEventListener('click', loadDatabaseFromIDB);
@@ -379,20 +400,18 @@
   btnExport.addEventListener('click', exportDatabase);
   btnListTables.addEventListener('click', refreshTableList);
   btnExplore.addEventListener('click', ()=>{
-    // pick first table as selected if none
     const firstBtn = tableList.querySelector('button[data-table]');
     if(firstBtn) previewTable(firstBtn.getAttribute('data-table'));
     else setStatus('No tables to explore', 'var(--muted)');
   });
 
-  // sample buttons
   document.querySelectorAll('[data-sql]').forEach(b=>{
     b.addEventListener('click', ()=>{
-      aceEditor.setValue(b.getAttribute('data-sql'), -1);
+      editorAPI.setValue(b.getAttribute('data-sql'), -1);
+      editorAPI.focus();
     });
   });
 
-  // table list actions (delegate)
   tableList.addEventListener('click', async (ev)=>{
     const tbtn = ev.target.closest('button[data-table]');
     const dbtn = ev.target.closest('button[data-drop]');
@@ -413,22 +432,20 @@
   modalClose.addEventListener('click', ()=> modal.style.display = 'none');
   modal.addEventListener('click', (e)=> { if(e.target===modal) modal.style.display='none'; });
 
-  // file input
   fileInput.addEventListener('change', async (ev)=>{
     const f = ev.target.files[0];
     if(f) await importFile(f);
     fileInput.value = '';
   });
 
-  // keyboard shortcut Ctrl+Enter to run
   document.addEventListener('keydown', (e)=>{
     if((e.ctrlKey || e.metaKey) && e.key === 'Enter'){
       e.preventDefault();
-      runSQL(aceEditor.getValue());
+      runSQL(editorAPI.getValue());
     }
   });
 
-  // initial state: try load DB from IDB, else new DB
+  // initial load
   try{
     const stored = await idbGet(IDB_KEY);
     if(stored){ await loadDatabaseFromBytes(stored); setStatus('Loaded DB from storage', 'var(--accent)'); }
@@ -439,15 +456,9 @@
     setStatus('DB ready (storage error)', 'tomato');
   }
 
-  // utility to show initial sample SQL
-  aceEditor.setValue("-- Example:\n-- CREATE TABLE test(id INTEGER PRIMARY KEY, name TEXT);\n-- INSERT INTO test(name) VALUES ('alice'),('bob');\n-- SELECT * FROM test;\n", -1);
-
-  // small helper for direct SQL console from URL hash (optional)
-  if(window.location.hash.startsWith('#q=')){
-    try{
-      const q = decodeURIComponent(window.location.hash.slice(3));
-      aceEditor.setValue(q, -1);
-    }catch(e){}
+  // initial editor content if ace was used it was set above; if textarea fallback, ensure it's populated
+  if(!window.ace){
+    // textarea already has default text from creation
   }
 
 })();
