@@ -1,149 +1,222 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tic Tac Toe - Hacker Style</title>
+    <title>P2P Tic Tac Toe</title>
+    <script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
     <style>
-        body {
-            background-color: #1c1c1c;
-            color: #00ff00; /* hacker green */
-            font-family: 'Courier New', Courier, monospace;
-            text-align: center;
-        }
-
-        h1 {
-            font-size: 2.5em;
-            margin: 20px 0;
-        }
-
-        #board {
-            display: grid;
-            grid-template-columns: repeat(3, 100px);
-            grid-template-rows: repeat(3, 100px);
-            gap: 5px;
-            justify-content: center;
-        }
-
-        .cell {
-            width: 100px;
-            height: 100px;
-            font-size: 2em;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            background-color: #333;
-            color: #00ff00;
-            cursor: pointer;
-            border: 2px solid #00ff00;
-            transition: background 0.3s;
-        }
-
-        .cell:hover {
-            background-color: #444;
-        }
-
-        #reset {
-            margin-top: 20px;
-            padding: 10px;
-            font-size: 1.5em;
-            background-color: #333;
-            color: #00ff00;
-            border: 2px solid #00ff00;
-            cursor: pointer;
-        }
-
-        #reset:hover {
-            background-color: #444;
-        }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; margin: 0; }
+        h1 { margin-bottom: 10px; color: #fff; }
+        #status { margin: 15px; font-size: 18px; font-weight: 500; height: 24px; color: #4CAF50; }
+        #share { margin: 10px; padding: 12px; background: #1a1a1a; border-radius: 8px; border: 1px solid #333; max-width: 90%; word-break: break-all; font-size: 14px; }
+        #share button { margin-left: 10px; padding: 6px 12px; font-size: 12px; background: #333; color: #fff; border: 1px solid #555; border-radius: 4px; cursor: pointer; }
+        #share button:hover { background: #444; }
+        #board { display: grid; grid-template-columns: repeat(3, 120px); gap: 8px; margin: 20px; }
+        .cell { width: 120px; height: 120px; background: #1e1e1e; display: flex; align-items: center; justify-content: center; font-size: 64px; font-weight: bold; cursor: pointer; border-radius: 12px; transition: all 0.2s; border: 2px solid #333; color: #fff; }
+        .cell:hover:not(.disabled) { background: #2a2a2a; border-color: #4CAF50; transform: scale(1.02); }
+        .cell.disabled { cursor: not-allowed; opacity: 0.7; }
+        .cell.x { color: #4CAF50; }
+        .cell.o { color: #f44336; }
+        #resetBtn { padding: 12px 24px; font-size: 16px; cursor: pointer; background: #4CAF50; color: white; border: none; border-radius: 6px; margin-top: 10px; font-weight: 600; }
+        #resetBtn:hover { background: #45a049; }
+        #resetBtn:disabled { background: #333; cursor: not-allowed; }
+        @media (max-width: 600px) { #board { grid-template-columns: repeat(3, 90px); gap: 6px; } .cell { width: 90px; height: 90px; font-size: 48px; } }
     </style>
 </head>
-
 <body>
-    <h1>Tic Tac Toe</h1>
+    <h1>🔴 P2P Tic Tac Toe</h1>
+    <div id="status">Initializing...</div>
+    <div id="share" style="display:none">
+        <span id="linkText"></span>
+        <button onclick="copyLink()">Copy Link</button>
+    </div>
     <div id="board"></div>
-    <button id="reset">Reset Game</button>
+    <button id="resetBtn" onclick="resetGame()" style="display:none">Play Again</button>
 
     <script>
-        const board = document.getElementById('board');
-        const resetButton = document.getElementById('reset');
-        let grid = Array(9).fill(null);
-        let isGameOver = false;
+        // Room logic with sessionStorage to handle page refresh
+        const urlParams = new URLSearchParams(window.location.search);
+        let roomId = urlParams.get('room');
+        let isHost = false;
 
-        const drawBoard = () => {
-            board.innerHTML = '';
-            grid.forEach((cell, index) => {
-                const div = document.createElement('div');
-                div.classList.add('cell');
-                div.addEventListener('click', () => handleClick(index));
-                div.textContent = cell;
-                board.appendChild(div);
+        if (!roomId) {
+            roomId = Math.random().toString(36).substring(2, 10);
+            isHost = true;
+            const newUrl = window.location.pathname + '?room=' + roomId;
+            window.history.replaceState({}, '', newUrl);
+            sessionStorage.setItem('ttt_host_' + roomId, 'true');
+        } else {
+            if (sessionStorage.getItem('ttt_host_' + roomId) === 'true') {
+                isHost = true;
+            }
+        }
+
+        // Public STUN and TURN servers (Open Relay)
+        const iceConfig = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+                { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+                { urls: 'turn:openrelay.metered.ca:5349', username: 'openrelayproject', credential: 'openrelayproject' }
+            ]
+        };
+
+        let peer, conn;
+        let mySymbol = isHost ? 'X' : 'O';
+        let currentPlayer = 'X';
+        let board = Array(9).fill(null);
+        let gameActive = false;
+
+        const statusDiv = document.getElementById('status');
+        const shareDiv = document.getElementById('share');
+        const linkText = document.getElementById('linkText');
+        const boardDiv = document.getElementById('board');
+        const resetBtn = document.getElementById('resetBtn');
+
+        // Initialize board
+        for (let i = 0; i < 9; i++) {
+            const cell = document.createElement('div');
+            cell.className = 'cell';
+            cell.dataset.index = i;
+            cell.onclick = () => cellClicked(i);
+            boardDiv.appendChild(cell);
+        }
+
+        function init() {
+            peer = new Peer(isHost ? roomId : null, {
+                host: '0.peerjs.com',
+                port: 443,
+                secure: true,
+                config: iceConfig
             });
-        };
 
-        const handleClick = (index) => {
-            if (grid[index] || isGameOver) return;
-            grid[index] = 'O';
-            drawBoard();
-            if (checkWinner('O')) {
-                setTimeout(() => alert("You win!"), 100); // Delay alert until after drawing
-                isGameOver = true;
-                return;
-            }
-            if (grid.every(cell => cell)) {
-                setTimeout(() => alert("It's a draw!"), 100); // Delay alert until after drawing
-                return;
-            }
-            pcMove();
-        };
-
-        const pcMove = () => {
-            const bestIndex = getBestMove();
-            if (bestIndex !== null) {
-                grid[bestIndex] = 'X';
-                drawBoard();
-                if (checkWinner('X')) {
-                    setTimeout(() => alert("PC wins!"), 100); // Delay alert until after drawing
-                    isGameOver = true;
-                    return;
+            peer.on('open', (id) => {
+                if (isHost) {
+                    statusDiv.textContent = 'Waiting for opponent to join...';
+                    shareDiv.style.display = 'block';
+                    linkText.textContent = window.location.href;
+                } else {
+                    statusDiv.textContent = 'Connecting to game...';
+                    conn = peer.connect(roomId, { reliable: true });
+                    setupConn(conn);
                 }
-            }
-            drawBoard();
-        };
-
-        const checkWinner = (player) => {
-            const winningCombinations = [
-                [0, 1, 2],
-                [3, 4, 5],
-                [6, 7, 8],
-                [0, 3, 6],
-                [1, 4, 7],
-                [2, 5, 8],
-                [0, 4, 8],
-                [2, 4, 6]
-            ];
-            return winningCombinations.some(combination => {
-                return combination.every(index => grid[index] === player);
             });
-        };
 
-        const getBestMove = () => {
-            const availableIndices = grid.map((cell, index) => (cell === null ? index : null)).filter(index => index !== null);
-            return availableIndices.length > 0 ? availableIndices[Math.floor(Math.random() * availableIndices.length)] : null;
-        };
+            peer.on('connection', (c) => {
+                if (isHost && !conn) {
+                    conn = c;
+                    setupConn(c);
+                }
+            });
 
-        resetButton.addEventListener('click', () => {
-            grid.fill(null);
-            isGameOver = false;
-            drawBoard();
-            pcMove(); // PC plays first after reset
-        });
+            peer.on('error', (err) => {
+                if (err.type === 'unavailable-id') {
+                    statusDiv.textContent = 'Room exists. Waiting to reconnect...';
+                    setTimeout(() => peer.reconnect(), 2000);
+                } else {
+                    statusDiv.textContent = 'Error: ' + err.message;
+                }
+            });
+        }
 
-        // Initialize game
-        drawBoard();
-        pcMove(); // Start with PC's turn
+        function setupConn(connection) {
+            conn = connection;
+            conn.on('open', () => {
+                gameActive = true;
+                shareDiv.style.display = 'none';
+                statusDiv.textContent = isHost ? 'Your turn (X)' : 'Opponent\'s turn (X)';
+            });
+
+            conn.on('data', (data) => {
+                if (data.type === 'move') handleMove(data.index, data.symbol, false);
+                else if (data.type === 'reset') resetBoard(false);
+            });
+
+            conn.on('close', () => {
+                statusDiv.textContent = 'Opponent disconnected. Game over.';
+                gameActive = false;
+                resetBtn.style.display = 'none';
+            });
+
+            conn.on('error', () => {
+                statusDiv.textContent = 'Connection error';
+                gameActive = false;
+            });
+        }
+
+        function cellClicked(index) {
+            if (!gameActive || board[index] || currentPlayer !== mySymbol) return;
+            handleMove(index, mySymbol, true);
+            if (conn && conn.open) conn.send({ type: 'move', index: index, symbol: mySymbol });
+        }
+
+        function handleMove(index, symbol, isLocal) {
+            if (!gameActive || board[index]) return;
+            
+            board[index] = symbol;
+            const cell = boardDiv.children[index];
+            cell.textContent = symbol;
+            cell.classList.add('disabled', symbol.toLowerCase());
+
+            if (checkWin(symbol)) {
+                gameActive = false;
+                statusDiv.textContent = isLocal ? 'You win!' : 'Opponent wins!';
+                resetBtn.style.display = 'inline-block';
+                return;
+            }
+
+            if (board.every(c => c !== null)) {
+                gameActive = false;
+                statusDiv.textContent = 'Draw!';
+                resetBtn.style.display = 'inline-block';
+                return;
+            }
+
+            currentPlayer = currentPlayer === 'X' ? 'O' : 'X';
+            if (isLocal) {
+                statusDiv.textContent = 'Opponent\'s turn (' + currentPlayer + ')';
+            } else {
+                statusDiv.textContent = 'Your turn (' + mySymbol + ')';
+            }
+        }
+
+        function checkWin(symbol) {
+            const wins = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+            return wins.some(combo => combo.every(i => board[i] === symbol));
+        }
+
+        function resetGame() {
+            if (conn && conn.open) conn.send({ type: 'reset' });
+            resetBoard(true);
+        }
+
+        function resetBoard(isLocal) {
+            board.fill(null);
+            currentPlayer = 'X';
+            gameActive = true;
+            mySymbol = isHost ? 'X' : 'O';
+            statusDiv.textContent = isHost ? 'Your turn (X)' : 'Opponent\'s turn (X)';
+            resetBtn.style.display = 'none';
+            
+            Array.from(boardDiv.children).forEach(cell => {
+                cell.textContent = '';
+                cell.classList.remove('disabled', 'x', 'o');
+            });
+        }
+
+        function copyLink() {
+            navigator.clipboard.writeText(window.location.href).then(() => {
+                const btn = shareDiv.querySelector('button');
+                const old = btn.textContent;
+                btn.textContent = 'Copied!';
+                setTimeout(() => btn.textContent = old, 2000);
+            });
+        }
+
+        window.onbeforeunload = () => { if (peer) peer.destroy(); };
+        init();
     </script>
 </body>
-
 </html>
