@@ -1,0 +1,989 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>2D Minecraft-ish (Single HTML)</title>
+  <style>
+    html,body{margin:0;height:100%;overflow:hidden;background:#0b1020;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    #c{display:block;width:100vw;height:100vh;image-rendering:pixelated}
+    #ui{
+      position:fixed;left:10px;top:10px;z-index:20;
+      color:rgba(255,255,255,.92);background:rgba(0,0,0,.35);
+      border:1px solid rgba(255,255,255,.12);backdrop-filter:blur(6px);
+      padding:10px 12px;border-radius:12px;user-select:none;pointer-events:none;
+      font-size:13px;line-height:1.25;max-width:min(520px,92vw)
+    }
+    #ui b{font-weight:800}
+    #ui kbd{
+      padding:2px 6px;border-radius:6px;border:1px solid rgba(255,255,255,.18);
+      background:rgba(255,255,255,.10);font:12px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace
+    }
+    #bar{
+      position:fixed;left:50%;bottom:12px;transform:translateX(-50%);
+      z-index:20;display:flex;gap:6px;align-items:center;justify-content:center;
+      background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.12);
+      padding:8px 10px;border-radius:14px;backdrop-filter:blur(6px);
+      user-select:none
+    }
+    .slot{
+      width:38px;height:38px;border-radius:10px;
+      border:1px solid rgba(255,255,255,.16);
+      background:rgba(255,255,255,.08);
+      display:grid;place-items:center;position:relative
+    }
+    .slot.sel{outline:2px solid rgba(120,180,255,.95); box-shadow:0 0 0 4px rgba(120,180,255,.15)}
+    .slot .n{position:absolute;right:6px;bottom:4px;font-size:12px;opacity:.9}
+    #toast{
+      position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:30;
+      color:rgba(255,255,255,.92);background:rgba(0,0,0,.42);
+      border:1px solid rgba(255,255,255,.12);padding:8px 12px;border-radius:12px;
+      opacity:0;transition:opacity .18s ease;user-select:none;pointer-events:none
+    }
+    #toast.on{opacity:1}
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="ui">
+  <div><b>2D Minecraft-ish</b> — dig, place, craft-ish</div>
+  <div style="margin-top:6px">
+    Move: <kbd>A</kbd><kbd>D</kbd> / <kbd>←</kbd><kbd>→</kbd> · Jump: <kbd>Space</kbd>/<kbd>W</kbd>/<kbd>↑</kbd> · Run: <kbd>Shift</kbd><br/>
+    Mine: <kbd>Left Click</kbd> (hold) · Place: <kbd>Right Click</kbd> · Select: <kbd>1</kbd>-<kbd>6</kbd> / Mouse Wheel<br/>
+    Toggle torch: <kbd>T</kbd> · Respawn: <kbd>R</kbd>
+  </div>
+  <div style="margin-top:6px;opacity:.85">
+    Tip: Mine stone underground for coal; place torches to see in caves.
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<div id="bar"></div>
+
+<script>
+(() => {
+  // ===== Canvas / scaling =====
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d', { alpha:false });
+  const DPR = () => Math.max(1, Math.min(2.5, devicePixelRatio || 1));
+  function resize(){
+    const d = DPR();
+    canvas.width = Math.floor(innerWidth * d);
+    canvas.height = Math.floor(innerHeight * d);
+    canvas.style.width = innerWidth + "px";
+    canvas.style.height = innerHeight + "px";
+    ctx.setTransform(d,0,0,d,0,0);
+  }
+  addEventListener('resize', resize, {passive:true});
+  resize();
+
+  // ===== UI =====
+  const toast = document.getElementById('toast');
+  function say(msg, ms=1400){
+    toast.textContent = msg;
+    toast.classList.add('on');
+    clearTimeout(say._t);
+    say._t = setTimeout(()=>toast.classList.remove('on'), ms);
+  }
+
+  const bar = document.getElementById('bar');
+
+  // ===== World config =====
+  const TILE = 16;                 // pixels per tile (render scale)
+  const WORLD_W = 320;             // tiles
+  const WORLD_H = 180;             // tiles
+  const SEA_LEVEL = 62;            // tiles from top
+  const GRAV = 1600;               // px/s^2
+  const JUMP_V = 520;              // px/s
+  const WALK = 210;                // px/s
+  const RUN  = 310;                // px/s
+  const FRICTION = 18;             // ground friction
+  const AIR_FRICTION = 2.8;
+  const STEP = 1/120;              // fixed physics step
+
+  // ===== Tiles =====
+  const T = {
+    AIR: 0,
+    GRASS: 1,
+    DIRT: 2,
+    STONE: 3,
+    WOOD: 4,
+    LEAVES: 5,
+    SAND: 6,
+    WATER: 7,
+    COAL: 8,
+    TORCH: 9,
+    PLANK: 10
+  };
+
+  const tileInfo = {
+    [T.AIR]:   { solid:false, name:"Air" },
+    [T.GRASS]: { solid:true,  name:"Grass" },
+    [T.DIRT]:  { solid:true,  name:"Dirt" },
+    [T.STONE]: { solid:true,  name:"Stone" },
+    [T.WOOD]:  { solid:true,  name:"Wood" },
+    [T.LEAVES]:{ solid:false, name:"Leaves" },
+    [T.SAND]:  { solid:true,  name:"Sand" },
+    [T.WATER]: { solid:false, name:"Water" },
+    [T.COAL]:  { solid:true,  name:"Coal Ore" },
+    [T.TORCH]: { solid:false, name:"Torch" },
+    [T.PLANK]: { solid:true,  name:"Planks" },
+  };
+
+  // mining hardness (seconds to mine at base)
+  const hardness = {
+    [T.AIR]: 0,
+    [T.LEAVES]: 0.12,
+    [T.WATER]: 0,
+    [T.TORCH]: 0.08,
+    [T.GRASS]: 0.28,
+    [T.DIRT]: 0.25,
+    [T.SAND]: 0.22,
+    [T.WOOD]: 0.55,
+    [T.PLANK]: 0.35,
+    [T.STONE]: 0.75,
+    [T.COAL]: 0.95,
+  };
+
+  // light emission
+  const emit = {
+    [T.TORCH]: 12
+  };
+
+  // ===== RNG / noise =====
+  let seed = (Math.random()*1e9)|0;
+  function hash(n){ n = (n ^ 61) ^ (n >>> 16); n = n + (n << 3); n = n ^ (n >>> 4); n = n * 0x27d4eb2d; n = n ^ (n >>> 15); return n|0; }
+  function rand01(n){ return ((hash(n) >>> 0) / 4294967295); }
+  function lerp(a,b,t){ return a + (b-a)*t; }
+  function smooth(t){ return t*t*(3-2*t); }
+  function valueNoise1D(x){
+    const xi = Math.floor(x);
+    const t = smooth(x - xi);
+    const a = rand01(xi + seed);
+    const b = rand01(xi + 1 + seed);
+    return lerp(a,b,t);
+  }
+  function fbm1D(x){
+    let v=0, a=0.6, f=1;
+    for(let i=0;i<5;i++){
+      v += valueNoise1D(x*f) * a;
+      f *= 2; a *= 0.5;
+    }
+    return v;
+  }
+
+  // ===== World arrays =====
+  const tiles = new Uint8Array(WORLD_W * WORLD_H);
+  const light = new Uint8Array(WORLD_W * WORLD_H);
+
+  const idx = (x,y) => x + y*WORLD_W;
+  function inBounds(x,y){ return x>=0 && y>=0 && x<WORLD_W && y<WORLD_H; }
+  function getTile(x,y){ if(!inBounds(x,y)) return T.STONE; return tiles[idx(x,y)]; }
+  function setTile(x,y,v){ if(!inBounds(x,y)) return; tiles[idx(x,y)] = v; }
+
+  // ===== Worldgen =====
+  function genWorld(){
+    tiles.fill(T.AIR);
+    // heightmap
+    const heights = new Int16Array(WORLD_W);
+    for(let x=0;x<WORLD_W;x++){
+      const n = fbm1D(x*0.045);
+      const h = Math.floor(SEA_LEVEL + (n-0.5)*18);
+      heights[x] = clampi(h, 28, WORLD_H-20);
+    }
+
+    // terrain fill
+    for(let x=0;x<WORLD_W;x++){
+      const h = heights[x];
+      for(let y=h;y<WORLD_H;y++){
+        const depth = y - h;
+        if(depth === 0) setTile(x,y,T.GRASS);
+        else if(depth < 5) setTile(x,y,T.DIRT);
+        else setTile(x,y,T.STONE);
+      }
+    }
+
+    // sandy patches near "beach"
+    for(let x=0;x<WORLD_W;x++){
+      const h = heights[x];
+      if(Math.abs(h-SEA_LEVEL) <= 2 && rand01(x*1337+seed) < 0.35){
+        for(let y=h;y<h+4;y++){
+          if(getTile(x,y)===T.GRASS) setTile(x,y,T.SAND);
+          if(getTile(x,y)===T.DIRT) setTile(x,y,T.SAND);
+        }
+      }
+    }
+
+    // carve caves
+    for(let x=0;x<WORLD_W;x++){
+      for(let y=SEA_LEVEL+6;y<WORLD_H-6;y++){
+        const n = fbm1D(x*0.08 + y*0.017);
+        const m = fbm1D(x*0.02 - y*0.02 + 100);
+        const c = (n*0.65 + m*0.35);
+        if(c > 0.62){
+          // carve
+          if(getTile(x,y)===T.STONE || getTile(x,y)===T.DIRT || getTile(x,y)===T.GRASS || getTile(x,y)===T.SAND)
+            setTile(x,y,T.AIR);
+          // occasional water pockets
+          if(c > 0.75 && rand01((x*65537 + y*17 + seed)|0) < 0.06) setTile(x,y,T.WATER);
+        }
+      }
+    }
+
+    // coal ore blobs
+    for(let i=0;i<520;i++){
+      const x = (rand01(i*19+seed)*WORLD_W)|0;
+      const y = (SEA_LEVEL + 8 + rand01(i*23+seed)* (WORLD_H-SEA_LEVEL-12))|0;
+      if(getTile(x,y)===T.STONE){
+        setTile(x,y,T.COAL);
+        if(rand01(i*29+seed) < 0.6) setTile(clampi(x+((rand01(i*31+seed)<0.5)?-1:1),0,WORLD_W-1), y, T.COAL);
+        if(rand01(i*37+seed) < 0.45) setTile(x, clampi(y+((rand01(i*41+seed)<0.5)?-1:1),0,WORLD_H-1), T.COAL);
+      }
+    }
+
+    // trees
+    for(let x=6;x<WORLD_W-6;x++){
+      const h = heights[x];
+      const here = getTile(x,h);
+      if(here===T.GRASS && rand01(x*777+seed) < 0.08){
+        const trunkH = 4 + ((rand01(x*999+seed)*3)|0);
+        for(let t=1;t<=trunkH;t++) setTile(x,h-t,T.WOOD);
+        const topY = h - trunkH;
+        for(let ox=-3;ox<=3;ox++){
+          for(let oy=-3;oy<=2;oy++){
+            const ax = x+ox, ay = topY+oy;
+            if(!inBounds(ax,ay)) continue;
+            const d = Math.abs(ox)+Math.abs(oy*1.2);
+            if(d < 4.4 && rand01((ax*928371 + ay*193 + seed)|0) < 0.92){
+              if(getTile(ax,ay)===T.AIR) setTile(ax,ay,T.LEAVES);
+            }
+          }
+        }
+      }
+    }
+
+    // make a safe spawn area
+    const sx = Math.floor(WORLD_W*0.18);
+    const sy = findSurfaceY(sx)-2;
+    for(let x=sx-6;x<=sx+6;x++){
+      for(let y=sy;y<sy+10;y++){
+        if(inBounds(x,y) && y < findSurfaceY(x)-1) setTile(x,y,T.AIR);
+      }
+    }
+
+    // initial torch near spawn
+    placeTorch(sx+2, findSurfaceY(sx+2)-1);
+
+    computeLight();
+  }
+
+  function clampi(v,a,b){ return v<a?a:(v>b?b:v); }
+
+  function findSurfaceY(x){
+    for(let y=0;y<WORLD_H;y++){
+      const t = getTile(x,y);
+      if(tileInfo[t].solid) return y;
+    }
+    return WORLD_H-1;
+  }
+
+  // ===== Lighting (simple flood from sky + torches) =====
+  function computeLight(){
+    light.fill(0);
+
+    // skylight: cast down columns
+    for(let x=0;x<WORLD_W;x++){
+      let l = 13;
+      for(let y=0;y<WORLD_H;y++){
+        const t = getTile(x,y);
+        if(t === T.AIR || t === T.LEAVES || t === T.WATER || t === T.TORCH){
+          light[idx(x,y)] = Math.max(light[idx(x,y)], l);
+          if(t === T.WATER) l = Math.max(0, l-2);
+          else l = Math.max(0, l-1);
+        } else {
+          l = Math.max(0, l-4);
+          light[idx(x,y)] = Math.max(light[idx(x,y)], l);
+        }
+        if(l===0) break;
+      }
+    }
+
+    // torch sources BFS
+    const qx = new Int16Array(WORLD_W*WORLD_H);
+    const qy = new Int16Array(WORLD_W*WORLD_H);
+    let qh=0, qt=0;
+    for(let y=0;y<WORLD_H;y++){
+      for(let x=0;x<WORLD_W;x++){
+        const t = getTile(x,y);
+        const e = emit[t] || 0;
+        if(e>0){
+          const ii = idx(x,y);
+          if(light[ii] < e) light[ii] = e;
+          qx[qt]=x; qy[qt]=y; qt++;
+        }
+      }
+    }
+
+    const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+    while(qh<qt){
+      const x = qx[qh], y = qy[qh]; qh++;
+      const src = light[idx(x,y)];
+      for(const [dx,dy] of dirs){
+        const nx = x+dx, ny = y+dy;
+        if(!inBounds(nx,ny)) continue;
+        const nt = getTile(nx,ny);
+        const block = tileInfo[nt].solid ? 3 : (nt===T.WATER?2:1);
+        const nl = src - block;
+        if(nl <= 0) continue;
+        const ni = idx(nx,ny);
+        if(light[ni] + 0.5 < nl){
+          light[ni] = nl;
+          qx[qt]=nx; qy[qt]=ny; qt++;
+        }
+      }
+    }
+  }
+
+  function placeTorch(x,y){
+    if(!inBounds(x,y)) return false;
+    const t = getTile(x,y);
+    if(t !== T.AIR && t !== T.WATER && t !== T.LEAVES) return false;
+    // needs solid support below
+    const below = getTile(x,y+1);
+    if(!tileInfo[below].solid) return false;
+    setTile(x,y,T.TORCH);
+    return true;
+  }
+
+  // ===== Player =====
+  const player = {
+    x: 40*TILE,
+    y: 20*TILE,
+    vx: 0,
+    vy: 0,
+    w: 12, // px
+    h: 26,
+    onGround: false,
+    facing: 1,
+    mineT: 0,
+    mineTarget: null, // {tx,ty,tile}
+    torchMode: false
+  };
+
+  // ===== Inventory =====
+  const slots = [
+    { id: T.DIRT,  name:"Dirt",  count: 40 },
+    { id: T.STONE, name:"Stone", count: 0 },
+    { id: T.WOOD,  name:"Wood",  count: 0 },
+    { id: T.PLANK, name:"Planks",count: 0 },
+    { id: T.TORCH, name:"Torch", count: 6 },
+    { id: T.SAND,  name:"Sand",  count: 0 },
+  ];
+  let selected = 0;
+
+  function renderHotbar(){
+    bar.innerHTML = "";
+    slots.forEach((s,i)=>{
+      const el = document.createElement('div');
+      el.className = "slot" + (i===selected ? " sel":"");
+      el.title = s.name;
+      const ic = document.createElement('canvas');
+      ic.width = 24; ic.height = 24;
+      const g = ic.getContext('2d');
+      drawTileIcon(g, s.id, 0,0,24);
+      el.appendChild(ic);
+      const n = document.createElement('div');
+      n.className = "n";
+      n.textContent = s.count;
+      el.appendChild(n);
+      bar.appendChild(el);
+    });
+  }
+
+  // ===== Input =====
+  const keys = new Set();
+  addEventListener('keydown', (e)=>{
+    keys.add(e.code);
+    if(e.code.startsWith('Digit')){
+      const n = parseInt(e.code.slice(5),10);
+      if(n>=1 && n<=6){ selected = n-1; renderHotbar(); }
+    }
+    if(e.code === 'KeyT'){ player.torchMode = !player.torchMode; say(player.torchMode ? "Torch mode" : "Block mode"); }
+    if(e.code === 'KeyR') respawn();
+  });
+  addEventListener('keyup', (e)=> keys.delete(e.code));
+
+  addEventListener('wheel', (e)=>{
+    const dir = Math.sign(e.deltaY);
+    if(dir!==0){
+      selected = (selected + (dir>0?1:-1) + slots.length) % slots.length;
+      renderHotbar();
+    }
+  }, {passive:true});
+
+  let mouse = { x:0, y:0, downL:false, downR:false };
+  canvas.addEventListener('contextmenu', e=>e.preventDefault());
+  addEventListener('pointermove', (e)=>{ mouse.x=e.clientX; mouse.y=e.clientY; }, {passive:true});
+  addEventListener('pointerdown', (e)=>{
+    if(e.button===0) mouse.downL=true;
+    if(e.button===2) mouse.downR=true;
+  });
+  addEventListener('pointerup', (e)=>{
+    if(e.button===0) mouse.downL=false;
+    if(e.button===2) mouse.downR=false;
+  });
+
+  // ===== Camera =====
+  const cam = { x:0, y:0 };
+  function updateCam(dt){
+    const tx = player.x - innerWidth/2;
+    const ty = player.y - innerHeight/2;
+    cam.x += (tx - cam.x) * (1 - Math.exp(-7*dt));
+    cam.y += (ty - cam.y) * (1 - Math.exp(-7*dt));
+    cam.x = Math.max(0, Math.min(cam.x, WORLD_W*TILE - innerWidth));
+    cam.y = Math.max(0, Math.min(cam.y, WORLD_H*TILE - innerHeight));
+  }
+
+  // ===== Physics / collision =====
+  function rectIntersectsSolid(rx,ry,rw,rh){
+    const x0 = Math.floor(rx / TILE);
+    const y0 = Math.floor(ry / TILE);
+    const x1 = Math.floor((rx+rw-1) / TILE);
+    const y1 = Math.floor((ry+rh-1) / TILE);
+    for(let y=y0;y<=y1;y++){
+      for(let x=x0;x<=x1;x++){
+        const t = getTile(x,y);
+        if(tileInfo[t].solid) return true;
+      }
+    }
+    return false;
+  }
+
+  function moveAndCollide(dt){
+    const run = keys.has('ShiftLeft') || keys.has('ShiftRight');
+    const left = keys.has('KeyA') || keys.has('ArrowLeft');
+    const right= keys.has('KeyD') || keys.has('ArrowRight');
+    const up = keys.has('KeyW') || keys.has('ArrowUp') || keys.has('Space');
+
+    const target = (right?1:0) - (left?1:0);
+    const maxSpd = run ? RUN : WALK;
+
+    player.vx += target * (run ? 1600 : 1300) * dt;
+    const fr = player.onGround ? FRICTION : AIR_FRICTION;
+    player.vx *= Math.exp(-fr*dt);
+    player.vx = clamp(player.vx, -maxSpd, maxSpd);
+
+    if(target !== 0) player.facing = target > 0 ? 1 : -1;
+
+    // water slows
+    if(isInWater(player.x, player.y)) {
+      player.vx *= 0.82;
+      player.vy *= 0.92;
+    }
+
+    // jump
+    if(up && player.onGround){
+      player.vy = -JUMP_V;
+      player.onGround = false;
+    }
+
+    // gravity
+    const g = isInWater(player.x, player.y) ? GRAV*0.45 : GRAV;
+    player.vy += g*dt;
+    player.vy = Math.min(player.vy, 1100);
+
+    // integrate X
+    let nx = player.x + player.vx*dt;
+    if(rectIntersectsSolid(nx - player.w/2, player.y - player.h, player.w, player.h)){
+      // step back
+      const step = Math.sign(player.vx) || 1;
+      while(!rectIntersectsSolid(player.x - player.w/2, player.y - player.h, player.w, player.h) && Math.abs(nx-player.x)>0.5){
+        nx -= step*0.5;
+        if(!rectIntersectsSolid(nx - player.w/2, player.y - player.h, player.w, player.h)) player.x = nx;
+        else break;
+      }
+      player.vx = 0;
+    } else {
+      player.x = nx;
+    }
+
+    // integrate Y
+    let ny = player.y + player.vy*dt;
+    player.onGround = false;
+    if(rectIntersectsSolid(player.x - player.w/2, ny - player.h, player.w, player.h)){
+      // collide: resolve
+      const step = Math.sign(player.vy) || 1;
+      while(!rectIntersectsSolid(player.x - player.w/2, player.y - player.h, player.w, player.h) && Math.abs(ny-player.y)>0.5){
+        ny -= step*0.5;
+        if(!rectIntersectsSolid(player.x - player.w/2, ny - player.h, player.w, player.h)) player.y = ny;
+        else break;
+      }
+      if(player.vy > 0) player.onGround = true;
+      player.vy = 0;
+    } else {
+      player.y = ny;
+    }
+
+    // fall respawn
+    if(player.y > WORLD_H*TILE + 400) respawn();
+  }
+
+  function clamp(v,a,b){ return v<a?a:(v>b?b:v); }
+
+  function isInWater(px,py){
+    const tx = Math.floor(px / TILE);
+    const ty = Math.floor((py-6) / TILE);
+    return getTile(tx,ty) === T.WATER;
+  }
+
+  function respawn(){
+    // spawn near left
+    const sx = Math.floor(WORLD_W*0.18);
+    const sy = findSurfaceY(sx);
+    player.x = (sx+0.5)*TILE;
+    player.y = (sy-1)*TILE;
+    player.vx = player.vy = 0;
+    say("Respawned");
+  }
+
+  // ===== Mining & placing =====
+  function screenToTile(sx,sy){
+    const wx = sx + cam.x;
+    const wy = sy + cam.y;
+    return { tx: Math.floor(wx / TILE), ty: Math.floor(wy / TILE) };
+  }
+
+  function withinReach(tx,ty){
+    const px = player.x;
+    const py = player.y - player.h/2;
+    const cx = (tx+0.5)*TILE;
+    const cy = (ty+0.5)*TILE;
+    const d = Math.hypot(cx-px, cy-py);
+    return d <= 88;
+  }
+
+  function canPlaceAt(tx,ty, id){
+    if(!inBounds(tx,ty)) return false;
+    const cur = getTile(tx,ty);
+    if(cur !== T.AIR && cur !== T.WATER && cur !== T.LEAVES) return false;
+
+    // don't place inside player
+    const rx = tx*TILE, ry = ty*TILE;
+    const px = player.x - player.w/2, py = player.y - player.h;
+    if(rectsOverlap(rx,ry,TILE,TILE, px,py, player.w, player.h)) return false;
+
+    if(id === T.TORCH){
+      const below = getTile(tx,ty+1);
+      return tileInfo[below].solid;
+    }
+    return true;
+  }
+
+  function rectsOverlap(ax,ay,aw,ah,bx,by,bw,bh){
+    return ax < bx+bw && ax+aw > bx && ay < by+bh && ay+ah > by;
+  }
+
+  function giveItem(tileId){
+    // simple drops
+    if(tileId === T.GRASS || tileId === T.DIRT) addToInv(T.DIRT, 1);
+    else if(tileId === T.STONE) addToInv(T.STONE, 1);
+    else if(tileId === T.COAL){ addToInv(T.STONE, 1); addToInv(T.COAL, 1); } // coal as "resource" (not placeable)
+    else if(tileId === T.SAND) addToInv(T.SAND, 1);
+    else if(tileId === T.WOOD) addToInv(T.WOOD, 1);
+    else if(tileId === T.PLANK) addToInv(T.PLANK, 1);
+    else if(tileId === T.TORCH) addToInv(T.TORCH, 1);
+    else if(tileId === T.LEAVES) { /* no drop */ }
+  }
+
+  function addToInv(id, n){
+    // treat coal as special: store in stone slot? We'll store in a hidden counter.
+    if(id === T.COAL){
+      invCoal += n; say(`Coal +${n}`); return;
+    }
+    const s = slots.find(s=>s.id===id);
+    if(s) { s.count += n; renderHotbar(); }
+  }
+
+  let invCoal = 0;
+
+  function spendSelected(n=1){
+    const s = slots[selected];
+    if(!s || s.count < n) return false;
+    s.count -= n;
+    renderHotbar();
+    return true;
+  }
+
+  function craftPlanksFromWood(){
+    // passive craft: if you have wood, press torch toggle? no; do it automatically sometimes
+    // We'll craft if player has >=1 wood and selected planks and tries to place but has 0 planks.
+    const wood = slots.find(s=>s.id===T.WOOD);
+    const plnk = slots.find(s=>s.id===T.PLANK);
+    if(wood && plnk && wood.count > 0){
+      wood.count -= 1;
+      plnk.count += 4;
+      renderHotbar();
+      say("Crafted 4 planks");
+      return true;
+    }
+    return false;
+  }
+
+  function craftTorches(){
+    // 1 coal + 1 wood => 4 torches (simplified)
+    const wood = slots.find(s=>s.id===T.WOOD);
+    const tor = slots.find(s=>s.id===T.TORCH);
+    if(wood && tor && wood.count > 0 && invCoal > 0){
+      wood.count -= 1;
+      invCoal -= 1;
+      tor.count += 4;
+      renderHotbar();
+      say("Crafted 4 torches");
+      return true;
+    }
+    return false;
+  }
+
+  function updateMining(dt){
+    const {tx,ty} = screenToTile(mouse.x, mouse.y);
+    const t = getTile(tx,ty);
+
+    // right click place (edge-trigger-ish)
+    if(mouse.downR){
+      mouse.downR = false; // consume
+      if(!withinReach(tx,ty)) { say("Too far"); return; }
+
+      if(player.torchMode){
+        const torSlot = slots.findIndex(s=>s.id===T.TORCH);
+        if(torSlot >= 0) selected = torSlot;
+      }
+
+      let id = slots[selected].id;
+
+      // allow craft helpers
+      if(id === T.PLANK && slots[selected].count === 0) craftPlanksFromWood();
+      if(id === T.TORCH && slots[selected].count === 0) craftTorches();
+
+      if(slots[selected].count <= 0){ say("Out of blocks"); return; }
+      if(!canPlaceAt(tx,ty,id)) return;
+
+      if(id === T.TORCH){
+        if(!placeTorch(tx,ty)) return;
+      } else {
+        setTile(tx,ty,id);
+      }
+      spendSelected(1);
+      computeLight();
+      return;
+    }
+
+    // left click mine (hold)
+    if(mouse.downL){
+      if(!withinReach(tx,ty)) { player.mineT = 0; player.mineTarget = null; return; }
+      if(t === T.AIR || t === T.WATER) { player.mineT = 0; player.mineTarget = null; return; }
+
+      const same = player.mineTarget && player.mineTarget.tx===tx && player.mineTarget.ty===ty && player.mineTarget.t===t;
+      if(!same){
+        player.mineTarget = { tx, ty, t };
+        player.mineT = 0;
+      }
+
+      const base = hardness[t] ?? 0.5;
+      const faster = (t===T.DIRT || t===T.GRASS || t===T.SAND || t===T.LEAVES) ? 1.0 : 0.0;
+      const mineSpeed = 1.0 + (invCoal>0 ? 0.15 : 0) + faster; // tiny buff for having coal
+      player.mineT += dt * mineSpeed;
+
+      if(player.mineT >= base){
+        // break
+        setTile(tx,ty,T.AIR);
+        giveItem(t);
+        player.mineT = 0;
+        player.mineTarget = null;
+        computeLight();
+      }
+    } else {
+      player.mineT = 0;
+      player.mineTarget = null;
+    }
+  }
+
+  // ===== Rendering =====
+  function tileColor(t, variant=0){
+    switch(t){
+      case T.GRASS: return ["#3fbf4a","#2fae3b","#44cc55"][variant%3];
+      case T.DIRT:  return ["#8a5a2b","#7b4f26","#946437"][variant%3];
+      case T.STONE: return ["#8a8f99","#7d828b","#939aa6"][variant%3];
+      case T.WOOD:  return ["#b07a3a","#9b6b34","#c08640"][variant%3];
+      case T.LEAVES:return ["#2e9c3f","#2a8f39","#37b14a"][variant%3];
+      case T.SAND:  return ["#e7d28c","#d9c57e","#f0dd99"][variant%3];
+      case T.WATER: return ["rgba(80,140,255,.55)","rgba(60,120,240,.55)","rgba(90,160,255,.5)"][variant%3];
+      case T.COAL:  return ["#6f7680","#646a73","#7b838f"][variant%3];
+      case T.TORCH: return ["#00000000","#00000000","#00000000"][variant%3];
+      case T.PLANK: return ["#caa063","#b98c55","#d4ad72"][variant%3];
+      default: return "#0000";
+    }
+  }
+
+  function drawTileIcon(g, t, x,y,s){
+    g.clearRect(0,0,s,s);
+    if(t===T.TORCH){
+      g.fillStyle = "#5b3b1f";
+      g.fillRect(x+s/2-2, y+6, 4, s-8);
+      g.fillStyle = "#ffcb4d";
+      g.fillRect(x+s/2-3, y+3, 6, 6);
+      g.fillStyle = "rgba(255,190,70,.55)";
+      g.fillRect(x+s/2-6, y+1, 12, 10);
+      return;
+    }
+    g.fillStyle = tileColor(t,0);
+    g.fillRect(x+2,y+2,s-4,s-4);
+    g.strokeStyle = "rgba(0,0,0,.35)";
+    g.strokeRect(x+2.5,y+2.5,s-5,s-5);
+    if(t===T.GRASS){
+      g.fillStyle = "#2a7d2f";
+      g.fillRect(x+2,y+2,s-4,5);
+    }
+    if(t===T.COAL){
+      g.fillStyle = "#1b1e24";
+      for(let i=0;i<8;i++){
+        g.fillRect(x+4+((i*7)%16), y+6+((i*11)%12), 2,2);
+      }
+    }
+  }
+
+  function draw(){
+    // sky
+    const g = ctx.createLinearGradient(0,0,0,innerHeight);
+    g.addColorStop(0,"#08122a");
+    g.addColorStop(0.5,"#0b1020");
+    g.addColorStop(1,"#050814");
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,innerWidth,innerHeight);
+
+    // parallax clouds
+    ctx.save();
+    ctx.globalAlpha = 0.10;
+    ctx.fillStyle = "#cfe6ff";
+    const t = perf.t;
+    for(let i=0;i<10;i++){
+      const cx = ((i*220 + (t*18)) % (innerWidth+300)) - 150;
+      const cy = 50 + (i*37 % 120);
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, 70, 22, 0, 0, Math.PI*2);
+      ctx.ellipse(cx+50, cy+5, 55, 18, 0, 0, Math.PI*2);
+      ctx.ellipse(cx-50, cy+8, 55, 18, 0, 0, Math.PI*2);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    const x0 = Math.floor(cam.x / TILE);
+    const y0 = Math.floor(cam.y / TILE);
+    const x1 = Math.ceil((cam.x + innerWidth) / TILE);
+    const y1 = Math.ceil((cam.y + innerHeight) / TILE);
+
+    // draw tiles
+    for(let y=y0;y<=y1;y++){
+      for(let x=x0;x<=x1;x++){
+        const t = getTile(x,y);
+        if(t === T.AIR) continue;
+
+        const sx = x*TILE - cam.x;
+        const sy = y*TILE - cam.y;
+
+        // lighting
+        const l = inBounds(x,y) ? light[idx(x,y)] : 0;
+        const shade = clamp(l/13, 0, 1);
+        const ambient = 0.10 + shade*0.90;
+
+        if(t === T.WATER){
+          ctx.save();
+          ctx.globalAlpha = 0.85;
+          ctx.fillStyle = tileColor(t, (x+y)&2);
+          ctx.fillRect(sx,sy,TILE,TILE);
+          // top shimmer
+          ctx.globalAlpha = 0.28;
+          ctx.fillStyle = "rgba(220,245,255,.9)";
+          ctx.fillRect(sx,sy, TILE, 2);
+          ctx.restore();
+
+          // darken by light
+          ctx.fillStyle = `rgba(0,0,0,${0.55*(1-ambient)})`;
+          ctx.fillRect(sx,sy,TILE,TILE);
+          continue;
+        }
+
+        // base
+        ctx.fillStyle = tileColor(t, (x*3+y*5)&2);
+        ctx.fillRect(sx,sy,TILE,TILE);
+
+        // grass cap
+        if(t===T.GRASS){
+          ctx.fillStyle = "#2b8b33";
+          ctx.fillRect(sx,sy, TILE, 4);
+        }
+
+        // coal flecks
+        if(t===T.COAL){
+          ctx.fillStyle = "#1c1f26";
+          for(let i=0;i<5;i++){
+            const px = sx + 3 + ((x*11 + y*7 + i*9) % 10);
+            const py = sy + 4 + ((x*5 + y*13 + i*7) % 8);
+            ctx.fillRect(px,py,2,2);
+          }
+        }
+
+        // torch draw
+        if(t===T.TORCH){
+          ctx.fillStyle = "#5b3b1f";
+          ctx.fillRect(sx+7, sy+5, 2, 11);
+          ctx.fillStyle = "#ffcb4d";
+          ctx.fillRect(sx+6, sy+3, 4, 4);
+          ctx.fillStyle = "rgba(255,190,70,.35)";
+          ctx.fillRect(sx+4, sy+1, 8, 8);
+        }
+
+        // outline
+        ctx.strokeStyle = "rgba(0,0,0,.14)";
+        ctx.strokeRect(sx+0.5,sy+0.5,TILE-1,TILE-1);
+
+        // light darken
+        ctx.fillStyle = `rgba(0,0,0,${0.72*(1-ambient)})`;
+        ctx.fillRect(sx,sy,TILE,TILE);
+      }
+    }
+
+    // mining highlight / crack
+    if(player.mineTarget){
+      const {tx,ty,t:tt} = player.mineTarget;
+      const sx = tx*TILE - cam.x;
+      const sy = ty*TILE - cam.y;
+      const base = hardness[tt] || 0.5;
+      const p = clamp(player.mineT / base, 0, 1);
+      ctx.save();
+      ctx.strokeStyle = `rgba(255,255,255,${0.25 + p*0.55})`;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(sx+1, sy+1, TILE-2, TILE-2);
+      ctx.globalAlpha = 0.6;
+      ctx.strokeStyle = "rgba(0,0,0,.7)";
+      ctx.beginPath();
+      ctx.moveTo(sx+3, sy+3);
+      ctx.lineTo(sx+TILE-4, sy+TILE-4);
+      ctx.moveTo(sx+TILE-4, sy+4);
+      ctx.lineTo(sx+5, sy+TILE-5);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // player
+    const px = player.x - cam.x;
+    const py = player.y - cam.y;
+    ctx.save();
+    // shadow
+    ctx.globalAlpha = 0.22;
+    ctx.fillStyle = "#000";
+    ctx.beginPath();
+    ctx.ellipse(px, py+2, 10, 4, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // body
+    const bob = Math.sin(perf.t*10) * (player.onGround ? Math.min(1.5, Math.abs(player.vx)/160) : 0);
+    ctx.translate(px, py- player.h + bob);
+
+    // legs
+    ctx.fillStyle = "#2f62ff";
+    ctx.fillRect(-6, 14, 5, 10);
+    ctx.fillRect( 1, 14, 5, 10);
+
+    // torso
+    ctx.fillStyle = "#4bd25a";
+    ctx.fillRect(-7, 6, 14, 10);
+
+    // head
+    ctx.fillStyle = "#ffd2b0";
+    ctx.fillRect(-6, -2, 12, 10);
+
+    // eyes
+    ctx.fillStyle = "#1a1a1a";
+    ctx.fillRect(-3 + (player.facing>0?2:-2), 1, 2, 2);
+    ctx.fillRect( 1 + (player.facing>0?2:-2), 1, 2, 2);
+
+    // arm
+    ctx.fillStyle = "#ffd2b0";
+    ctx.fillRect(player.facing>0?7:-9, 8, 2, 8);
+
+    // outline
+    ctx.strokeStyle = "rgba(0,0,0,.35)";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(-8.5, -2.5, 17, 27);
+
+    ctx.restore();
+
+    // crosshair on targeted tile
+    const {tx,ty} = screenToTile(mouse.x, mouse.y);
+    if(withinReach(tx,ty)){
+      const sx = tx*TILE - cam.x;
+      const sy = ty*TILE - cam.y;
+      ctx.save();
+      ctx.strokeStyle = "rgba(120,180,255,.85)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(sx+1, sy+1, TILE-2, TILE-2);
+      ctx.restore();
+    }
+
+    // vignette
+    ctx.save();
+    const vg = ctx.createRadialGradient(innerWidth/2, innerHeight/2, Math.min(innerWidth,innerHeight)*0.2,
+                                        innerWidth/2, innerHeight/2, Math.max(innerWidth,innerHeight)*0.75);
+    vg.addColorStop(0, "rgba(0,0,0,0)");
+    vg.addColorStop(1, "rgba(0,0,0,0.45)");
+    ctx.fillStyle = vg;
+    ctx.fillRect(0,0,innerWidth,innerHeight);
+    ctx.restore();
+
+    // small HUD for coal
+    ctx.save();
+    ctx.globalAlpha = 0.85;
+    ctx.fillStyle = "rgba(0,0,0,.35)";
+    ctx.fillRect(10, innerHeight-58, 160, 40);
+    ctx.strokeStyle = "rgba(255,255,255,.12)";
+    ctx.strokeRect(10.5, innerHeight-57.5, 159, 39);
+    ctx.fillStyle = "rgba(255,255,255,.92)";
+    ctx.font = "13px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    ctx.fillText(`Coal: ${invCoal}`, 20, innerHeight-32);
+    ctx.fillText(`Mode: ${player.torchMode ? "Torch" : "Block"}`, 20, innerHeight-16);
+    ctx.restore();
+  }
+
+  // ===== Main loop =====
+  const perf = { last: performance.now(), acc: 0, t: 0 };
+  function step(now){
+    let dt = Math.min(0.033, (now - perf.last)/1000);
+    perf.last = now;
+    perf.t += dt;
+
+    perf.acc += dt;
+    while(perf.acc >= STEP){
+      moveAndCollide(STEP);
+      updateMining(STEP);
+      updateCam(STEP);
+      perf.acc -= STEP;
+    }
+
+    draw();
+    requestAnimationFrame(step);
+  }
+
+  // ===== Init =====
+  genWorld();
+  respawn();
+  renderHotbar();
+  say("Dig & build!");
+
+  requestAnimationFrame(step);
+})();
+</script>
+</body>
+</html>
