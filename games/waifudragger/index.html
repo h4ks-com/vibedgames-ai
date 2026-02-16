@@ -1,0 +1,621 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Waifu Follower (Single File)</title>
+  <style>
+    html, body { margin:0; height:100%; overflow:hidden; background:#0b1020; }
+    canvas { display:block; width:100vw; height:100vh; image-rendering: pixelated; }
+    #ui {
+      position: fixed; left: 12px; top: 12px; z-index: 10;
+      font: 14px/1.3 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      color: rgba(255,255,255,.92);
+      background: rgba(0,0,0,.35);
+      border: 1px solid rgba(255,255,255,.12);
+      padding: 10px 12px;
+      border-radius: 10px;
+      backdrop-filter: blur(6px);
+      user-select: none;
+      max-width: 360px;
+    }
+    #ui b { font-weight: 700; }
+    #ui .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    #ui kbd {
+      padding: 2px 6px; border-radius: 6px;
+      background: rgba(255,255,255,.12);
+      border: 1px solid rgba(255,255,255,.18);
+      font: 12px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    #ui .small { opacity:.85; font-size: 12px; }
+    #loading {
+      position: fixed; inset:0; display:grid; place-items:center; z-index: 20;
+      background: radial-gradient(1200px 800px at 50% 40%, rgba(120,140,255,.18), transparent 60%),
+                  linear-gradient(#070a14, #0b1020);
+      color: rgba(255,255,255,.92);
+      font: 16px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    }
+    .spinner {
+      width: 38px; height: 38px; border-radius: 50%;
+      border: 3px solid rgba(255,255,255,.18);
+      border-top-color: rgba(255,255,255,.85);
+      animation: spin .9s linear infinite;
+      margin-bottom: 12px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div id="loading">
+    <div style="text-align:center">
+      <div class="spinner"></div>
+      Loading waifu asset…
+      <div class="small" style="margin-top:6px; opacity:.75">If it takes too long, your browser may be blocking cross-origin image loading.</div>
+    </div>
+  </div>
+
+  <div id="ui">
+    <div class="row">
+      <b>Waifu Follower</b>
+      <span class="small">— single-file canvas game</span>
+    </div>
+    <div style="margin-top:6px" class="row">
+      Move: <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / <kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd>
+      Run: <kbd>Shift</kbd>
+      Toggle follow: <kbd>F</kbd>
+    </div>
+    <div style="margin-top:6px" class="small">
+      The waifu follows with a little springy lag. Click to set a waypoint. (She’ll still try to stick near you.)
+    </div>
+  </div>
+
+  <canvas id="c"></canvas>
+
+  <script>
+  (() => {
+    const WAIFU_URL = "https://s.h4ks.com/EB1.png";
+
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+
+    const DPR = () => Math.max(1, Math.min(2.5, window.devicePixelRatio || 1));
+    function resize() {
+      const dpr = DPR();
+      canvas.width = Math.floor(innerWidth * dpr);
+      canvas.height = Math.floor(innerHeight * dpr);
+      canvas.style.width = innerWidth + "px";
+      canvas.style.height = innerHeight + "px";
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    addEventListener('resize', resize, { passive:true });
+    resize();
+
+    const keys = new Set();
+    addEventListener('keydown', (e) => {
+      const k = e.key.toLowerCase();
+      keys.add(k);
+      if (k === 'f') follower.enabled = !follower.enabled;
+      if (["arrowup","arrowdown","arrowleft","arrowright"," "].includes(e.key.toLowerCase())) e.preventDefault();
+    });
+    addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
+
+    let mouse = { x: innerWidth/2, y: innerHeight/2, down:false };
+    addEventListener('pointermove', (e) => { mouse.x = e.clientX; mouse.y = e.clientY; }, { passive:true });
+
+    const world = {
+      // camera follows player
+      camX: 0, camY: 0,
+      // simple world size and obstacles
+      w: 4200, h: 2600,
+      obstacles: []
+    };
+
+    function rand(min, max){ return min + Math.random()*(max-min); }
+    function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+
+    // Create obstacles: rectangles and a few "ponds"
+    for (let i=0;i<70;i++){
+      const r = {
+        x: rand(200, world.w-200),
+        y: rand(200, world.h-200),
+        w: rand(40, 180),
+        h: rand(40, 180),
+        kind: Math.random()<0.2 ? "pond" : "rock"
+      };
+      world.obstacles.push(r);
+    }
+    // a few walls
+    world.obstacles.push({x: 900, y: 520, w: 1200, h: 40, kind:"wall"});
+    world.obstacles.push({x: 900, y: 520, w: 40, h: 700, kind:"wall"});
+    world.obstacles.push({x: 2060, y: 520, w: 40, h: 700, kind:"wall"});
+    world.obstacles.push({x: 900, y: 1180, w: 1200, h: 40, kind:"wall"});
+
+    const player = {
+      x: world.w/2, y: world.h/2,
+      vx: 0, vy: 0,
+      r: 18,
+      speed: 220,
+      runMult: 1.55,
+      facing: 1, // 1 right, -1 left
+      waypoint: null
+    };
+
+    const follower = {
+      enabled: true,
+      x: player.x - 90,
+      y: player.y + 40,
+      vx: 0, vy: 0,
+      r: 20,
+      // how close to stand behind you
+      followDist: 90,
+      maxSpeed: 320,
+      spring: 10.5,
+      damping: 9.0,
+      bobT: 0,
+      mood: 0
+    };
+
+    const waifuImg = new Image();
+    waifuImg.crossOrigin = "anonymous";
+    waifuImg.src = WAIFU_URL;
+
+    const loadingEl = document.getElementById('loading');
+    let waifuReady = false;
+    waifuImg.onload = () => { waifuReady = true; loadingEl.style.display = "none"; };
+    waifuImg.onerror = () => {
+      loadingEl.innerHTML = `<div style="text-align:center; max-width:520px; padding:24px">
+        <div style="font-size:18px; margin-bottom:8px">Couldn’t load waifu asset.</div>
+        <div style="opacity:.85; font-size:13px; line-height:1.5">
+          Your browser may be blocking cross-origin image loading from:<br>
+          <code style="opacity:.95">${WAIFU_URL}</code><br><br>
+          The game will continue with a placeholder sprite.
+        </div>
+      </div>`;
+      setTimeout(() => loadingEl.style.display = "none", 1300);
+    };
+
+    function circleVsRect(cx, cy, cr, rx, ry, rw, rh) {
+      const px = clamp(cx, rx, rx+rw);
+      const py = clamp(cy, ry, ry+rh);
+      const dx = cx - px, dy = cy - py;
+      const d2 = dx*dx + dy*dy;
+      return d2 < cr*cr;
+    }
+
+    function resolveCircleRect(entity, rect) {
+      // Push circle out of rect along minimum axis
+      const cx = entity.x, cy = entity.y, r = entity.r;
+      const nearestX = clamp(cx, rect.x, rect.x + rect.w);
+      const nearestY = clamp(cy, rect.y, rect.y + rect.h);
+      let dx = cx - nearestX;
+      let dy = cy - nearestY;
+      let dist = Math.hypot(dx, dy);
+      if (dist === 0) {
+        // inside corner / edge; pick axis based on penetration
+        const leftPen = Math.abs(cx - rect.x);
+        const rightPen = Math.abs((rect.x + rect.w) - cx);
+        const topPen = Math.abs(cy - rect.y);
+        const botPen = Math.abs((rect.y + rect.h) - cy);
+        const minPen = Math.min(leftPen, rightPen, topPen, botPen);
+        if (minPen === leftPen) { dx = -1; dy = 0; dist = 1; }
+        else if (minPen === rightPen) { dx = 1; dy = 0; dist = 1; }
+        else if (minPen === topPen) { dx = 0; dy = -1; dist = 1; }
+        else { dx = 0; dy = 1; dist = 1; }
+      }
+      const overlap = r - dist;
+      if (overlap > 0) {
+        const nx = dx / dist, ny = dy / dist;
+        entity.x += nx * overlap;
+        entity.y += ny * overlap;
+        // remove velocity along normal (simple slide)
+        const vn = entity.vx*nx + entity.vy*ny;
+        if (vn < 0) { entity.vx -= vn*nx; entity.vy -= vn*ny; }
+      }
+    }
+
+    function collideWithWorld(entity) {
+      // bounds
+      entity.x = clamp(entity.x, entity.r, world.w - entity.r);
+      entity.y = clamp(entity.y, entity.r, world.h - entity.r);
+
+      for (const o of world.obstacles) {
+        if (o.kind === "pond") continue; // ponds don't block; just slow in update
+        if (circleVsRect(entity.x, entity.y, entity.r, o.x, o.y, o.w, o.h)) {
+          resolveCircleRect(entity, o);
+        }
+      }
+    }
+
+    function inPond(x,y) {
+      for (const o of world.obstacles) {
+        if (o.kind !== "pond") continue;
+        if (x > o.x && x < o.x+o.w && y > o.y && y < o.y+o.h) return true;
+      }
+      return false;
+    }
+
+    canvas.addEventListener('pointerdown', (e) => {
+      mouse.down = true;
+      const wx = e.clientX + world.camX;
+      const wy = e.clientY + world.camY;
+      player.waypoint = { x: wx, y: wy };
+    });
+    canvas.addEventListener('pointerup', () => mouse.down = false);
+
+    function updatePlayer(dt) {
+      // Input vector
+      let ix = 0, iy = 0;
+      const up = keys.has('w') || keys.has('arrowup');
+      const down = keys.has('s') || keys.has('arrowdown');
+      const left = keys.has('a') || keys.has('arrowleft');
+      const right = keys.has('d') || keys.has('arrowright');
+      if (up) iy -= 1;
+      if (down) iy += 1;
+      if (left) ix -= 1;
+      if (right) ix += 1;
+
+      // waypoint steering when no key input
+      let usingWaypoint = false;
+      if (player.waypoint && ix === 0 && iy === 0) {
+        const dx = player.waypoint.x - player.x;
+        const dy = player.waypoint.y - player.y;
+        const d = Math.hypot(dx, dy);
+        if (d < 14) {
+          player.waypoint = null;
+        } else {
+          ix = dx / d;
+          iy = dy / d;
+          usingWaypoint = true;
+        }
+      }
+
+      const running = keys.has('shift');
+      let spd = player.speed * (running ? player.runMult : 1);
+      if (inPond(player.x, player.y)) spd *= 0.62;
+
+      // accel toward desired velocity
+      const len = Math.hypot(ix, iy) || 1;
+      const dx = ix / len, dy = iy / len;
+      const targetVx = dx * spd;
+      const targetVy = dy * spd;
+
+      const accel = usingWaypoint ? 14 : 18;
+      player.vx += (targetVx - player.vx) * (1 - Math.exp(-accel*dt));
+      player.vy += (targetVy - player.vy) * (1 - Math.exp(-accel*dt));
+
+      // friction if no input
+      if (ix === 0 && iy === 0 && !player.waypoint) {
+        const fr = 10.5;
+        player.vx *= Math.exp(-fr*dt);
+        player.vy *= Math.exp(-fr*dt);
+      }
+
+      // integrate
+      player.x += player.vx * dt;
+      player.y += player.vy * dt;
+
+      collideWithWorld(player);
+
+      if (Math.abs(player.vx) > 1) player.facing = player.vx >= 0 ? 1 : -1;
+    }
+
+    function updateFollower(dt) {
+      follower.bobT += dt * (0.8 + Math.hypot(player.vx, player.vy)/260);
+
+      // Desired position: behind player based on movement direction (or facing)
+      let bx = player.facing, by = 0;
+      const pv = Math.hypot(player.vx, player.vy);
+      if (pv > 15) { bx = -player.vx/pv; by = -player.vy/pv; } // behind movement
+      else { bx = -player.facing; by = 0; } // behind facing
+
+      const desiredX = player.x + bx * follower.followDist;
+      const desiredY = player.y + by * follower.followDist + 14;
+
+      let tx = desiredX, ty = desiredY;
+
+      // If player set waypoint, follower leans toward it a bit (curiosity)
+      if (player.waypoint) {
+        tx = desiredX * 0.8 + player.waypoint.x * 0.2;
+        ty = desiredY * 0.8 + player.waypoint.y * 0.2;
+      }
+
+      // If disabled, she just idles where she is (light damping)
+      if (!follower.enabled) {
+        follower.vx *= Math.exp(-6.5*dt);
+        follower.vy *= Math.exp(-6.5*dt);
+        follower.x += follower.vx*dt;
+        follower.y += follower.vy*dt;
+        collideWithWorld(follower);
+        return;
+      }
+
+      // Spring-damper toward target
+      const dx = tx - follower.x;
+      const dy = ty - follower.y;
+
+      const ax = dx * follower.spring - follower.vx * follower.damping;
+      const ay = dy * follower.spring - follower.vy * follower.damping;
+
+      follower.vx += ax * dt;
+      follower.vy += ay * dt;
+
+      // cap speed
+      const sp = Math.hypot(follower.vx, follower.vy);
+      const pond = inPond(follower.x, follower.y);
+      const maxSp = (pond ? follower.maxSpeed*0.72 : follower.maxSpeed);
+      if (sp > maxSp) {
+        follower.vx = follower.vx / sp * maxSp;
+        follower.vy = follower.vy / sp * maxSp;
+      }
+
+      follower.x += follower.vx * dt;
+      follower.y += follower.vy * dt;
+
+      collideWithWorld(follower);
+
+      // mood wobble based on closeness
+      const distToPlayer = Math.hypot(follower.x - player.x, follower.y - player.y);
+      const targetMood = clamp(1 - distToPlayer/260, 0, 1);
+      follower.mood += (targetMood - follower.mood) * (1 - Math.exp(-3.0*dt));
+    }
+
+    function updateCamera(dt) {
+      const targetX = player.x - innerWidth/2;
+      const targetY = player.y - innerHeight/2;
+
+      world.camX += (targetX - world.camX) * (1 - Math.exp(-6.5*dt));
+      world.camY += (targetY - world.camY) * (1 - Math.exp(-6.5*dt));
+
+      world.camX = clamp(world.camX, 0, world.w - innerWidth);
+      world.camY = clamp(world.camY, 0, world.h - innerHeight);
+    }
+
+    function drawBackground() {
+      const ox = -world.camX, oy = -world.camY;
+
+      // sky gradient
+      const g = ctx.createLinearGradient(0, 0, 0, innerHeight);
+      g.addColorStop(0, "#0b1430");
+      g.addColorStop(1, "#070a14");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, innerWidth, innerHeight);
+
+      // stars
+      ctx.save();
+      ctx.globalAlpha = 0.35;
+      for (let i=0;i<120;i++){
+        const sx = (i*199.7 % innerWidth);
+        const sy = (i*89.3 % innerHeight);
+        const tw = 0.6 + (i%7)*0.12;
+        ctx.fillStyle = i%11===0 ? "rgba(170,200,255,.9)" : "rgba(255,255,255,.7)";
+        ctx.fillRect(sx, sy, tw, tw);
+      }
+      ctx.restore();
+
+      // ground grid (parallax-ish)
+      const tile = 60;
+      const startX = Math.floor(world.camX / tile) * tile;
+      const startY = Math.floor(world.camY / tile) * tile;
+
+      for (let y = startY; y < world.camY + innerHeight + tile; y += tile) {
+        for (let x = startX; x < world.camX + innerWidth + tile; x += tile) {
+          const gx = x + ox, gy = y + oy;
+          const n = ((x*73856093) ^ (y*19349663)) >>> 0;
+          const c = 14 + (n % 16);
+          ctx.fillStyle = `rgb(${8+c},${18+c},${20+c})`;
+          ctx.fillRect(gx, gy, tile, tile);
+          ctx.strokeStyle = "rgba(255,255,255,.04)";
+          ctx.strokeRect(gx+0.5, gy+0.5, tile, tile);
+        }
+      }
+
+      // world boundary vignette
+      ctx.save();
+      ctx.strokeStyle = "rgba(255,255,255,.08)";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(ox+1.5, oy+1.5, world.w-3, world.h-3);
+      ctx.restore();
+
+      // obstacles
+      for (const o of world.obstacles) {
+        const x = o.x + ox, y = o.y + oy;
+        if (x+o.w < -50 || y+o.h < -50 || x > innerWidth+50 || y > innerHeight+50) continue;
+
+        if (o.kind === "pond") {
+          const gg = ctx.createLinearGradient(x, y, x+o.w, y+o.h);
+          gg.addColorStop(0, "rgba(60,140,255,.18)");
+          gg.addColorStop(1, "rgba(40,90,210,.24)");
+          ctx.fillStyle = gg;
+          ctx.fillRect(x, y, o.w, o.h);
+          ctx.strokeStyle = "rgba(120,190,255,.25)";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x+1, y+1, o.w-2, o.h-2);
+          // ripples
+          ctx.globalAlpha = 0.25;
+          ctx.strokeStyle = "rgba(200,240,255,.35)";
+          for (let i=0;i<3;i++){
+            const rx = x + o.w*(0.25 + i*0.25);
+            const ry = y + o.h*(0.35 + ((i*37)%10)/100);
+            ctx.beginPath();
+            ctx.ellipse(rx, ry, 16+i*10, 7+i*5, 0, 0, Math.PI*2);
+            ctx.stroke();
+          }
+          ctx.globalAlpha = 1;
+        } else {
+          // rock/wall
+          const base = o.kind === "wall" ? "rgba(255,255,255,.10)" : "rgba(255,255,255,.08)";
+          ctx.fillStyle = base;
+          ctx.fillRect(x, y, o.w, o.h);
+          ctx.strokeStyle = "rgba(255,255,255,.14)";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x+1, y+1, o.w-2, o.h-2);
+
+          // subtle highlight
+          ctx.fillStyle = "rgba(255,255,255,.06)";
+          ctx.fillRect(x+3, y+3, Math.max(0, o.w-6), Math.max(0, Math.min(10, o.h-6)));
+        }
+      }
+
+      // waypoint marker
+      if (player.waypoint) {
+        const wx = player.waypoint.x + ox;
+        const wy = player.waypoint.y + oy;
+        ctx.save();
+        ctx.globalAlpha = 0.9;
+        ctx.strokeStyle = "rgba(255,255,255,.8)";
+        ctx.fillStyle = "rgba(120,160,255,.22)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(wx, wy, 10, 0, Math.PI*2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(wx, wy, 22, 0, Math.PI*2);
+        ctx.strokeStyle = "rgba(120,160,255,.35)";
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    function drawPlayer() {
+      const x = player.x - world.camX;
+      const y = player.y - world.camY;
+
+      // shadow
+      ctx.save();
+      ctx.globalAlpha = 0.22;
+      ctx.fillStyle = "#000";
+      ctx.beginPath();
+      ctx.ellipse(x, y+18, 18, 7, 0, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+
+      // body
+      const speed = Math.hypot(player.vx, player.vy);
+      const bob = Math.sin(perf.t*10) * Math.min(2.5, speed/120);
+
+      ctx.save();
+      ctx.translate(x, y + bob);
+      ctx.fillStyle = "rgba(255,255,255,.82)";
+      ctx.strokeStyle = "rgba(0,0,0,.35)";
+      ctx.lineWidth = 2;
+
+      ctx.beginPath();
+      ctx.arc(0, 0, player.r, 0, Math.PI*2);
+      ctx.fill();
+      ctx.stroke();
+
+      // face direction indicator
+      ctx.strokeStyle = "rgba(30,50,90,.55)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(player.facing * (player.r-3), -2);
+      ctx.stroke();
+
+      ctx.restore();
+    }
+
+    function drawWaifu() {
+      const x = follower.x - world.camX;
+      const y = follower.y - world.camY;
+
+      // shadow
+      ctx.save();
+      ctx.globalAlpha = 0.22;
+      ctx.fillStyle = "#000";
+      ctx.beginPath();
+      ctx.ellipse(x, y+22, 20, 8, 0, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+
+      // sprite
+      const bob = Math.sin(follower.bobT * 6.2) * (2.2 + follower.mood*1.8);
+      const tilt = Math.sin(follower.bobT * 2.2) * (0.05 + follower.mood*0.08);
+
+      const dir = (player.x - follower.x) >= 0 ? 1 : -1;
+
+      const w = 96, h = 128;
+      ctx.save();
+      ctx.translate(x, y - 40 + bob);
+      ctx.rotate(tilt);
+
+      // glow
+      ctx.globalAlpha = 0.35 + follower.mood*0.25;
+      ctx.fillStyle = "rgba(120,160,255,.35)";
+      ctx.beginPath();
+      ctx.ellipse(0, 40, 34, 18, 0, 0, Math.PI*2);
+      ctx.fill();
+
+      ctx.globalAlpha = 1;
+      ctx.scale(dir, 1);
+
+      if (waifuReady) {
+        // draw centered
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(waifuImg, -w/2, -h/2, w, h);
+      } else {
+        // placeholder
+        ctx.fillStyle = "rgba(255,180,220,.85)";
+        ctx.strokeStyle = "rgba(0,0,0,.35)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.roundRect(-w/2, -h/2, w, h, 14);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = "rgba(0,0,0,.35)";
+        ctx.fillRect(-w/2+12, -8, w-24, 8);
+        ctx.fillRect(-w/2+18, 12, w-36, 7);
+      }
+
+      // follow indicator
+      ctx.globalAlpha = 0.8;
+      ctx.fillStyle = follower.enabled ? "rgba(170,255,190,.9)" : "rgba(255,200,170,.9)";
+      ctx.beginPath();
+      ctx.arc(0, -h/2 - 10, 5.5, 0, Math.PI*2);
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    // polyfill roundRect for older browsers
+    if (!CanvasRenderingContext2D.prototype.roundRect) {
+      CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+        r = Math.min(r, w/2, h/2);
+        this.beginPath();
+        this.moveTo(x+r, y);
+        this.arcTo(x+w, y, x+w, y+h, r);
+        this.arcTo(x+w, y+h, x, y+h, r);
+        this.arcTo(x, y+h, x, y, r);
+        this.arcTo(x, y, x+w, y, r);
+        this.closePath();
+        return this;
+      };
+    }
+
+    const perf = { last: performance.now(), t: 0 };
+
+    function loop(now) {
+      const dt = Math.min(0.033, (now - perf.last) / 1000);
+      perf.last = now;
+      perf.t += dt;
+
+      updatePlayer(dt);
+      updateFollower(dt);
+      updateCamera(dt);
+
+      ctx.clearRect(0, 0, innerWidth, innerHeight);
+      drawBackground();
+
+      // draw order: follower behind player a bit based on y
+      if (follower.y < player.y) { drawWaifu(); drawPlayer(); }
+      else { drawPlayer(); drawWaifu(); }
+
+      requestAnimationFrame(loop);
+    }
+
+    requestAnimationFrame(loop);
+  })();
+  </script>
+</body>
+</html>
