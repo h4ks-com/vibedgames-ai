@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sphere Observation Simulator Deluxe</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #1a1a1a;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            display: block;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: #fff;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            font-size: 12px;
+            z-index: 10;
+        }
+        #weapon {
+            position: absolute;
+            top: 100px;
+            left: 10px;
+            color: #fff;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            font-size: 14px;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <div id="info">WASD: Move | SPACE: Shoot | 0-9: Switch Weapon | ESC: Reset</div>
+    <div id="weapon">Weapon: Pistol</div>
+    
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+
+        // Simple MIDI-style piano music generation
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        
+        function playNote(frequency, duration) {
+            const osc = audioContext.createOscillator();
+            const gain = audioContext.createGain();
+            
+            osc.connect(gain);
+            gain.connect(audioContext.destination);
+            
+            osc.frequency.value = frequency;
+            osc.type = 'triangle';
+            
+            gain.gain.setValueAtTime(0.1, audioContext.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + duration);
+            
+            osc.start(audioContext.currentTime);
+            osc.stop(audioContext.currentTime + duration);
+        }
+
+        function playMelody() {
+            const notes = [261.63, 293.66, 329.63, 349.23, 392, 440, 493.88, 523.25];
+            let index = 0;
+            setInterval(() => {
+                playNote(notes[index % notes.length], 0.3);
+                index++;
+            }, 400);
+        }
+
+        playMelody();
+
+        const keys = {};
+        const particles = [];
+        const spheres = [];
+        const scientists = [];
+        const projectiles = [];
+        const bees = [];
+        
+        const weapons = {
+            0: { name: 'Pistol', color: '#ffff00', speed: 10, size: 3, damage: 1 },
+            1: { name: 'Grenade', color: '#ff4444', speed: 6, size: 8, damage: 5, bounces: true },
+            2: { name: 'Boomerang', color: '#00ff88', speed: 8, size: 6, damage: 2, returns: true },
+            3: { name: 'Toast', color: '#d2691e', speed: 5, size: 10, damage: 1, spin: true },
+            4: { name: 'Waffle', color: '#8b6914', speed: 5, size: 12, damage: 1, spin: true },
+            5: { name: 'Molotov', color: '#ff6600', speed: 6, size: 7, damage: 3, explodes: true },
+            6: { name: 'Rubber Duck', color: '#ffdd00', speed: 4, size: 9, damage: 0 },
+            7: { name: 'Spoon', color: '#c0c0c0', speed: 9, size: 4, damage: 1, spin: true },
+            8: { name: 'Shoe', color: '#8b4513', speed: 7, size: 11, damage: 2, spin: true },
+            9: { name: 'Nuclear Banana', color: '#ffff00', speed: 7, size: 14, damage: 10, explodes: true }
+        };
+        
+        const player = {
+            x: canvas.width / 2,
+            y: canvas.height / 2,
+            vx: 0,
+            vy: 0,
+            speed: 5,
+            size: 15,
+            angle: 0,
+            weapon: 0,
+            health: 100
+        };
+
+        class Bee {
+            constructor() {
+                this.x = Math.random() * canvas.width - canvas.width / 2 + player.x;
+                this.y = Math.random() * canvas.height - canvas.height / 2 + player.y;
+                this.vx = Math.random() * 2 - 1;
+                this.vy = Math.random() * 2 - 1;
+                this.size = 4;
+                this.bobOffset = Math.random() * Math.PI * 2;
+                this.angle = 0;
+            }
+
+            update() {
+                const dx = player.x - this.x;
+                const dy = player.y - this.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                if (distance < 400) {
+                    const angle = Math.atan2(dy, dx);
+                    this.vx = Math.cos(angle) * 3;
+                    this.vy = Math.sin(angle) * 3;
+                } else {
+                    this.vx += (Math.random() - 0.5) * 0.1;
+                    this.vy += (Math.random() - 0.5) * 0.1;
+                }
+
+                this.x += this.vx;
+                this.y += this.vy;
+                this.angle += 0.1;
+            }
+
+            draw(ctx) {
+                const screenX = this.x - player.x + canvas.width / 2;
+                const screenY = this.y - player.y + canvas.height / 2;
+
+                if (screenX < -20 || screenX > canvas.width + 20 || 
+                    screenY < -20 || screenY > canvas.height + 20) return;
+
+                ctx.fillStyle = '#ffff00';
+                ctx.beginPath();
+                ctx.ellipse(screenX, screenY, this.size, this.size * 0.6, 0, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 1;
+                for (let i = 0; i < 2; i++) {
+                    ctx.beginPath();
+                    ctx.arc(screenX + Math.cos(this.angle + i * Math.PI) * 3, 
+                            screenY + Math.sin(this.angle + i * Math.PI) * 2, 1.5, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+        }
+
+        class Sphere {
+            constructor(x, y, z, depth) {
+                this.x = x;
+                this.y = y;
+                this.z = z;
+                this.depth = depth;
+                this.baseX = x;
+                this.baseY = y;
+                this.rotation = Math.random() * Math.PI * 2;
+                this.rotationSpeed = Math.random() * 0.02 - 0.01;
+                this.bobOffset = Math.random() * Math.PI * 2;
+                this.size = 8 + Math.random() * 4;
+                this.smallSpheres = [];
+                this.generateSmallSpheres();
+            }
+
+            generateSmallSpheres() {
+                const count = 12 + Math.floor(Math.random() * 8);
+                for (let i = 0; i < count; i++) {
+                    const angle = (i / count) * Math.PI * 2;
+                    const distance = this.size * 0.6;
+                    this.smallSpheres.push({
+                        angle: angle,
+                        distance: distance,
+                        rotation: Math.random() * Math.PI * 2
+                    });
+                }
+            }
+
+            update() {
+                this.rotation += this.rotationSpeed;
+                this.y = this.baseY + Math.sin(Date.now() * 0.0005 + this.bobOffset) * 2;
+            }
+
+            draw(ctx) {
+                const screenX = this.x - player.x + canvas.width / 2;
+                const screenY = this.y - player.y + canvas.height / 2;
+
+                if (screenX < -50 || screenX > canvas.width + 50 || 
+                    screenY < -50 || screenY > canvas.height + 50) return;
+
+                const depth = Math.sqrt((this.x - player.x) ** 2 + (this.y - player.y) ** 2);
+                const brightness = Math.max(0.3, 1 - depth / 800);
+
+                ctx.fillStyle = `rgba(${180 * brightness}, ${140 * brightness}, ${100 * brightness}, ${brightness})`;
+                ctx.beginPath();
+                ctx.arc(screenX, screenY, this.size, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.strokeStyle = `rgba(100, 80, 60, ${brightness * 0.5})`;
+                ctx.lineWidth = 1;
+                ctx.stroke();
+
+                this.smallSpheres.forEach(small => {
+                    const sx = screenX + Math.cos(small.angle + this.rotation) * small.distance;
+                    const sy = screenY + Math.sin(small.angle + this.rotation) * small.distance;
+                    const smallSize = this.size * 0.25;
+
+                    ctx.fillStyle = `rgba(${60 * brightness}, ${100 * brightness}, ${40 * brightness}, ${brightness})`;
+                    ctx.beginPath();
+                    ctx.arc(sx, sy, smallSize, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    ctx.strokeStyle = `rgba(30, 50, 20, ${brightness * 0.5})`;
+                    ctx.lineWidth = 0.5;
+                    ctx.stroke();
+                });
+            }
+
+            getDistance() {
+                return Math.sqrt((this.x - player.x) ** 2 + (this.y - player.y) ** 2);
+            }
+        }
+
+        class Scientist {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.size = 8;
+                this.angle = Math.random() * Math.PI * 2;
+                this.walking = true;
+                this.walkSpeed = 1;
+                this.walkDirection = Math.random() > 0.5 ? 1 : -1;
+            }
+
+            update() {
+                if (this.walking) {
+                    this.x += this.walkDirection * this.walkSpeed;
+                    if (Math.random() < 0.02) {
+                        this.walkDirection *= -1;
+                    }
+                }
+            }
+
+            draw(ctx) {
+                const screenX = this.x - player.x + canvas.width / 2;
+                const screenY = this.y - player.y + canvas.height / 2;
+
+                if (screenX < -30 || screenX > canvas.width + 30 || 
+                    screenY < -30 || screenY > canvas.height + 30) return;
+
+                ctx.fillStyle = '#f5f5f5';
+                ctx.fillRect(screenX - 6, screenY - 8, 12, 16);
+                ctx.fillRect(screenX - 8, screenY - 2, 4, 8);
+                ctx.fillRect(screenX + 4, screenY - 2, 4, 8);
+                ctx.beginPath();
+                ctx.arc(screenX, screenY - 10, 4, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.fillStyle = '#000';
+                ctx.fillRect(screenX - 4, screenY + 8, 8, 2);
+
+                ctx.fillStyle = '#333';
+                ctx.font = '10px Arial';
+                ctx.fillText('Notes', screenX - 12, screenY + 14);
+            }
+        }
+
+        class Projectile {
+            constructor(x, y, angle, weaponType) {
+                this.x = x;
+                this.y = y;
+                this.weapon = weapons[weaponType];
+                this.vx = Math.cos(angle) * this.weapon.speed;
+                this.vy = Math.sin(angle) * this.weapon.speed;
+                this.size = this.weapon.size;
+                this.life = 300;
+                this.rotation = 0;
+                this.startX = x;
+                this.startY = y;
+                this.bounceCount = 0;
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.life--;
+                this.rotation += 0.1;
+
+                if (this.weapon.bounces && this.bounceCount < 3) {
+                    if (Math.random() < 0.01) {
+                        this.vx *= -0.8;
+                        this.vy *= -0.8;
+                        this.bounceCount++;
+                    }
+                }
+
+                if (this.weapon.returns) {
+                    const distance = Math.sqrt((this.x - this.startX) ** 2 + (this.y - this.startY) ** 2);
+                    if (distance > 200) {
+                        const angle = Math.atan2(this.startY - this.y, this.startX - this.x);
+                        this.vx = Math.cos(angle) * this.weapon.speed * 1.5;
+                        this.vy = Math.sin(angle) * this.weapon.speed * 1.5;
+                    }
+                }
+            }
+
+            draw(ctx) {
+                const screenX = this.x - player.x + canvas.width / 2;
+                const screenY = this.y - player.y + canvas.height / 2;
+
+                if (screenX < -50 || screenX > canvas.width + 50 || 
+                    screenY < -50 || screenY > canvas.height + 50) return;
+
+                ctx.save();
+                ctx.translate(screenX, screenY);
+                
+                if (this.weapon.spin) {
+                    ctx.rotate(this.rotation);
+                }
+
+                ctx.fillStyle = this.weapon.color;
+                
+                if (this.weapon.name === 'Toast' || this.weapon.name === 'Waffle') {
+                    ctx.fillRect(-this.size/2, -this.size/2, this.size, this.size);
+                    if (this.weapon.name === 'Waffle') {
+                        ctx.strokeStyle = '#ff8c00';
+                        ctx.lineWidth = 1;
+                        for (let i = 1; i < 4; i++) {
+                            ctx.beginPath();
+                            ctx.moveTo(-this.size/2, -this.size/2 + i * this.size/4);
+                            ctx.lineTo(this.size/2, -this.size/2 + i * this.size/4);
+                            ctx.stroke();
+                            ctx.beginPath();
+                            ctx.moveTo(-this.size/2 + i * this.size/4, -this.size/2);
+                            ctx.lineTo(-this.size/2 + i * this.size/4, this.size/2);
+                            ctx.stroke();
+                        }
+                    }
+                } else if (this.weapon.name === 'Shoe') {
+                    ctx.beginPath();
+                    ctx.ellipse(0, 0, this.size * 0.8, this.size * 0.5, 0, 0, Math.PI * 2);
+                    ctx.fill();
+                } else if (this.weapon.name === 'Spoon') {
+                    ctx.fillRect(-2, -this.size, 4, this.size * 2);
+                    ctx.beginPath();
+                    ctx.arc(0, -this.size, 3, 0, Math.PI * 2);
+                    ctx.fill();
+                } else if (this.weapon.name === 'Rubber Duck') {
+                    ctx.beginPath();
+                    ctx.arc(-2, 0, this.size * 0.6, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.fillStyle = '#ff6600';
+                    ctx.beginPath();
+                    ctx.arc(1, -1, 1, 0, Math.PI * 2);
+                    ctx.fill();
+                } else {
+                    ctx.beginPath();
+                    ctx.arc(0, 0, this.size, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                ctx.restore();
+            }
+        }
+
+        function initScene() {
+            spheres.length = 0;
+            scientists.length = 0;
+            particles.length = 0;
+            projectiles.length = 0;
+            bees.length = 0;
+
+            const gridSize = 15;
+            const spacing = 40;
+            for (let i = 0; i < gridSize; i++) {
+                for (let j = 0; j < gridSize; j++) {
+                    const x = i * spacing - (gridSize * spacing) / 2 + 400;
+                    const y = j * spacing - (gridSize * spacing) / 2 + 300;
+                    const z = Math.random() * 100;
+                    spheres.push(new Sphere(x, y, z, Math.random()));
+                }
+            }
+
+            for (let i = 0; i < 8; i++) {
+                scientists.push(new Scientist(
+                    Math.random() * 800 - 400 + player.x,
+                    Math.random() * 600 - 300 + player.y
+                ));
+            }
+
+            for (let i = 0; i < 15; i++) {
+                bees.push(new Bee());
+            }
+        }
+
+        function drawGarfieldBooth() {
+            const bx = 200;
+            const by = 100;
+            ctx.fillStyle = '#ff6b6b';
+            ctx.fillRect(bx, by, 120, 100);
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(bx + 10, by + 20, 100, 60);
+            ctx.fillStyle = '#ffa500';
+            ctx.font = 'bold 14px Arial';
+            ctx.fillText('GARFIELD', bx + 25, by + 45);
+            ctx.fillText('PHOTO BOOTH', bx + 15, by + 62);
+            ctx.fillStyle = '#ff8c00';
+            ctx.font = '12px Arial';
+            ctx.fillText('BAKE SALE', bx + 30, by + 85);
+
+            ctx.fillStyle = '#ff9900';
+            for (let i = 0; i < 3; i++) {
+                ctx.beginPath();
+                ctx.arc(bx + 30 + i * 30, by + 95 + Math.sin(Date.now() * 0.005 + i) * 3, 3, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        function drawCryingChildren() {
+            const positions = [
+                {x: 100, y: 80},
+                {x: 350, y: 120},
+                {x: 50, y: 150}
+            ];
+
+            positions.forEach(pos => {
+                ctx.fillStyle = '#ffdbac';
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y - 8, 6, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.fillStyle = '#000';
+                ctx.fillRect(pos.x - 4, pos.y - 6, 8, 6);
+
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(pos.x - 2, pos.y - 2);
+                ctx.lineTo(pos.x + 2, pos.y + 2);
+                ctx.stroke();
+
+                ctx.fillStyle = '#0099ff';
+                for (let i = 0; i < 3; i++) {
+                    ctx.beginPath();
+                    ctx.arc(pos.x - 4 + i * 2, pos.y + 8 + Math.sin(Date.now() * 0.01 + i) * 2, 1, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            });
+        }
+
+        document.addEventListener('keydown', (e) => {
+            keys[e.key.toLowerCase()] = true;
+            
+            if (e.key === ' ') {
+                e.preventDefault();
+                const angle = Math.atan2(
+                    canvas.height / 2 - player.y,
+                    canvas.width / 2 - player.x
+                );
+                projectiles.push(new Projectile(player.x, player.y, angle, player.weapon));
+            }
+            
+            if (e.key >= '0' && e.key <= '9') {
+                player.weapon = parseInt(e.key);
+                document.getElementById('weapon').textContent = `Weapon: ${weapons[player.weapon].name}`;
+            }
+            
+            if (e.key === 'Escape') {
+                player.x = canvas.width / 2;
+                player.y = canvas.height / 2;
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            keys[e.key.toLowerCase()] = false;
+        });
+
+        function update() {
+            player.vx = 0;
+            player.vy = 0;
+
+            if (keys['w']) player.vy -= player.speed;
+            if (keys['s']) player.vy += player.speed;
+            if (keys['a']) player.vx -= player.speed;
+            if (keys['d']) player.vx += player.speed;
+
+            player.x += player.vx;
+            player.y += player.vy;
+
+            spheres.forEach(s => s.update());
+            scientists.forEach(s => s.update());
+            bees.forEach(b => b.update());
+
+            projectiles.forEach((p, i) => {
+                p.update();
+                if (p.life <= 0) projectiles.splice(i, 1);
+            });
+
+            spheres.sort((a, b) => a.getDistance() - b.getDistance());
+
+            for (let i = bees.length - 1; i >= 0; i--) {
+                const bee = bees[i];
+                const dx = player.x - bee.x;
+                const dy = player.y - bee.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                if (distance < 15) {
+                    player.health -= 0.1;
+                }
+            }
+        }
+
+        function draw() {
+            ctx.fillStyle = '#0a0a0a';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.save();
+            ctx.translate(canvas.width / 2, canvas.height / 2);
+
+            spheres.forEach(s => s.draw(ctx));
+            scientists.forEach(s => s.draw(ctx));
+            projectiles.forEach(p => p.draw(ctx));
+            bees.forEach(b => b.draw(ctx));
+
+            ctx.restore();
+
+            ctx.fillStyle = '#fff';
+            ctx.font = '14px Arial';
+            ctx.fillText(`X: ${Math.floor(player.x)} Y: ${Math.floor(player.y)}`, 10, canvas.height - 10);
+            ctx.fillText(`Health: ${Math.floor(player.health)}`, 10, canvas.height - 30);
+            ctx.fillText(`Bees: ${bees.length}`, 10, canvas.height - 50);
+
+            drawGarfieldBooth();
+            drawCryingChildren();
+
+            ctx.strokeStyle = '#888';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(canvas.width / 2, canvas.height / 2, 20, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        initScene();
+        gameLoop();
+    </script>
+</body>
+</html>
