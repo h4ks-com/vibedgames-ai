@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Automatic Piano Tune Generator</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            font-family: 'Arial', sans-serif;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        #container {
+            background: white;
+            padding: 40px;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+            max-width: 700px;
+            text-align: center;
+        }
+        h1 {
+            color: #1e3c72;
+            margin-bottom: 30px;
+            font-size: 32px;
+        }
+        #piano {
+            display: flex;
+            justify-content: center;
+            gap: 2px;
+            margin: 30px 0;
+            height: 200px;
+            background: #333;
+            padding: 10px;
+            border-radius: 10px;
+            box-shadow: inset 0 0 10px rgba(0,0,0,0.5);
+        }
+        .key {
+            flex: 1;
+            border: 2px solid #333;
+            border-radius: 5px;
+            cursor: default;
+            transition: all 0.1s;
+            position: relative;
+            max-width: 40px;
+        }
+        .white-key {
+            background: white;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+        }
+        .black-key {
+            background: #1a1a1a;
+            max-width: 25px;
+            margin: 0 -13px;
+            z-index: 10;
+        }
+        .key.active {
+            transform: translateY(2px);
+            box-shadow: inset 0 2px 5px rgba(0,0,0,0.3);
+        }
+        .white-key.active {
+            background: #e0e0e0;
+        }
+        .black-key.active {
+            background: #4a4a4a;
+        }
+        #info {
+            margin-top: 30px;
+            color: #666;
+        }
+        #tune-name {
+            font-size: 24px;
+            color: #1e3c72;
+            font-weight: bold;
+            margin: 20px 0;
+            min-height: 30px;
+            font-style: italic;
+        }
+        #stats {
+            font-size: 14px;
+            color: #999;
+            margin-top: 15px;
+        }
+        #status {
+            color: #2a5298;
+            font-size: 14px;
+            margin-top: 15px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <h1>🎹 Automatic Piano Tune Generator</h1>
+        <div id="piano"></div>
+        <div id="tune-name">♪ Melody Loading ♪</div>
+        <div id="stats"></div>
+        <div id="status">Initializing...</div>
+        <div id="info">AI-generated melodies playing continuously</div>
+    </div>
+
+    <script>
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        
+        if (audioContext.state === 'suspended') {
+            audioContext.resume();
+        }
+
+        // Piano notes (C3 to C5)
+        const noteFrequencies = {
+            'C3': 130.81, 'C#3': 138.59, 'D3': 146.83, 'D#3': 155.56, 'E3': 164.81,
+            'F3': 174.61, 'F#3': 185.00, 'G3': 196.00, 'G#3': 207.65, 'A3': 220.00,
+            'A#3': 233.08, 'B3': 246.94, 'C4': 261.63, 'C#4': 277.18, 'D4': 293.66,
+            'D#4': 311.13, 'E4': 329.63, 'F4': 349.23, 'F#4': 369.99, 'G4': 392.00,
+            'G#4': 415.30, 'A4': 440.00, 'A#4': 466.16, 'B4': 493.88, 'C5': 523.25
+        };
+
+        const noteNames = Object.keys(noteFrequencies);
+        const whiteKeys = ['C3', 'D3', 'E3', 'F3', 'G3', 'A3', 'B3', 'C4', 'D4', 'E4', 'F4', 'G4', 'A4', 'B4', 'C5'];
+        const blackKeys = ['C#3', 'D#3', 'F#3', 'G#3', 'A#3', 'C#4', 'D#4', 'F#4', 'G#4', 'A#4'];
+
+        let tuneCount = 0;
+        let activeKeys = {};
+
+        // Create piano visualization
+        function initPiano() {
+            const pianoDiv = document.getElementById('piano');
+            pianoDiv.innerHTML = '';
+            
+            for (let i = 0; i < whiteKeys.length; i++) {
+                const key = document.createElement('div');
+                key.className = 'key white-key';
+                key.id = 'key-' + whiteKeys[i];
+                pianoDiv.appendChild(key);
+            }
+
+            for (let blackKey of blackKeys) {
+                const key = document.createElement('div');
+                key.className = 'key black-key';
+                key.id = 'key-' + blackKey;
+                pianoDiv.appendChild(key);
+            }
+        }
+
+        function playNote(note, duration) {
+            return new Promise(resolve => {
+                const freq = noteFrequencies[note];
+                const osc = audioContext.createOscillator();
+                const gain = audioContext.createGain();
+
+                osc.type = 'sine';
+                osc.frequency.value = freq;
+                osc.connect(gain);
+                gain.connect(audioContext.destination);
+
+                gain.gain.setValueAtTime(0.3, audioContext.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + duration);
+
+                osc.start(audioContext.currentTime);
+                osc.stop(audioContext.currentTime + duration);
+
+                // Animate key
+                const keyElement = document.getElementById('key-' + note);
+                if (keyElement) {
+                    keyElement.classList.add('active');
+                    setTimeout(() => keyElement.classList.remove('active'), duration * 1000);
+                }
+
+                setTimeout(resolve, duration * 1000);
+            });
+        }
+
+        function generateTuneName() {
+            const adjectives = ['Peaceful', 'Joyful', 'Whimsical', 'Gentle', 'Ethereal', 'Bouncy', 'Dreamy', 'Bright', 'Melancholic', 'Serene'];
+            const nouns = ['Melody', 'Symphony', 'Reverie', 'Dance', 'Journey', 'Dream', 'Waltz', 'Prelude', 'Nocturne', 'Serenade'];
+            
+            const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
+            const noun = nouns[Math.floor(Math.random() * nouns.length)];
+            
+            return `${adj} ${noun}`;
+        }
+
+        async function generateAndPlayTune() {
+            tuneCount++;
+            const tuneName = generateTuneName();
+            document.getElementById('tune-name').textContent = tuneName;
+
+            // Generate random melody
+            const noteCount = Math.floor(Math.random() * 8) + 6; // 6-13 notes
+            const melody = [];
+
+            for (let i = 0; i < noteCount; i++) {
+                const note = noteNames[Math.floor(Math.random() * noteNames.length)];
+                const duration = [0.25, 0.5, 0.75, 1.0][Math.floor(Math.random() * 4)];
+                melody.push({ note, duration });
+            }
+
+            document.getElementById('stats').textContent = `${noteCount} notes • Tempo: ${Math.floor(60 + Math.random() * 80)} BPM`;
+            document.getElementById('status').textContent = `Playing tune #${tuneCount}...`;
+
+            // Play melody
+            for (let noteObj of melody) {
+                await playNote(noteObj.note, noteObj.duration);
+                // Small pause between notes
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+
+            // Schedule next tune
+            const nextTuneDelay = Math.floor(Math.random() * 2000) + 1000;
+            setTimeout(generateAndPlayTune, nextTuneDelay);
+        }
+
+        // Initialize and start
+        initPiano();
+        document.getElementById('status').textContent = 'Generating first tune...';
+        setTimeout(() => {
+            generateAndPlayTune();
+        }, 500);
+    </script>
+</body>
+</html>
