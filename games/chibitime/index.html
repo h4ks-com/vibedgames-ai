@@ -1,0 +1,954 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Valware: Chibi At All Times</title>
+<style>
+  :root{--ui-bg:rgba(6,10,22,0.80);--accent:#0b63ff}
+  html,body{height:100%;margin:0;background:#061220;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;color:#e6eef8}
+  #ui{position:fixed;left:12px;top:12px;z-index:30}
+  #panel{background:var(--ui-bg);padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,0.04);width:410px}
+  #title{font-weight:900;font-size:16px;margin-bottom:8px}
+  .row{display:flex;justify-content:space-between;align-items:center;margin-top:6px;gap:10px}
+  .small{font-size:13px;color:#bcd7f7}
+  .stat{font-weight:800;color:#fff}
+  .hint{font-size:13px;color:#cfe3ff;margin-top:8px;line-height:1.25}
+  input[type=number]{width:130px;padding:7px 8px;border-radius:8px;border:1px solid rgba(255,255,255,0.10);background:#0b162e;color:#eaf2ff}
+  button{padding:7px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:#0f2a44;color:#cfe3ff;cursor:pointer;font-weight:800}
+  button.primary{background:var(--accent);border-color:rgba(255,255,255,0.06);color:#fff}
+  button.disabled{opacity:0.4;cursor:not-allowed}
+  #canvasWrap{display:flex;align-items:center;justify-content:center;height:100%}
+  canvas{background:#031021;border-radius:12px;box-shadow:0 16px 50px rgba(2,8,20,0.7);max-width:calc(100vw - 40px);height:auto}
+  #legend{position:fixed;right:12px;top:12px;background:var(--ui-bg);padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,0.04);width:300px}
+  #footer{position:fixed;left:12px;bottom:12px;color:#93a7c8;font-size:13px}
+  @media (max-width:980px){ #panel{width:280px} #legend{display:none} }
+</style>
+</head>
+<body>
+  <div id="ui">
+    <div id="panel">
+      <div id="title">Valware: Chibi At All Times</div>
+      <div class="small">Stand inside the <b>Time Machine</b> (top-right) to travel. Choose a year from <b>10000 BCE to 10000 CE</b>. Collect <b>chibi cats</b> across eras. (They’re adorable and suspiciously collectible.)</div>
+
+      <div class="row">
+        <div class="small">Target year</div>
+        <div style="display:flex;gap:8px;align-items:center;justify-content:flex-end;flex:1">
+          <input id="yearInput" type="number" min="-10000" max="10000" step="1" value="2026" />
+          <button id="travelBtn" class="primary">Travel</button>
+        </div>
+      </div>
+
+      <div class="row"><div class="small">Current year</div><div id="yearLabel" class="stat">2026 CE</div></div>
+      <div class="row"><div class="small">Chibi cats</div><div id="catCount" class="stat">0</div></div>
+      <div class="row"><div class="small">Pies</div><div id="pieCount" class="stat">0</div></div>
+      <div class="row"><div class="small">Sword</div><div id="swordLabel" class="stat">Cardboard</div></div>
+
+      <div class="hint">Controls: <b>WASD</b> move • <b>Space</b> shoot • <b>E</b> upgrade at shop (10 pies) • Must be inside time machine to travel.</div>
+    </div>
+  </div>
+
+  <div id="legend">
+    <div style="font-weight:900;margin-bottom:6px">Notes</div>
+    <div class="small">Different years generate different palettes, tree layouts, and enemy behaviors. Trees block movement. Enemies may drop pies.</div>
+    <div class="small" style="margin-top:8px"><b>64 swords total</b>. Upgrade costs <b>10 pies</b> per tier.</div>
+  </div>
+
+  <div id="canvasWrap">
+    <canvas id="game" width="960" height="640"></canvas>
+  </div>
+
+  <div id="footer">Collect chibi cats. Use pies to upgrade swords. Stand inside the Time Machine box to travel to your selected year.</div>
+
+<script>
+(function(){
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+
+  const yearInput = document.getElementById('yearInput');
+  const travelBtn = document.getElementById('travelBtn');
+  const yearLabel = document.getElementById('yearLabel');
+  const catCountEl = document.getElementById('catCount');
+  const pieCountEl = document.getElementById('pieCount');
+  const swordLabelEl = document.getElementById('swordLabel');
+
+  // 64 swords total
+  const SWORDS = [
+    'Cardboard','Wooden','Pine','Oak','Birch','Cedar','Ash','Maple',
+    'Bronze','Iron','Forged Iron','Steel','Tempered Steel','Damascus','Silver','Gold',
+    'Platinum','Titanium','Cobalt','Nickel','Chromium','Tungsten','Mythril','Adamant',
+    'Obsidian','Onyx','Basalt','Glass','Crystal','Runed','Refined','Arcsteel',
+    'Stormsteel','Sunsteel','Moonsteel','Starsteel','Plasma','Ion','Photon','Laser',
+    'Neon','Prism','Gravity','Singularity','Quantum','Phase','Spectral','Ethereal',
+    'Void','Abyss','Null','Entropy','Chrono','Aeon','Eclipse','Nova',
+    'Pulsar','Quasar','Nebula','Galactic','Celestial','Cosmic','Omega','Final'
+  ];
+  const SWORD_COUNT = SWORDS.length; // 64
+
+  // Areas
+  const shop = { x: 36, y: canvas.height - 160, w: 170, h: 120 };
+  const timeMachine = { x: canvas.width - 220, y: 20, w: 195, h: 140 };
+
+  // Player
+  const player = {
+    x: canvas.width/2, y: canvas.height/2, r: 14,
+    speed: 170, facingX: 0, facingY: -1,
+    lastShot: 0, shootCooldown: 520
+  };
+
+  // State
+  let currentYear = 2026;
+  let pies = 0;
+  let cats = 0;
+  let swordLevel = 0;
+
+  // Entities
+  let trees = [];
+  let catsOnMap = []; // collectible chibi cats
+  let piesOnMap = []; // dropped pies (used for upgrades)
+  let enemies = [];
+  let bullets = [];
+  let particles = [];
+
+  // Timers
+  let catTimer = 0;
+  let pieTimer = 0;
+  let enemyTimer = 0;
+
+  // Controls
+  const keys = {};
+  window.addEventListener('keydown', e => {
+    keys[e.key.toLowerCase()] = true;
+    if (e.key === ' ' || e.code === 'Space') e.preventDefault();
+  });
+  window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+  // RNG
+  function mulberry32(seed){
+    return function(){
+      let t = seed += 0x6D2B79F5;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function clamp(v,a,b){ return Math.max(a, Math.min(b,v)); }
+
+  function yearText(y){
+    if (y === 0) return '0';
+    if (y < 0) return `${Math.abs(y)} BCE`;
+    return `${y} CE`;
+  }
+
+  function yearToSeed(y){
+    return (y * 2654435761) ^ 0x9E3779B9 ^ ((y<0)?0xDEADBEEF:0);
+  }
+
+  function hslToRgb(h,s,l){
+    h = ((h%360)+360)%360;
+    const c = (1 - Math.abs(2*l - 1)) * s;
+    const x = c * (1 - Math.abs((h/60)%2 - 1));
+    const m = l - c/2;
+    let r=0,g=0,b=0;
+    if (h < 60){ r=c; g=x; b=0; }
+    else if (h < 120){ r=x; g=c; b=0; }
+    else if (h < 180){ r=0; g=c; b=x; }
+    else if (h < 240){ r=0; g=x; b=c; }
+    else if (h < 300){ r=x; g=0; b=c; }
+    else { r=c; g=0; b=x; }
+    return {r:Math.round((r+m)*255),g:Math.round((g+m)*255),b:Math.round((b+m)*255)};
+  }
+  function rgba(rgb,a){ return `rgba(${rgb.r},${rgb.g},${rgb.b},${a})`; }
+
+  // World generator from year: palette, tree layout, enemy pool, rates
+  let rnd = mulberry32(yearToSeed(currentYear));
+  let world = makeWorld(currentYear);
+
+  function makeWorld(y){
+    const seed = yearToSeed(y);
+    rnd = mulberry32(seed);
+
+    const baseHue = Math.floor(rnd()*360);
+    const bg = hslToRgb(baseHue, 0.55, 0.12 + rnd()*0.08);
+    const ambient = hslToRgb(baseHue + 35 + rnd()*50, 0.55, 0.20);
+    const tree = hslToRgb(baseHue + 120 + rnd()*90, 0.55, 0.26);
+    const cat = hslToRgb(baseHue + 330 + rnd()*60, 0.60, 0.78);
+    const pie = hslToRgb(baseHue + 290 + rnd()*60, 0.70, 0.72);
+
+    const ancientFactor = y < 0 ? 1.20 : 1.0;
+    const futureFactor = y > 4000 ? 1.15 : 1.0;
+
+    const treeCount = Math.floor((10 + rnd()*18) * ancientFactor);
+    const catRate = (0.85 + rnd()*1.2); // cats are always around
+    const pieRate = (0.8 + rnd()*1.1) / ancientFactor;
+    const enemyRate = (0.9 + rnd()*1.4) * ancientFactor * futureFactor;
+
+    // enemy pools based on band
+    let pool;
+    if (y < -5000){
+      pool = [
+        {hp:4,speed:70,color:'#ff6b88',behavior:'fastChase'},
+        {hp:5,speed:40,color:'#ffb3b3',behavior:'tank'},
+        {hp:3,speed:55,color:'#ff6b6b',behavior:'chase'}
+      ];
+    } else if (y < 0){
+      pool = [
+        {hp:3,speed:60,color:'#ff6b6b',behavior:'chase'},
+        {hp:3,speed:40,color:'#ff9b6b',behavior:'slowCharge'},
+        {hp:2,speed:55,color:'#ff7f7f',behavior:'wander'}
+      ];
+    } else if (y < 5000){
+      pool = [
+        {hp:2,speed:65,color:'#ff6b6b',behavior:'chase'},
+        {hp:3,speed:45,color:'#ff9b6b',behavior:'wander'},
+        {hp:4,speed:32,color:'#ffb3b3',behavior:'tank'}
+      ];
+    } else {
+      pool = [
+        {hp:5,speed:75,color:'#ff6b88',behavior:'fastChase'},
+        {hp:6,speed:48,color:'#ffb3b3',behavior:'tank'},
+        {hp:4,speed:70,color:'#b78eff',behavior:'blink'}
+      ];
+    }
+
+    // trees
+    const trees = [];
+    const minX=70,maxX=canvas.width-70,minY=70,maxY=canvas.height-120;
+    for (let i=0;i<treeCount;i++){
+      let tries=0;
+      while (tries++ < 100){
+        const s = 18 + rnd()*48;
+        const x = minX + rnd()*(maxX-minX);
+        const y0 = minY + rnd()*(maxY-minY);
+        if (x < shop.x + shop.w + 80 && y0 > shop.y - 80) continue;
+        if (x > timeMachine.x - 80 && y0 < timeMachine.y + timeMachine.h + 80) continue;
+
+        let ok=true;
+        for (const t of trees) if (Math.hypot(t.x-x,t.y-y0) < (t.s+s)*0.95) { ok=false; break; }
+        if (!ok) continue;
+        trees.push({x,y:y0,s});
+        break;
+      }
+    }
+
+    return {
+      seed,
+      colors:{bg,ambient,tree,cat,pie},
+      rates:{catRate,pieRate,enemyRate},
+      enemyPool:pool,
+      trees
+    };
+  }
+
+  function inTimeMachine(){
+    return player.x > timeMachine.x && player.x < timeMachine.x+timeMachine.w &&
+           player.y > timeMachine.y && player.y < timeMachine.y+timeMachine.h;
+  }
+  function inShop(){
+    return player.x > shop.x && player.x < shop.x+shop.w &&
+           player.y > shop.y && player.y < shop.y+shop.h;
+  }
+
+  function updateShootStats(){
+    // gentle across 64 swords
+    player.shootCooldown = Math.max(65, 520 - swordLevel * 6.5);
+  }
+  updateShootStats();
+
+  // Spawn helpers
+  function spawnCat(){
+    const pad = 30;
+    let tries=0;
+    while (tries++ < 110){
+      const x = pad + rnd()*(canvas.width - pad*2);
+      const y = pad + rnd()*(canvas.height - pad*2);
+      if (x > shop.x-50 && x < shop.x+shop.w+50 && y > shop.y-50 && y < shop.y+shop.h+50) continue;
+      if (x > timeMachine.x-50 && x < timeMachine.x+timeMachine.w+50 && y > timeMachine.y-50 && y < timeMachine.y+timeMachine.h+50) continue;
+      let coll=false;
+      for (const t of trees) if (Math.hypot(t.x-x,t.y-y) < t.s + 18) { coll=true; break; }
+      if (coll) continue;
+      catsOnMap.push({x,y,r:12 + rnd()*5, bob:rnd()*Math.PI*2});
+      return;
+    }
+  }
+
+  function spawnPie(){
+    const pad = 30;
+    let tries=0;
+    while (tries++ < 110){
+      const x = pad + rnd()*(canvas.width - pad*2);
+      const y = pad + rnd()*(canvas.height - pad*2);
+      if (x > shop.x-50 && x < shop.x+shop.w+50 && y > shop.y-50 && y < shop.y+shop.h+50) continue;
+      if (x > timeMachine.x-50 && x < timeMachine.x+timeMachine.w+50 && y > timeMachine.y-50 && y < timeMachine.y+timeMachine.h+50) continue;
+      let coll=false;
+      for (const t of trees) if (Math.hypot(t.x-x,t.y-y) < t.s + 18) { coll=true; break; }
+      if (coll) continue;
+      piesOnMap.push({x,y,r:12});
+      return;
+    }
+  }
+
+  function spawnEnemy(){
+    const pool = world.enemyPool;
+    const tpl = pool[Math.floor(rnd()*pool.length)];
+    const side = Math.floor(rnd()*4);
+    let x=0,y=0;
+    if (side===0){ x=-30; y=rnd()*canvas.height; }
+    else if (side===1){ x=canvas.width+30; y=rnd()*canvas.height; }
+    else if (side===2){ x=rnd()*canvas.width; y=-30; }
+    else { x=rnd()*canvas.width; y=canvas.height+30; }
+
+    const dist = Math.min(1, Math.abs(currentYear)/10000);
+    const hpScale = 1 + dist*0.7;
+
+    enemies.push({
+      x,y,r:12 + rnd()*10,
+      hp: Math.max(1, Math.round(tpl.hp * hpScale)),
+      baseHp: Math.max(1, Math.round(tpl.hp * hpScale)),
+      speed: tpl.speed * (0.9 + dist*0.25),
+      color: tpl.color,
+      behavior: tpl.behavior,
+      blinkCd: 0,
+      target: null
+    });
+  }
+
+  function shoot(){
+    const now = performance.now();
+    if (now - player.lastShot < player.shootCooldown) return;
+    player.lastShot = now;
+
+    const fx = player.facingX || 0, fy = player.facingY || -1;
+    const n = Math.hypot(fx,fy) || 1;
+    const speed = 460 + swordLevel * 8.5;
+    const vx = (fx/n)*speed, vy = (fy/n)*speed;
+
+    const dmg = 1 + Math.floor(swordLevel/6);
+    const color =
+      swordLevel >= 56 ? '#b78eff' :
+      swordLevel >= 40 ? '#7fffe7' :
+      swordLevel >= 20 ? '#ffd56b' :
+      '#ffffff';
+
+    bullets.push({x:player.x+(fx/n)*18,y:player.y+(fy/n)*18,vx,vy,r:5 + swordLevel*0.05,ttl:2100,dmg,color});
+
+    for (let i=0;i<6;i++){
+      particles.push({x:player.x,y:player.y,vx:(Math.random()-0.5)*140+vx*0.02,vy:(Math.random()-0.5)*140+vy*0.02,life:240+Math.random()*340,col:color,r:1+Math.random()*2});
+    }
+  }
+
+  function tryUpgrade(){
+    if (!inShop()) return;
+    if (pies >= 10 && swordLevel < SWORD_COUNT-1){
+      pies -= 10;
+      swordLevel++;
+      updateShootStats();
+      for (let i=0;i<30;i++){
+        particles.push({
+          x:shop.x+shop.w/2 + (Math.random()-0.5)*shop.w,
+          y:shop.y+shop.h/2 + (Math.random()-0.5)*shop.h,
+          vx:(Math.random()-0.5)*340, vy:(Math.random()-0.5)*340,
+          life:600+Math.random()*900, col:'#ffd56b', r:2+Math.random()*3
+        });
+      }
+    }
+  }
+
+  function travelToYear(target){
+    target = clamp(target, -10000, 10000);
+    if (!inTimeMachine()){
+      travelBtn.classList.add('disabled');
+      setTimeout(()=>travelBtn.classList.remove('disabled'), 450);
+      return;
+    }
+    currentYear = target;
+    world = makeWorld(currentYear);
+    trees = world.trees.map(t=>({x:t.x,y:t.y,s:t.s}));
+
+    // reset map clutter; keep totals
+    catsOnMap = [];
+    piesOnMap = [];
+    enemies = [];
+    bullets = [];
+    particles = [];
+    catTimer = pieTimer = enemyTimer = 0;
+
+    for (let i=0;i<4;i++) spawnCat();
+    for (let i=0;i<2;i++) spawnPie();
+    updateUI();
+  }
+
+  travelBtn.addEventListener('click', () => {
+    const y = parseInt(yearInput.value,10);
+    if (!Number.isFinite(y)) return;
+    travelToYear(y);
+  });
+
+  // Mouse aim & click
+  canvas.addEventListener('mousemove', e => {
+    const r = canvas.getBoundingClientRect();
+    const mx = e.clientX - r.left, my = e.clientY - r.top;
+    if (!(keys['w']||keys['a']||keys['s']||keys['d'])) { player.facingX = mx - player.x; player.facingY = my - player.y; }
+  });
+  canvas.addEventListener('mousedown', e => {
+    const r = canvas.getBoundingClientRect();
+    const mx = e.clientX - r.left, my = e.clientY - r.top;
+    player.facingX = mx - player.x; player.facingY = my - player.y;
+    shoot();
+  });
+  canvas.addEventListener('touchstart', e => {
+    const t = e.touches[0]; if (!t) return;
+    const r = canvas.getBoundingClientRect();
+    const mx = t.clientX - r.left, my = t.clientY - r.top;
+    player.facingX = mx - player.x; player.facingY = my - player.y;
+    shoot();
+    e.preventDefault();
+  }, {passive:false});
+
+  // Collisions
+  function resolveTreeCollision(){
+    for (const t of trees){
+      const dx = player.x - t.x, dy = player.y - t.y;
+      const d = Math.hypot(dx,dy) || 1;
+      const min = player.r + t.s*0.7;
+      if (d < min){
+        const overlap = (min - d) + 0.5;
+        player.x += (dx/d) * overlap;
+        player.y += (dy/d) * overlap;
+      }
+    }
+  }
+
+  function collectCats(){
+    for (let i=catsOnMap.length-1;i>=0;i--){
+      const c = catsOnMap[i];
+      if (Math.hypot(player.x-c.x, player.y-c.y) < player.r + c.r - 2){
+        cats++;
+        for (let k=0;k<18;k++){
+          particles.push({x:c.x,y:c.y,vx:(Math.random()-0.5)*260,vy:(Math.random()-0.5)*260,life:240+Math.random()*520,col:rgba(world.colors.cat,1),r:2+Math.random()*3});
+        }
+        catsOnMap.splice(i,1);
+      }
+    }
+  }
+
+  function collectPies(){
+    for (let i=piesOnMap.length-1;i>=0;i--){
+      const p = piesOnMap[i];
+      if (Math.hypot(player.x-p.x, player.y-p.y) < player.r + p.r - 2){
+        pies++;
+        for (let k=0;k<16;k++){
+          particles.push({x:p.x,y:p.y,vx:(Math.random()-0.5)*240,vy:(Math.random()-0.5)*240,life:220+Math.random()*480,col:rgba(world.colors.pie,1),r:2+Math.random()*3});
+        }
+        piesOnMap.splice(i,1);
+      }
+    }
+  }
+
+  function bulletsHitEnemies(){
+    for (let i=enemies.length-1;i>=0;i--){
+      const en = enemies[i];
+      for (let j=bullets.length-1;j>=0;j--){
+        const b = bullets[j];
+        if (Math.hypot(b.x-en.x,b.y-en.y) < b.r + en.r){
+          en.hp -= b.dmg;
+          bullets.splice(j,1);
+          for (let k=0;k<7;k++){
+            particles.push({x:en.x,y:en.y,vx:(Math.random()-0.5)*200,vy:(Math.random()-0.5)*200,life:200+Math.random()*300,col:'rgba(255,216,208,1)',r:2});
+          }
+          if (en.hp <= 0){
+            // drop a pie often
+            if (Math.random() < 0.75) piesOnMap.push({x:en.x+(Math.random()-0.5)*10,y:en.y+(Math.random()-0.5)*10,r:12});
+            enemies.splice(i,1);
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  function updateParticles(dt){
+    for (let i=particles.length-1;i>=0;i--){
+      const p = particles[i];
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      p.vx *= 0.98; p.vy *= 0.98;
+      p.life -= dt*1000;
+      if (p.life <= 0) particles.splice(i,1);
+    }
+  }
+
+  // Enemy behaviors
+  function updateEnemies(dt){
+    for (const en of enemies){
+      let tx = player.x, ty = player.y;
+
+      if (en.behavior === 'wander'){
+        if (!en.target || Math.random() < 0.004) en.target = {x: Math.random()*canvas.width, y: Math.random()*canvas.height};
+        tx = en.target.x; ty = en.target.y;
+      } else if (en.behavior === 'slowCharge'){
+        const d = Math.hypot(player.x-en.x, player.y-en.y);
+        if (d > 260){ tx = en.x; ty = en.y; }
+      } else if (en.behavior === 'fastChase'){
+        tx = player.x + (player.facingX||0)*22;
+        ty = player.y + (player.facingY||-1)*22;
+      } else if (en.behavior === 'blink'){
+        en.blinkCd -= dt;
+        const d = Math.hypot(player.x-en.x, player.y-en.y);
+        if (d < 380 && en.blinkCd <= 0){
+          en.blinkCd = 1.5 + Math.random()*1.2;
+          for (let t=0;t<24;t++){
+            const ang = Math.random()*Math.PI*2;
+            const rad = 120 + Math.random()*140;
+            const nx = player.x + Math.cos(ang)*rad;
+            const ny = player.y + Math.sin(ang)*rad;
+            if (nx < 30 || nx > canvas.width-30 || ny < 30 || ny > canvas.height-30) continue;
+            if (nx > shop.x-20 && nx < shop.x+shop.w+20 && ny > shop.y-20 && ny < shop.y+shop.h+20) continue;
+            if (nx > timeMachine.x-20 && nx < timeMachine.x+timeMachine.w+20 && ny > timeMachine.y-20 && ny < timeMachine.y+timeMachine.h+20) continue;
+            en.x = nx; en.y = ny;
+            for (let k=0;k<14;k++) particles.push({x:nx,y:ny,vx:(Math.random()-0.5)*260,vy:(Math.random()-0.5)*260,life:200+Math.random()*280,col:'rgba(183,142,255,1)',r:2});
+            break;
+          }
+        }
+      }
+
+      const dx = tx - en.x, dy = ty - en.y;
+      const d = Math.hypot(dx,dy) || 1;
+      let vx = (dx/d) * en.speed, vy = (dy/d) * en.speed;
+
+      // tree avoidance
+      for (const t of trees){
+        const td = Math.hypot(en.x-t.x, en.y-t.y) || 1;
+        if (td < t.s + en.r + 14){
+          vx += (en.x - t.x)/td * 100;
+          vy += (en.y - t.y)/td * 100;
+        }
+      }
+
+      en.x += vx * dt; en.y += vy * dt;
+
+      // collision with player -> shove
+      if (Math.hypot(player.x-en.x, player.y-en.y) < player.r + en.r){
+        const dd = Math.hypot(player.x-en.x, player.y-en.y) || 1;
+        const nx = (en.x - player.x)/dd, ny = (en.y - player.y)/dd;
+        en.x += nx*18; en.y += ny*18;
+        for (let k=0;k<6;k++){
+          particles.push({x:player.x,y:player.y,vx:(Math.random()-0.5)*220,vy:(Math.random()-0.5)*220,life:240+Math.random()*380,col:'rgba(255,179,179,1)',r:2});
+        }
+      }
+    }
+  }
+
+  // Drawing helpers
+  function roundRect(ctx,x,y,w,h,r,strokeOnly){
+    r = r ?? 6;
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);
+    ctx.arcTo(x+w,y,x+w,y+h,r);
+    ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r);
+    ctx.arcTo(x,y,x+w,y,r);
+    ctx.closePath();
+    if (strokeOnly) ctx.stroke(); else ctx.fill();
+  }
+
+  function drawTree(x,y,s){
+    ctx.fillStyle = 'rgba(107,67,41,1)';
+    roundRect(ctx, x - s*0.12, y + s*0.12, s*0.24, s*0.5, s*0.06);
+    ctx.fillStyle = rgba(world.colors.tree, 1);
+    ctx.beginPath(); ctx.ellipse(x, y - s*0.06, s*0.6, s*0.45, 0, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(x - s*0.18, y - s*0.28, s*0.42, s*0.32, 0, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(x + s*0.18, y - s*0.28, s*0.42, s*0.32, 0, 0, Math.PI*2); ctx.fill();
+  }
+
+  function drawChibiCat(c){
+    // cute little blob cat
+    const bob = Math.sin(c.bob) * 2.5;
+    const x = c.x, y = c.y + bob;
+    const r = c.r;
+
+    // shadow
+    ctx.beginPath();
+    ctx.fillStyle = 'rgba(0,0,0,0.16)';
+    ctx.ellipse(x+6,y+10,r*0.9,r*0.45,0,0,Math.PI*2);
+    ctx.fill();
+
+    // body
+    ctx.beginPath();
+    ctx.fillStyle = rgba(world.colors.cat, 1);
+    ctx.arc(x,y,r,0,Math.PI*2);
+    ctx.fill();
+
+    // ears
+    ctx.fillStyle = rgba(world.colors.cat, 1);
+    ctx.beginPath();
+    ctx.moveTo(x - r*0.55, y - r*0.25);
+    ctx.lineTo(x - r*0.15, y - r*0.95);
+    ctx.lineTo(x - r*0.05, y - r*0.25);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.moveTo(x + r*0.55, y - r*0.25);
+    ctx.lineTo(x + r*0.15, y - r*0.95);
+    ctx.lineTo(x + r*0.05, y - r*0.25);
+    ctx.closePath();
+    ctx.fill();
+
+    // face
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.beginPath(); ctx.arc(x - r*0.25, y - r*0.05, r*0.08, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x + r*0.25, y - r*0.05, r*0.08, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x, y + r*0.12, r*0.06, 0, Math.PI*2); ctx.fill();
+
+    // whiskers
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.lineWidth = 2;
+    for (let i=-1;i<=1;i+=2){
+      ctx.beginPath(); ctx.moveTo(x + i*r*0.15, y + r*0.12);
+      ctx.lineTo(x + i*r*0.65, y + r*0.02);
+      ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x + i*r*0.15, y + r*0.18);
+      ctx.lineTo(x + i*r*0.65, y + r*0.18);
+      ctx.stroke();
+    }
+  }
+
+  function drawPie(p){
+    const col = world.colors.pie;
+    const x=p.x,y=p.y,r=p.r;
+    // shadow
+    ctx.beginPath(); ctx.fillStyle='rgba(0,0,0,0.16)';
+    ctx.ellipse(x+6,y+8,r*0.9,r*0.45,0,0,Math.PI*2); ctx.fill();
+    // body
+    ctx.beginPath(); ctx.fillStyle=rgba(col,1); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+    // lattice
+    ctx.strokeStyle='rgba(0,0,0,0.12)'; ctx.lineWidth=2;
+    for (let i=0;i<4;i++){
+      ctx.beginPath();
+      ctx.moveTo(x + Math.cos(i*Math.PI/2)*r*0.6, y + Math.sin(i*Math.PI/2)*r*0.6);
+      ctx.lineTo(x - Math.cos(i*Math.PI/2)*r*0.6, y - Math.sin(i*Math.PI/2)*r*0.6);
+      ctx.stroke();
+    }
+  }
+
+  function draw(){
+    // background
+    ctx.fillStyle = rgba(world.colors.bg, 1);
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    // ambient wash
+    ctx.save(); ctx.globalAlpha = 0.08;
+    ctx.fillStyle = rgba(world.colors.ambient, 1);
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.restore();
+
+    // subtle grid
+    ctx.save();
+    ctx.globalAlpha = 0.03;
+    ctx.strokeStyle = '#ffffff';
+    for (let gx=0;gx<canvas.width;gx+=48){ ctx.beginPath(); ctx.moveTo(gx,0); ctx.lineTo(gx,canvas.height); ctx.stroke(); }
+    for (let gy=0;gy<canvas.height;gy+=48){ ctx.beginPath(); ctx.moveTo(0,gy); ctx.lineTo(canvas.width,gy); ctx.stroke(); }
+    ctx.restore();
+
+    // trees
+    for (const t of trees) drawTree(t.x,t.y,t.s);
+
+    // shop
+    ctx.save();
+    roundRect(ctx, shop.x, shop.y, shop.w, shop.h, 10);
+    ctx.fillStyle = 'rgba(123,27,27,1)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)'; ctx.lineWidth = 1;
+    roundRect(ctx, shop.x, shop.y, shop.w, shop.h, 10, true);
+    ctx.fillStyle = '#ffd8a8'; ctx.font = '700 14px system-ui, Arial';
+    ctx.fillText('Sword Shop', shop.x + 12, shop.y + 30);
+    ctx.fillStyle = '#fff'; ctx.font = '12px system-ui, Arial';
+    ctx.fillText('Press E to upgrade (10 pies)', shop.x + 12, shop.y + 54);
+    ctx.restore();
+
+    // time machine
+    ctx.save();
+    roundRect(ctx, timeMachine.x, timeMachine.y, timeMachine.w, timeMachine.h, 12);
+    ctx.fillStyle = 'rgba(8,48,58,1)';
+    ctx.fill();
+    ctx.strokeStyle = inTimeMachine() ? '#8be6ff' : 'rgba(255,255,255,0.05)';
+    ctx.lineWidth = inTimeMachine() ? 2.5 : 1;
+    roundRect(ctx, timeMachine.x, timeMachine.y, timeMachine.w, timeMachine.h, 12, true);
+    ctx.fillStyle = '#dff7ff'; ctx.font = '700 13px system-ui, Arial';
+    ctx.fillText('Time Machine', timeMachine.x + 12, timeMachine.y + 28);
+    ctx.fillStyle = '#cfe3ff'; ctx.font = '12px system-ui, Arial';
+    ctx.fillText(inTimeMachine() ? 'Travel enabled' : 'Stand here to travel', timeMachine.x + 12, timeMachine.y + 50);
+    ctx.restore();
+
+    // collectibles
+    for (const c of catsOnMap) drawChibiCat(c);
+    for (const p of piesOnMap) drawPie(p);
+
+    // enemies
+    for (const en of enemies){
+      ctx.beginPath();
+      ctx.fillStyle = en.color;
+      ctx.arc(en.x,en.y,en.r,0,Math.PI*2);
+      ctx.fill();
+      // hp
+      const w = en.r*2;
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(en.x-en.r, en.y-en.r-8, w, 6);
+      ctx.fillStyle = '#ffdede';
+      ctx.fillRect(en.x-en.r, en.y-en.r-8, w * clamp(en.hp/(en.baseHp||1),0,1), 6);
+    }
+
+    // bullets
+    for (const b of bullets){
+      ctx.beginPath(); ctx.fillStyle=b.color; ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill();
+      ctx.globalAlpha=0.12; ctx.beginPath(); ctx.fillStyle=b.color; ctx.arc(b.x,b.y,b.r*3,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
+    }
+
+    // particles
+    for (const p of particles){
+      ctx.globalAlpha = clamp(p.life/900,0,1);
+      ctx.fillStyle = p.col;
+      ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    // player
+    ctx.beginPath(); ctx.fillStyle='#e6f4ff';
+    ctx.arc(player.x,player.y,player.r,0,Math.PI*2); ctx.fill();
+
+    // sword
+    const fx = player.facingX || 0, fy = player.facingY || -1;
+    const ang = Math.atan2(fy,fx);
+    ctx.save();
+    ctx.translate(player.x,player.y);
+    ctx.rotate(ang);
+    const bladeLen = 18 + swordLevel*0.45;
+    const bladeW = 6 + Math.min(12, swordLevel*0.1);
+    const swordColor =
+      swordLevel >= 56 ? '#b78eff' :
+      swordLevel >= 40 ? '#7fffe7' :
+      swordLevel >= 20 ? '#ffd56b' :
+      swordLevel >= 10 ? '#c9c9c9' : '#8b6b4a';
+    ctx.fillStyle = swordColor;
+    roundRect(ctx, 10, -bladeW/2, bladeLen, bladeW, 3);
+    ctx.fill();
+    ctx.restore();
+
+    // HUD
+    ctx.fillStyle='rgba(0,0,0,0.45)';
+    ctx.fillRect(12,12,640,46);
+    ctx.fillStyle='#eaf4ff';
+    ctx.font='700 14px system-ui, Arial';
+    ctx.fillText(`Year: ${yearText(currentYear)}   Cats: ${cats}   Pies: ${pies}   Sword: ${SWORDS[swordLevel]} (${swordLevel+1}/${SWORD_COUNT})`, 20, 40);
+
+    if (inShop()){
+      ctx.fillStyle='rgba(0,0,0,0.55)';
+      ctx.fillRect(shop.x+6, shop.y-30, 290, 22);
+      ctx.fillStyle='#fff';
+      ctx.font='12px system-ui, Arial';
+      ctx.fillText(pies>=10 ? 'Press E to upgrade sword (10 pies)' : 'Need 10 pies to upgrade', shop.x+12, shop.y-14);
+    }
+
+    if (!inTimeMachine()){
+      ctx.fillStyle='rgba(0,0,0,0.35)';
+      ctx.fillRect(timeMachine.x, timeMachine.y + timeMachine.h + 8, timeMachine.w, 18);
+      ctx.fillStyle='#cfe3ff';
+      ctx.font='12px system-ui, Arial';
+      ctx.fillText('Stand inside to enable Travel', timeMachine.x + 8, timeMachine.y + timeMachine.h + 21);
+    }
+  }
+
+  function updateUI(){
+    yearLabel.textContent = yearText(currentYear);
+    catCountEl.textContent = cats;
+    pieCountEl.textContent = pies;
+    swordLabelEl.textContent = SWORDS[swordLevel];
+  }
+  updateUI();
+
+  // Enemy update
+  function updateEnemies(dt){
+    for (const en of enemies){
+      let tx = player.x, ty = player.y;
+
+      if (en.behavior === 'wander'){
+        if (!en.target || Math.random() < 0.004) en.target = {x: Math.random()*canvas.width, y: Math.random()*canvas.height};
+        tx = en.target.x; ty = en.target.y;
+      } else if (en.behavior === 'slowCharge'){
+        const d = Math.hypot(player.x-en.x, player.y-en.y);
+        if (d > 280) { tx = en.x; ty = en.y; }
+      } else if (en.behavior === 'fastChase'){
+        tx = player.x + (player.facingX||0)*22;
+        ty = player.y + (player.facingY||-1)*22;
+      } else if (en.behavior === 'blink'){
+        en.blinkCd -= dt;
+        const d = Math.hypot(player.x-en.x, player.y-en.y);
+        if (d < 420 && en.blinkCd <= 0){
+          en.blinkCd = 1.5 + Math.random()*1.2;
+          for (let t=0;t<26;t++){
+            const ang = Math.random()*Math.PI*2;
+            const rad = 120 + Math.random()*160;
+            const nx = player.x + Math.cos(ang)*rad;
+            const ny = player.y + Math.sin(ang)*rad;
+            if (nx < 30 || nx > canvas.width-30 || ny < 30 || ny > canvas.height-30) continue;
+            if (nx > shop.x-20 && nx < shop.x+shop.w+20 && ny > shop.y-20 && ny < shop.y+shop.h+20) continue;
+            if (nx > timeMachine.x-20 && nx < timeMachine.x+timeMachine.w+20 && ny > timeMachine.y-20 && ny < timeMachine.y+timeMachine.h+20) continue;
+            en.x = nx; en.y = ny;
+            for (let k=0;k<14;k++) particles.push({x:nx,y:ny,vx:(Math.random()-0.5)*260,vy:(Math.random()-0.5)*260,life:180+Math.random()*280,col:'rgba(183,142,255,1)',r:2});
+            break;
+          }
+        }
+      }
+
+      const dx = tx - en.x, dy = ty - en.y;
+      const d = Math.hypot(dx,dy) || 1;
+      let vx = (dx/d) * en.speed, vy = (dy/d) * en.speed;
+
+      // tree avoidance
+      for (const t of trees){
+        const td = Math.hypot(en.x-t.x, en.y-t.y) || 1;
+        if (td < t.s + en.r + 14){
+          vx += (en.x - t.x)/td * 100;
+          vy += (en.y - t.y)/td * 100;
+        }
+      }
+
+      en.x += vx*dt; en.y += vy*dt;
+
+      // collision with player -> shove
+      if (Math.hypot(player.x-en.x, player.y-en.y) < player.r + en.r){
+        const dd = Math.hypot(player.x-en.x, player.y-en.y) || 1;
+        const nx = (en.x - player.x)/dd, ny = (en.y - player.y)/dd;
+        en.x += nx*18; en.y += ny*18;
+        for (let k=0;k<6;k++){
+          particles.push({x:player.x,y:player.y,vx:(Math.random()-0.5)*220,vy:(Math.random()-0.5)*220,life:220+Math.random()*380,col:'rgba(255,179,179,1)',r:2});
+        }
+      }
+    }
+  }
+
+  function resolveTreeCollision(){
+    for (const t of trees){
+      const dx = player.x - t.x, dy = player.y - t.y;
+      const d = Math.hypot(dx,dy) || 1;
+      const min = player.r + t.s*0.7;
+      if (d < min){
+        const overlap = (min - d) + 0.5;
+        player.x += (dx/d) * overlap;
+        player.y += (dy/d) * overlap;
+      }
+    }
+  }
+
+  function updateParticles(dt){
+    for (let i=particles.length-1;i>=0;i--){
+      const p = particles[i];
+      p.x += p.vx*dt; p.y += p.vy*dt;
+      p.vx *= 0.98; p.vy *= 0.98;
+      p.life -= dt*1000;
+      if (p.life <= 0) particles.splice(i,1);
+    }
+  }
+
+  function bulletsUpdate(dt){
+    for (let i=bullets.length-1;i>=0;i--){
+      const b = bullets[i];
+      b.x += b.vx*dt; b.y += b.vy*dt;
+      b.ttl -= dt*1000;
+      if (b.ttl <= 0 || b.x < -80 || b.x > canvas.width+80 || b.y < -80 || b.y > canvas.height+80) bullets.splice(i,1);
+    }
+  }
+
+  // Travel button gating visual
+  function flashDisabled(btn){
+    btn.classList.add('disabled');
+    setTimeout(()=>btn.classList.remove('disabled'), 450);
+  }
+
+  // Override travel click to enforce time machine presence
+  travelBtn.addEventListener('click', () => {
+    const y = parseInt(yearInput.value,10);
+    if (!Number.isFinite(y)) return;
+    if (!inTimeMachine()){ flashDisabled(travelBtn); return; }
+    travelToYear(y);
+  });
+
+  function travelToYear(target){
+    target = clamp(target, -10000, 10000);
+    currentYear = target;
+    world = makeWorld(currentYear);
+    trees = world.trees.map(t=>({x:t.x,y:t.y,s:t.s}));
+    // reset scene clutter
+    catsOnMap = []; piesOnMap = []; enemies = []; bullets = []; particles = [];
+    catTimer = pieTimer = enemyTimer = 0;
+    // seed initial items
+    for (let i=0;i<4;i++) spawnCat();
+    for (let i=0;i<2;i++) spawnPie();
+    updateUI();
+  }
+
+  // Initial spawns
+  for (let i=0;i<4;i++) spawnCat();
+  for (let i=0;i<2;i++) spawnPie();
+
+  // Main loop
+  let last = performance.now();
+  function loop(now){
+    const dt = Math.min(0.05,(now-last)/1000);
+    last = now;
+
+    // movement
+    let mx=0,my=0;
+    if (keys['w']||keys['arrowup']) my -= 1;
+    if (keys['s']||keys['arrowdown']) my += 1;
+    if (keys['a']||keys['arrowleft']) mx -= 1;
+    if (keys['d']||keys['arrowright']) mx += 1;
+
+    if (mx!==0 || my!==0){ player.facingX = mx; player.facingY = my; }
+
+    const n = Math.hypot(mx,my) || 1;
+    player.x += (mx/n) * player.speed * (1 + swordLevel*0.004) * dt;
+    player.y += (my/n) * player.speed * (1 + swordLevel*0.004) * dt;
+    player.x = clamp(player.x, player.r+6, canvas.width - player.r - 6);
+    player.y = clamp(player.y, player.r+6, canvas.height - player.r - 6);
+
+    resolveTreeCollision();
+
+    // actions
+    if (keys[' '] || keys['space']) shoot();
+    if (keys['e'] || keys['E']){ tryUpgrade(); keys['e']=false; keys['E']=false; }
+
+    // spawn timers
+    catTimer += dt;
+    const catInterval = Math.max(0.55, 2.2 / world.rates.catRate);
+    if (catTimer >= catInterval){ catTimer = 0; if (catsOnMap.length < 10) spawnCat(); }
+
+    pieTimer += dt;
+    const pieInterval = Math.max(0.7, 3.0 / world.rates.pieRate);
+    if (pieTimer >= pieInterval){ pieTimer = 0; if (piesOnMap.length < 8) spawnPie(); }
+
+    enemyTimer += dt;
+    const enemyInterval = Math.max(0.6, 3.6 / world.rates.enemyRate);
+    if (enemyTimer >= enemyInterval){ enemyTimer = 0; if (enemies.length < 10) spawnEnemy(); }
+
+    // animate cats bob
+    for (const c of catsOnMap) c.bob += dt*3;
+
+    // updates
+    bulletsUpdate(dt);
+    updateEnemies(dt);
+    bulletsHitEnemies();
+    collectCats();
+    collectPies();
+    updateParticles(dt);
+
+    updateUI();
+    draw();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>
