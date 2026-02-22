@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Self-Replicating Calendar App</title>
+<style>
+  :root{font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;background:#f6f8fb;color:#0d1530}
+  *{box-sizing:border-box}
+  body{margin:0;padding:22px;display:flex;align-items:flex-start;justify-content:center}
+  .app{width:min(760px,96vw);background:#fff;border-radius:12px;padding:18px 20px 26px;box-shadow:0 8px 20px rgba(11,20,40,0.08)}
+  header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px}
+  .created{font-size:14px;color:#23325b;font-weight:700}
+  .tz{font-size:13px;color:#52607a;margin-top:6px}
+  button#spawn{padding:10px 14px;border-radius:8px;border:0;background:#0b63ff;color:#fff;font-weight:700;cursor:pointer}
+  .calendar{margin-top:14px}
+  .month-title{font-weight:700;color:#10213f;font-size:16px;margin-bottom:8px}
+  table.cal{width:100%;border-collapse:collapse}
+  table.cal thead th{padding:6px;font-weight:700;color:#345;opacity:.9;font-size:13px;text-align:center}
+  table.cal td{height:48px;text-align:center;border:1px solid #eef3fb;color:#112233;background:#fff}
+  table.cal td.inactive{color:#9aa6bb;background:#fbfdff}
+  table.cal td.today{background:#0b63ff;color:#fff;font-weight:700;border:1px solid rgba(11,99,255,0.15)}
+  .footer{margin-top:12px;font-size:13px;color:#51607a}
+  @media (max-width:480px){ table.cal td{height:40px;font-size:13px} .month-title{font-size:15px} }
+</style>
+</head>
+<body>
+  <div class="app" id="app">
+    <header>
+      <div>
+        <div class="created">Created: <span id="createdAt">—</span></div>
+        <div class="tz" id="tzInfo"></div>
+      </div>
+      <div>
+        <button id="spawn" title="Open a copy of this app in a new tab">Open a copy in new tab</button>
+      </div>
+    </header>
+
+    <div class="calendar" id="calendarRegion" aria-live="polite"></div>
+
+    <div class="footer">Click the button to open an identical page in a new tab. Each page shows its own creation time.</div>
+  </div>
+
+<script>
+(function(){
+  function pad(n){ return String(n).padStart(2,'0'); }
+  function fmtLocal(d){
+    return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) + ' ' +
+           pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+  }
+
+  function monthTitle(d){
+    return d.toLocaleString(undefined, {month:'long', year:'numeric'});
+  }
+
+  function renderCalendar(container, refDate){
+    container.innerHTML = '';
+    var year = refDate.getFullYear();
+    var month = refDate.getMonth();
+    var first = new Date(year, month, 1);
+    var last = new Date(year, month + 1, 0);
+    var daysInMonth = last.getDate();
+    var startDay = first.getDay(); // 0=Sun..6=Sat
+
+    var title = document.createElement('div');
+    title.className = 'month-title';
+    title.textContent = monthTitle(refDate);
+    container.appendChild(title);
+
+    var table = document.createElement('table');
+    table.className = 'cal';
+
+    var thead = document.createElement('thead');
+    var trHead = document.createElement('tr');
+    var weekdayNames = [];
+    for (var i = 0; i < 7; i++){
+      var d = new Date(2020,5,7 + i); // known Sunday base
+      weekdayNames.push(d.toLocaleDateString(undefined, {weekday: 'short'}));
+    }
+    weekdayNames.forEach(function(w){ var th = document.createElement('th'); th.textContent = w; trHead.appendChild(th); });
+    thead.appendChild(trHead);
+    table.appendChild(thead);
+
+    var tbody = document.createElement('tbody');
+    var totalCells = Math.ceil((startDay + daysInMonth) / 7) * 7;
+    var dayNum = 1;
+    var today = new Date();
+    for (var r = 0; r < totalCells / 7; r++){
+      var tr = document.createElement('tr');
+      for (var c = 0; c < 7; c++){
+        var idx = r*7 + c;
+        var td = document.createElement('td');
+        if (idx < startDay || dayNum > daysInMonth){
+          td.className = 'inactive';
+          td.textContent = '';
+        } else {
+          td.textContent = String(dayNum);
+          if (dayNum === today.getDate() && month === today.getMonth() && year === today.getFullYear()){
+            td.className = 'today';
+          }
+          dayNum++;
+        }
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    container.appendChild(table);
+  }
+
+  function initPage(){
+    var created = new Date();
+    // Display formatted creation time
+    var createdEl = document.getElementById('createdAt');
+    createdEl.textContent = created.toLocaleString();
+    // Time zone info
+    var tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    document.getElementById('tzInfo').textContent = 'Time zone: ' + (tz || 'Local');
+
+    renderCalendar(document.getElementById('calendarRegion'), new Date());
+
+    // Spawn handler: open a new window and write this page's current HTML into it.
+    // The newly written page will run its own scripts and set its own creation time on load.
+    document.getElementById('spawn').addEventListener('click', function(){
+      var w = window.open();
+      if (!w) {
+        alert('Popup blocked — allow popups to open a new tab.');
+        return;
+      }
+      try {
+        // Use the current document's outerHTML as the source for the new page.
+        // The new page's scripts will run and set its own creation time on load.
+        var src = '<!doctype html>' + document.documentElement.outerHTML;
+        // Ensure the inserted src contains a full html doc: outerHTML includes <html> already, but we prefix doctype.
+        w.document.open();
+        w.document.write(src);
+        w.document.close();
+      } catch (e) {
+        // As a fallback, build a minimal page string and write it.
+        var fallback = document.documentElement.outerHTML;
+        w.document.open();
+        w.document.write(fallback);
+        w.document.close();
+      }
+    }, {passive:true});
+  }
+
+  // initialize when DOM is ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initPage);
+  } else {
+    initPage();
+  }
+})();
+</script>
+</body>
+</html>
