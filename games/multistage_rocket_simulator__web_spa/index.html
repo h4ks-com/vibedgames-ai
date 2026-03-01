@@ -1,0 +1,983 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Multistage Rocket Simulator</title>
+  <!-- Bootstrap CSS for quick responsive UI -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <!-- Plotly for charts -->
+  <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
+  <style>
+    body { padding: 12px; background:#f8f9fa; font-family: system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;}
+    .stage-card { margin-bottom:8px; }
+    .logbox { height:240px; overflow:auto; background:#fff; padding:8px; border-radius:4px; border:1px solid #ddd; font-family: monospace; font-size:12px;}
+    .chart { height:260px; }
+    .small { font-size:0.9rem; }
+    @media (max-width:767px){ .chart{height:200px;} .logbox{height:180px;} }
+  </style>
+</head>
+<body>
+<div class="container-fluid">
+  <h3 class="mb-2">Multistage Rocket Simulator (Web SPA)</h3>
+  <div class="row">
+    <div class="col-lg-4">
+      <div class="card p-3 mb-3">
+        <h5>Simulation Controls</h5>
+        <div class="mb-2 row">
+          <label class="col-6 col-form-label small">Units</label>
+          <div class="col-6">
+            <select id="unitToggle" class="form-select form-select-sm">
+              <option value="SI" selected>SI (m, kg, s)</option>
+              <option value="IMP">Imperial (ft, lb, s)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="mb-2">
+          <label class="form-label small">Preset</label>
+          <select id="presetSelect" class="form-select form-select-sm">
+            <option value="">-- Choose Preset --</option>
+            <option value="sounding">Sounding Rocket (Sub-orbital)</option>
+            <option value="orbital">Orbital Launcher (Simple 2-stage)</option>
+            <option value="heavy">Heavy-lift (3-stage)</option>
+          </select>
+        </div>
+
+        <div class="mb-2">
+          <label class="form-label small">Initial altitude</label>
+          <input id="initAlt" class="form-control form-control-sm" type="number" step="0.1" value="0" min="0" max="20000">
+          <div class="form-text small">meters (0–20000 m)</div>
+        </div>
+
+        <div class="mb-2 row">
+          <div class="col-8">
+            <label class="form-label small">Payload mass</label>
+            <input id="payloadMass" class="form-control form-control-sm" type="number" step="0.1" value="500" min="0">
+          </div>
+          <div class="col-4">
+            <label class="form-label small">Cd (global)</label>
+            <input id="globalCd" class="form-control form-control-sm" type="number" step="0.01" value="0.3" min="0.01">
+          </div>
+        </div>
+
+        <div class="mb-2">
+          <label class="form-label small">Launch azimuth (deg, optional)</label>
+          <input id="azimuth" class="form-control form-control-sm" type="number" step="0.1" value="90">
+        </div>
+
+        <div class="mb-2">
+          <label class="form-label small">Time step (s)</label>
+          <input id="timeStep" class="form-control form-control-sm" type="number" step="0.01" value="0.5" min="0.01">
+        </div>
+
+        <div class="mb-2">
+          <label class="form-label small">Max sim time (s)</label>
+          <input id="maxTime" class="form-control form-control-sm" type="number" step="1" value="1000" min="1">
+        </div>
+
+        <div class="mb-2">
+          <label class="form-label small">Log verbosity</label>
+          <select id="verbosity" class="form-select form-select-sm">
+            <option value="1" selected>Essential</option>
+            <option value="2">Detailed per step</option>
+            <option value="3">Verbose (every step long)</option>
+          </select>
+        </div>
+
+        <div class="d-flex gap-2">
+          <button id="runBtn" class="btn btn-success btn-sm">Run</button>
+          <button id="pauseBtn" class="btn btn-warning btn-sm" disabled>Pause</button>
+          <button id="stepBtn" class="btn btn-secondary btn-sm">Step</button>
+          <button id="resetBtn" class="btn btn-danger btn-sm">Reset</button>
+        </div>
+
+        <hr/>
+
+        <div class="d-flex gap-2 mb-2">
+          <button id="exportCsvBtn" class="btn btn-outline-primary btn-sm">Export CSV</button>
+          <button id="printReportBtn" class="btn btn-outline-secondary btn-sm">Print Report</button>
+          <button id="shareBtn" class="btn btn-outline-success btn-sm">Copy Share URL</button>
+        </div>
+
+        <div id="warnBox" class="small text-danger mt-2"></div>
+
+      </div>
+
+      <div class="card p-3 mb-3">
+        <h5>Stages (1 bottom → N top)</h5>
+        <div id="stagesContainer"></div>
+        <div class="mt-2">
+          <label class="form-label small">Number of stages</label>
+          <input id="numStages" type="number" min="1" max="6" value="2" class="form-control form-control-sm">
+        </div>
+        <div class="mt-2 small text-muted">Per-stage inputs: prop mass, dry mass, Isp (s), thrust (N optional), diameter (m), length (m), Cd.</div>
+      </div>
+
+      <div class="card p-3 mb-3">
+        <h5>Summary</h5>
+        <div id="summaryPanel" class="small"></div>
+      </div>
+
+    </div>
+
+    <div class="col-lg-8">
+      <div class="row g-3">
+        <div class="col-12">
+          <div class="card p-3">
+            <h5>Charts</h5>
+            <div class="row">
+              <div class="col-md-6">
+                <div id="chartAlt" class="chart"></div>
+              </div>
+              <div class="col-md-6">
+                <div id="chartVel" class="chart"></div>
+              </div>
+              <div class="col-md-6 mt-3">
+                <div id="chartMass" class="chart"></div>
+              </div>
+              <div class="col-md-6 mt-3">
+                <div id="chartFlow" class="chart"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-12">
+          <div class="card p-3">
+            <h5>Per-stage Delta-V & Losses</h5>
+            <div id="dvBars" class="small"></div>
+            <div id="losses" class="mt-2 small"></div>
+          </div>
+        </div>
+
+        <div class="col-12">
+          <div class="card p-3">
+            <h5>Step-by-step Log</h5>
+            <div class="logbox" id="logBox" aria-live="polite"></div>
+            <div class="form-text small mt-2">Use Step to advance one time-step; Run to simulate continuously. RK4 integration (fixed dt) is used for stable, accurate short-step integration. (See comments in source for justification.)</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/*
+  Multistage Rocket Simulator
+  - Vanilla JS SPA with Plotly charts.
+  - Physics:
+    * Tsiolkovsky rocket equation: Δv = g0 * Isp * ln(m0/mf)
+      (Tsiolkovsky, 1903)
+    * Drag: Fd = 0.5 * rho(h) * v^2 * Cd * A
+    * Gravity variation: g(h) = g0 * (Re/(Re+h))^2
+    * ISA barometric model piecewise to ~86 km (troposphere, stratosphere, mesosphere).
+      This implementation uses standard atmosphere piecewise layers up to ~86 km
+      using exponential or linear lapse rates as appropriate. (See U.S. Standard Atmosphere 1976)
+  - Integration: RK4 fixed timestep chosen for accuracy and stability vs simple Euler.
+    RK4 reduces global error O(dt^4) and keeps energy/drift low for stiff thrust changes.
+    Adaptive integrators could be used but are heavier; RK4 is efficient and simple for 1D ascent.
+  - References:
+    * Tsiolkovsky - rocket equation
+    * U.S. Standard Atmosphere - barometric formulas
+*/
+
+const G0 = 9.80665; // m/s^2 standard gravity
+const Re = 6371000; // Earth radius meters
+const Rg = 287.05;  // specific gas constant for dry air J/(kg·K)
+
+let state = {
+  units: 'SI',
+  stages: [],
+  running: false,
+  t: 0,
+  dt: 0.5,
+  maxTime: 1000,
+  payloadMass: 500,
+  initAlt: 0,
+  azimuth: 90,
+  logs: [],
+  series: {t:[], alt:[], vel:[], mass:[], massFlow:[], rho:[], drag:[]},
+  verbosity: 1
+};
+
+// Utility: format numbers with units
+function fmt(v, decimals=2){ return Number(v).toFixed(decimals); }
+function range(n, f){ return [...Array(n).keys()].map(f); }
+
+// Default stage template
+function makeStage(i){
+  return {
+    id: i,
+    name: 'Stage ' + (i+1),
+    propMass: i===0? 10000 : 3000, // kg default
+    dryMass: i===0? 2000 : 500,    // kg
+    Isp: i===0? 300 : 350,         // s
+    thrust: '',                    // N optional
+    diameter: 3.5,                 // m
+    length: 10 + i*2,
+    Cd: 0.3,
+    active: true
+  };
+}
+
+// Initialize UI
+const stagesContainer = document.getElementById('stagesContainer');
+const numStagesInput = document.getElementById('numStages');
+const runBtn = document.getElementById('runBtn');
+const pauseBtn = document.getElementById('pauseBtn');
+const stepBtn = document.getElementById('stepBtn');
+const resetBtn = document.getElementById('resetBtn');
+const logBox = document.getElementById('logBox');
+const payloadMassInput = document.getElementById('payloadMass');
+const initAltInput = document.getElementById('initAlt');
+const azimuthInput = document.getElementById('azimuth');
+const globalCdInput = document.getElementById('globalCd');
+const timeStepInput = document.getElementById('timeStep');
+const maxTimeInput = document.getElementById('maxTime');
+const unitToggle = document.getElementById('unitToggle');
+const presetSelect = document.getElementById('presetSelect');
+const verbositySelect = document.getElementById('verbosity');
+const warnBox = document.getElementById('warnBox');
+const exportCsvBtn = document.getElementById('exportCsvBtn');
+const printReportBtn = document.getElementById('printReportBtn');
+const shareBtn = document.getElementById('shareBtn');
+
+function initStages(n){
+  state.stages = [];
+  for(let i=0;i<n;i++) state.stages.push(makeStage(i));
+  renderStages();
+}
+function renderStages(){
+  stagesContainer.innerHTML = '';
+  state.stages.forEach((st,i)=>{
+    const card = document.createElement('div');
+    card.className = 'card p-2 stage-card small';
+    card.innerHTML = `
+      <div class="d-flex justify-content-between align-items-start">
+        <div><strong>${st.name}</strong> <span class="text-muted">(${i===0? 'bottom':''})</span></div>
+        <div class="text-end">
+          <button class="btn btn-sm btn-outline-secondary btn-edit" data-i="${i}">Edit</button>
+        </div>
+      </div>
+      <div class="mt-2 small">
+        Prop: <span class="fst-italic">${st.propMass} kg</span>,
+        Dry: <span class="fst-italic">${st.dryMass} kg</span>,
+        Isp: <span class="fst-italic">${st.Isp} s</span>,
+        Thrust: <span class="fst-italic">${st.thrust?st.thrust+' N':'(auto)'}</span>,
+        Dia: <span class="fst-italic">${st.diameter} m</span>,
+        Cd: <span class="fst-italic">${st.Cd}</span>
+      </div>
+      <div class="mt-2">
+        <button class="btn btn-sm btn-outline-danger btn-remove" data-i="${i}">Remove</button>
+        <button class="btn btn-sm btn-outline-info btn-up" data-i="${i}">Up</button>
+        <button class="btn btn-sm btn-outline-info btn-down" data-i="${i}">Down</button>
+      </div>
+    `;
+    stagesContainer.appendChild(card);
+  });
+  // attach listeners
+  document.querySelectorAll('.btn-edit').forEach(b=>{
+    b.onclick = ()=>{ openStageEditor(parseInt(b.dataset.i)); };
+  });
+  document.querySelectorAll('.btn-remove').forEach(b=>{
+    b.onclick = ()=>{ state.stages.splice(parseInt(b.dataset.i),1); renderStages(); updateShareHash(); };
+  });
+  document.querySelectorAll('.btn-up').forEach(b=>{
+    b.onclick = ()=>{
+      const i = parseInt(b.dataset.i);
+      if(i>0){ const tmp = state.stages[i-1]; state.stages[i-1]=state.stages[i]; state.stages[i]=tmp; renderStages(); updateShareHash();}
+    };
+  });
+  document.querySelectorAll('.btn-down').forEach(b=>{
+    b.onclick = ()=>{
+      const i = parseInt(b.dataset.i);
+      if(i<state.stages.length-1){ const tmp = state.stages[i+1]; state.stages[i+1]=state.stages[i]; state.stages[i]=tmp; renderStages(); updateShareHash();}
+    };
+  });
+}
+
+function openStageEditor(i){
+  const st = state.stages[i];
+  const modal = document.createElement('div');
+  modal.className = 'modal show';
+  modal.style.display = 'block';
+  modal.innerHTML = `
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Edit ${st.name}</h5>
+          <button type="button" class="btn-close btn-close-white btn-close-modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-2"><label class="form-label small">Name</label><input id="m_name" class="form-control form-control-sm" value="${st.name}"></div>
+          <div class="row">
+            <div class="col"><label class="form-label small">Prop mass (kg)</label><input id="m_prop" class="form-control form-control-sm" type="number" value="${st.propMass}"></div>
+            <div class="col"><label class="form-label small">Dry mass (kg)</label><input id="m_dry" class="form-control form-control-sm" type="number" value="${st.dryMass}"></div>
+          </div>
+          <div class="row mt-2">
+            <div class="col"><label class="form-label small">Isp (s)</label><input id="m_isp" class="form-control form-control-sm" type="number" value="${st.Isp}"></div>
+            <div class="col"><label class="form-label small">Thrust (N) optional</label><input id="m_thrust" class="form-control form-control-sm" type="text" value="${st.thrust}"></div>
+          </div>
+          <div class="row mt-2">
+            <div class="col"><label class="form-label small">Diameter (m)</label><input id="m_dia" class="form-control form-control-sm" type="number" value="${st.diameter}"></div>
+            <div class="col"><label class="form-label small">Length (m)</label><input id="m_len" class="form-control form-control-sm" type="number" value="${st.length}"></div>
+          </div>
+          <div class="mt-2"><label class="form-label small">Cd</label><input id="m_cd" class="form-control form-control-sm" type="number" step="0.01" value="${st.Cd}"></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary btn-sm btn-close-modal">Cancel</button>
+          <button class="btn btn-primary btn-sm" id="saveStage">Save</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  modal.querySelectorAll('.btn-close-modal').forEach(b=>b.onclick=()=>modal.remove());
+  modal.querySelector('#saveStage').onclick = ()=>{
+    st.name = modal.querySelector('#m_name').value || st.name;
+    st.propMass = Math.max(0, parseFloat(modal.querySelector('#m_prop').value) || 0);
+    st.dryMass = Math.max(0, parseFloat(modal.querySelector('#m_dry').value) || 0);
+    st.Isp = Math.max(1, parseFloat(modal.querySelector('#m_isp').value) || 1);
+    const thrustVal = modal.querySelector('#m_thrust').value.trim();
+    st.thrust = thrustVal === '' ? '' : Number(thrustVal);
+    st.diameter = Math.max(0.01, parseFloat(modal.querySelector('#m_dia').value) || 0.01);
+    st.length = Math.max(0.01, parseFloat(modal.querySelector('#m_len').value) || 0.01);
+    st.Cd = Math.max(0.01, parseFloat(modal.querySelector('#m_cd').value) || 0.01);
+    modal.remove();
+    renderStages();
+    updateShareHash();
+  };
+}
+
+// Presets
+presetSelect.onchange = ()=>{
+  const v = presetSelect.value;
+  if(v==='sounding'){
+    numStagesInput.value = 2;
+    initStagesFromNum();
+    state.stages[0].propMass = 800;
+    state.stages[0].dryMass = 200;
+    state.stages[0].Isp = 250;
+    state.stages[0].thrust = 200000;
+    state.stages[1].propMass = 200;
+    state.stages[1].dryMass = 80;
+    state.stages[1].Isp = 240;
+    state.payloadMass = 50;
+    payloadMassInput.value = state.payloadMass;
+  } else if(v==='orbital'){
+    numStagesInput.value = 2;
+    initStagesFromNum();
+    state.stages[0].propMass = 180000; state.stages[0].dryMass = 15000; state.stages[0].Isp = 300; state.stages[0].thrust = 7600000; state.stages[0].diameter = 5;
+    state.stages[1].propMass = 40000; state.stages[1].dryMass = 3500; state.stages[1].Isp = 420; state.stages[1].thrust = 900000; state.stages[1].diameter = 4;
+    state.payloadMass = 8000; payloadMassInput.value = state.payloadMass;
+  } else if(v==='heavy'){
+    numStagesInput.value = 3;
+    initStagesFromNum();
+    state.stages[0].propMass = 250000; state.stages[0].dryMass = 22000; state.stages[0].Isp = 300; state.stages[0].thrust = 10000000; state.stages[0].diameter = 7;
+    state.stages[1].propMass = 80000; state.stages[1].dryMass = 7000; state.stages[1].Isp = 330; state.stages[1].thrust = 2500000; state.stages[1].diameter = 5;
+    state.stages[2].propMass = 20000; state.stages[2].dryMass = 2000; state.stages[2].Isp = 420; state.stages[2].thrust = 600000; state.stages[2].diameter = 4;
+    state.payloadMass = 20000; payloadMassInput.value = state.payloadMass;
+  }
+  renderStages();
+  updateShareHash();
+};
+
+// init stages number change
+numStagesInput.onchange = initStagesFromNum;
+function initStagesFromNum(){
+  let n = Math.max(1, Math.min(6, parseInt(numStagesInput.value) || 2));
+  numStagesInput.value = n;
+  if(n > state.stages.length){
+    for(let i=state.stages.length;i<n;i++) state.stages.push(makeStage(i));
+  } else {
+    state.stages = state.stages.slice(0,n);
+  }
+  renderStages();
+  updateShareHash();
+}
+
+// Input listeners
+payloadMassInput.onchange = ()=>{ state.payloadMass = Number(payloadMassInput.value); updateShareHash(); };
+initAltInput.onchange = ()=>{ state.initAlt = Number(initAltInput.value); updateShareHash(); };
+azimuthInput.onchange = ()=>{ state.azimuth = Number(azimuthInput.value); updateShareHash(); };
+globalCdInput.onchange = ()=>{ updateShareHash(); };
+timeStepInput.onchange = ()=>{ state.dt = Number(timeStepInput.value); updateShareHash(); };
+maxTimeInput.onchange = ()=>{ state.maxTime = Number(maxTimeInput.value); updateShareHash(); };
+unitToggle.onchange = ()=>{ state.units = unitToggle.value; updateShareHash(); };
+verbositySelect.onchange = ()=>{ state.verbosity = Number(verbositySelect.value); };
+
+// Initialize
+initStagesFromNum();
+initStagesFromNum(); // ensure render
+renderStages();
+
+// Physics helpers
+
+// ISA / barometric model (piecewise) up to ~86 km.
+// Simplified piecewise model (troposphere, lower stratosphere, upper stratosphere, mesosphere).
+// For h <= 11km: T = T0 + L*h (lapse rate), p = p0*(T/T0)^(-g0/(L*R)), rho = p/(R*T)
+// For layers above, use exponential approximations or isothermal layers per standard atmosphere.
+// Here we implement layers for altitudes up to 86 km adequate for rockets.
+function atmosphere(h){
+  // h in meters
+  // Constants at sea level
+  const T0 = 288.15; // K
+  const p0 = 101325; // Pa
+  if(h < 11000){
+    // Troposphere L = -6.5 K/km
+    const L = -0.0065;
+    const T = T0 + L*h;
+    const p = p0 * Math.pow(T/T0, -G0/(L*Rg));
+    const rho = p/(Rg*T);
+    return {T,p,rho};
+  } else if(h < 20000){
+    // Lower stratosphere isothermal approx T = 216.65 K
+    const T = 216.65;
+    // p = p11 * exp(-g*(h-11000)/(R*T))
+    const p11 = p0 * Math.pow((216.65)/T0, -G0/(-0.0065*Rg));
+    const p = p11 * Math.exp(-G0*(h-11000)/(Rg*T));
+    const rho = p/(Rg*T);
+    return {T,p,rho};
+  } else if(h < 32000){
+    // Stratosphere with positive lapse +1 K/km approx
+    const L = 0.001;
+    const T20 = 216.65;
+    const T = T20 + L*(h-20000);
+    // p20 obtained:
+    const p11 = p0 * Math.pow((216.65)/T0, -G0/(-0.0065*Rg));
+    const p20 = p11 * Math.exp(-G0*(20000-11000)/(Rg*216.65));
+    const p = p20 * Math.pow(T/T20, -G0/(L*Rg));
+    const rho = p/(Rg*T);
+    return {T,p,rho};
+  } else if(h < 47000){
+    // Isothermal again T ~ 228.65
+    const T = 228.65;
+    // p32 calc
+    // For simplicity, chain from 32000
+    const p32 = 5474.89; // approximate pressure at 32km Pa (approx)
+    const p = p32 * Math.exp(-G0*(h-32000)/(Rg*T));
+    const rho = p/(Rg*T);
+    return {T,p,rho};
+  } else {
+    // Above 47km to 86km exponential decay (very thin air)
+    // approximate exponential with scale height ~ 7 km
+    const rho0 = 1.0; // dummy will scale
+    const rho = 1.225 * Math.exp(-(h)/7000); // rough
+    const p = rho * Rg * 200; // approximate T around 200K
+    const T = p/(Rg*rho);
+    return {T,p,rho};
+  }
+}
+
+// gravity variation
+function gAtAlt(h){
+  return G0 * Math.pow(Re/(Re + h), 2);
+}
+
+// Drag force (positive magnitude)
+function dragForce(rho, v, Cd, area){
+  return 0.5 * rho * v * Math.abs(v) * Cd * area;
+}
+
+// Compute cross-sectional area from diameter
+function areaFromDiam(d){ return Math.PI * Math.pow(d/2,2); }
+
+// Compute analytic Tsiolkovsky per-stage delta-v and cumulative
+function computeAnalyticDeltaV(stages, payload){
+  // We assume order stages[0] bottom, last top. For each stage ignition mass includes that stage + all upper stages + payload.
+  let results = [];
+  // Build array of mass above for each stage
+  for(let i=0;i<stages.length;i++){
+    // m0: dry+prop for this stage + sum(dry+prop of upper) + payload
+    let m0 = 0;
+    for(let j=i;j<stages.length;j++) m0 += stages[j].propMass + stages[j].dryMass;
+    m0 += payload;
+    let mf = m0 - stages[i].propMass; // after burning prop, dry mass remains attached until separation
+    // Δv = g0 * Isp * ln(m0/mf)
+    const dv = G0 * stages[i].Isp * Math.log(m0/mf);
+    results.push({index:i, name:stages[i].name, m0, mf, dv});
+  }
+  return results;
+}
+
+// Simulation engine with RK4 integration for vertical ascent.
+// State variables: h (m), v (m/s), mass (kg), prop remaining per stage array.
+// For RK4 we integrate h' = v, v' = (T - D)/m - g(h), m' = -ṁ (when burning).
+// RK4 justification: See comment header. This is single-dimension and yields stable accurate results.
+function simulateStep(simState, dt, globalCd){
+  // simState: { t, h, v, mass, stages: array with propRemaining, nextStageIndex, logs ... }
+  // Returns updated simState and data for logging.
+  // Determine current active stage index (lowest stage with propRemaining > 0)
+  let activeIdx = -1;
+  for(let i=0;i<simState.stages.length;i++){
+    if(simState.stages[i].propRemaining > 0){ activeIdx = i; break; }
+  }
+  // Compute thrust for active stage
+  let T = 0;
+  let Isp = 0;
+  let mdot = 0;
+  let Cd = globalCd;
+  let area = 1.0; // area comes from current stage diameter; we choose the one burning. If none, use topmost.
+  if(activeIdx >= 0){
+    const st = simState.stages[activeIdx];
+    Isp = st.Isp;
+    Cd = st.Cd || globalCd;
+    area = areaFromDiam(st.diameter || 1.0);
+    // If thrust specified, use it; else auto-assign based on heuristics for thrust-to-weight.
+    if(st.thrust && typeof st.thrust === 'number'){
+      T = st.thrust;
+    } else {
+      // Heuristic: bottom stage (index 0) gets T = 1.5 * currentMass * g0; upper get 0.6 * mass * g0
+      const factor = activeIdx === 0 ? 1.5 : 0.6;
+      T = factor * simState.mass * G0;
+    }
+    // mass flow ṁ = T / (Isp * g0)
+    mdot = T / (Isp * G0);
+    // But cannot consume more than remaining prop
+    if(mdot * dt > simState.stages[activeIdx].propRemaining){
+      mdot = simState.stages[activeIdx].propRemaining / dt;
+      T = mdot * Isp * G0; // adjust thrust to final partial burn
+    }
+  } else {
+    // No prop remaining: no thrust
+    T = 0; mdot = 0; Isp = 0;
+    // set area from topmost stage or payload
+    const last = simState.stages[simState.stages.length-1];
+    area = areaFromDiam(last? last.diameter || 1.0 : 1.0);
+  }
+
+  // compute derivatives for RK4
+  function derivatives(stateVars, tLocal){
+    const h = stateVars.h;
+    const v = stateVars.v;
+    const m = stateVars.m;
+    // atmosphere
+    const atm = atmosphere(Math.max(0,h));
+    const rho = atm.rho;
+    const g = gAtAlt(Math.max(0,h));
+    const D = dragForce(rho, v, Cd, area);
+    const a = (T - D) / Math.max(m,1e-6) - g;
+    const dm = -mdot;
+    return {dh: v, dv: a, dm: dm, rho, D, g};
+  }
+
+  // RK4 integration
+  const s0 = {h: simState.h, v: simState.v, m: simState.mass};
+  const k1 = derivatives(s0, simState.t);
+  const s1 = {h: s0.h + 0.5*dt*k1.dh, v: s0.v + 0.5*dt*k1.dv, m: s0.m + 0.5*dt*k1.dm};
+  const k2 = derivatives(s1, simState.t + 0.5*dt);
+  const s2 = {h: s0.h + 0.5*dt*k2.dh, v: s0.v + 0.5*dt*k2.dv, m: s0.m + 0.5*dt*k2.dm};
+  const k3 = derivatives(s2, simState.t + 0.5*dt);
+  const s3 = {h: s0.h + dt*k3.dh, v: s0.v + dt*k3.dv, m: s0.m + dt*k3.dm};
+  const k4 = derivatives(s3, simState.t + dt);
+
+  // Combine increments
+  const dh = (dt/6) * (k1.dh + 2*k2.dh + 2*k3.dh + k4.dh);
+  const dv = (dt/6) * (k1.dv + 2*k2.dv + 2*k3.dv + k4.dv);
+  const dm = (dt/6) * (k1.dm + 2*k2.dm + 2*k3.dm + k4.dm);
+
+  // Update state
+  simState.t += dt;
+  simState.h += dh;
+  simState.v += dv;
+  simState.mass += dm;
+  // consume prop from active stage
+  if(activeIdx >= 0){
+    const consumed = Math.min(simState.stages[activeIdx].propRemaining, Math.max(0, -dm));
+    simState.stages[activeIdx].propRemaining -= consumed;
+    // if near zero, set to zero and drop dry mass (stage separation)
+    if(simState.stages[activeIdx].propRemaining <= 1e-6){
+      // stage burnout; perform separation: drop dry mass of that stage
+      const dropMass = simState.stages[activeIdx].dryMass;
+      simState.mass -= dropMass;
+      simState.stages[activeIdx].dropped = true;
+      simState.stages[activeIdx].propRemaining = 0;
+      simState.logs.push(`${formatTime(simState.t)}: Stage ${activeIdx+1} burned out and separated, dropping ${fmt(dropMass)} kg dry mass.`);
+    }
+  }
+
+  // compute some instantaneous values for logging
+  const atmNow = atmosphere(Math.max(0,simState.h));
+  const gNow = gAtAlt(Math.max(0,simState.h));
+  const Dnow = dragForce(atmNow.rho, simState.v, Cd, area);
+
+  return {
+    simState,
+    dt,
+    T, mdot,
+    rho: atmNow.rho,
+    D: Dnow,
+    g: gNow,
+    activeIdx
+  };
+}
+
+// Format time in mm:ss
+function formatTime(t){
+  const s = Math.floor(t);
+  const mm = String(Math.floor(s/60)).padStart(2,'0');
+  const ss = String(s%60).padStart(2,'0');
+  return `${mm}:${ss}`;
+}
+
+// Run controls
+let simInterval = null;
+
+runBtn.onclick = ()=>{ startSim(); };
+pauseBtn.onclick = ()=>{ pauseSim(); };
+stepBtn.onclick = ()=>{ stepSim(); };
+resetBtn.onclick = ()=>{ resetSim(); };
+
+function startSim(){
+  if(state.running) return;
+  // Validation
+  const validation = validateInputs();
+  if(!validation.ok){
+    warnBox.innerText = validation.msg;
+    return;
+  } else warnBox.innerText = '';
+  // initialize sim state
+  setupSimState();
+  state.running = true;
+  runBtn.disabled = true;
+  pauseBtn.disabled = false;
+  stepBtn.disabled = true;
+  const dt = Number(timeStepInput.value) || 0.5;
+  simInterval = setInterval(()=>{
+    if(!state.running) return;
+    // run one step; check termination conditions
+    if(state.t >= state.maxTime) { pauseSim(); logEvent('Max sim time reached'); return; }
+    stepSimInternal(dt);
+  }, Math.max(10, dt*1000)); // real-time approx: dt seconds -> setInterval(dt*1000), but ensure minimum 10ms for small dt
+}
+
+function pauseSim(){
+  state.running = false;
+  runBtn.disabled = false;
+  pauseBtn.disabled = true;
+  stepBtn.disabled = false;
+  if(simInterval){ clearInterval(simInterval); simInterval = null; }
+}
+
+function resetSim(){
+  pauseSim();
+  // reset logs and charts
+  state.logs = [];
+  state.series = {t:[], alt:[], vel:[], mass:[], massFlow:[], rho:[], drag:[]};
+  state.t = 0;
+  state.running = false;
+  logBox.innerHTML = '';
+  document.getElementById('summaryPanel').innerHTML = '';
+  Plotly.purge('chartAlt'); Plotly.purge('chartVel'); Plotly.purge('chartMass'); Plotly.purge('chartFlow');
+  document.getElementById('dvBars').innerHTML = '';
+  document.getElementById('losses').innerHTML = '';
+  // reset stage propRemaining
+  state.stages.forEach(st=>{ st.propRemaining = st.propMass; st.dropped = false; });
+  updateShareHash();
+}
+
+function stepSim(){
+  // Validation and initialize if first step
+  if(!state.t || state.t===0){
+    const validation = validateInputs();
+    if(!validation.ok){
+      warnBox.innerText = validation.msg;
+      return;
+    } else warnBox.innerText = '';
+    setupSimState();
+  }
+  stepSimInternal(Number(timeStepInput.value) || 0.5);
+}
+
+function stepSimInternal(dt){
+  if(state.t >= state.maxTime){
+    logEvent('Max sim time reached');
+    pauseSim();
+    return;
+  }
+  const res = simulateStep(state, dt, Number(globalCdInput.value) || 0.3);
+  // Logging according to verbosity
+  const v = state.verbosity;
+  // Build step log entry
+  let entry = `${formatTime(state.t)} | h=${fmt(state.h)} m, v=${fmt(state.v)} m/s, m=${fmt(state.mass)} kg`;
+  if(v>=2) entry += `, T=${fmt(res.T)} N, mdot=${fmt(res.mdot)} kg/s, rho=${res.rho.toExponential(2)} kg/m3, D=${fmt(res.D)} N, g=${fmt(res.g)} m/s2`;
+  state.logs.push(entry);
+  // Update series
+  state.series.t.push(state.t);
+  state.series.alt.push(state.h);
+  state.series.vel.push(state.v);
+  state.series.mass.push(state.mass);
+  state.series.massFlow.push(res.mdot);
+  state.series.rho.push(res.rho);
+  state.series.drag.push(res.D);
+  // Append log to UI
+  appendLog(entry);
+  // Update charts live
+  updateCharts();
+  // Termination: all prop used or mass exhausted or velocity negative & no thrust and falling
+  const anyProp = state.stages.some(s=>s.propRemaining > 1e-6);
+  if(!anyProp && Math.abs(state.v) < 1e-6 && state.t>1){
+    logEvent('All stages expended and vertical drift negligible - simulation ends.');
+    pauseSim();
+  }
+  if(state.h < -1000){
+    logEvent('Rocket fell below -1000 m - ending sim.');
+    pauseSim();
+  }
+  // If reached space (>100km) end
+  if(state.h > 100000){
+    logEvent('Reached >100 km (Karman line) - sim ends.');
+    pauseSim();
+  }
+  // If no thrust remains and mass left then end
+  if(!anyProp && state.t>10){
+    logEvent('No remaining propellant.');
+    pauseSim();
+  }
+  // update per-stage delta-v bars maybe end or periodically
+  updateDVPanel();
+}
+
+function setupSimState(){
+  state.t = 0;
+  state.running = false;
+  state.logs = [];
+  state.series = {t:[], alt:[], vel:[], mass:[], massFlow:[], rho:[], drag:[]};
+  // Initialize sim state fields
+  // stage copies with propRemaining
+  state.stages.forEach(st=>{ st.propRemaining = st.propMass; st.dropped = false; });
+  // compute total mass initial (sum props + drys + payload)
+  let totalMass = state.payloadMass;
+  state.stages.forEach(s=> totalMass += s.propMass + s.dryMass);
+  state.mass = totalMass;
+  state.h = Number(initAltInput.value) || 0;
+  state.v = 0;
+  state.t = 0;
+  // initial log
+  logEvent(`Simulation start. Initial mass ${fmt(state.mass)} kg, altitude ${fmt(state.h)} m`);
+  // initial charts
+  updateCharts(true);
+  updateDVPanel();
+}
+
+// Logging functions
+function appendLog(txt){
+  logBox.innerText = (logBox.innerText ? logBox.innerText + '\n' : '') + txt;
+  logBox.scrollTop = logBox.scrollHeight;
+}
+function logEvent(txt){
+  state.logs.push(txt);
+  appendLog(txt);
+}
+
+// Charts update
+function updateCharts(initial=false){
+  const t = state.series.t;
+  const alt = state.series.alt;
+  const vel = state.series.vel;
+  const mass = state.series.mass;
+  const flow = state.series.massFlow;
+  const drag = state.series.drag;
+  if(initial || t.length === 0){
+    Plotly.newPlot('chartAlt', [{x:t, y:alt, type:'scatter', name:'Altitude (m)'}],
+      {margin:{t:20}, yaxis:{title:'Altitude (m)'}} , {responsive:true});
+    Plotly.newPlot('chartVel', [{x:t, y:vel, type:'scatter', name:'Velocity (m/s)'}],
+      {margin:{t:20}, yaxis:{title:'Velocity (m/s)'}}, {responsive:true});
+    Plotly.newPlot('chartMass', [{x:t, y:mass, type:'scatter', name:'Mass (kg)'}],
+      {margin:{t:20}, yaxis:{title:'Mass (kg)'}}, {responsive:true});
+    Plotly.newPlot('chartFlow', [{x:t, y:flow, type:'scatter', name:'Mass flow (kg/s)'},{x:t, y:drag, type:'scatter', name:'Drag (N)', yaxis:'y2'}],
+      {margin:{t:20}, yaxis:{title:'Mass flow (kg/s)'}, yaxis2:{overlaying:'y', side:'right', title:'Drag (N)'}}, {responsive:true});
+  } else {
+    Plotly.extendTraces('chartAlt', {x:[[t[t.length-1]]], y:[[alt[alt.length-1]]]}, [0]);
+    Plotly.extendTraces('chartVel', {x:[[t[t.length-1]]], y:[[vel[vel.length-1]]]}, [0]);
+    Plotly.extendTraces('chartMass', {x:[[t[t.length-1]]], y:[[mass[mass.length-1]]]}, [0]);
+    Plotly.extendTraces('chartFlow', {x:[[t[t.length-1]]], y:[[flow[flow.length-1]]]}, [0]);
+    // For drag add to second trace on chartFlow
+    Plotly.extendTraces('chartFlow', {x:[[t[t.length-1]]], y:[[drag[drag.length-1]]]}, [1]);
+  }
+}
+
+// Delta-V panel
+function updateDVPanel(){
+  const analytic = computeAnalyticDeltaV(state.stages, state.payloadMass);
+  const totalAnalytic = analytic.reduce((s,a)=>s+a.dv,0);
+  // compute thrust-integrated delta-v (integral of T/m dt) and actual velocity change
+  let dvThrust = 0;
+  let dvActual = 0;
+  const n = state.series.t.length;
+  for(let i=1;i<n;i++){
+    const dt = state.series.t[i] - state.series.t[i-1];
+    // approximate thrust acceleration = T/m -> T = mdot * Isp * g0
+    const mdot = state.series.massFlow[i];
+    const m = state.series.mass[i];
+    const v1 = state.series.vel[i-1], v2 = state.series.vel[i];
+    // approximate instantaneous thrust dv = mdot*Isp*G0/m * dt
+    // but we don't have T series stored; instead approximate thrust accel = - (dm/dt) * Isp*G0 / m
+    const thrustAcc = (mdot>0)? ((mdot * state.stages[0]?.Isp || G0) * G0 / m) : 0; // fallback rough
+    // Better: compute from drag and gravity: actual dv = v2 - v1; and dvThrust = dvActual + ∫(g + D/m) dt
+    const avgV = 0.5*(v1+v2);
+    const rho = state.series.rho[i];
+    const D = state.series.drag[i];
+    const g = gAtAlt(Math.max(0, state.series.alt[i]));
+    dvActual += (v2 - v1);
+    dvThrust += (v2 - v1) + g*dt + (D / Math.max(m,1e-6)) * dt;
+  }
+  // losses
+  const gravityLoss = Math.max(0, dvThrust - dvActual); // should equal integral of g + D/m
+  const dragLoss = 0; // approximate infiltration - would require per-step separation; we'll compute more directly below.
+
+  // Build bars
+  const bars = analytic.map((a,i)=> ({stage: a.name, dv: a.dv, index:i}));
+  let html = `<div class="small">Analytic Δv per stage (Tsiolkovsky):</div><ul>`;
+  bars.forEach(b=> html += `<li>${b.stage}: ${fmt(b.dv)} m/s</li>`);
+  html += `</ul><div class="small">Total analytic Δv: <strong>${fmt(totalAnalytic)}</strong> m/s</div>`;
+  document.getElementById('dvBars').innerHTML = html;
+  // Losses summary
+  const actualDeltaV = state.series.vel.length ? state.series.vel[state.series.vel.length-1] : 0;
+  document.getElementById('losses').innerHTML = `
+    <div class="small">Numeric final velocity: <strong>${fmt(actualDeltaV)}</strong> m/s</div>
+    <div class="small">Numeric integrated thrust Δv (approx): <strong>${fmt(dvThrust)}</strong> m/s</div>
+    <div class="small">Estimated gravity+drag losses (approx): <strong>${fmt(Math.max(0, dvThrust - actualDeltaV))}</strong> m/s</div>
+  `;
+}
+
+// Validate inputs and warn for unrealistic values
+function validateInputs(){
+  // basic checks
+  const payload = Number(payloadMassInput.value) || 0;
+  if(payload < 0) return {ok:false, msg:'Payload mass must be >= 0'};
+  if(state.stages.length < 1) return {ok:false, msg:'At least one stage required'};
+  // total dry+prop mass
+  let totalProp = 0, totalDry=0;
+  for(const s of state.stages){
+    if(s.Isp <= 0) return {ok:false, msg:`Isp must be positive for ${s.name}`};
+    if(s.dryMass <= 0) return {ok:false, msg:`Dry mass must be > 0 for ${s.name}`};
+    totalProp += s.propMass;
+    totalDry += s.dryMass;
+  }
+  if(totalProp <= 0) return {ok:false, msg:'Total propellant mass must be > 0'};
+  // thrust checks (T/W)
+  // Use initial mass estimate
+  let m0 = payload + totalProp + totalDry;
+  let bottomThrust = state.stages[0].thrust || (1.5 * m0 * G0);
+  const TWR = bottomThrust / (m0 * G0);
+  if(TWR < 0.8) return {ok:false, msg:`Low liftoff T/W (${fmt(TWR)}) — rocket may not lift. Increase thrust or reduce mass.`};
+  if(TWR > 20) warnBox.innerText = 'Unrealistically high T/W — check thrust value.';
+  return {ok:true, msg:''};
+}
+
+// Export CSV
+exportCsvBtn.onclick = ()=>{
+  if(state.series.t.length === 0){ alert('No simulation data to export.'); return; }
+  let csv = 'time_s,alt_m,vel_mps,mass_kg,massflow_kgps,rho,drag_N\n';
+  for(let i=0;i<state.series.t.length;i++){
+    csv += `${state.series.t[i]},${state.series.alt[i]},${state.series.vel[i]},${state.series.mass[i]},${state.series.massFlow[i]},${state.series.rho[i]},${state.series.drag[i]}\n`;
+  }
+  const blob = new Blob([csv], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'rocket_timeseries.csv'; a.click();
+  URL.revokeObjectURL(url);
+};
+
+// Print report
+printReportBtn.onclick = ()=>{
+  const w = window.open('', '_blank');
+  const dvAnalytic = computeAnalyticDeltaV(state.stages, state.payloadMass);
+  let html = `<html><head><title>Rocket Simulation Report</title><style>body{font-family:Arial;padding:20px;} pre{background:#f7f7f7;padding:10px;border:1px solid #ddd;}</style></head><body>`;
+  html += `<h2>Simulation Report</h2>`;
+  html += `<h4>Configuration</h4><ul>`;
+  html += `<li>Payload: ${fmt(state.payloadMass)} kg</li>`;
+  html += `<li>Initial altitude: ${fmt(Number(initAltInput.value)||0)} m</li>`;
+  html += `<li>Stages: ${state.stages.length}</li></ul>`;
+  html += `<h4>Stages</h4><ol>`;
+  state.stages.forEach(s=>{
+    html += `<li>${s.name}: prop ${fmt(s.propMass)} kg, dry ${fmt(s.dryMass)} kg, Isp ${fmt(s.Isp)} s, Thrust ${s.thrust?fmt(s.thrust)+' N':'(auto)'}</li>`;
+  });
+  html += `</ol>`;
+  html += `<h4>Analytic Δv</h4><ul>`;
+  dvAnalytic.forEach(d=> html += `<li>${d.name}: ${fmt(d.dv)} m/s (m0=${fmt(d.m0)} kg -> mf=${fmt(d.mf)} kg)</li>`);
+  html += `</ul>`;
+  html += `<h4>Step-by-step Log</h4><pre>${state.logs.join('\n')}</pre>`;
+  html += `</body></html>`;
+  w.document.write(html);
+  w.document.close();
+  w.print();
+};
+
+// Share URL: encode config into hash
+function updateShareHash(){
+  const cfg = {
+    units: state.units,
+    stages: state.stages.map(s=>({
+      name:s.name, propMass:s.propMass, dryMass:s.dryMass, Isp:s.Isp,
+      thrust:s.thrust, diameter:s.diameter, length:s.length, Cd:s.Cd
+    })),
+    payload: Number(payloadMassInput.value)||0,
+    initAlt: Number(initAltInput.value)||0,
+    dt: Number(timeStepInput.value)||0.5,
+    maxTime: Number(maxTimeInput.value)||1000,
+    globalCd: Number(globalCdInput.value)||0.3
+  };
+  const json = JSON.stringify(cfg);
+  const b64 = btoa(unescape(encodeURIComponent(json)));
+  location.hash = b64.slice(0, 2000); // limit size
+}
+shareBtn.onclick = ()=>{
+  updateShareHash();
+  const url = location.href;
+  navigator.clipboard.writeText(url).then(()=> alert('Share URL copied to clipboard.'));
+};
+
+// On load, if hash present, decode
+window.addEventListener('load', ()=>{
+  if(location.hash.length > 1){
+    try{
+      const b64 = location.hash.substring(1);
+      const json = decodeURIComponent(escape(atob(b64)));
+      const cfg = JSON.parse(json);
+      if(cfg){
+        state.units = cfg.units || 'SI';
+        unitToggle.value = state.units;
+        payloadMassInput.value = cfg.payload || payloadMassInput.value;
+        initAltInput.value = cfg.initAlt || initAltInput.value;
+        timeStepInput.value = cfg.dt || timeStepInput.value;
+        maxTimeInput.value = cfg.maxTime || maxTimeInput.value;
+        globalCdInput.value = cfg.globalCd || globalCdInput.value;
+        if(cfg.stages && cfg.stages.length){
+          state.stages = cfg.stages.map((s,i)=>({
+            id:i, name:s.name || `Stage ${i+1}`, propMass:s.propMass||0, dryMass:s.dryMass||0, Isp:s.Isp||300,
+            thrust: s.thrust||'', diameter:s.diameter||1, length:s.length||1, Cd:s.Cd||0.3
+          }));
+          numStagesInput.value = state.stages.length;
+          renderStages();
+        }
+      }
+    }catch(e){
+      console.warn('Could not decode config from URL hash.');
+    }
+  }
+});
+
+// small initial summary
+function quickSummary(){
+  const analytic = computeAnalyticDeltaV(state.stages, Number(payloadMassInput.value)||0);
+  const total = analytic.reduce((s,a)=>s+a.dv,0);
+  document.getElementById('summaryPanel').innerHTML = `
+    <div>Total stages: ${state.stages.length}</div>
+    <div>Estimated total analytic Δv: <strong>${fmt(total)}</strong> m/s</div>
+    <div class="mt-1 small text-muted">Analytic Δv assumes ideal vacuum burns per-stage (Tsiolkovsky).</div>
+  `;
+}
+quickSummary();
+setInterval(quickSummary, 2000);
+
+// ensure share hash updates on edits occasionally
+setInterval(updateShareHash, 30000);
+
+</script>
+</body>
+</html>
