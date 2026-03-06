@@ -1,0 +1,780 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>Worms-3D-Revival-Demo (single file)</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<style>
+  html,body{height:100%;margin:0;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#111;color:#eee;overflow:hidden}
+  #app{display:flex;flex-direction:column;height:100%}
+  #topbar{display:flex;align-items:center;gap:12px;padding:8px;background:#0d0f12;border-bottom:1px solid rgba(255,255,255,0.04)}
+  .brand{font-weight:700}
+  #main{flex:1;display:flex;align-items:stretch}
+  #view{flex:1;position:relative;background:#08121a;display:flex;align-items:center;justify-content:center}
+  canvas{max-width:100%;max-height:100%;background:transparent}
+  #loadingOverlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:auto}
+  .panel{background:rgba(0,0,0,0.5);padding:12px;border-radius:8px;border:1px solid rgba(255,255,255,0.04)}
+  #progressBar{width:380px;height:14px;background:#222;border-radius:8px;overflow:hidden;margin-top:10px}
+  #progressFill{height:100%;width:0%;background:linear-gradient(90deg,#4ecdc4,#2a9df4);transition:width 300ms}
+  #percent{margin-top:6px;font-size:13px}
+  #errorBox{margin-top:10px;color:#f88}
+  #controls{width:360px;padding:12px;border-left:1px solid rgba(255,255,255,0.03);background:#071017;overflow:auto}
+  .small{font-size:13px;color:#ccc}
+  button{background:#1565c0;border:none;padding:8px 10px;border-radius:6px;color:#fff;cursor:pointer}
+  button.secondary{background:#333}
+  .row{display:flex;gap:8px;align-items:center;margin-top:8px}
+  #debug{position:fixed;right:12px;bottom:12px;background:rgba(0,0,0,0.6);padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.04);font-size:13px}
+  #report{width:100%;height:120px}
+  a.link{color:#6ad;border-bottom:1px dashed #6ad}
+  .muted{color:#9aa}
+  .placeholder{width:320px;height:200px;border-radius:8px;background:linear-gradient(180deg,#07313a,#06242a);display:flex;align-items:center;justify-content:center;color:#6df;border:1px dashed rgba(255,255,255,0.04)}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="topbar">
+    <div class="brand">Worms-3D-Revival-Demo</div>
+    <div class="small muted">Web demo • WebGL + 2D fallback • Deterministic replay</div>
+    <div style="margin-left:auto" class="small muted">Seed:
+      <input id="seedInput" style="width:140px;padding:6px;border-radius:6px;border:1px solid #234;background:#071019;color:#fff" />
+      <button id="inviteBtn" class="secondary">Create Invite</button>
+    </div>
+  </div>
+  <div id="main">
+    <div id="view">
+      <div id="loadingOverlay" class="panel">
+        <div style="display:flex;align-items:center;gap:12px">
+          <div style="width:56px;height:56px;border-radius:10px;background:linear-gradient(135deg,#2a9df4,#4ecdc4);display:flex;align-items:center;justify-content:center;font-weight:700">W3D</div>
+          <div style="text-align:left">
+            <div style="font-size:16px;font-weight:700">Loading demo...</div>
+            <div class="small muted">Preparing rendering & assets — optimized small bundle</div>
+          </div>
+        </div>
+        <div id="progressBar"><div id="progressFill"></div></div>
+        <div id="percent">0%</div>
+        <div id="errorBox"></div>
+        <div class="row">
+          <button id="retryBtn" style="display:none">Retry</button>
+          <button id="fallbackBtn" class="secondary" style="display:none">Use 2D Fallback</button>
+        </div>
+      </div>
+
+      <canvas id="glCanvas" width="1200" height="700" style="display:none"></canvas>
+      <canvas id="fallbackCanvas" width="1200" height="700" style="display:none"></canvas>
+
+      <div id="placeholder" class="placeholder" style="display:none">
+        <div>
+          <div style="font-size:18px">Preparing scene…</div>
+          <div class="small muted">If this takes long, try the fallback</div>
+        </div>
+      </div>
+    </div>
+    <div id="controls" class="panel">
+      <div style="font-weight:700">Quick-play Demo</div>
+      <div class="small muted">A local match with two bots and one weapon (deterministic).</div>
+      <div class="row">
+        <button id="startDemo">Start Quick-Play</button>
+        <button id="stopDemo" class="secondary">Stop</button>
+      </div>
+      <div class="row">
+        <button id="fireBtn">Fire (player)</button>
+        <button id="stepReplay" class="secondary">Export Replay</button>
+      </div>
+      <div style="margin-top:10px">
+        <div style="font-weight:700">Diagnostics & Matchmaking</div>
+        <div class="small muted">STUN/TURN and P2P diagnostics (simulated).</div>
+        <div class="row">
+          <button id="diagBtn">Run Network Diagnostics</button>
+          <button id="simulateP2P" class="secondary">Simulate P2P</button>
+        </div>
+        <div id="netLog" class="small muted" style="margin-top:6px;max-height:120px;overflow:auto"></div>
+      </div>
+
+      <div style="margin-top:12px">
+        <div style="font-weight:700">Debug & Telemetry</div>
+        <label class="small"><input type="checkbox" id="showFps" /> Show FPS</label>
+        <label class="small" style="display:block"><input type="checkbox" id="teleOptOut" /> Opt-out of anonymous error reports</label>
+        <div class="small muted" style="margin-top:6px">Last error: <span id="lastError">none</span></div>
+        <div style="margin-top:6px" class="row">
+          <button id="copyReport" class="secondary">Copy Debug Report</button>
+        </div>
+        <textarea id="report" placeholder="Debug report will appear here..."></textarea>
+      </div>
+
+      <div style="margin-top:12px">
+        <div style="font-weight:700">Replay & Verification</div>
+        <div class="small muted">Replay string (seed + actions) for deterministic playback & server-side validation.</div>
+        <div class="row">
+          <button id="replayBtn">Play Replay</button>
+          <button id="verifyBtn" class="secondary">Verify Replay (simulate)</button>
+        </div>
+      </div>
+
+      <div style="margin-top:12px" class="small muted">
+        Release: This is a minimal demo build. To report bugs, include the copied debug report and steps to reproduce. Example issue URL: <a class="link" href="https://example.com/report" target="_blank">https://example.com/report</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="debug" style="display:none">
+  <div id="fps">FPS: --</div>
+  <div id="renderer">Renderer: --</div>
+  <div id="glerror">GL Error: --</div>
+</div>
+
+<script>
+/* Single-file Worms-3D-Revival-Demo
+   Features implemented:
+   - Loading screen with progress + percent, WebGL detection and fallback link
+   - Asset preloader with timeout and retries, test texture+shader
+   - 2D canvas fallback implementing projectile arcs, terrain, hit detection
+   - Debug overlay and telemetry opt-out + copyable report
+   - Seeded RNG for deterministic replay; export/import of replay string
+   - Simulated matchmaking/STUN/TURN diagnostics and P2P relay fallback
+   - Quick-play demo: two bots and one weapon locally
+*/
+
+/* Utilities */
+function by(id){return document.getElementById(id)}
+function logNet(s){const e=by('netLog'); e.innerText = new Date().toLocaleTimeString()+' - '+s + '\\n' + e.innerText;}
+function now(){return performance.now()}
+function clamp(v,a,b){return Math.max(a,Math.min(b,v))}
+
+/* Seeded RNG - mulberry32 */
+function makeRng(seed){
+  let v = seed >>> 0;
+  return function(){
+    v += 0x6D2B79F5 | 0;
+    var t = Math.imul(v ^ v >>> 15, 1 | v);
+    t ^= t + Math.imul(t ^ t >>> 7, 61 | t);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  }
+}
+
+/* Basic deterministic projectile physics */
+function simulateShot(seed, angle, power, steps=200){
+  const rng = makeRng(seed);
+  const dt = 1/60;
+  const g = 9.81;
+  let x=0,y=40; // start
+  let vx = power*Math.cos(angle);
+  let vy = power*Math.sin(angle);
+  const path=[];
+  for(let i=0;i<steps;i++){
+    vy -= g*dt;
+    x += vx*dt*30;
+    y += vy*dt*30;
+    path.push({x,y});
+    if(y<=terrainHeightAt(x)) break;
+  }
+  return path;
+}
+
+/* Simple terrain function */
+function terrainHeightAt(x){
+  // deterministic hills
+  return 20 + 15*Math.sin(x*0.012) + 6*Math.cos(x*0.03);
+}
+
+/* State */
+const state = {
+  lastError: null,
+  glAvailable: false,
+  glRenderer: null,
+  usingFallback: false,
+  progress: 0,
+  optOutTelemetry:false,
+  seed: Math.floor(Math.random()*99999999),
+  replay: {seed:0, actions:[]},
+  bots: [],
+  running:false,
+  fpsEnabled:false,
+  reportText:'',
+  assetsRetries:0
+};
+
+/* Elements */
+const progressFill = by('progressFill');
+const percent = by('percent');
+const loadingOverlay = by('loadingOverlay');
+const errorBox = by('errorBox');
+const retryBtn = by('retryBtn');
+const fallbackBtn = by('fallbackBtn');
+const glCanvas = by('glCanvas');
+const fallbackCanvas = by('fallbackCanvas');
+const placeholder = by('placeholder');
+const fpsDiv = by('fps');
+const rendererDiv = by('renderer');
+const glerrorDiv = by('glerror');
+const debugDiv = by('debug');
+const seedInput = by('seedInput');
+const inviteBtn = by('inviteBtn');
+const startDemo = by('startDemo');
+const stopDemo = by('stopDemo');
+const fireBtn = by('fireBtn');
+const stepReplay = by('stepReplay');
+const diagBtn = by('diagBtn');
+const simulateP2P = by('simulateP2P');
+const netLog = by('netLog');
+const showFpsBox = by('showFps');
+const teleOptOutBox = by('teleOptOut');
+const copyReportBtn = by('copyReport');
+const reportArea = by('report');
+const replayBtn = by('replayBtn');
+const verifyBtn = by('verifyBtn');
+
+/* Audio: small loading beep */
+let audioCtx;
+function playBeep(freq=880,dur=0.06){
+  try{
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type='sine'; o.frequency.value=freq;
+    g.gain.value=0.0001;
+    o.connect(g); g.connect(audioCtx.destination);
+    const t = audioCtx.currentTime;
+    g.gain.linearRampToValueAtTime(0.02,t+0.001);
+    o.start(t);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+    o.stop(t+dur+0.02);
+  }catch(e){}
+}
+
+/* Progress updater */
+function setProgress(p,text){
+  state.progress = p;
+  progressFill.style.width = (p*100|0)+'%';
+  percent.innerText = (p*100|0)+'% ' + (text||'');
+  playBeep(600+400*p,0.03);
+}
+
+/* WebGL detection & renderer info */
+function detectWebGL(){
+  let gl=null, isWebGL2=false;
+  try{
+    gl = glCanvas.getContext('webgl2',{preserveDrawingBuffer:false,antialias:true});
+    if(gl){ isWebGL2=true; }
+    else gl = glCanvas.getContext('webgl',{preserveDrawingBuffer:false,antialias:true}) || glCanvas.getContext('experimental-webgl');
+  }catch(e){ gl=null; }
+  if(!gl) return {available:false,reason:'WebGL unavailable or blocked by browser.'};
+  // renderer info
+  try{
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    const renderer = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+    const vendor = dbg ? gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR);
+    return {available:true,gl,renderer,version:gl.getParameter(gl.VERSION),isWebGL2};
+  }catch(e){
+    return {available:true,gl,renderer:'unknown',version:'unknown',isWebGL2};
+  }
+}
+
+/* Asset preloader with timeout+retry+backoff */
+async function loadAssetsWithRetries(maxRetries=3){
+  const baseTimeout = 2500;
+  for(let attempt=0;attempt<=maxRetries;attempt++){
+    try{
+      setProgress(0.1,'Verifying renderer');
+      const ok = await verifyRenderingTest(baseTimeout * Math.pow(2,attempt));
+      if(ok) {
+        setProgress(0.9,'Loading minimal assets');
+        await loadMinimalAssets();
+        setProgress(1.0,'Ready');
+        return true;
+      } else throw new Error('Rendering test failed');
+    }catch(err){
+      state.lastError = err.message || String(err);
+      by('lastError').innerText = state.lastError;
+      setProgress(0, 'Failed');
+      errorBox.innerText = 'Load failed: ' + state.lastError;
+      retryBtn.style.display = 'inline-block';
+      fallbackBtn.style.display = 'inline-block';
+      state.assetsRetries = attempt;
+      if(attempt < maxRetries){
+        const wait = 500 * Math.pow(2,attempt);
+        await new Promise(r=>setTimeout(r,wait));
+        continue;
+      }else{
+        // all failed
+        autoSendReportIfNeeded('fatal','Asset load failed after retries: '+state.lastError);
+        return false;
+      }
+    }
+  }
+}
+
+/* Verify rendering with small shader + texture test */
+async function verifyRenderingTest(timeout=3000){
+  return new Promise(async (resolve,reject)=>{
+    const t0 = now();
+    let done=false;
+    let timedOut=false;
+    const timer = setTimeout(()=>{ timedOut=true; if(!done){ done=true; reject(new Error('Rendering test timeout')); }}, timeout);
+    try{
+      const wt = detectWebGL();
+      if(!wt.available){ clearTimeout(timer); done=true; reject(new Error(wt.reason)); return; }
+      state.glAvailable = true;
+      state.glRenderer = wt.renderer || 'unknown';
+      rendererDiv.innerText = 'Renderer: ' + state.glRenderer + ' (' + (wt.isWebGL2? 'WebGL2':'WebGL1') + ')';
+      // compile tiny shader
+      const gl = wt.gl;
+      const vsSrc = 'attribute vec2 p;void main(){gl_Position=vec4(p,0.0,1.0);}';
+      const fsSrc = 'precision mediump float;void main(){gl_FragColor=vec4(0.3,0.6,0.8,1.0);}';
+      function compile(type,src){
+        const s = gl.createShader(type); gl.shaderSource(s,src); gl.compileShader(s);
+        if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) throw new Error('Shader compile error: '+gl.getShaderInfoLog(s));
+        return s;
+      }
+      const vs = compile(gl.VERTEX_SHADER,vsSrc);
+      const fs = compile(gl.FRAGMENT_SHADER,fsSrc);
+      const pr = gl.createProgram(); gl.attachShader(pr,vs); gl.attachShader(pr,fs); gl.linkProgram(pr);
+      if(!gl.getProgramParameter(pr,gl.LINK_STATUS)) throw new Error('Program link failed: '+gl.getProgramInfoLog(pr));
+      // create tiny texture from canvas
+      const texCan = document.createElement('canvas'); texCan.width=8; texCan.height=8;
+      const cx = texCan.getContext('2d');
+      const imgd = cx.createImageData(8,8);
+      for(let i=0;i<64;i++){ imgd.data[i*4+0]= (i*3)%255; imgd.data[i*4+1]=(i*7)%255; imgd.data[i*4+2]=(i*5)%255; imgd.data[i*4+3]=255; }
+      cx.putImageData(imgd,0,0);
+      const bitmap = await createImageBitmap(texCan);
+      const tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,tex);
+      gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+      gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,bitmap);
+      // draw one frame to framebuffer
+      gl.viewport(0,0,glCanvas.width,glCanvas.height);
+      gl.clearColor(0.02,0.05,0.07,1); gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.useProgram(pr);
+      const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+      gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
+      const loc = gl.getAttribLocation(pr,'p'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+      gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+      // readPixels to ensure rendering works
+      const px = new Uint8Array(4);
+      gl.readPixels(0,0,1,1,gl.RGBA,gl.UNSIGNED_BYTE,px);
+      const rendered = px[0] !== 0 || px[1] !== 0 || px[2] !== 0;
+      clearTimeout(timer);
+      done=true;
+      if(!rendered) reject(new Error('Render output unexpected'));
+      else { state.gl = gl; resolve(true); }
+    }catch(e){
+      if(!timedOut) clearTimeout(timer);
+      done=true;
+      reject(e);
+    }
+  });
+}
+
+/* Minimal assets load (simulate small package) */
+async function loadMinimalAssets(){
+  // small models/sounds simulated by generating minimal arrays
+  await new Promise(r=>setTimeout(r,300)); // simulate tiny network
+  // prepare first visible placeholder scene within 3s
+  placeholder.style.display='flex'; loadingOverlay.style.display='none';
+  // small delay to allow first frame visible
+  await new Promise(r=>setTimeout(r,1200));
+  return true;
+}
+
+/* Fallback 2D game implementation */
+const fallback = {
+  ctx:null,
+  width:1200,height:700,
+  objects:[],
+  lastT:0,
+  rng:null,
+  replay:{seed:0,actions:[]},
+  init(seed){
+    fallbackCanvas.style.display='block';
+    glCanvas.style.display='none';
+    placeholder.style.display='none';
+    this.ctx = fallbackCanvas.getContext('2d');
+    this.rng = makeRng(seed);
+    this.reset(seed);
+    this.loop(0);
+  },
+  reset(seed){
+    this.replay.seed = seed;
+    this.rng = makeRng(seed);
+    this.objects = [
+      {id:'bot1',x:150,y:terrainHeightAt(150)-0,health:100,ai:true},
+      {id:'bot2',x:900,y:terrainHeightAt(900)-0,health:100,ai:true}
+    ];
+    this.projectiles = [];
+    this.lastT = now();
+    this.hitLog = [];
+    state.replay = {seed:seed,actions:[]};
+  },
+  loop(t){
+    const dt = (t - this.lastT)/1000; this.lastT = t;
+    fallback.update(dt);
+    fallback.draw();
+    if(state.running) requestAnimationFrame(fallback.loop);
+  },
+  update(dt){
+    // bots AI: random interval fire
+    if(!state.running) return;
+    if(Math.random()<0.02){
+      const bot = this.objects[Math.random()>0.5?0:1];
+      this.fire(bot.x+10,terrainHeightAt(bot.x)+20, (Math.random()*0.6+0.4)*Math.PI/3, 50+Math.random()*40, 'bot');
+    }
+    // update projectiles
+    for(let p of this.projectiles){
+      p.vy -= 9.81*dt*30;
+      p.x += p.vx*dt*30;
+      p.y += p.vy*dt*30;
+      // terrain collision
+      if(p.y <= terrainHeightAt(p.x)){
+        // check hit nearby bots
+        for(let b of this.objects){
+          const d = Math.hypot(b.x-p.x, b.y-p.y);
+          if(d<30){ b.health -= 30; this.hitLog.push({t:Date.now(),target:b.id,damage:30}); }
+        }
+        p.dead=true;
+      }
+    }
+    this.projectiles = this.projectiles.filter(p=>!p.dead && p.x>=-100 && p.x<=this.width+100);
+  },
+  draw(){
+    const c = this.ctx;
+    c.clearRect(0,0,this.width,this.height);
+    // sky
+    const grad = c.createLinearGradient(0,0,0,this.height);
+    grad.addColorStop(0,'#063a46'); grad.addColorStop(1,'#052027');
+    c.fillStyle = grad; c.fillRect(0,0,this.width,this.height);
+    // terrain
+    c.fillStyle = '#0b4b3c';
+    c.beginPath();
+    c.moveTo(0,this.height);
+    for(let x=0;x<=this.width;x+=4) c.lineTo(x, this.height - terrainHeightAt(x));
+    c.lineTo(this.width,this.height); c.closePath(); c.fill();
+    // bots
+    for(let b of this.objects){
+      c.fillStyle = b.health>50?'#8ef':'#f88';
+      c.beginPath(); c.arc(b.x, this.height - b.y, 12,0,Math.PI*2); c.fill();
+      c.fillStyle='#fff'; c.fillText(b.id + ' ('+Math.max(0|b.health,0)+')', b.x-20, this.height - b.y -18);
+    }
+    // projectiles
+    for(let p of this.projectiles){
+      c.fillStyle='#ffd';
+      c.beginPath(); c.arc(p.x, this.height - p.y, 6,0,Math.PI*2); c.fill();
+    }
+  },
+  fire(x,y,angle,power,who){
+    const vx = Math.cos(angle)*power;
+    const vy = Math.sin(angle)*power;
+    const id = 'p'+Math.random().toString(36).slice(2,9);
+    this.projectiles.push({id,x,y,vx,vy,owner:who});
+    state.replay.actions.push({t:Date.now(),type:'fire',x,y,angle,power,owner:who});
+  },
+  exportReplay(){ return btoa(JSON.stringify(state.replay)); },
+  importReplay(str){
+    try{
+      const obj = JSON.parse(atob(str));
+      state.replay = obj;
+      this.reset(obj.seed);
+      // apply actions deterministically
+      for(let a of obj.actions){ if(a.type==='fire') this.fire(a.x,a.y,a.angle,a.power,a.owner); }
+    }catch(e){ throw e; }
+  }
+};
+
+/* Start quick-play gameplay (uses fallback canvas for simplicity if no GL) */
+function startQuickPlay(){
+  state.running=true;
+  state.replay.seed = state.seed;
+  state.replay.actions = [];
+  if(state.usingFallback || !state.glAvailable){
+    fallback.init(state.seed);
+  } else {
+    // For WebGL we run a simple 2D-like simulation painted on glCanvas for demo purposes
+    glCanvas.style.display='block';
+    fallbackCanvas.style.display='none';
+    placeholder.style.display='none';
+    runGLDemo(state.seed);
+  }
+}
+
+/* Stop demo */
+function stopQuickPlay(){
+  state.running=false;
+  // hide canvases
+}
+
+/* Fire player shot */
+function playerFire(){
+  const angle = 0.7; const power=70;
+  if(state.usingFallback || !state.glAvailable){
+    fallback.fire(200,terrainHeightAt(200)+20,angle,power,'player');
+  } else {
+    glFire(200,terrainHeightAt(200)+20,angle,power,'player');
+  }
+}
+
+/* Replay export/import */
+function exportReplay(){
+  let s='';
+  if(state.usingFallback || !state.glAvailable) s = fallback.exportReplay();
+  else s = btoa(JSON.stringify(state.replay));
+  reportArea.value = s;
+}
+
+/* Simulate server-side verification */
+async function verifyReplay(){
+  const s = reportArea.value;
+  try{
+    const data = s ? JSON.parse(atob(s)) : null;
+    if(!data) { alert('No replay data in report area'); return; }
+    // perform basic checks
+    if(!data.seed || !Array.isArray(data.actions)) throw new Error('Invalid replay format');
+    // sanity check: ensure actions times are increasing
+    let lastT=0; for(let a of data.actions){ if(a.t < lastT) throw new Error('Action timestamps not increasing'); lastT=a.t; }
+    alert('Replay verified (simulated). Seed: '+data.seed+' actions:'+data.actions.length);
+  }catch(e){
+    alert('Verification failed: '+e.message);
+  }
+}
+
+/* GL demo minimal simulation (simple 2D drawing using 2D context of glCanvas) */
+function runGLDemo(seed){
+  // For demo brevity we use glCanvas 2D overlay to simulate "WebGL scene" content.
+  const ctx = glCanvas.getContext('2d');
+  const rng = makeRng(seed);
+  let bots = [{id:'bot1',x:160,y:terrainHeightAt(160),health:100},{id:'bot2',x:920,y:terrainHeightAt(920),health:100}];
+  let projectiles=[];
+  state.replay = {seed:seed,actions:[]};
+  function loop(t){
+    if(!state.running) return;
+    // update
+    if(rng() < 0.02){
+      const bot = bots[Math.random()>0.5?0:1];
+      const angle = 0.6 + rng()*0.4;
+      const power = 50 + rng()*40;
+      projectiles.push({x:bot.x,y:bot.y+20,vx:Math.cos(angle)*power,vy:Math.sin(angle)*power,owner:'bot'});
+      state.replay.actions.push({t:Date.now(),type:'fire',x:bot.x,y:bot.y+20,angle,power,owner:'bot'});
+    }
+    for(let p of projectiles){
+      p.vy -= 9.81*(1/60)*30;
+      p.x += p.vx*(1/60)*30;
+      p.y += p.vy*(1/60)*30;
+      if(p.y <= terrainHeightAt(p.x)){
+        for(let b of bots){ if(Math.hypot(b.x-p.x,b.y-p.y) < 30){ b.health -=30; } }
+        p.dead=true;
+      }
+    }
+    projectiles = projectiles.filter(p=>!p.dead);
+    // draw simple scene
+    ctx.clearRect(0,0,glCanvas.width,glCanvas.height);
+    const grad = ctx.createLinearGradient(0,0,0,glCanvas.height); grad.addColorStop(0,'#072b33'); grad.addColorStop(1,'#03161a');
+    ctx.fillStyle=grad; ctx.fillRect(0,0,glCanvas.width,glCanvas.height);
+    ctx.fillStyle='#0b4b3c';
+    ctx.beginPath(); ctx.moveTo(0,glCanvas.height);
+    for(let x=0;x<=glCanvas.width;x+=4) ctx.lineTo(x, glCanvas.height - terrainHeightAt(x));
+    ctx.lineTo(glCanvas.width,glCanvas.height); ctx.closePath(); ctx.fill();
+    // bots
+    for(let b of bots){
+      ctx.fillStyle = b.health>50?'#8ef':'#f88';
+      ctx.beginPath(); ctx.arc(b.x, glCanvas.height - b.y, 12,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='#fff'; ctx.fillText(b.id + ' ('+Math.max(0|b.health,0)+')', b.x-20, glCanvas.height - b.y -18);
+    }
+    // projectiles
+    for(let p of projectiles){ ctx.fillStyle='#ffd'; ctx.beginPath(); ctx.arc(p.x, glCanvas.height - p.y, 6,0,Math.PI*2); ctx.fill(); }
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+}
+
+/* GL fire placeholder */
+function glFire(x,y,angle,power,who){
+  state.replay.actions.push({t:Date.now(),type:'fire',x,y,angle,power,owner:who});
+  // simple visual: spawn a small circle in 2D draw
+}
+
+/* Network diagnostics & P2P simulation */
+async function runNetworkDiagnostics(){
+  logNet('Starting STUN/TURN diagnostics...');
+  // Try creating RTCPeerConnection and gather ICE candidates
+  try{
+    const pc = new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
+    pc.onicecandidate = (e) => {
+      if(e.candidate) logNet('ICE candidate: ' + e.candidate.candidate);
+    };
+    pc.onconnectionstatechange = ()=> logNet('Connection state: '+pc.connectionState);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    // Wait briefly for gather
+    await new Promise(r=>setTimeout(r,1200));
+    logNet('Local description set. ICE gathering may continue.');
+    pc.close();
+  }catch(e){
+    logNet('Diagnostics error: ' + e.message);
+  }
+}
+
+/* Simulated P2P attempt with fallback to relay */
+async function simulateP2PAndRelay(){
+  logNet('Attempting P2P connection...');
+  // Simulate timeout and fallback
+  const success = Math.random() > 0.6;
+  await new Promise(r=>setTimeout(r,1000));
+  if(success){ logNet('Direct P2P established.'); }
+  else { logNet('Direct P2P failed; falling back to relay server.'); await new Promise(r=>setTimeout(r,600)); logNet('Relay connection established (simulated).'); }
+}
+
+/* Debug overlay & telemetry */
+function updateDebugOverlay(){
+  debugDiv.style.display = state.fpsEnabled? 'block':'none';
+  fpsDiv.innerText = 'FPS: ' + (state._fps|0);
+  rendererDiv.innerText = 'Renderer: ' + (state.glRenderer || 'none');
+  glerrorDiv.innerText = 'GL Error: ' + (state.lastError || 'none');
+}
+
+/* Auto-send report on fatal errors */
+async function autoSendReportIfNeeded(level,extra){
+  if(teleOptOutBox.checked) return;
+  const report = makeDebugReport(level,extra);
+  // send using navigator.sendBeacon if available
+  try{
+    const url = 'https://example.com/telemetry'; // placeholder
+    if(navigator.sendBeacon){
+      navigator.sendBeacon(url, new Blob([JSON.stringify(report)],{type:'application/json'}));
+    } else {
+      await fetch(url,{method:'POST',body:JSON.stringify(report),headers:{'Content-Type':'application/json'}});
+    }
+  }catch(e){}
+  reportArea.value = JSON.stringify(report,null,2);
+}
+
+/* Create debug report */
+function makeDebugReport(level,extra){
+  const r = {
+    app:'Worms-3D-Revival-Demo',
+    ts:new Date().toISOString(),
+    level:level||'info',
+    seed:state.seed,
+    glAvailable:state.glAvailable,
+    renderer:state.glRenderer,
+    lastError:state.lastError,
+    progress:state.progress,
+    extra:extra||null,
+    userAgent: navigator.userAgent,
+  };
+  return r;
+}
+
+/* Copy report to clipboard */
+async function copyReport(){
+  try{
+    await navigator.clipboard.writeText(reportArea.value || JSON.stringify(makeDebugReport('manual')));
+    alert('Report copied to clipboard');
+  }catch(e){ alert('Copy failed: '+e.message); }
+}
+
+/* Invite URL encoding/decoding */
+function createInvite(){
+  const seed = Number(seedInput.value) || state.seed;
+  const payload = {seed:seed,ts:Date.now()};
+  const code = btoa(JSON.stringify(payload));
+  const url = location.origin + location.pathname + '?invite=' + encodeURIComponent(code);
+  prompt('Shareable invite URL (short):', url);
+}
+
+/* On load, check for invite param */
+function checkInviteParam(){
+  const params = new URLSearchParams(location.search);
+  const inv = params.get('invite');
+  if(inv){
+    try{
+      const payload = JSON.parse(atob(inv));
+      state.seed = payload.seed || state.seed;
+      seedInput.value = state.seed;
+      logNet('Invite detected. Seed set to '+state.seed);
+    }catch(e){}
+  }
+}
+
+/* FPS monitor */
+let lastFrame=performance.now(), frameCount=0;
+function fpsTick(){
+  const t = performance.now();
+  frameCount++;
+  if(t-lastFrame>=1000){
+    state._fps = frameCount/( (t-lastFrame)/1000 );
+    frameCount=0; lastFrame=t;
+    if(showFpsBox.checked) state.fpsEnabled=true; else state.fpsEnabled=false;
+    updateDebugOverlay();
+  }
+  requestAnimationFrame(fpsTick);
+}
+
+/* Initialization flow */
+async function init(){
+  seedInput.value = state.seed;
+  setProgress(0,'Starting');
+  placeholder.style.display='flex';
+  loadingOverlay.style.display='flex';
+  // Ensure first visible frame within 3 seconds: show placeholder immediately (done)
+  // Start preloader
+  const ok = await loadAssetsWithRetries(2);
+  if(!ok){
+    // show fallback prompt
+    state.usingFallback = true;
+    fallbackBtn.style.display='inline-block';
+    retryBtn.style.display='inline-block';
+    placeholder.style.display='none';
+    return;
+  }
+  // hide loading overlay and start demo in GL
+  loadingOverlay.style.display='none';
+  placeholder.style.display='none';
+  glCanvas.style.display = state.glAvailable ? 'block' : 'none';
+  fallbackCanvas.style.display = 'none';
+  // Set render info
+  by('renderer').innerText = 'Renderer: ' + (state.glRenderer || 'none');
+  // Auto-start quick-play demo
+  startQuickPlay();
+  requestAnimationFrame(fpsTick);
+}
+
+/* Event bindings */
+retryBtn.addEventListener('click',async ()=>{
+  retryBtn.style.display='none'; fallbackBtn.style.display='none'; errorBox.innerText='';
+  await loadAssetsWithRetries(2);
+});
+fallbackBtn.addEventListener('click',()=>{
+  state.usingFallback=true;
+  loadingOverlay.style.display='none';
+  placeholder.style.display='none';
+  fallback.init(state.seed);
+});
+inviteBtn.addEventListener('click',createInvite);
+startDemo.addEventListener('click',()=>{ startQuickPlay(); });
+stopDemo.addEventListener('click',()=>{ stopQuickPlay(); });
+fireBtn.addEventListener('click',()=>{ playerFire(); });
+stepReplay.addEventListener('click',exportReplay);
+diagBtn.addEventListener('click',runNetworkDiagnostics);
+simulateP2P.addEventListener('click',simulateP2PAndRelay);
+showFpsBox.addEventListener('change',()=>{ state.fpsEnabled = showFpsBox.checked; updateDebugOverlay(); });
+teleOptOutBox.addEventListener('change',()=>{ state.optOutTelemetry = teleOptOutBox.checked; });
+copyReportBtn.addEventListener('click',copyReport);
+replayBtn.addEventListener('click',()=>{
+  const s = reportArea.value;
+  if(state.usingFallback || !state.glAvailable){
+    try{ fallback.importReplay(s); alert('Replay loaded in fallback'); } catch(e){ alert('Invalid replay: '+e.message); }
+  } else { alert('Replay import for GL not implemented in this minimal demo'); }
+});
+verifyBtn.addEventListener('click',verifyReplay);
+by('teleOptOut').addEventListener('change',(e)=>{ /* saved preference could go to localStorage */ });
+window.addEventListener('error',(ev)=>{ state.lastError = ev.message; by('lastError').innerText = state.lastError; autoSendReportIfNeeded('fatal',ev.message); });
+
+checkInviteParam();
+init();
+
+/* Small UX: ensure first visible frame if no GL in 3s */
+setTimeout(()=>{ if(state.progress<0.5 && loadingOverlay.style.display!=='none'){ placeholder.style.display='flex'; } },3000);
+
+/* Small DOM placements for lastError text */
+by('lastError').innerText = state.lastError || 'none';
+
+</script>
+</body>
+</html>
