@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Worms Game</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+            background: #1a1a1a;
+        }
+        canvas {
+            display: block;
+        }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            z-index: 100;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+        #gameState {
+            margin: 10px 0;
+        }
+        #playerList {
+            margin: 10px 0;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+        .player-item {
+            padding: 5px;
+            margin: 3px 0;
+            border-left: 3px solid;
+            padding-left: 8px;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            margin: 5px 0;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        input {
+            background: #333;
+            color: white;
+            border: 1px solid #555;
+            padding: 8px;
+            border-radius: 4px;
+            margin: 5px 0;
+            width: 200px;
+        }
+        #inviteLink {
+            background: #333;
+            color: #4CAF50;
+            padding: 5px;
+            border-radius: 4px;
+            word-break: break-all;
+            font-size: 11px;
+            margin: 5px 0;
+            max-width: 250px;
+        }
+        #turn {
+            color: #FFD700;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        #controls {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            color: white;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 8px;
+            font-size: 12px;
+        }
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+    <div id="ui">
+        <div id="menu" class="hidden">
+            <h3>3D Worms</h3>
+            <div>
+                <input type="text" id="playerName" placeholder="Enter your name" maxlength="20">
+                <button onclick="game.createGame()">Create Game</button>
+            </div>
+            <div style="margin-top: 10px; border-top: 1px solid #555; padding-top: 10px;">
+                <input type="text" id="gameCode" placeholder="Enter game code or URL">
+                <button onclick="game.joinGame()">Join Game</button>
+            </div>
+        </div>
+        <div id="lobby" class="hidden">
+            <h3>Game Lobby</h3>
+            <div id="gameCode" style="background: #333; padding: 5px; border-radius: 4px; margin: 5px 0; word-break: break-all;"></div>
+            <div id="inviteLink"></div>
+            <button onclick="game.copyInviteLink()" style="width: 100%; margin: 5px 0;">Copy Invite Link</button>
+            <button onclick="game.startGame()" id="startBtn" style="display: none; width: 100%;">Start Game</button>
+            <div id="playerList" style="border: 1px solid #555; padding: 5px; border-radius: 4px; margin: 5px 0;"></div>
+            <button onclick="game.returnToMenu()">Leave Lobby</button>
+        </div>
+        <div id="gameUI" class="hidden">
+            <div id="turn" style="color: #FFD700; font-weight: bold;"></div>
+            <div id="gameState">Health: <span id="health">100</span></div>
+            <div id="playerList" style="border: 1px solid #555; padding: 5px; border-radius: 4px; margin: 5px 0;"></div>
+            <button onclick="game.endTurn()" id="endTurnBtn" style="width: 100%; display: none;">End Turn</button>
+        </div>
+    </div>
+    <div id="controls">
+        <div>Mouse: Look Around</div>
+        <div>WASD: Move Worm</div>
+        <div>Space: Jump</div>
+        <div>Left Click: Aim</div>
+        <div>Right Click: Shoot</div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        const TURN_SERVER = 'https://api.github.com';
+        
+        class Game {
+            constructor() {
+                this.canvas = document.getElementById('gameCanvas');
+                this.scene = new THREE.Scene();
+                this.scene.background = new THREE.Color(0x87CEEB);
+                this.scene.fog = new THREE.Fog(0x87CEEB, 100, 1000);
+                
+                this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+                this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true });
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.renderer.shadowMap.enabled = true;
+                this.renderer.shadowMap.type = THREE.PCFShadowShadowMap;
+                
+                this.gameState = 'menu';
+                this.players = [];
+                this.gameCode = null;
+                this.playerName = null;
+                this.currentPlayerIndex = 0;
+                this.gameId = null;
+                this.playerId = null;
+                
+                this.setupLights();
+                this.setupTerrain();
+                this.setupCamera();
+                this.setupControls();
+                this.setupEventListeners();
+                
+                this.checkForGameInvite();
+                this.animate();
+            }
+            
+            setupLights() {
+                const sunLight = new THREE.DirectionalLight(0xffffff, 1.5);
+                sunLight.position.set(50, 50, 50);
+                sunLight.castShadow = true;
+                sunLight.shadow.mapSize.width = 2048;
+                sunLight.shadow.mapSize.height = 2048;
+                sunLight.shadow.camera.left = -100;
+                sunLight.shadow.camera.right = 100;
+                sunLight.shadow.camera.top = 100;
+                sunLight.shadow.camera.bottom = -100;
+                sunLight.shadow.camera.near = 0.5;
+                sunLight.shadow.camera.far = 500;
+                this.scene.add(sunLight);
+                
+                const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+                this.scene.add(ambientLight);
+            }
+            
+            setupTerrain() {
+                const geometry = new THREE.PlaneGeometry(200, 200, 50, 50);
+                
+                const positionAttribute = geometry.getAttribute('position');
+                const vertex = new THREE.Vector3();
+                for (let i = 0; i < positionAttribute.count; i++) {
+                    vertex.fromBufferAttribute(positionAttribute, i);
+                    vertex.z = Math.sin(vertex.x * 0.1) * 5 + Math.cos(vertex.y * 0.1) * 5 + Math.random() * 2;
+                    positionAttribute.setXYZ(i, vertex.x, vertex.y, vertex.z);
+                }
+                positionAttribute.needsUpdate = true;
+                geometry.computeVertexNormals();
+                
+                const material = new THREE.MeshStandardMaterial({ color: 0x8B7355 });
+                const terrain = new THREE.Mesh(geometry, material);
+                terrain.receiveShadow = true;
+                terrain.rotation.x = -Math.PI / 2;
+                this.scene.add(terrain);
+                this.terrain = terrain;
+            }
+            
+            setupCamera() {
+                this.camera.position.set(0, 30, 50);
+                this.camera.lookAt(0, 0, 0);
+            }
+            
+            setupControls() {
+                this.controls = {
+                    forward: false,
+                    backward: false,
+                    left: false,
+                    right: false,
+                    jump: false,
+                    mouseDown: false,
+                    aim: false
+                };
+                
+                this.mouse = { x: 0, y: 0, deltaX: 0, deltaY: 0 };
+                this.cameraPitch = 0;
+                this.cameraYaw = 0;
+                
+                document.addEventListener('keydown', (e) => {
+                    if (e.key.toLowerCase() === 'w') this.controls.forward = true;
+                    if (e.key.toLowerCase() === 's') this.controls.backward = true;
+                    if (e.key.toLowerCase() === 'a') this.controls.left = true;
+                    if (e.key.toLowerCase() === 'd') this.controls.right = true;
+                    if (e.key === ' ') {
+                        e.preventDefault();
+                        this.controls.jump = true;
+                    }
+                });
+                
+                document.addEventListener('keyup', (e) => {
+                    if (e.key.toLowerCase() === 'w') this.controls.forward = false;
+                    if (e.key.toLowerCase() === 's') this.controls.backward = false;
+                    if (e.key.toLowerCase() === 'a') this.controls.left = false;
+                    if (e.key.toLowerCase() === 'd') this.controls.right = false;
+                    if (e.key === ' ') this.controls.jump = false;
+                });
+                
+                document.addEventListener('mousemove', (e) => {
+                    this.mouse.deltaX = e.movementX || 0;
+                    this.mouse.deltaY = e.movementY || 0;
+                });
+                
+                document.addEventListener('mousedown', (e) => {
+                    if (e.button === 0) this.controls.aim = true;
+                    if (e.button === 2) this.controls.shoot = true;
+                });
+                
+                document.addEventListener('mouseup', (e) => {
+                    if (e.button === 0) this.controls.aim = false;
+                    if (e.button === 2) this.controls.shoot = false;
+                });
+                
+                document.addEventListener('contextmenu', (e) => e.preventDefault());
+            }
+            
+            setupEventListeners() {
+                window.addEventListener('resize', () => {
+                    this.camera.aspect = window.innerWidth / window.innerHeight;
+                    this.camera.updateProjectionMatrix();
+                    this.renderer.setSize(window.innerWidth, window.innerHeight);
+                });
+            }
+            
+            checkForGameInvite() {
+                const params = new URLSearchParams(window.location.search);
+                const code = params.get('gameCode');
+                if (code) {
+                    document.getElementById('gameCode').value = code;
+                    this.gameCode = code;
+                }
+            }
+            
+            showMenu() {
+                document.getElementById('menu').classList.remove('hidden');
+                document.getElementById('lobby').classList.add('hidden');
+                document.getElementById('gameUI').classList.add('hidden');
+                this.gameState = 'menu';
+            }
+            
+            showLobby() {
+                document.getElementById('menu').classList.add('hidden');
+                document.getElementById('lobby').classList.remove('hidden');
+                document.getElementById('gameUI').classList.add('hidden');
+                this.gameState = 'lobby';
+            }
+            
+            showGame() {
+                document.getElementById('menu').classList.add('hidden');
+                document.getElementById('lobby').classList.add('hidden');
+                document.getElementById('gameUI').classList.remove('hidden');
+                this.gameState = 'game';
+            }
+            
+            generateGameCode() {
+                return Math.random().toString(36).substring(2, 8).toUpperCase();
+            }
+            
+            createGame() {
+                const name = document.getElementById('playerName').value.trim();
+                if (!name) {
+                    alert('Please enter a name');
+                    return;
+                }
+                
+                this.playerName = name;
+                this.gameCode = this.generateGameCode();
+                this.gameId = this.gameCode;
+                this.playerId = Math.random().toString(36).substring(2, 10);
+                
+                this.players = [{
+                    id: this.playerId,
+                    name: name,
+                    health: 100,
+                    isHost: true
+                }];
+                
+                this.updateLobbyUI();
+                this.showLobby();
+            }
+            
+            joinGame() {
+                const input = document.getElementById('gameCode').value.trim();
+                const name = document.getElementById('playerName').value.trim();
+                
+                if (!name) {
+                    alert('Please enter a name');
+                    return;
+                }
+                
+                if (!input) {
+                    alert('Please enter a game code or URL');
+                    return;
+                }
+                
+                this.playerName = name;
+                this.playerId = Math.random().toString(36).substring(2, 10);
+                
+                const codeMatch = input.match(/[A-Z0-9]{6}/);
+                if (codeMatch) {
+                    this.gameCode = codeMatch[0];
+                } else {
+                    this.gameCode = input.toUpperCase();
+                }
+                
+                this.gameId = this.gameCode;
+                
+                this.players = [
+                    { id: 'host', name: 'Host', health: 100, isHost: true },
+                    { id: this.playerId, name: name, health: 100, isHost: false }
+                ];
+                
+                this.updateLobbyUI();
+                this.showLobby();
+            }
+            
+            updateLobbyUI() {
+                document.getElementById('gameCode').textContent = 'Code: ' + this.gameCode;
+                const inviteUrl = `${window.location.origin}${window.location.pathname}?gameCode=${this.gameCode}`;
+                document.getElementById('inviteLink').textContent = inviteUrl;
+                
+                const playerList = document.getElementById('playerList');
+                const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#F7DC6F'];
+                playerList.innerHTML = this.players.map((p, i) => `
+                    <div class="player-item" style="border-left-color: ${colors[i % colors.length]}">
+                        ${p.name} (${p.health}HP) ${p.isHost ? '👑' : ''}
+                    </div>
+                `).join('');
+                
+                const startBtn = document.getElementById('startBtn');
+                if (this.players[0].id === this.playerId) {
+                    startBtn.style.display = 'block';
+                } else {
+                    startBtn.style.display = 'none';
+                }
+            }
+            
+            copyInviteLink() {
+                const inviteUrl = `${window.location.origin}${window.location.pathname}?gameCode=${this.gameCode}`;
+                navigator.clipboard.writeText(inviteUrl);
+                alert('Invite link copied!');
+            }
+            
+            startGame() {
+                this.createWorms();
+                this.showGame();
+            }
+            
+            createWorms() {
+                const colors = [0xFF6B6B, 0x4ECDC4, 0x45B7D1, 0xFFA07A, 0x98D8C8, 0xF7DC6F];
+                
+                this.worms = this.players.map((player, index) => {
+                    const angle = (index / this.players.length) * Math.PI * 2;
+                    const distance = 30;
+                    
+                    const geometry = new THREE.CapsuleGeometry(1, 3, 4, 8);
+                    const material = new THREE.MeshStandardMaterial({ color: colors[index % colors.length] });
+                    const mesh = new THREE.Mesh(geometry, material);
+                    mesh.castShadow = true;
+                    mesh.receiveShadow = true;
+                    
+                    const x = Math.cos(angle) * distance;
+                    const z = Math.sin(angle) * distance;
+                    mesh.position.set(x, 10, z);
+                    
+                    this.scene.add(mesh);
+                    
+                    return {
+                        playerId: player.id,
+                        mesh: mesh,
+                        position: new THREE.Vector3(x, 10, z),
+                        velocity: new THREE.Vector3(0, 0, 0),
+                        rotation: angle,
+                        aiming: false,
+                        aimPower: 0,
+                        aimDirection: new THREE.Vector3(0, 0, 1)
+                    };
+                });
+            }
+            
+            getCurrentWorm() {
+                if (!this.worms) return null;
+                return this.worms[this.currentPlayerIndex];
+            }
+            
+            updateGameUI() {
+                const currentWorm = this.getCurrentWorm();
+                if (!currentWorm) return;
+                
+                const player = this.players[this.currentPlayerIndex];
+                document.getElementById('health').textContent = player.health;
+                document.getElementById('turn').textContent = `${player.name}'s Turn`;
+                
+                const playerList = document.getElementById('playerList');
+                const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#F7DC6F'];
+                playerList.innerHTML = this.players.map((p, i) => `
+                    <div class="player-item" style="border-left-color: ${colors[i % colors.length]}; ${i === this.currentPlayerIndex ? 'background: rgba(255,255,255,0.1)' : ''}">
+                        ${p.name}: ${p.health}HP
+                    </div>
+                `).join('');
+                
+                const endTurnBtn = document.getElementById('endTurnBtn');
+                if (this.players[this.currentPlayerIndex].id === this.playerId) {
+                    endTurnBtn.style.display = 'block';
+                } else {
+                    endTurnBtn.style.display = 'none';
+                }
+            }
+            
+            updateWormPhysics() {
+                const worm = this.getCurrentWorm();
+                if (!worm) return;
+                
+                const speed = 0.5;
+                const moveDirection = new THREE.Vector3(0, 0, 0);
+                
+                if (this.controls.forward) moveDirection.z -= 1;
+                if (this.controls.backward) moveDirection.z += 1;
+                if (this.controls.left) moveDirection.x -= 1;
+                if (this.controls.right) moveDirection.x += 1;
+                
+                if (moveDirection.length() > 0) {
+                    moveDirection.normalize();
+                    
+                    const cameraDirection = new THREE.Vector3(0, 0, -1);
+                    cameraDirection.applyAxisAngle(new THREE.Vector3(0, 1, 0), this.cameraYaw);
+                    
+                    const moveInWorldSpace = moveDirection.clone();
+                    moveInWorldSpace.applyAxisAngle(new THREE.Vector3(0, 1, 0), this.cameraYaw);
+                    
+                    worm.velocity.x += moveInWorldSpace.x * speed;
+                    worm.velocity.z += moveInWorldSpace.z * speed;
+                }
+                
+                worm.velocity.y -= 0.05;
+                
+                const groundY = this.getTerrainHeightAt(worm.mesh.position.x, worm.mesh.position.z) + 2;
+                
+                if (worm.mesh.position.y <= groundY) {
+                    worm.mesh.position.y = groundY;
+                    worm.velocity.y = 0;
+                    
+                    if (this.controls.jump) {
+                        worm.velocity.y = 0.5;
+                    }
+                } else {
+                    worm.mesh.position.y += worm.velocity.y;
+                }
+                
+                worm.velocity.x *= 0.95;
+                worm.velocity.z *= 0.95;
+                
+                worm.mesh.position.x += worm.velocity.x;
+                worm.mesh.position.z += worm.velocity.z;
+                
+                if (worm.aiming) {
+                    worm.aimPower = Math.min(worm.aimPower + 0.02, 1);
+                }
+                
+                if (this.controls.shoot && worm.aiming) {
+                    this.fireWeapon(worm);
+                    worm.aiming = false;
+                    worm.aimPower = 0;
+                }
+            }
+            
+            getTerrainHeightAt(x, z) {
+                const terrainGeometry = this.terrain.geometry;
+                const positionAttribute = terrainGeometry.getAttribute('position');
+                
+                let minDistance = Infinity;
+                let height = 0;
+                
+                for (let i = 0; i < positionAttribute.count; i++) {
+                    const vx = positionAttribute.getX(i);
+                    const vy = positionAttribute.getY(i);
+                    const vz = positionAttribute.getZ(i);
+                    
+                    const distance = Math.sqrt((vx - x) ** 2 + (vy - z) ** 2);
+                    if (distance < minDistance) {
+                        minDistance = distance;
+                        height = vz;
+                    }
+                }
+                
+                return height;
+            }
+            
+            fireWeapon(worm) {
+                const bulletGeometry = new THREE.SphereGeometry(0.5, 8, 8);
+                const bulletMaterial = new THREE.MeshStandardMaterial({ color: 0x000000 });
+                const bullet = new THREE.Mesh(bulletGeometry, bulletMaterial);
+                bullet.castShadow = true;
+                bullet.receiveShadow = true;
+                
+                const power = worm.aimPower;
+                const aimY = this.cameraPitch;
+                
+                bullet.position.copy(worm.mesh.position);
+                bullet.position.y += 1;
+                
+                const direction = new THREE.Vector3(
+                    Math.sin(this.cameraYaw) * Math.cos(aimY),
+                    Math.sin(aimY),
+                    -Math.cos(this.cameraYaw) * Math.cos(aimY)
+                );
+                
+                const bulletVelocity = direction.multiplyScalar(1 + power);
+                
+                this.scene.add(bullet);
+                
+                const bulletData = {
+                    mesh: bullet,
+                    velocity: bulletVelocity,
+                    life: 300
+                };
+                
+                if (!this.bullets) this.bullets = [];
+                this.bullets.push(bulletData);
+            }
+            
+            updateBullets() {
+                if (!this.bullets) return;
+                
+                this.bullets = this.bullets.filter(bullet => {
+                    bullet.velocity.y -= 0.01;
+                    bullet.mesh.position.add(bullet.velocity);
+                    bullet.life--;
+                    
+                    const terrainHeight = this.getTerrainHeightAt(bullet.mesh.position.x, bullet.mesh.position.z);
+                    
+                    if (bullet.mesh.position.y <= terrainHeight || bullet.life <= 0) {
+                        this.scene.remove(bullet.mesh);
+                        
+                        this.createExplosion(bullet.mesh.position);
+                        this.damageNearbyWorms(bullet.mesh.position);
+                        
+                        return false;
+                    }
+                    
+                    return true;
+                });
+            }
+            
+            createExplosion(position) {
+                const explosionGeometry = new THREE.SphereGeometry(1, 8, 8);
+                const explosionMaterial = new THREE.MeshStandardMaterial({
+                    color: 0xFF8800,
+                    emissive: 0xFF8800,
+                    emissiveIntensity: 1
+                });
+                const explosion = new THREE.Mesh(explosionGeometry, explosionMaterial);
+                explosion.position.copy(position);
+                this.scene.add(explosion);
+                
+                setTimeout(() => {
+                    this.scene.remove(explosion);
+                }, 100);
+            }
+            
+            damageNearbyWorms(position) {
+                const damage = 30;
+                const radius = 15;
+                
+                this.worms.forEach((worm, index) => {
+                    const distance = position.distanceTo(worm.mesh.position);
+                    if (distance < radius) {
+                        const damageAmount = Math.max(5, damage * (1 - distance / radius));
+                        this.players[index].health -= damageAmount;
+                        
+                        if (this.players[index].health <= 0) {
+                            this.players[index].health = 0;
+                            this.scene.remove(worm.mesh);
+                            worm.mesh.visible = false;
+                        }
+                    }
+                });
+            }
+            
+            updateCamera() {
+                const worm = this.getCurrentWorm();
+                if (!worm) return;
+                
+                const sensitivity = 0.005;
+                this.cameraYaw -= this.mouse.deltaX * sensitivity;
+                this.cameraPitch -= this.mouse.deltaY * sensitivity;
+                this.cameraPitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, this.cameraPitch));
+                
+                const distance = 15;
+                const height = 3;
+                
+                const cameraX = worm.mesh.position.x - Math.sin(this.cameraYaw) * distance * Math.cos(this.cameraPitch);
+                const cameraY = worm.mesh.position.y + height + Math.sin(this.cameraPitch) * distance;
+                const cameraZ = worm.mesh.position.z + Math.cos(this.cameraYaw) * distance * Math.cos(this.cameraPitch);
+                
+                this.camera.position.lerp(new THREE.Vector3(cameraX, cameraY, cameraZ), 0.1);
+                this.camera.lookAt(worm.mesh.position.x, worm.mesh.position.y + 1, worm.mesh.position.z);
+            }
+            
+            endTurn() {
+                this.currentPlayerIndex = (this.currentPlayerIndex + 1) % this.players.length;
+                
+                const deadWorms = this.players.filter(p => p.health <= 0).length;
+                if (this.players.length - deadWorms <= 1) {
+                    const winner = this.players.find(p => p.health > 0);
+                    alert(`${winner.name} wins!`);
+                    this.returnToMenu();
+                    return;
+                }
+                
+                this.updateGameUI();
+            }
+            
+            returnToMenu() {
+                this.worms = [];
+                this.bullets = [];
+                this.currentPlayerIndex = 0;
+                this.players = [];
+                this.gameCode = null;
+                this.gameId = null;
+                
+                const allMeshes = [];
+                this.scene.traverse(obj => {
+                    if (obj instanceof THREE.Mesh && obj !== this.terrain) {
+                        allMeshes.push(obj);
+                    }
+                });
+                allMeshes.forEach(mesh => this.scene.remove(mesh));
+                
+                document.getElementById('playerName').value = '';
+                document.getElementById('gameCode').value = '';
+                
+                this.showMenu();
+            }
+            
+            animate() {
+                requestAnimationFrame(() => this.animate());
+                
+                if (this.gameState === 'game') {
+                    this.updateWormPhysics();
+                    this.updateBullets();
+                    this.updateCamera();
+                    this.updateGameUI();
+                }
+                
+                this.renderer.render(this.scene, this.camera);
+            }
+        }
+        
+        window.game = new Game();
+        window.game.showMenu();
+    </script>
+</body>
+</html>
