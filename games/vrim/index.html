@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Folder Image Scatter - A-Frame</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+  <style>
+    html,body { height:100%; margin:0; font-family: Arial, Helvetica, sans-serif; background:#08080b; color:#eee; }
+    #ui {
+      position: absolute;
+      left: 12px;
+      top: 12px;
+      z-index: 20;
+      background: rgba(6,6,10,0.75);
+      padding: 12px;
+      border-radius: 10px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.6);
+      min-width:260px;
+      max-width:360px;
+    }
+    #ui label { display:block; font-size:13px; margin-bottom:6px; color:#dce7ff; }
+    #ui input[type="file"] { display:block; margin-bottom:10px; color:#fff; }
+    #ui .row { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+    #ui .row label { width:64px; font-size:12px; color:#cbd6ff; }
+    #ui input[type="range"] { flex:1; }
+    #ui button {
+      background:#2da44e;
+      border:none;
+      color:white;
+      padding:8px 10px;
+      border-radius:6px;
+      cursor:pointer;
+      font-size:14px;
+    }
+    #ui button.secondary { background:#5865f2; }
+    #ui button:disabled { opacity:0.5; cursor:not-allowed; }
+    #status { font-size:12px; margin-top:6px; color:#c5cbe8; }
+    a-scene { height:100vh; width:100vw; display:block; }
+    #credits {
+      position:absolute;
+      left:12px;
+      bottom:12px;
+      z-index:20;
+      color:#ddd;
+      background: rgba(0,0,0,0.35);
+      padding:6px 8px;
+      border-radius:6px;
+      font-size:12px;
+    }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <label for="folder">Choose a folder (select folder in file dialog)</label>
+    <input id="folder" type="file" webkitdirectory directory multiple />
+    <div class="row">
+      <label>Images</label>
+      <div id="fileCount">0</div>
+    </div>
+    <div class="row">
+      <label for="count">Count</label>
+      <input id="count" type="range" min="5" max="800" value="120">
+      <div id="countVal" style="width:38px; text-align:right;">120</div>
+    </div>
+    <div class="row">
+      <label for="spread">Spread</label>
+      <input id="spread" type="range" min="5" max="200" value="60">
+      <div id="spreadVal" style="width:38px; text-align:right;">60</div>
+    </div>
+    <div style="display:flex; gap:8px; margin-top:6px;">
+      <button id="generate" disabled>Generate</button>
+      <button id="clear" class="secondary">Clear</button>
+    </div>
+    <div id="status">Select a folder containing images to begin.</div>
+  </div>
+
+  <div id="credits">A-Frame Folder Image Scatter</div>
+
+  <a-scene background="color: #0a0a11">
+    <a-assets id="assets"></a-assets>
+
+    <a-entity light="type: ambient; color: #777"></a-entity>
+    <a-entity light="type: directional; color: #e8e6ff; intensity: 0.6" position="-1 2 1"></a-entity>
+
+    <a-sky color="#071026"></a-sky>
+
+    <a-entity id="cameraRig" position="0 1.6 6">
+      <a-entity camera look-controls="pointerLockEnabled: true" wasd-controls>
+        <a-entity cursor="fuse: false; rayOrigin: mouse" raycaster="objects: .clickable"
+                  position="0 0 -0.5"
+                  geometry="primitive: ring; radiusInner: 0.002; radiusOuter: 0.006"
+                  material="color: #fff; shader: flat"></a-entity>
+      </a-entity>
+    </a-entity>
+
+    <a-entity id="sceneContainer"></a-entity>
+  </a-scene>
+
+  <script>
+    // Billboard component: face camera, but keep upright (no X rotation)
+    AFRAME.registerComponent('billboard', {
+      tick: function () {
+        var cam = this.el.sceneEl.camera;
+        if (!cam) return;
+        var camPos = new THREE.Vector3();
+        this.el.sceneEl.camera.getWorldPosition(camPos);
+        var obj = this.el.object3D;
+        obj.lookAt(camPos);
+        // Keep upright
+        var euler = new THREE.Euler().setFromQuaternion(obj.quaternion, 'YXZ');
+        euler.x = 0;
+        obj.quaternion.setFromEuler(euler);
+      }
+    });
+
+    (function () {
+      var folderInput = document.getElementById('folder');
+      var assetsEl = document.getElementById('assets');
+      var container = document.getElementById('sceneContainer');
+      var generateBtn = document.getElementById('generate');
+      var clearBtn = document.getElementById('clear');
+      var status = document.getElementById('status');
+      var fileCountEl = document.getElementById('fileCount');
+      var countSlider = document.getElementById('count');
+      var spreadSlider = document.getElementById('spread');
+      var countVal = document.getElementById('countVal');
+      var spreadVal = document.getElementById('spreadVal');
+
+      var imageFiles = []; // {file, url, id, w, h}
+      var objectUrls = [];
+
+      countSlider.addEventListener('input', function(){ countVal.textContent = countSlider.value; });
+      spreadSlider.addEventListener('input', function(){ spreadVal.textContent = spreadSlider.value; });
+
+      folderInput.addEventListener('change', function (evt) {
+        clearAssets();
+        imageFiles = [];
+        objectUrls = [];
+        container.innerHTML = '';
+        generateBtn.disabled = true;
+        status.textContent = 'Loading images from folder...';
+        var files = Array.from(evt.target.files || []);
+        if (!files.length) {
+          status.textContent = 'No files selected.';
+          fileCountEl.textContent = '0';
+          return;
+        }
+
+        // Filter images
+        var images = files.filter(function(f){ return f.type && f.type.startsWith('image'); });
+        fileCountEl.textContent = images.length;
+        if (!images.length) {
+          status.textContent = 'No image files found in folder.';
+          return;
+        }
+
+        var loadedCount = 0;
+        images.forEach(function (file, i) {
+          var url = URL.createObjectURL(file);
+          objectUrls.push(url);
+          var id = 'img-' + i + '-' + Date.now();
+          var img = document.createElement('img');
+          img.setAttribute('id', id);
+          img.setAttribute('crossorigin', 'anonymous');
+          img.onload = function () {
+            // store metadata
+            imageFiles.push({ file: file, url: url, id: id, w: img.naturalWidth, h: img.naturalHeight });
+            loadedCount++;
+            status.textContent = 'Loaded images: ' + loadedCount + ' / ' + images.length;
+            // enable when all loaded
+            if (loadedCount === images.length) {
+              // It's possible push order differs; ensure consistent ordering by id's numeric suffix
+              imageFiles.sort(function(a,b){ return a.id.localeCompare(b.id); });
+              status.textContent = 'Ready. Click Generate to scatter images.';
+              generateBtn.disabled = false;
+            }
+          };
+          img.onerror = function () {
+            // skip bad images
+            loadedCount++;
+            status.textContent = 'Loaded images: ' + loadedCount + ' / ' + images.length;
+            if (loadedCount === images.length) {
+              if (imageFiles.length) {
+                status.textContent = 'Ready. Click Generate to scatter images.';
+                generateBtn.disabled = false;
+              } else {
+                status.textContent = 'No valid images loaded.';
+              }
+            }
+          };
+          img.src = url;
+          assetsEl.appendChild(img);
+        });
+      });
+
+      generateBtn.addEventListener('click', function () {
+        if (!imageFiles.length) return;
+        container.innerHTML = '';
+        var total = parseInt(countSlider.value, 10) || 120;
+        var spread = parseFloat(spreadSlider.value) || 60;
+        var rng = Math.random;
+
+        for (var i = 0; i < total; i++) {
+          var pick = imageFiles[Math.floor(rng() * imageFiles.length)];
+          var imgEl = document.getElementById(pick.id);
+          var aspect = (pick.w && pick.h) ? (pick.w / pick.h) : 1;
+
+          var theta = rng() * Math.PI * 2;
+          var phi = (rng() - 0.4) * Math.PI * 0.6; // tend forward
+          var radius = Math.pow(rng(), 1.2) * spread + 2;
+          var x = Math.cos(theta) * Math.cos(phi) * radius;
+          var y = Math.sin(phi) * radius * 0.6 + (rng() * 2 - 1);
+          var z = -Math.sin(theta) * Math.cos(phi) * radius - (rng() * 0.5);
+
+          // size scaling
+          var base = (0.8 + rng() * 2.5) * (1 + (spread / 100)) * (1 / (0.5 + Math.abs(radius) / (spread + 1)));
+          var height = base;
+          var width = base * aspect;
+
+          var plane = document.createElement('a-plane');
+          plane.className = 'clickable';
+          plane.setAttribute('position', { x: x.toFixed(3), y: y.toFixed(3), z: z.toFixed(3) });
+          plane.setAttribute('rotation', {
+            x: (rng() - 0.5) * 18,
+            y: (rng() - 0.5) * 18,
+            z: (rng() - 0.5) * 40
+          });
+          plane.setAttribute('scale', { x: width.toFixed(3), y: height.toFixed(3), z: 1 });
+          plane.setAttribute('material', {
+            src: '#' + pick.id,
+            side: 'double',
+            transparent: true,
+            opacity: 0
+          });
+          plane.setAttribute('billboard', '');
+
+          // Fade in
+          var fadeDur = 500 + Math.floor(rng() * 1200);
+          plane.setAttribute('animation__fade', {
+            property: 'material.opacity',
+            from: 0,
+            to: (0.6 + rng() * 0.4).toFixed(2),
+            dur: fadeDur,
+            easing: 'easeInOutQuad',
+            delay: Math.floor(rng() * 900)
+          });
+
+          // gentle bobbing: to a small offset
+          var delta = (rng() - 0.5) * 0.35;
+          var floatDur = 3000 + Math.floor(rng() * 7000);
+          var toPos = x.toFixed(3) + ' ' + (y + delta).toFixed(3) + ' ' + z.toFixed(3);
+          plane.setAttribute('animation__float', {
+            property: 'position',
+            dir: 'alternate',
+            dur: floatDur,
+            easing: 'easeInOutSine',
+            loop: true,
+            to: toPos
+          });
+
+          // small random rotation animation for subtle motion
+          var rotDur = 4000 + Math.floor(rng() * 6000);
+          plane.setAttribute('animation__rot', {
+            property: 'rotation',
+            dur: rotDur,
+            dir: 'alternate',
+            loop: true,
+            to: { x: (plane.getAttribute('rotation').x + (rng()-0.5)*6).toFixed(2),
+                  y: (plane.getAttribute('rotation').y + (rng()-0.5)*6).toFixed(2),
+                  z: (plane.getAttribute('rotation').z + (rng()-0.5)*8).toFixed(2) }
+          });
+
+          // click pop
+          plane.addEventListener('click', (function(initialScaleX, initialScaleY){
+            return function (evt) {
+              var el = evt.currentTarget;
+              el.emit('pop');
+            };
+          })(width, height));
+          plane.setAttribute('animation__pop', {
+            property: 'scale',
+            startEvents: 'pop',
+            dur: 360,
+            easing: 'easeOutBack',
+            to: { x: (width * 1.9).toFixed(3), y: (height * 1.9).toFixed(3), z: 1 }
+          });
+
+          container.appendChild(plane);
+        }
+
+        status.textContent = 'Generated ' + total + ' planes from ' + imageFiles.length + ' images.';
+      });
+
+      clearBtn.addEventListener('click', function () {
+        container.innerHTML = '';
+        clearAssets();
+        imageFiles = [];
+        objectUrls.forEach(function(u){ try { URL.revokeObjectURL(u);} catch(e){} });
+        objectUrls = [];
+        document.getElementById('fileCount').textContent = '0';
+        document.getElementById('status').textContent = 'Cleared. Select another folder to begin.';
+        generateBtn.disabled = true;
+      });
+
+      function clearAssets() {
+        // remove all children of assets
+        while (assetsEl.firstChild) assetsEl.removeChild(assetsEl.firstChild);
+      }
+
+      // Revoke object URLs on unload
+      window.addEventListener('beforeunload', function () {
+        objectUrls.forEach(function(u){ try { URL.revokeObjectURL(u); } catch(e){} });
+      });
+    })();
+  </script>
+</body>
+</html>
