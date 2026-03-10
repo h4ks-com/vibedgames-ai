@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Random Image Scatter - A-Frame</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+  <style>
+    html,body { height:100%; margin:0; font-family: Arial, Helvetica, sans-serif; }
+    #ui {
+      position: absolute;
+      left: 12px;
+      top: 12px;
+      z-index: 10;
+      background: rgba(0,0,0,0.55);
+      color: #fff;
+      padding: 10px;
+      border-radius: 8px;
+      backdrop-filter: blur(4px);
+      box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+    }
+    #ui label { display:block; font-size:14px; margin-bottom:6px; }
+    #ui input[type="file"] { display:block; margin-bottom:8px; color:#000; }
+    #ui input[type="range"] { width: 160px; }
+    #ui .row { margin-bottom:8px; display:flex; gap:8px; align-items:center; }
+    #ui button {
+      background:#1db954;
+      border:none;
+      color:white;
+      padding:6px 10px;
+      border-radius:5px;
+      cursor:pointer;
+      font-size:14px;
+    }
+    #ui button:disabled { opacity:0.6; cursor:not-allowed; }
+    #hint { font-size:12px; color:#ddd; margin-top:6px; }
+    a-scene { height:100vh; width:100vw; display:block; }
+    #credits {
+      position:absolute;
+      left:12px;
+      bottom:12px;
+      z-index:10;
+      color:#fff;
+      background: rgba(0,0,0,0.35);
+      padding:6px 8px;
+      border-radius:6px;
+      font-size:12px;
+    }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <label for="file">Choose an image</label>
+    <input id="file" type="file" accept="image/*">
+    <div class="row">
+      <label for="count">Count</label>
+      <input id="count" type="range" min="5" max="300" value="80">
+      <span id="countVal" style="width:36px; text-align:right;">80</span>
+    </div>
+    <div class="row">
+      <label for="spread">Spread</label>
+      <input id="spread" type="range" min="5" max="120" value="40">
+      <span id="spreadVal" style="width:36px; text-align:right;">40</span>
+    </div>
+    <div style="display:flex; gap:8px;">
+      <button id="generate" disabled>Generate</button>
+      <button id="clear">Clear</button>
+    </div>
+    <div id="hint">Tip: Move camera (drag / WASD). Use the range sliders to tweak the scene before generating.</div>
+  </div>
+
+  <div id="credits">A-Frame Random Image Scatter</div>
+
+  <a-scene background="color: #101018">
+    <a-assets>
+      <!-- placeholder image asset; will be replaced when user loads an image -->
+      <img id="user-image" src="" crossorigin="anonymous"/>
+    </a-assets>
+
+    <!-- Ambient and directional light for gentle shading -->
+    <a-entity light="type: ambient; color: #888"></a-entity>
+    <a-entity light="type: directional; intensity: 0.6" position="-1 2 1"></a-entity>
+
+    <!-- Sky / backdrop -->
+    <a-sky color="#0b0c10"></a-sky>
+
+    <!-- Camera rig with controls -->
+    <a-entity id="cameraRig" position="0 1.6 4">
+      <a-entity id="camera" camera look-controls wasd-controls>
+        <a-entity cursor="fuse: false; rayOrigin: mouse" raycaster="objects: .clickable" position="0 0 -1"
+                  geometry="primitive: ring; radiusInner: 0.005; radiusOuter: 0.01"
+                  material="color: #fff; shader: flat"></a-entity>
+      </a-entity>
+    </a-entity>
+
+    <!-- Container for the generated planes -->
+    <a-entity id="sceneContainer"></a-entity>
+
+  </a-scene>
+
+  <script>
+    // Billboard component: makes an entity face the camera
+    AFRAME.registerComponent('billboard', {
+      tick: function () {
+        var camEl = document.querySelector('[camera]');
+        if (!camEl) { return; }
+        var camPos = new THREE.Vector3();
+        camEl.object3D.getWorldPosition(camPos);
+        var obj3d = this.el.object3D;
+        obj3d.lookAt(camPos);
+        // Keep vertical orientation stable (optional): zero out X rotation so it only yaw towards camera
+        var euler = new THREE.Euler().setFromQuaternion(obj3d.quaternion, 'YXZ');
+        euler.x = 0;
+        obj3d.quaternion.setFromEuler(euler);
+      }
+    });
+
+    (function () {
+      var fileInput = document.getElementById('file');
+      var imgAsset = document.getElementById('user-image');
+      var generateBtn = document.getElementById('generate');
+      var clearBtn = document.getElementById('clear');
+      var container = document.getElementById('sceneContainer');
+      var countSlider = document.getElementById('count');
+      var spreadSlider = document.getElementById('spread');
+      var countVal = document.getElementById('countVal');
+      var spreadVal = document.getElementById('spreadVal');
+
+      countSlider.addEventListener('input', function(){ countVal.textContent = countSlider.value; });
+      spreadSlider.addEventListener('input', function(){ spreadVal.textContent = spreadSlider.value; });
+
+      var lastDataUrl = null;
+
+      fileInput.addEventListener('change', function (evt) {
+        var file = evt.target.files && evt.target.files[0];
+        if (!file) return;
+        if (!file.type.startsWith('image/')) {
+          alert('Please choose an image file.');
+          return;
+        }
+        var reader = new FileReader();
+        reader.onload = function (e) {
+          lastDataUrl = e.target.result;
+          // Set the a-assets image src and wait for it to load
+          imgAsset.src = lastDataUrl;
+          // enable button after assigned; the browser will fetch data URL instantly, but ensure next generate waits for load
+          generateBtn.disabled = false;
+        };
+        reader.readAsDataURL(file);
+      });
+
+      generateBtn.addEventListener('click', function () {
+        if (!lastDataUrl) return;
+        // Ensure the asset is loaded before creating materials
+        if (imgAsset.complete && imgAsset.naturalWidth !== 0) {
+          populateScene();
+        } else {
+          // If not yet loaded, wait for the load event
+          imgAsset.addEventListener('load', function onLoad() {
+            imgAsset.removeEventListener('load', onLoad);
+            populateScene();
+          });
+        }
+      });
+
+      clearBtn.addEventListener('click', function () {
+        while (container.firstChild) container.removeChild(container.firstChild);
+      });
+
+      function populateScene() {
+        // Clear existing
+        while (container.firstChild) container.removeChild(container.firstChild);
+
+        var count = parseInt(countSlider.value, 10) || 80;
+        var spread = parseFloat(spreadSlider.value) || 40;
+        var rng = Math.random;
+
+        // Slightly scale image planes based on image aspect ratio
+        var imgW = imgAsset.naturalWidth || 1;
+        var imgH = imgAsset.naturalHeight || 1;
+        var aspect = imgW / imgH;
+
+        // For variety, create a few layers with different distance ranges
+        for (var i = 0; i < count; i++) {
+          var plane = document.createElement('a-plane');
+          plane.className = 'clickable';
+          // position: distribute in a sphere-ish volume in front of the camera
+          var theta = rng() * Math.PI * 2;
+          var phi = (rng() - 0.5) * Math.PI * 0.6; // keep mostly forward
+          var radius = Math.pow(rng(), 1.2) * spread + 2; // skew smaller distances
+          var x = Math.cos(theta) * Math.cos(phi) * radius;
+          var y = Math.sin(phi) * radius * 0.6 + (rng() * 2 - 1); // bias some random vertical offset
+          var z = -Math.sin(theta) * Math.cos(phi) * radius - (rng() * 2); // negative z-forward
+
+          // scale: random but relative to distance to keep visuals reasonable
+          var baseScale = (1 + rng() * 3) * (1 + (spread / 60)) * (1 / (0.6 + Math.abs(radius) / (spread + 1)));
+          // preserve aspect
+          var width = baseScale * aspect;
+          var height = baseScale;
+
+          plane.setAttribute('position', { x: x.toFixed(3), y: y.toFixed(3), z: z.toFixed(3) });
+          plane.setAttribute('rotation', {
+            x: (rng() - 0.5) * 20,
+            y: (rng() - 0.5) * 20,
+            z: (rng() - 0.5) * 60
+          });
+          plane.setAttribute('scale', { x: width.toFixed(3), y: height.toFixed(3), z: 1 });
+
+          // Use the asset by id as material src. Side: double so visible from both sides.
+          // Add some random opacity and basic blending for depth feel.
+          var opacity = (0.55 + rng() * 0.45).toFixed(2);
+          plane.setAttribute('material', {
+            src: '#user-image',
+            transparent: true,
+            opacity: opacity,
+            side: 'double',
+            color: '#ffffff'
+          });
+
+          // Add billboard component so they face the camera
+          plane.setAttribute('billboard', '');
+
+          // Add a small hover/interaction: float animation and scale on click
+          var animName = 'float' + i;
+          plane.setAttribute('animation__float', {
+            property: 'position',
+            dir: 'alternate',
+            dur: 4000 + Math.floor(rng() * 8000),
+            easing: 'easeInOutSine',
+            loop: true,
+            to: { x: x * 1.02, y: y + (rng() - 0.5) * 0.18, z: z }.x // placeholder, we'll set with setAttribute below
+          });
+          // Because animation.to can't accept objects well via setAttribute in this context, set attributes directly:
+          plane.components && plane.components.animation__float && plane.components.animation__float.begin && plane.components.animation__float.begin();
+
+          // Add simple click interaction to enlarge briefly
+          plane.addEventListener('click', function (evt) {
+            var el = evt.currentTarget;
+            el.emit('pop');
+          });
+
+          // Define pop animation
+          plane.setAttribute('animation__pop', {
+            property: 'scale',
+            startEvents: 'pop',
+            dur: 350,
+            easing: 'easeOutBack',
+            to: { x: (parseFloat(plane.getAttribute('scale').x) * 1.8).toFixed(3),
+                  y: (parseFloat(plane.getAttribute('scale').y) * 1.8).toFixed(3),
+                  z: 1 }
+          });
+
+          // Slight random delay for staggered animation start
+          plane.setAttribute('animation__fadein', {
+            property: 'material.opacity',
+            from: 0,
+            to: opacity,
+            dur: 600,
+            delay: Math.floor(rng() * 1200)
+          });
+
+          // Append to container
+          container.appendChild(plane);
+        }
+      }
+
+      // Initialize: disable generate until image loaded
+      generateBtn.disabled = true;
+    })();
+  </script>
+</body>
+</html>
