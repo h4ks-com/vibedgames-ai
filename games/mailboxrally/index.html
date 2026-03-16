@@ -1,0 +1,760 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Mailbox Rally — Sticker Upgrades</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  :root{
+    --bg:#0f1724;
+    --panel:#0b1220;
+    --accent:#ffd166;
+    --muted:#94a3b8;
+  }
+  html,body{height:100%;margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial; background:linear-gradient(180deg,#051224,#0b1220); color:#e6eef8;}
+  .wrap{display:flex;flex-direction:column;height:100%;padding:14px;box-sizing:border-box;gap:12px;}
+  header{display:flex;align-items:center;gap:12px;}
+  h1{font-size:20px;margin:0}
+  .topbar{display:flex;gap:12px;align-items:center;margin-left:auto;}
+  .btn{background:var(--panel);padding:8px 10px;border-radius:8px;color:var(--muted);border:1px solid rgba(255,255,255,0.03);cursor:pointer}
+  .btn.primary{background:linear-gradient(90deg,#ffb703,#ffd166);color:#08111a;font-weight:700}
+  .content{display:flex;gap:12px;align-items:flex-start;flex:1;min-height:0;}
+  .game-panel{background:linear-gradient(180deg,#071426 0%, #082033 100%);border-radius:12px;padding:12px;flex:1;display:flex;flex-direction:column;min-width:0}
+  canvas{background:transparent;border-radius:8px;display:block;margin:0 auto;box-shadow:0 6px 18px rgba(2,6,23,0.6)}
+  .hud{display:flex;gap:12px;align-items:center;margin-top:8px;justify-content:space-between}
+  .info{display:flex;gap:8px;align-items:center}
+  .stat{font-size:13px;color:var(--muted)}
+  .side{width:320px;background:linear-gradient(180deg,#061424,#071a32);border-radius:12px;padding:12px;box-sizing:border-box;display:flex;flex-direction:column;gap:8px}
+  .panel{background:rgba(255,255,255,0.02);padding:10px;border-radius:8px;min-height:0}
+  .stickers{display:flex;flex-wrap:wrap;gap:6px}
+  .sticker{background:rgba(255,255,255,0.03);padding:6px;border-radius:8px;min-width:48px;text-align:center;color:#fff;font-size:20px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .sticker small{font-size:11px;color:var(--muted);margin-top:4px}
+  .inventory-list{display:flex;flex-direction:column;gap:6px;max-height:220px;overflow:auto;padding-right:6px}
+  .inv-item{display:flex;align-items:center;gap:8px;padding:6px;border-radius:8px;background:rgba(255,255,255,0.01)}
+  .inv-item .emoji{font-size:20px}
+  .small{font-size:12px;color:var(--muted)}
+  .center{display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .overlay{position:fixed;inset:0;background:linear-gradient(180deg,rgba(2,6,23,0.6),rgba(2,6,23,0.75));display:none;align-items:center;justify-content:center;z-index:40}
+  .dialog{background:#071427;padding:16px;border-radius:12px;min-width:320px;box-shadow:0 10px 50px rgba(1,6,20,0.7)}
+  .choices{display:flex;gap:10px;margin-top:10px}
+  .choice{background:#0b1522;padding:10px;border-radius:10px;flex:1;text-align:center;cursor:pointer;border:1px solid rgba(255,255,255,0.03)}
+  .choice:hover{transform:translateY(-4px);transition:transform 0.12s}
+  footer{display:flex;gap:8px;align-items:center;justify-content:space-between;font-size:13px;color:var(--muted)}
+  .controls{font-size:13px;color:var(--muted)}
+  .meter{height:8px;background:rgba(255,255,255,0.04);border-radius:6px;overflow:hidden;width:100%}
+  .meter > i{display:block;height:100%;background:linear-gradient(90deg,#7bd389,#2bb673);width:0%}
+  @media(max-width:900px){
+    .content{flex-direction:column}
+    .side{width:100%}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Mailbox Rally</h1>
+    <div class="topbar">
+      <div class="small">Lap target: <b id="lapTarget">2</b></div>
+      <button id="startBtn" class="btn primary">Start Race</button>
+      <button id="resetBtn" class="btn">Reset Progress</button>
+    </div>
+  </header>
+
+  <div class="content">
+    <div class="game-panel panel">
+      <canvas id="game" width="720" height="480"></canvas>
+      <div class="hud">
+        <div class="info">
+          <div class="stat"><b>Time:</b> <span id="timer">0.00</span>s</div>
+          <div class="stat"><b>Lap:</b> <span id="lap">0</span>/<span id="lapTotal">2</span></div>
+          <div class="stat"><b>Place:</b> <span id="place">—</span></div>
+        </div>
+        <div class="info">
+          <div class="stat">Speed <span id="speed">0</span></div>
+          <div class="stat">Stickers <span id="stickerCount">0</span></div>
+        </div>
+      </div>
+      <div style="margin-top:8px;display:flex;gap:8px;align-items:center;justify-content:space-between;">
+        <div class="controls small">Controls: Arrow keys to steer and accelerate • R to restart</div>
+        <div style="width:240px;">
+          <div class="small">Boost meter</div>
+          <div class="meter"><i id="boostBar" style="width:0%"></i></div>
+        </div>
+      </div>
+    </div>
+
+    <aside class="side">
+      <div class="panel">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div><strong>Mailbox Status</strong><div class="small">Applied upgrades change performance & appearance</div></div>
+          <div style="text-align:right">
+            <div><b id="appliedCount">0</b>/6 slots</div>
+            <div class="small">Total power: <b id="powerScore">0</b></div>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;margin-top:8px;align-items:center">
+          <div style="width:120px;height:90px;border-radius:8px;background:linear-gradient(180deg,#0f2b39,#07202e);display:flex;align-items:center;justify-content:center;position:relative" id="mailboxPreview">
+            <div id="mailboxEmoji" style="font-size:44px">📮</div>
+            <div id="stickerPreview" style="position:absolute;left:6px;top:6px;display:flex;flex-direction:column;gap:4px"></div>
+          </div>
+          <div style="flex:1">
+            <div class="small">Top speed: <b id="statSpeed">—</b></div>
+            <div class="small">Acceleration: <b id="statAccel">—</b></div>
+            <div class="small">Handling: <b id="statHandling">—</b></div>
+            <div class="small">Grip: <b id="statGrip">—</b></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div style="display:flex;justify-content:space-between;align-items:flex-end">
+          <div><strong>Inventory</strong><div class="small">Applied stickers and extras</div></div>
+          <div><button id="manageBtn" class="btn">Manage</button></div>
+        </div>
+        <div class="inventory-list" id="inventoryList" style="margin-top:8px"></div>
+      </div>
+
+      <div class="panel">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div><strong>Upcoming Rewards</strong></div>
+          <div class="small">Win or place well to earn stickers</div>
+        </div>
+        <div class="stickers" id="stickerPool" style="margin-top:8px"></div>
+      </div>
+    </aside>
+  </div>
+
+  <footer>
+    <div class="small">Mailbox Rally — attach stickers to customize your racer. Progress saved in browser localStorage.</div>
+    <div class="small">Made for quick fun</div>
+  </footer>
+</div>
+
+<!-- overlays & dialogs -->
+<div id="overlay" class="overlay">
+  <div class="dialog" id="rewardDialog" style="display:none;">
+    <div><strong>You earned a sticker!</strong></div>
+    <div class="small" style="margin-top:6px">Choose one to apply to your mailbox:</div>
+    <div class="choices" id="rewardChoices"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
+      <button id="closeReward" class="btn">Close</button>
+    </div>
+  </div>
+
+  <div class="dialog" id="manageDialog" style="display:none;">
+    <div><strong>Manage Stickers</strong></div>
+    <div class="small" style="margin-top:6px">Click an applied sticker to remove it. Click an inventory sticker to apply (max 6).</div>
+    <div id="manageList" style="margin-top:8px;display:flex;flex-direction:column;gap:8px;max-height:320px;overflow:auto"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
+      <button id="closeManage" class="btn">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  // Utility & storage
+  const LS_KEY = 'mailboxRally_v1';
+  const defaultState = {
+    applied: [], // sticker ids
+    inventory: [], // sticker ids
+    power: 0
+  };
+
+  const stickerDefs = [
+    {id:'speed1', name:'⚡️ Speed Burst', emoji:'⚡️', desc:'+0.30 top speed', mods:{speed:0.30}},
+    {id:'accel1', name:'🚀 Quick Thrust', emoji:'🚀', desc:'+0.18 accel', mods:{accel:0.18}},
+    {id:'handle1', name:'🔄 Agile Hinge', emoji:'🔄', desc:'+0.18 handling', mods:{handling:0.18}},
+    {id:'grip1', name:'🛞 Sticky Tires', emoji:'🛞', desc:'+0.20 grip', mods:{grip:0.20}},
+    {id:'light1', name:'🪶 Feather Decal', emoji:'🪶', desc:'+0.12 accel, +0.10 handling', mods:{accel:0.12, handling:0.10}},
+    {id:'nitro1', name:'🔥 Nitro Patch', emoji:'🔥', desc:'+0.15 accel, +0.15 top speed', mods:{accel:0.15, speed:0.15}},
+    {id:'aero1', name:'🕊 Aero Stripe', emoji:'🕊', desc:'+0.20 top speed, -0.05 handling', mods:{speed:0.20, handling:-0.05}},
+    {id:'armor1', name:'🛡 Reinforced', emoji:'🛡', desc:'+0.25 grip, +0.05 handling', mods:{grip:0.25, handling:0.05}}
+  ];
+
+  function loadState(){ try{ const s = localStorage.getItem(LS_KEY); return s?JSON.parse(s):JSON.parse(JSON.stringify(defaultState)); }catch(e){ return JSON.parse(JSON.stringify(defaultState)); } }
+  function saveState(st){ localStorage.setItem(LS_KEY, JSON.stringify(st)); }
+
+  // Game state
+  const state = loadState();
+
+  // DOM
+  const canvas = document.getElementById('game'), ctx = canvas.getContext('2d');
+  const timerEl = document.getElementById('timer'), lapEl = document.getElementById('lap'), lapTotalEl = document.getElementById('lapTotal');
+  const startBtn = document.getElementById('startBtn'), resetBtn = document.getElementById('resetBtn');
+  const speedEl = document.getElementById('speed'), placeEl = document.getElementById('place');
+  const stickerCountEl = document.getElementById('stickerCount'), stickerPoolEl = document.getElementById('stickerPool');
+  const mailboxPreview = document.getElementById('mailboxPreview'), stickerPreview = document.getElementById('stickerPreview');
+  const statSpeed = document.getElementById('statSpeed'), statAccel = document.getElementById('statAccel'), statHandling = document.getElementById('statHandling'), statGrip = document.getElementById('statGrip');
+  const appliedCount = document.getElementById('appliedCount'), powerScore = document.getElementById('powerScore');
+  const inventoryList = document.getElementById('inventoryList');
+  const overlay = document.getElementById('overlay'), rewardDialog = document.getElementById('rewardDialog'), rewardChoices = document.getElementById('rewardChoices'), closeReward = document.getElementById('closeReward');
+  const manageBtn = document.getElementById('manageBtn'), manageDialog = document.getElementById('manageDialog'), manageList = document.getElementById('manageList'), closeManage = document.getElementById('closeManage');
+  const boostBar = document.getElementById('boostBar');
+
+  // Race config
+  const LapTarget = 2;
+  lapTotalEl.textContent = LapTarget;
+  document.getElementById('lapTarget').textContent = LapTarget;
+
+  // Track config (centered)
+  const W = canvas.width, H = canvas.height;
+  const center = {x:W/2, y:H/2};
+  const trackOuter = 220, trackInner = 90;
+
+  // Player mailbox base stats
+  const base = {topSpeed:2.2, accel:0.08, handling:0.055, grip:0.06};
+  const MAX_APPLIED = 6;
+
+  // Player state used in race (reset each race)
+  let player = null, ai = null;
+  let racing = false, raceStart = 0, elapsed = 0;
+  let reqId = null;
+  let keys = {};
+
+  function computeStats(){
+    // start with base
+    let stats = Object.assign({}, base);
+    // apply stickers
+    state.applied.forEach(id=>{
+      const s = stickerDefs.find(x=>x.id===id);
+      if(!s) return;
+      const m = s.mods;
+      if(m.speed) stats.topSpeed += m.speed;
+      if(m.accel) stats.accel += m.accel;
+      if(m.handling) stats.handling += m.handling;
+      if(m.grip) stats.grip += m.grip;
+    });
+    // clamp
+    stats.topSpeed = Math.max(0.5, stats.topSpeed);
+    stats.accel = Math.max(0.01, stats.accel);
+    stats.handling = Math.max(0.01, stats.handling);
+    stats.grip = Math.max(0.01, stats.grip);
+    return stats;
+  }
+
+  function initPlayer(){
+    const stats = computeStats();
+    player = {
+      x: center.x + trackOuter - 40,
+      y: center.y,
+      angle: Math.PI/2, // direction of movement
+      vel: 0,
+      lap: 0,
+      lastAngle: null,
+      finished: false,
+      finishTime: null,
+      boost: 0,
+      stats
+    };
+    ai = {
+      angle: Math.PI/2, // position moves angle around center
+      speed: stats.topSpeed * 0.9 + (Math.random()*0.5 - 0.15),
+      lap: 0,
+      finished: false,
+      finishTime: null,
+      lastAngle:null
+    };
+  }
+
+  function resetRace(){
+    racing = false;
+    elapsed = 0;
+    player = null;
+    ai = null;
+    cancelAnimationFrame(reqId);
+    placeEl.textContent = '—';
+    timerEl.textContent = '0.00';
+    lapEl.textContent = '0';
+    boostBar.style.width = '0%';
+  }
+
+  // draw track and players
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+    // background vignette
+    const g = ctx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0,'#071426'); g.addColorStop(1,'#04111a');
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,W,H);
+
+    // grass outside
+    ctx.fillStyle = '#08331b';
+    ctx.beginPath(); ctx.rect(0,0,W,H); ctx.fill();
+
+    // outer asphalt ring
+    ctx.fillStyle = '#3c3c3c';
+    ctx.beginPath();
+    ctx.ellipse(center.x, center.y, trackOuter, trackOuter*0.6, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // inner grass
+    ctx.fillStyle = '#0b522b';
+    ctx.beginPath();
+    ctx.ellipse(center.x, center.y, trackInner, trackInner*0.6, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // track lanes shading
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.beginPath();
+    ctx.ellipse(center.x, center.y, (trackOuter+trackInner)/2, (trackOuter*0.6 + trackInner*0.6)/2, 0, 0, Math.PI*2);
+    ctx.stroke();
+
+    // start line (vertical small line)
+    ctx.save();
+    ctx.translate(center.x + trackOuter, center.y);
+    ctx.rotate(-Math.PI/2);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(-2,-12,4,24);
+    ctx.restore();
+
+    // draw AI as small wheel
+    if(ai){
+      const ax = center.x + Math.cos(ai.angle) * ((trackInner + trackOuter)/2);
+      const ay = center.y + Math.sin(ai.angle) * ((trackInner*0.6 + trackOuter*0.6)/2);
+      // wheel
+      ctx.save();
+      ctx.translate(ax,ay);
+      ctx.rotate(ai.angle + Math.PI/2);
+      ctx.fillStyle = '#d9d9d9';
+      ctx.beginPath(); ctx.ellipse(0,0,12,8,0,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#222'; ctx.fillRect(-6,-4,12,8);
+      ctx.restore();
+    }
+
+    // draw player mailbox (rotated rectangle with emoji and stickers)
+    if(player){
+      ctx.save();
+      ctx.translate(player.x, player.y);
+      ctx.rotate(player.angle);
+      // hull
+      ctx.fillStyle = '#ff7b00';
+      ctx.strokeStyle = '#00000055';
+      ctx.lineWidth = 2;
+      roundRect(ctx, -22, -14, 44, 28, 6);
+      ctx.fill();
+      ctx.stroke();
+      // flag
+      ctx.fillStyle = '#e63946';
+      ctx.fillRect(16, -8, 8, 5);
+      // slot
+      ctx.fillStyle = '#00000066';
+      ctx.fillRect(-12, -6, 24, 4);
+      // emoji on front
+      ctx.fillStyle = '#fff';
+      ctx.font = '20px serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('📮', 0, -1);
+      // stickers: draw from state.applied, map to small icons positions
+      const icons = state.applied.slice(0, MAX_APPLIED);
+      for(let i=0;i<icons.length;i++){
+        const s = stickerDefs.find(x=>x.id===icons[i]);
+        if(!s) continue;
+        const px = -18 + (i%3)*18;
+        const py = 10 + Math.floor(i/3)*10;
+        ctx.font = '14px serif';
+        ctx.fillText(s.emoji, px, py);
+      }
+      ctx.restore();
+    }
+
+    // HUD overlay: place and info
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.fillRect(8,8,160,48);
+  }
+
+  function roundRect(ctx,x,y,w,h,r){
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);
+    ctx.arcTo(x+w,y,x+w,y+h,r);
+    ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r);
+    ctx.arcTo(x,y,x+w,y,r);
+    ctx.closePath();
+  }
+
+  // physics & update
+  function update(dt){
+    if(!player || !ai) return;
+    // AI simple path following: advance angle
+    if(!ai.finished){
+      ai.angle += (ai.speed * dt) / ((trackInner+trackOuter)/2);
+      // lap detection for AI
+      detectLapAI(ai);
+    }
+
+    // Player input
+    const stats = player.stats;
+    // turning: left/right reduce angle based on handling and current speed factor
+    let turn = 0;
+    if(keys['ArrowLeft']) turn -= 1;
+    if(keys['ArrowRight']) turn += 1;
+    // throttle
+    if(keys['ArrowUp']) {
+      player.vel += stats.accel * dt * 60;
+    } else {
+      // natural friction & braking
+      player.vel -= (0.02 + (1-stats.grip)*0.03) * dt * 60;
+    }
+    // clamp vel
+    const maxV = stats.topSpeed + player.boost;
+    if(player.vel > maxV) player.vel = maxV;
+    if(player.vel < 0) player.vel = 0;
+
+    // turning scaled by velocity and handling
+    const turnSpeed = turn * stats.handling * (0.6 + (player.vel / Math.max(0.1,maxV)));
+    player.angle += turnSpeed * dt * 60;
+
+    // move
+    player.x += Math.cos(player.angle) * player.vel * dt * 60;
+    player.y += Math.sin(player.angle) * player.vel * dt * 60;
+
+    // check track: if outside allowed band -> apply slow down (grass)
+    const dx = player.x - center.x, dy = player.y - center.y;
+    const r = Math.sqrt(dx*dx + dy*dy);
+    const onTrack = (r <= trackOuter && r >= trackInner);
+    if(!onTrack) {
+      player.vel *= (0.98 - (0.2 - player.stats.grip*0.5) * dt * 6);
+    } else {
+      // small grip-based acceleration boost
+      player.vel += player.stats.grip * 0.002 * dt * 60;
+    }
+
+    // clamp position if goes too far away (bounce back)
+    if(r > trackOuter*1.5) {
+      // push back toward center
+      const ang = Math.atan2(dy,dx);
+      player.x = center.x + Math.cos(ang) * trackOuter*1.2;
+      player.y = center.y + Math.sin(ang) * trackOuter*1.2;
+      player.vel *= 0.6;
+    }
+
+    // handle lap detection via player's radial angle
+    const ang = Math.atan2(player.y - center.y, player.x - center.x);
+    detectLapPlayer(ang);
+
+    // boost decay
+    if(player.boost > 0){
+      player.boost = Math.max(0, player.boost - 0.02*dt*60);
+    }
+
+    // update UI
+    timerEl.textContent = elapsed.toFixed(2);
+    lapEl.textContent = player.lap;
+    speedEl.textContent = (player.vel).toFixed(2);
+    boostBar.style.width = `${Math.min(100, Math.round((player.boost/1.0)*100))}%`;
+
+    // win detection: finished if lap >= target and not already flagged
+    if(!player.finished && player.lap >= LapTarget){
+      player.finished = true;
+      player.finishTime = elapsed;
+      // determine place
+      let pos = 1;
+      if(ai.finished && ai.finishTime < player.finishTime) pos = 2;
+      else if(!ai.finished) { // AI still running -> check approximate
+        // approximate ai position by angle lap
+        if(ai.lap > player.lap || (ai.lap === player.lap && ai.angle > ang)) pos = 2;
+      }
+      placeEl.textContent = pos + (pos===1? 'st' : pos===2? 'nd' : 'th');
+      // stop race when both finished or short delay
+      setTimeout(()=>endRace(pos), 500);
+    }
+
+    // if AI finished and player finished -> stop
+    if(ai.finished && player.finished){
+      // nothing else
+    }
+  }
+
+  function detectLapPlayer(currentAngle){
+    if(player.lastAngle == null) { player.lastAngle = currentAngle; return; }
+    const prev = player.lastAngle;
+    // detect wrap crossing approx at angle ~0 (rightmost)
+    if(prev > 5.5 && currentAngle < 0.5){
+      player.lap += 1;
+    } else if(prev < -5.5 && currentAngle > -0.5){
+      // other wrap direction possible due to atan range, but handle positive both
+      player.lap +=1;
+    }
+    player.lastAngle = currentAngle;
+  }
+
+  function detectLapAI(a){
+    if(a.lastAngle == null) { a.lastAngle = a.angle; return; }
+    const prev = a.lastAngle;
+    const cur = a.angle;
+    if(prev > 5.5 && cur < 0.5) a.lap += 1;
+    else if(prev < -5.5 && cur > -0.5) a.lap += 1;
+    a.lastAngle = cur;
+    if(a.lap >= LapTarget && !a.finished){
+      a.finished = true;
+      a.finishTime = elapsed + (Math.random()*1.5); // tiny variation
+    }
+  }
+
+  function gameLoop(ts){
+    if(!racing) return;
+    if(!gameLoop.last) gameLoop.last = ts;
+    const dt = Math.min(0.05, (ts - gameLoop.last)/1000);
+    gameLoop.last = ts;
+    elapsed += dt;
+    update(dt);
+    draw();
+    // stop condition: both finished -> cancel
+    if(player && ai && player.finished && ai.finished){
+      racing = false;
+      cancelAnimationFrame(reqId);
+      showFinishSoon();
+    } else {
+      reqId = requestAnimationFrame(gameLoop);
+    }
+  }
+
+  function showFinishSoon(){
+    // small delay then show reward based on placement
+    setTimeout(()=> {
+      const place = (player.finishTime < ai.finishTime)?1:2;
+      determineReward(place);
+    }, 600);
+  }
+
+  // reward system: offer 3 random stickers (could be duplicates) biased by place
+  function randomRewards(place){
+    // better placing -> higher chance of strong stickers
+    const weights = stickerDefs.map((s,i)=> {
+      // simplistic: strong = those with more total mods
+      const power = Object.values(s.mods).reduce((a,b)=>a+Math.abs(b),0);
+      const baseW = 1 + power*2;
+      return baseW * (place===1?1.6:place===2?1.1:0.8);
+    });
+    // sample 3 unique
+    const picks = [];
+    for(let k=0;k<3;k++){
+      const total = weights.reduce((a,b)=>a+b,0);
+      let r = Math.random()*total;
+      let idx = 0;
+      for(;idx<weights.length;idx++){
+        r -= weights[idx];
+        if(r<=0) break;
+      }
+      if(idx >= weights.length) idx = weights.length-1;
+      // avoid duplicates if possible
+      if(picks.includes(idx)){
+        // find nearest not picked
+        for(let j=0;j<weights.length;j++) if(!picks.includes(j)){ idx = j; break; }
+      }
+      picks.push(idx);
+    }
+    return picks.map(i => stickerDefs[i]);
+  }
+
+  function determineReward(place){
+    overlay.style.display = 'flex';
+    rewardDialog.style.display = 'block';
+    manageDialog.style.display = 'none';
+    rewardChoices.innerHTML = '';
+    const choices = randomRewards(place);
+    choices.forEach(s=>{
+      const div = document.createElement('div'); div.className = 'choice';
+      div.innerHTML = `<div style="font-size:28px">${s.emoji}</div><div style="font-weight:700;margin-top:6px">${s.name}</div><div class="small" style="margin-top:6px">${s.desc}</div>`;
+      div.onclick = ()=>{ awardSticker(s.id); overlay.style.display='none'; rewardDialog.style.display='none'; };
+      rewardChoices.appendChild(div);
+    });
+    closeReward.onclick = ()=>{ overlay.style.display='none'; rewardDialog.style.display='none'; };
+  }
+
+  function awardSticker(sid){
+    // add to inventory and auto-apply or prompt replace
+    state.inventory.push(sid);
+    // if applied slots available, apply automatically
+    if(state.applied.length < MAX_APPLIED){
+      state.applied.push(sid);
+      // remove from inventory as it's applied (we will keep an applied copy but remove one inventory entry)
+      // find last occurrence in inventory and remove
+      const idx = state.inventory.lastIndexOf(sid);
+      if(idx>=0) state.inventory.splice(idx,1);
+    } else {
+      // prompt to replace: show manage dialog
+      overlay.style.display = 'flex';
+      manageDialog.style.display = 'block';
+      rewardDialog.style.display = 'none';
+      populateManage(sid);
+      return saveAndRefresh();
+    }
+    saveAndRefresh();
+  }
+
+  function populateManage(pendingId){
+    manageList.innerHTML = '';
+    const title = document.createElement('div'); title.innerHTML = `<div style="font-weight:700">Choose a sticker to replace (or discard new):</div><div class="small" style="margin-top:6px">${stickerDefs.find(s=>s.id===pendingId).emoji} ${stickerDefs.find(s=>s.id===pendingId).name}</div>`;
+    manageList.appendChild(title);
+    // show applied with remove/replace options
+    state.applied.forEach((id, i) => {
+      const row = document.createElement('div'); row.className='inv-item';
+      row.innerHTML = `<div class="emoji">${stickerDefs.find(s=>s.id===id).emoji}</div>
+        <div style="flex:1"><div style="font-weight:700">${stickerDefs.find(s=>s.id===id).name}</div><div class="small">${stickerDefs.find(s=>s.id===id).desc}</div></div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <button class="btn" style="padding:6px" onclick="return false">Remove</button>
+          <button class="btn primary" style="padding:6px" onclick="return false">Replace</button>
+        </div>`;
+      const btns = row.querySelectorAll('button');
+      btns[0].onclick = ()=>{
+        // remove this applied and put it back into inventory, then apply pending into applied
+        state.applied.splice(i,1);
+        state.inventory.push(id);
+        // apply pending
+        state.applied.push(pendingId);
+        // remove pending from inventory if present
+        const idx = state.inventory.lastIndexOf(pendingId); if(idx>=0) state.inventory.splice(idx,1);
+        overlay.style.display='none'; manageDialog.style.display='none';
+        saveAndRefresh();
+      };
+      btns[1].onclick = ()=>{
+        // replace directly: drop this applied into inventory, replace with pending
+        state.applied[i] = pendingId;
+        state.inventory.push(id);
+        const idx = state.inventory.lastIndexOf(pendingId); if(idx>=0) state.inventory.splice(idx,1);
+        overlay.style.display='none'; manageDialog.style.display='none';
+        saveAndRefresh();
+      };
+      manageList.appendChild(row);
+    });
+
+    // discard option
+    const discardRow = document.createElement('div');
+    discardRow.style.display='flex'; discardRow.style.justifyContent='flex-end';
+    const discardBtn = document.createElement('button');
+    discardBtn.className='btn'; discardBtn.textContent='Discard New Sticker';
+    discardBtn.onclick = ()=>{ overlay.style.display='none'; manageDialog.style.display='none'; saveAndRefresh(); };
+    discardRow.appendChild(discardBtn);
+    manageList.appendChild(discardRow);
+
+    closeManage.onclick = ()=>{ overlay.style.display='none'; manageDialog.style.display='none'; saveAndRefresh(); };
+  }
+
+  function saveAndRefresh(){
+    saveState(state);
+    refreshUI();
+  }
+
+  // UI rendering
+  function refreshUI(){
+    // sticker pool examples
+    stickerPoolEl.innerHTML = '';
+    for(let i=0;i<3;i++){
+      const s = stickerDefs[(i+2)%stickerDefs.length];
+      const el = document.createElement('div'); el.className='sticker';
+      el.innerHTML = `${s.emoji}<small>${s.name.split(' ')[0]}</small>`;
+      stickerPoolEl.appendChild(el);
+    }
+
+    // inventory
+    inventoryList.innerHTML = '';
+    // show applied first
+    state.applied.forEach((id,i)=>{
+      const def = stickerDefs.find(s=>s.id===id);
+      const row = document.createElement('div'); row.className='inv-item';
+      row.innerHTML = `<div class="emoji">${def.emoji}</div><div style="flex:1"><div style="font-weight:700">${def.name}</div><div class="small">${def.desc}</div></div><div class="small">Applied</div>`;
+      inventoryList.appendChild(row);
+    });
+    // extras
+    state.inventory.forEach((id,i)=>{
+      const def = stickerDefs.find(s=>s.id===id);
+      const row = document.createElement('div'); row.className='inv-item';
+      const applyBtn = document.createElement('button'); applyBtn.className='btn'; applyBtn.textContent='Apply';
+      applyBtn.onclick = ()=>{ if(state.applied.length < MAX_APPLIED){ state.applied.push(id); state.inventory.splice(state.inventory.indexOf(id),1); saveAndRefresh(); } else { populateManage(id); overlay.style.display='flex'; manageDialog.style.display='block'; } };
+      row.innerHTML = `<div class="emoji">${def.emoji}</div><div style="flex:1"><div style="font-weight:700">${def.name}</div><div class="small">${def.desc}</div></div>`;
+      row.appendChild(applyBtn);
+      inventoryList.appendChild(row);
+    });
+
+    // mailbox preview stickers
+    stickerPreview.innerHTML = '';
+    state.applied.slice(0,MAX_APPLIED).forEach((id,i)=>{
+      const s = stickerDefs.find(x=>x.id===id);
+      const sp = document.createElement('div'); sp.style.fontSize='18px'; sp.textContent = s.emoji; sp.title = s.name;
+      stickerPreview.appendChild(sp);
+    });
+
+    appliedCount.textContent = state.applied.length;
+    stickerCountEl.textContent = state.inventory.length;
+    // stats
+    const stats = computeStats();
+    statSpeed.textContent = stats.topSpeed.toFixed(2);
+    statAccel.textContent = stats.accel.toFixed(3);
+    statHandling.textContent = stats.handling.toFixed(3);
+    statGrip.textContent = stats.grip.toFixed(3);
+    // power score approx sum of mods
+    const power = Math.round((stats.topSpeed*10 + stats.accel*100 + stats.handling*100 + stats.grip*100));
+    powerScore.textContent = power;
+  }
+
+  // event handlers
+  window.addEventListener('keydown', e=>{
+    keys[e.key] = true;
+    if(e.key === 'r' || e.key === 'R'){ // restart quick
+      if(racing){ resetRace(); startRace(); } else { startRace(); }
+    }
+  });
+  window.addEventListener('keyup', e=>{ keys[e.key] = false; });
+
+  startBtn.onclick = ()=>{ if(!racing) startRace(); };
+  resetBtn.onclick = ()=>{ if(confirm('Reset all sticker progress?')){ localStorage.removeItem(LS_KEY); Object.assign(state, JSON.parse(JSON.stringify(defaultState))); saveState(state); refreshUI(); } };
+
+  manageBtn.onclick = ()=>{ overlay.style.display='flex'; manageDialog.style.display='block'; rewardDialog.style.display='none'; populateManage(null); };
+  closeManage.onclick = ()=>{ overlay.style.display='none'; manageDialog.style.display='none'; saveAndRefresh(); };
+
+  // start a new race
+  function startRace(){
+    // initialize player with current stats
+    const stats = computeStats();
+    initPlayer();
+    player.stats = stats;
+    ai.speed = stats.topSpeed * 0.9 + (Math.random()*0.5 - 0.15);
+    racing = true;
+    raceStart = performance.now();
+    elapsed = 0;
+    gameLoop.last = null;
+    reqId = requestAnimationFrame(gameLoop);
+    placeEl.textContent = '—';
+    // small countdown
+    startBtn.textContent = 'Racing...';
+  }
+
+  function endRace(place){
+    startBtn.textContent = 'Start Race';
+    // Award a sticker based on place
+    // show dialog handled by showFinishSoon
+  }
+
+  function determineReward(place){
+    // call the random rewards and show (modified to expose manage overlay behavior)
+    overlay.style.display = 'flex';
+    rewardDialog.style.display = 'block';
+    manageDialog.style.display = 'none';
+    rewardChoices.innerHTML = '';
+    const choices = randomRewards(place);
+    choices.forEach(s=>{
+      const div = document.createElement('div'); div.className = 'choice';
+      div.innerHTML = `<div style="font-size:28px">${s.emoji}</div><div style="font-weight:700;margin-top:6px">${s.name}</div><div class="small" style="margin-top:6px">${s.desc}</div>`;
+      div.onclick = ()=>{ awardSticker(s.id); overlay.style.display='none'; rewardDialog.style.display='none'; };
+      rewardChoices.appendChild(div);
+    });
+    closeReward.onclick = ()=>{ overlay.style.display='none'; rewardDialog.style.display='none'; };
+  }
+
+  // init
+  refreshUI();
+  draw();
+
+  // Expose populateManage globally for inline onclicks inside created elements
+  window.populateManage = function(pendingId){ populateManage(pendingId); };
+
+  // Save state when window unload
+  window.addEventListener('beforeunload', ()=> saveState(state));
+})();
+</script>
+</body>
+</html>
