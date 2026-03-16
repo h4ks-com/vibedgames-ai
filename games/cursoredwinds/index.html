@@ -1,0 +1,554 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Windy Cursor — Click the Yes</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  :root{
+    --bg:#0f1724;
+    --panel:#07102a;
+    --accent:#7ee787;
+    --muted:#9aa9c1;
+    --yes-bg:#ff6b6b;
+    --rope:#f3e1b6;
+  }
+  html,body{
+    height:100%;
+    margin:0;
+    background:
+      radial-gradient(1200px 600px at 80% 20%, rgba(255,255,255,0.03), transparent 10%),
+      linear-gradient(180deg, #071428 0%, #071026 40%, #0b1320 100%);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+    color:var(--muted);
+    -webkit-font-smoothing:antialiased;
+    -moz-osx-font-smoothing:grayscale;
+    cursor: none; /* hide native cursor so the fake cursor is the visible one */
+    user-select:none;
+    overflow:hidden;
+  }
+
+  .container{
+    position:relative;
+    height:100vh;
+    width:100vw;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+
+  .hud{
+    position:fixed;
+    right:18px;
+    top:18px;
+    background:rgba(6,12,20,0.6);
+    border:1px solid rgba(255,255,255,0.03);
+    padding:10px 14px;
+    border-radius:10px;
+    color:var(--muted);
+    backdrop-filter:blur(6px);
+    font-size:13px;
+    line-height:1.4;
+  }
+
+  .instructions{
+    position:fixed;
+    left:18px;
+    top:18px;
+    background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+    border:1px solid rgba(255,255,255,0.02);
+    padding:12px 14px;
+    border-radius:10px;
+    color:var(--muted);
+    font-size:13px;
+    max-width:320px;
+  }
+
+  .instructions b{ color:#fff; font-weight:600; }
+
+  canvas#scene{
+    position:fixed;
+    inset:0;
+    display:block;
+    z-index:0;
+  }
+
+  /* Button element (visual) */
+  .yes-btn{
+    position:absolute;
+    left:0;
+    top:0;
+    width:120px;
+    height:56px;
+    margin-left:-60px; /* center on physics position */
+    margin-top:-28px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    background:linear-gradient(180deg,var(--yes-bg),#ff5252);
+    color:white;
+    font-weight:700;
+    font-size:18px;
+    border-radius:8px;
+    box-shadow:0 10px 30px rgba(0,0,0,0.5), inset 0 -2px 0 rgba(0,0,0,0.08);
+    z-index:3;
+    pointer-events:none; /* clicks are intercepted globally and resolved against our physics cursor */
+  }
+
+  /* Fake cursor */
+  .fake-cursor{
+    position:fixed;
+    width:20px;
+    height:20px;
+    border-radius:50%;
+    background:linear-gradient(135deg,#ffffff, #dcefff);
+    box-shadow:0 3px 10px rgba(12,20,40,0.6), 0 0 16px rgba(126,231,135,0.08);
+    transform:translate(-50%,-50%) scale(1);
+    z-index:6;
+    pointer-events:none;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+  .fake-cursor::after{
+    content:'';
+    width:8px;
+    height:8px;
+    border-radius:50%;
+    background:rgba(0,0,0,0.06);
+    transform:translateY(2px);
+  }
+
+  .status{
+    position:fixed;
+    left:50%;
+    transform:translateX(-50%);
+    bottom:26px;
+    background:rgba(7,12,22,0.5);
+    padding:8px 14px;
+    border-radius:999px;
+    color:var(--muted);
+    font-size:13px;
+    border:1px solid rgba(255,255,255,0.02);
+    backdrop-filter: blur(4px);
+    z-index:5;
+  }
+
+  .win-overlay{
+    position:fixed;
+    inset:0;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    background:linear-gradient(180deg, rgba(4,8,14,0.6), rgba(4,8,14,0.85));
+    z-index:20;
+    color:#fff;
+    font-size:22px;
+    flex-direction:column;
+    gap:12px;
+    padding:30px;
+    text-align:center;
+  }
+
+  .btn-small{
+    padding:8px 14px;
+    border-radius:8px;
+    background:rgba(255,255,255,0.06);
+    border:1px solid rgba(255,255,255,0.04);
+    color:var(--muted);
+    cursor:pointer;
+    font-weight:600;
+  }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+
+<div class="instructions">
+  <div style="font-weight:700;color:#fff;margin-bottom:6px;">Windy Challenge</div>
+  The wind tries to blow your cursor to the right. Click the <b>Yes</b> button on the left — but it's tied to the wall, flapping on a rope.<br>
+  Tip: slowly guide the cursor and click when the fake cursor overlaps the button.
+</div>
+
+<div class="hud" id="hud">
+  Wind: <span id="windVal">0.00</span><br/>
+  Gusts: <span id="gustVal">0</span><br/>
+  Tries: <span id="tries">0</span>
+</div>
+
+<div class="status" id="status">Try to click the Yes button</div>
+
+<!-- Visual button element; actual responsiveness is handled by physics -->
+<div id="yesBtn" class="yes-btn">Yes</div>
+
+<div id="fakeCursor" class="fake-cursor"></div>
+
+<div id="win" class="win-overlay" style="display:none;">
+  <div style="font-size:28px;font-weight:700;">You did it!</div>
+  <div style="max-width:520px;color:rgba(255,255,255,0.85);font-size:16px;">
+    You clicked the Yes button despite the wild winds and the flapping rope. Nicely done.
+  </div>
+  <div style="display:flex;gap:10px;margin-top:8px;">
+    <button id="retry" class="btn-small">Play Again</button>
+    <button id="close" class="btn-small">Close</button>
+  </div>
+</div>
+
+<script>
+/* Windy Cursor Game
+   Single-file HTML. Click 'Yes' on the left. The visible cursor is affected by wind physics.
+   Clicks are evaluated using the simulated (fake) cursor vs the simulated button physics.
+*/
+
+(() => {
+  const canvas = document.getElementById('scene');
+  const ctx = canvas.getContext('2d', { alpha: true });
+  let W = canvas.width = innerWidth;
+  let H = canvas.height = innerHeight;
+
+  window.addEventListener('resize', () => {
+    W = canvas.width = innerWidth;
+    H = canvas.height = innerHeight;
+    anchor.y = H * 0.5;
+  });
+
+  // Anchor point for the rope (left side)
+  const anchor = { x: 120, y: H * 0.5 };
+
+  // Button physics
+  const btn = {
+    pos: { x: anchor.x + 180, y: anchor.y + 30 },
+    vel: { x: 0, y: 0 },
+    mass: 1.2,
+    restLen: 180,
+    radius: 60, // visual approximate (half width)
+    wobble: 0
+  };
+
+  // Place the HTML element for the YES button over the simulated button
+  const yesEl = document.getElementById('yesBtn');
+
+  // Fake cursor physics
+  const fake = {
+    pos: { x: W / 2, y: H / 2 },
+    vel: { x: 0, y: 0 },
+    target: { x: W / 2, y: H / 2 }, // real mouse position target
+    mass: 0.9,
+    followK: 0.18, // how strongly it follows real mouse
+    maxSpeed: 220,
+  };
+  const fakeEl = document.getElementById('fakeCursor');
+
+  // Wind parameters
+  let time = 0;
+  let tries = 0;
+  let gustCounter = 0;
+  const windState = {
+    base: 40,     // base wind push to the right (px/s^2)
+    turbulence: 60, // amplitude of sine turbulence
+    gust: 0,      // transient gust force added
+  };
+
+  // HUD
+  const windVal = document.getElementById('windVal');
+  const gustVal = document.getElementById('gustVal');
+  const triesEl = document.getElementById('tries');
+  const status = document.getElementById('status');
+
+  // Win overlay
+  const win = document.getElementById('win');
+  const retryBtn = document.getElementById('retry');
+  const closeBtn = document.getElementById('close');
+
+  // Track real mouse position
+  window.addEventListener('mousemove', (e) => {
+    fake.target.x = e.clientX;
+    fake.target.y = e.clientY;
+  });
+  window.addEventListener('touchmove', (e) => {
+    if (e.touches && e.touches[0]) {
+      fake.target.x = e.touches[0].clientX;
+      fake.target.y = e.touches[0].clientY;
+    }
+  }, {passive:true});
+
+  // Clicking - evaluate if fake cursor overlaps button
+  window.addEventListener('mousedown', (e) => {
+    tries++;
+    triesEl.textContent = tries;
+    if (isFakeOverButton()) {
+      winGame();
+    } else {
+      // small feedback
+      status.textContent = 'Missed! Keep trying.';
+      setTimeout(()=> status.textContent = 'Try to click the Yes button', 1000);
+      // give a little reaction: a gust or button jerk
+      createGust(200 + Math.random()*400);
+      // and toggle a small twitch on button
+      btn.vel.x -= 60 + Math.random()*60;
+    }
+  });
+
+  function isFakeOverButton(){
+    const dx = fake.pos.x - btn.pos.x;
+    const dy = fake.pos.y - btn.pos.y;
+    const dist = Math.hypot(dx,dy);
+    return dist < 46; // somewhat forgiving
+  }
+
+  function winGame(){
+    win.style.display = 'flex';
+    status.textContent = 'You clicked it!';
+  }
+
+  retryBtn.addEventListener('click', ()=>{
+    reset();
+    win.style.display = 'none';
+  });
+  closeBtn.addEventListener('click', ()=>{
+    win.style.display = 'none';
+  });
+
+  function reset(){
+    tries = 0;
+    triesEl.textContent = tries;
+    fake.pos.x = W/2; fake.pos.y = H/2;
+    fake.vel.x = 0; fake.vel.y = 0;
+    btn.pos.x = anchor.x + btn.restLen;
+    btn.pos.y = anchor.y + 20;
+    btn.vel.x = 0; btn.vel.y = 0;
+    windState.gust = 0;
+    gustCounter = 0;
+    status.textContent = 'Try to click the Yes button';
+  }
+
+  // Create a gust impulse
+  function createGust(magnitude = 400){
+    windState.gust += magnitude;
+    gustCounter++;
+    setTimeout(()=> {
+      // little echo
+      windState.gust += 80 + Math.random()*120;
+      gustCounter++;
+    }, 150);
+  }
+
+  // Occasionally spawn gusts automatically
+  setInterval(()=>{
+    if (Math.random() < 0.28) {
+      createGust(220 + Math.random()*420);
+    }
+  }, 1100);
+
+  // Animation loop
+  let last = performance.now();
+  function loop(now){
+    const dt = Math.min(0.032, (now - last)/1000); // cap dt for stability
+    last = now;
+    time += dt;
+
+    // Wind computation
+    // Base rightward push + layered sine turbulence + decaying gust impulses
+    const sinComp = Math.sin(time * 1.6) * windState.turbulence * 0.5
+                  + Math.sin(time * 3.1 + 0.8) * windState.turbulence * 0.35
+                  + Math.sin(time * 5.9 + 2.1) * windState.turbulence * 0.15;
+    const breeze = windState.base + sinComp;
+    // Gust decays exponentially
+    windState.gust *= Math.exp(-dt * 2.2);
+    const totalWind = breeze + windState.gust;
+
+    // Update HUD
+    windVal.textContent = (totalWind).toFixed(1);
+    gustVal.textContent = Math.round(windState.gust);
+
+    // --- Fake cursor physics ---
+    // At every frame, target is the real mouse; the fake cursor will be pulled toward it while a persistent wind pushes it to the right.
+    // simulate a soft spring toward target + wind force + some noise (scattered)
+    const followForceX = (fake.target.x - fake.pos.x) * fake.followK;
+    const followForceY = (fake.target.y - fake.pos.y) * fake.followK;
+    // scattered wind: depends a bit on y (higher up stronger gusts), and a small perlin-like noise via sines
+    const scatterFactor = 1 + Math.sin((fake.pos.y*0.01) + time*2.4) * 0.35 + Math.cos((fake.pos.x*0.01)+time*1.7) * 0.25;
+    const windForceX = (totalWind * 0.9 + Math.sin(time*8 + fake.pos.y*0.004)*28) * scatterFactor;
+    const windForceY = Math.sin(time*2 + fake.pos.x*0.006) * 6 * (Math.random()*0.8 + 0.2);
+
+    // acceleration = (forces) / mass
+    const accX = (followForceX + windForceX) / fake.mass;
+    const accY = (followForceY + windForceY) / fake.mass;
+
+    fake.vel.x += accX * dt;
+    fake.vel.y += accY * dt;
+
+    // clamp velocity for control
+    const speed = Math.hypot(fake.vel.x, fake.vel.y);
+    if (speed > fake.maxSpeed){
+      const s = fake.maxSpeed / speed;
+      fake.vel.x *= s; fake.vel.y *= s;
+    }
+
+    // damping for stability
+    fake.vel.x *= Math.pow(0.86, dt*60);
+    fake.vel.y *= Math.pow(0.86, dt*60);
+
+    fake.pos.x += fake.vel.x * dt;
+    fake.pos.y += fake.vel.y * dt;
+
+    // Keep fake cursor inside viewport so it can always click
+    fake.pos.x = Math.max(6, Math.min(W-6, fake.pos.x));
+    fake.pos.y = Math.max(6, Math.min(H-6, fake.pos.y));
+
+    // --- Button physics (rope) ---
+    // Compute spring along the rope from anchor to button
+    const dx = btn.pos.x - anchor.x;
+    const dy = btn.pos.y - anchor.y;
+    let len = Math.hypot(dx, dy);
+    if (len < 0.0001) len = 0.0001;
+    const dirX = dx / len;
+    const dirY = dy / len;
+
+    // spring force to maintain rest length (rope tension; if stretched -> pull back; if slack -> push out a bit)
+    const k = 120; // spring stiffness
+    const stretch = len - btn.restLen;
+    const springForceX = -k * stretch * dirX;
+    const springForceY = -k * stretch * dirY;
+
+    // wind affects button too (makes it flap)
+    const windOnButtonX = (totalWind * 0.6 + Math.sin(time*5 + btn.pos.y*0.01)*46) * (1 + Math.sin(time*1.5)*0.12);
+    const windOnButtonY = Math.sin(time*2.5 + btn.pos.x*0.005) * 18;
+
+    // a little chaotic torque perpendicular to rope to simulate flap
+    const perpX = -dirY;
+    const perpY = dirX;
+    const flapStrength = 150;
+    const flap = (Math.sin(time*7 + len*0.02) + Math.cos(time*3.4 + btn.pos.x*0.01)) * 0.5;
+    const flapForceX = perpX * flapStrength * flap;
+    const flapForceY = perpY * flapStrength * flap;
+
+    // total forces
+    const totalFx = springForceX + windOnButtonX + flapForceX - 8 * btn.vel.x;
+    const totalFy = springForceY + windOnButtonY + flapForceY - 8 * btn.vel.y + 20 * Math.sin(time*0.3 + dx*0.004);
+
+    // acceleration
+    const accBX = totalFx / btn.mass;
+    const accBY = totalFy / btn.mass;
+
+    btn.vel.x += accBX * dt;
+    btn.vel.y += accBY * dt;
+
+    // damping
+    btn.vel.x *= Math.pow(0.88, dt*60);
+    btn.vel.y *= Math.pow(0.88, dt*60);
+
+    btn.pos.x += btn.vel.x * dt;
+    btn.pos.y += btn.vel.y * dt;
+
+    // Add slight constraint so it doesn't go behind the left edge
+    if (btn.pos.x < anchor.x + 20) {
+      btn.pos.x = anchor.x + 20;
+      btn.vel.x *= -0.2;
+    }
+
+    // Update DOM positions for visuals
+    yesEl.style.left = (btn.pos.x) + 'px';
+    yesEl.style.top = (btn.pos.y) + 'px';
+
+    fakeEl.style.left = fake.pos.x + 'px';
+    fakeEl.style.top = fake.pos.y + 'px';
+
+    // Draw scene on canvas: rope and swirling wind particles
+    ctx.clearRect(0,0,W,H);
+
+    // subtle background particles for wind direction
+    drawWindParticles(ctx, dt, totalWind);
+
+    // rope
+    ctx.lineWidth = 3.5;
+    ctx.strokeStyle = 'rgba(243,225,182,0.95)';
+    ctx.beginPath();
+    // make rope curve slightly via quadratic control point for a nicer flapping look
+    const midX = (anchor.x + btn.pos.x) / 2 + Math.sin(time*3 + btn.pos.x*0.02) * 18;
+    const midY = (anchor.y + btn.pos.y) / 2 + Math.cos(time*2 + btn.pos.y*0.018) * 14;
+    ctx.moveTo(anchor.x, anchor.y);
+    ctx.quadraticCurveTo(midX, midY, btn.pos.x, btn.pos.y);
+    ctx.stroke();
+
+    // rope highlight
+    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = 'rgba(40,28,14,0.06)';
+    ctx.beginPath();
+    ctx.moveTo(anchor.x, anchor.y);
+    ctx.quadraticCurveTo(midX-6, midY-6, btn.pos.x-6, btn.pos.y-6);
+    ctx.stroke();
+
+    // anchor ring
+    ctx.fillStyle = '#e8d7a8';
+    ctx.beginPath();
+    ctx.arc(anchor.x, anchor.y, 8,0,Math.PI*2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    last = now;
+    requestAnimationFrame(loop);
+  }
+
+  // tiny particle system to show wind direction and gusts
+  const particles = [];
+  function spawnParticle(x,y,vx,vy,size,life,col){
+    particles.push({x,y,vx,vy,size,life,age:0,col});
+  }
+  function drawWindParticles(ctx, dt, windSpeed){
+    // spawn a few each frame at left third of screen to move right
+    const spawnCount = 2 + Math.floor(Math.abs(Math.sin(time*2))*3);
+    for (let i=0;i<spawnCount;i++){
+      const sx = Math.random()*W*0.35;
+      const sy = Math.random()*H;
+      const angleJitter = (Math.random()-0.5) * 0.9;
+      const baseV = windSpeed*0.7 + 40 + Math.random()*60;
+      const vx = baseV + Math.random()*40;
+      const vy = angleJitter * 40;
+      spawnParticle(sx, sy, vx, vy, 1 + Math.random()*3, 1.2 + Math.random()*1.6, 'rgba(126,231,135,0.06)');
+    }
+
+    // spawn extra particles when gust is present
+    if (windState.gust > 40 && Math.random() < 0.6){
+      const sx = Math.random()*W*0.3;
+      const sy = Math.random()*H;
+      const vx = windSpeed*1.2 + 120 + Math.random()*220;
+      spawnParticle(sx, sy, vx, (Math.random()-0.5)*40, 1 + Math.random()*4, 0.7, 'rgba(255,255,255,0.06)');
+    }
+
+    // update and draw particles
+    for (let i = particles.length-1; i>=0; i--){
+      const p = particles[i];
+      p.age += dt;
+      if (p.age > p.life) { particles.splice(i,1); continue; }
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      // fade out
+      const t = p.age / Math.max(0.0001,p.life);
+      const alpha = Math.max(0, 1 - t);
+      ctx.fillStyle = p.col.replace(/,[^\),]+\)$/, ',' + (0.06*alpha).toFixed(3) + ')');
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y, p.size*(1 + t*1.8), Math.max(0.6, p.size*(0.5 + t*0.8)), 0, 0, Math.PI*2);
+      ctx.fill();
+      // remove if out of bounds
+      if (p.x > W + 80 || p.y < -80 || p.y > H + 80) particles.splice(i,1);
+    }
+  }
+
+  // Initial placement
+  reset();
+
+  // Start loop
+  requestAnimationFrame(loop);
+
+  // keyboard: press R to reset
+  window.addEventListener('keydown', (e)=>{
+    if (e.key === 'r' || e.key === 'R') reset();
+  });
+
+})();
+</script>
+</body>
+</html>
