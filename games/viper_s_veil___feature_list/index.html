@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Viper's Veil — Feature List</title>
+<style>
+  html,body{height:100%;margin:0;background:#0b0b0d;color:#ddd;font-family:monospace}
+  #gameWrap{display:flex;flex-direction:row;height:100%}
+  #left{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  canvas{image-rendering:pixelated;background:#071018;border:6px solid #05060a}
+  #ui{width:320px;padding:12px;background:#05060a;color:#bfcbd6;box-shadow:inset 0 0 20px rgba(0,0,0,.7)}
+  .row{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+  button,input,select{background:#0d1114;color:#cfe;text-shadow:0 1px 0 #000;border:1px solid #20242a;padding:6px;border-radius:4px}
+  .meter{height:10px;background:#111;border:1px solid #222;border-radius:3px;overflow:hidden;width:100%}
+  .meter > i{display:block;height:100%;background:linear-gradient(90deg,#ffb86b,#ff6b6b);width:50%}
+  .small{font-size:12px;color:#8da3b2}
+  #minimap{width:100%;height:64px;background:#091116;border:1px solid #112;display:block;margin-bottom:8px}
+  .center{text-align:center}
+  #modal{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);background:#071018;border:2px solid #1a1f24;padding:12px;display:none;z-index:10;width:420px}
+  .modalRow{display:flex;gap:8px;margin-top:8px}
+  .tiles{display:flex;gap:4px;flex-wrap:wrap}
+  .tile{width:36px;height:24px;border:1px solid #122;display:flex;align-items:center;justify-content:center;font-size:12px}
+  #log{height:120px;overflow:auto;background:#05070a;padding:6px;border:1px solid #111;font-size:12px}
+  footer{font-size:11px;color:#6f7e86;margin-top:8px}
+</style>
+</head>
+<body>
+<div id="gameWrap">
+  <div id="left">
+    <canvas id="c" width="512" height="384"></canvas>
+  </div>
+  <div id="ui">
+    <div class="row center"><strong>Viper's Veil</strong></div>
+    <div class="row"><canvas id="minimap"></canvas></div>
+    <div class="row"><div style="width:70px">Stamina</div><div class="meter"><i id="staminaBar"></i></div><div id="staminaVal" style="width:36px;text-align:right"></div></div>
+    <div class="row"><div style="width:70px">Venom</div><div class="meter"><i id="venomBar"></i></div><div id="venomVal" style="width:36px;text-align:right"></div></div>
+    <div class="row"><div style="width:70px">HeatSense</div><button id="toggleHeat">Toggle (H)</button><div id="heatCost" class="small" style="margin-left:8px"></div></div>
+    <div class="row"><button id="mixVenom">Venom-Mixing</button><button id="buildNest">Nest Puzzle</button><button id="timedStrike">Timed Strike</button></div>
+    <div class="row"><select id="modeSelect"><option value="campaign">Campaign</option><option value="endless">Endless</option><option value="arena">Arena</option></select><button id="startBtn">Start</button></div>
+    <div class="row"><label class="small">Speed Assist <input id="speedAssist" type="checkbox"></label></div>
+    <div class="row"><label class="small">Auto Heat <input id="autoHeat" type="checkbox"></label></div>
+    <div class="row"><label class="small">Thermal Contrast <input id="thermalContrast" type="range" min="0" max="2" step="0.1" value="1"></label></div>
+    <div class="row"><button id="shedBtn">Force Shed (debug)</button><button id="shareBtn">Share Run</button></div>
+    <div id="log" class="small"></div>
+    <footer>Controls: WASD/Arrows or Gamepad. H = Heat Sense • Click attacks • Space for strike</footer>
+  </div>
+</div>
+
+<div id="modal"></div>
+
+<script>
+/*
+ Viper's Veil — simplified but feature-rich single-file implementation
+ Author: Generated
+*/
+
+// --- Utilities ---
+const rand = (a,b)=>a+Math.random()*(b-a);
+const rint=(a,b)=>Math.floor(rand(a,b+1));
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+const angleTo=(a,b)=>Math.atan2(b.y-a.y,b.x-a.x);
+
+// --- Canvas / Pixel scaling ---
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const MINIMAP = document.getElementById('minimap');
+const miniCtx = MINIMAP.getContext('2d');
+const W = canvas.width, H = canvas.height;
+const TILE = 16; // world tile in pixels
+const MAP_COLS = Math.floor(W / TILE);
+const MAP_ROWS = Math.floor(H / TILE);
+
+// --- UI Elements ---
+const staminaBar = document.getElementById('staminaBar');
+const venomBar = document.getElementById('venomBar');
+const staminaVal = document.getElementById('staminaVal');
+const venomVal = document.getElementById('venomVal');
+const toggleHeatBtn = document.getElementById('toggleHeat');
+const mixBtn = document.getElementById('mixVenom');
+const nestBtn = document.getElementById('buildNest');
+const timedBtn = document.getElementById('timedStrike');
+const startBtn = document.getElementById('startBtn');
+const modeSelect = document.getElementById('modeSelect');
+const logEl = document.getElementById('log');
+const modal = document.getElementById('modal');
+const shareBtn = document.getElementById('shareBtn');
+const shedBtn = document.getElementById('shedBtn');
+const speedAssistCheck = document.getElementById('speedAssist');
+const autoHeatCheck = document.getElementById('autoHeat');
+const thermalContrast = document.getElementById('thermalContrast');
+const heatCostEl = document.getElementById('heatCost');
+
+// --- Game State ---
+let running = false;
+let mode = 'campaign';
+let time = 0;
+let rngSeed = Math.floor(Math.random()*1e9);
+let player = null;
+let entities = [];
+let terrain = [];
+let dens = [];
+let logLines = [];
+let unlocks = JSON.parse(localStorage.getItem('vv_unl')||'{}');
+
+// --- Audio: simple ambient soundtrack ---
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+const audio = new AudioCtx();
+const masterGain = audio.createGain(); masterGain.gain.value = 0.08; masterGain.connect(audio.destination);
+function makeAmbient(){
+  const now = audio.currentTime;
+  const osc = audio.createOscillator();
+  const gain = audio.createGain();
+  osc.type='sine'; osc.frequency.value=110 + Math.random()*40;
+  gain.gain.value = 0;
+  osc.connect(gain); gain.connect(masterGain);
+  osc.start(now);
+  gain.gain.linearRampToValueAtTime(0.02, now+2);
+  gain.gain.linearRampToValueAtTime(0.01, now+10);
+  gain.gain.linearRampToValueAtTime(0, now+30);
+  osc.stop(now+30);
+  setTimeout(makeAmbient, 10000+Math.random()*15000);
+}
+makeAmbient();
+
+// --- Logging helper ---
+function log(s){
+  logLines.unshift((new Date()).toLocaleTimeString()+ ' - ' + s);
+  logLines = logLines.slice(0,200);
+  logEl.innerHTML = logLines.join('<br>');
+}
+
+// --- Map / Terrain ---
+const TerrainTypes = {
+  sand: {col:'#bda57c', speed:0.9, heat:1.1, cover:0.2, name:'Sand'},
+  grass: {col:'#3a7a3c', speed:0.75, heat:0.9, cover:0.6, name:'Grass'},
+  crevice: {col:'#1b2430', speed:0.6, heat:0.8, cover:0.9, name:'Crevice'},
+  rock: {col:'#6e6e72', speed:0.5, heat:0.7, cover:0.95, name:'Rock'},
+  plain: {col:'#556b7a', speed:1.0, heat:1.0, cover:0.1, name:'Plain'},
+};
+
+function generateTerrain(){
+  terrain = [];
+  for(let y=0;y<MAP_ROWS;y++){
+    let row = [];
+    for(let x=0;x<MAP_COLS;x++){
+      let v = Math.random();
+      let t = 'plain';
+      if(v < 0.08) t='rock';
+      else if(v < 0.25) t='crevice';
+      else if(v < 0.5) t='grass';
+      else if(v < 0.65) t='sand';
+      row.push(t);
+    }
+    terrain.push(row);
+  }
+  // create some den spots
+  dens = [];
+  for(let i=0;i<4;i++){
+    let dx=rint(4,MAP_COLS-5), dy=rint(4,MAP_ROWS-5);
+    dens.push({x:dx,y:dy,owner:null,level:1,offspring:0});
+  }
+}
+generateTerrain();
+
+// --- Entities: Prey & Predators & Player ---
+class Entity {
+  constructor(type,x,y){
+    this.type=type; this.x=x; this.y=y; this.vx=0; this.vy=0; this.alive=true;
+    this.size = (type==='player')?8:(type==='predator'?7:5);
+    this.warmth = (type==='player')?1.6:(type==='predator'?1.4:1.0);
+    this.health = 10;
+    this.alert = 0;
+    this.id = 'e'+Math.random().toString(36).slice(2,9);
+    this.home = null;
+    this.following = null;
+    this.sex = Math.random()<0.5?'M':'F';
+    this.age = 0;
+    this.speedBase = (type==='prey')?0.6:(type==='predator')?0.9:1.0;
+    this.group = null;
+    this.lastAlarm=0;
+  }
+  gridPos(){ return {gx:Math.floor(this.x/TILE), gy:Math.floor(this.y/TILE)}}
+  update(dt){
+    this.age += dt;
+    if(this.type==='prey') this.updatePrey(dt);
+    if(this.type==='predator') this.updatePred(dt);
+    if(this.type==='player') this.updatePlayer(dt);
+    // movement integration
+    this.x += this.vx*dt;
+    this.y += this.vy*dt;
+    // clamp within world
+    this.x = clamp(this.x, 8, W-8);
+    this.y = clamp(this.y, 8, H-8);
+  }
+  updatePrey(dt){
+    // herd behavior: follow center, flee if alerted
+    if(!this.group){
+      // find nearest group or create new
+      const near = entities.filter(e=>e.type==='prey' && e!==this && dist(this,e)<80);
+      if(near.length>1) this.group = near;
+    }
+    // basic wander
+    if(this.alert > 0){
+      // flee from player
+      const p = player;
+      const d = dist(this,p);
+      if(d < 140 && p.alive){
+        let ang = angleTo(this,p);
+        this.vx += Math.cos(ang+Math.PI)*(0.6+this.alert*1.2);
+        this.vy += Math.sin(ang+Math.PI)*(0.6+this.alert*1.2);
+      }
+      this.alert = Math.max(0,this.alert - dt*0.5);
+    } else {
+      this.vx += Math.cos(this.age + this.id.length)*0.02;
+      this.vy += Math.sin(this.age*1.2)*0.02;
+    }
+    // apply terrain speed
+    const tmod = getTerrainAt(this.x,this.y).speed;
+    const sp = this.speedBase * tmod;
+    let s = Math.hypot(this.vx,this.vy);
+    if(s>sp){ this.vx*=sp/s; this.vy*=sp/s; }
+    // alarm spread when close to predators
+    for(const e of entities){
+      if(e.type==='predator' && dist(this,e)<80){ this.alert = Math.max(this.alert,1); }
+    }
+  }
+  updatePred(dt){
+    // predators hunt: birds (flying) use sight, mongoose use heat/smell
+    // assign subtype by id parity
+    const subtype = this.id.charCodeAt(2)%2? 'bird':'mongoose';
+    // find target
+    let target = null;
+    let best = 9999;
+    for(const e of entities){
+      if(e===this) continue;
+      if(e.type==='player' || e.type==='prey'){
+        const d = dist(this,e);
+        if(subtype==='bird'){
+          // birds use sight: line of sight simple: if d < 160 and angle within cone
+          if(d < 160){
+            const ang = Math.abs(angleDiff(Math.atan2(this.vy||0.0001,this.vx||0.0001), angleTo(this,e)));
+            if(ang < 1.3 && d < best){best=d;target=e;}
+          }
+        } else {
+          // mongoose track heat: if warm enough and close
+          if(e.warmth > 0.9 && d < 120 && d < best){best=d;target=e;}
+        }
+      }
+    }
+    if(target){
+      const a = angleTo(this,target);
+      this.vx += Math.cos(a)*0.6; this.vy += Math.sin(a)*0.6;
+      if(dist(this,target) < (this.size+target.size)+6){
+        // strike
+        if(target.type==='player'){
+          // damage player
+          if(time - (this.lastStrike||0) > 2){
+            player.health -= (subtype==='mongoose')?2:1;
+            this.lastStrike = time;
+            log('Predator struck player!');
+            if(player.health<=0){ player.alive=false; log('You were killed by a predator!'); }
+          }
+        } else {
+          target.health -= 5;
+          if(target.health<=0) target.alive=false;
+        }
+      }
+    } else {
+      this.vx += Math.cos(this.age)*0.02; this.vy += Math.sin(this.age*1.3)*0.02;
+    }
+    // clamp speed
+    const tmod = getTerrainAt(this.x,this.y).speed;
+    let sp = this.speedBase * tmod * 1.3;
+    let s = Math.hypot(this.vx,this.vy);
+    if(s>sp){ this.vx*=sp/s; this.vy*=sp/s; }
+  }
+  updatePlayer(dt){
+    // controlled by global input; handled elsewhere
+  }
+}
+
+function angleDiff(a,b){ let d = (b-a+Math.PI*3)%(Math.PI*2)-Math.PI; return d; }
+
+// --- Player / Snake ---
+class Player extends Entity {
+  constructor(x,y){
+    super('player',x,y);
+    this.segments = [];
+    this.segmentCount = 7;
+    this.dir = 0;
+    this.speed = 1.1;
+    this.stamina = 100;
+    this.venom = 5;
+    this.venomMax = 8;
+    this.venomPotency = 1;
+    this.heatSense = false;
+    this.heatAuto = false;
+    this.venomCooldown = 0;
+    this.recovery = 0;
+    this.stealth = 0.2;
+    this.xp = 0;
+    this.shedTimer = 0;
+    this.skin = 0;
+    for(let i=0;i<this.segmentCount;i++) this.segments.push({x:x - i*10, y:y});
+    this.den = null;
+    this.offspring = [];
+  }
+  update(dt,input){
+    // handle control/inertia
+    if(!this.alive) return;
+    // movement: input provided from global
+    let ax=0, ay=0;
+    if(input.left) ax-=1;
+    if(input.right) ax+=1;
+    if(input.up) ay-=1;
+    if(input.down) ay+=1;
+    // apply speed assist
+    let spAssist = speedAssistCheck.checked?1.25:1.0;
+    let baseSpeed = this.speed * spAssist;
+    // terrain modifier at head
+    const t = getTerrainAt(this.x,this.y);
+    const tSpeed = t.speed;
+    const targetVx = (ax!==0 || ay!==0) ? (ax*Math.cos(0) + 0)*baseSpeed : 0;
+    // use angular smoothing: set dir from input
+    if(ax!==0 || ay!==0){
+      const a = Math.atan2(ay,ax);
+      this.dir = lerpAngle(this.dir,a,0.14);
+      const mag = Math.hypot(ax,ay);
+      this.vx += Math.cos(this.dir) * 0.8 * mag;
+      this.vy += Math.sin(this.dir) * 0.8 * mag;
+    } else {
+      // slight friction
+      this.vx *= 0.98; this.vy *= 0.98;
+    }
+    // stamina effects
+    if(this.heatSense){ this.stamina -= dt*6; }
+    if(Math.hypot(this.vx,this.vy) > baseSpeed*0.6) this.stamina -= dt*1.2;
+    this.stamina = clamp(this.stamina,0,100);
+    if(this.stamina<=0){ this.heatSense=false; }
+    // process venom cooldown/recovery
+    this.venomCooldown = Math.max(0,this.venomCooldown - dt);
+    this.recovery = Math.max(0,this.recovery - dt);
+    // apply terrain speed
+    let s = Math.hypot(this.vx,this.vy);
+    const sp = baseSpeed * tSpeed;
+    if(s > sp){ this.vx *= sp/s; this.vy *= sp/s; }
+    // integrate head
+    this.x += this.vx*dt;
+    this.y += this.vy*dt;
+    // body following (slither)
+    const lead = {x:this.x,y:this.y};
+    for(let i=0;i<this.segments.length;i++){
+      const seg = this.segments[i];
+      const dx = lead.x - seg.x;
+      const dy = lead.y - seg.y;
+      const d = Math.hypot(dx,dy);
+      const target = 10 + i*0.2;
+      if(d > 0.001){
+        seg.x += dx * 0.2;
+        seg.y += dy * 0.2;
+        // snap to maintain spacing
+        const angle = Math.atan2(dy,dx);
+        seg.x = lead.x - Math.cos(angle)*target;
+        seg.y = lead.y - Math.sin(angle)*target;
+      }
+      lead.x = seg.x; lead.y = seg.y;
+    }
+    // update shedding timer and xp
+    this.shedTimer += dt;
+    if(this.shedTimer > 90 || this.xp >= 100){
+      this.triggerShed();
+      this.shedTimer = 0; this.xp = 0;
+    }
+    // interactions: auto heat sense
+    if(this.heatAuto) this.heatSense = true;
+    // detect den proximity
+    for(const d of dens){
+      const dx = (d.x*TILE+TILE/2) - this.x;
+      const dy = (d.y*TILE+TILE/2) - this.y;
+      if(Math.hypot(dx,dy) < 28){
+        if(!d.owner) d.owner = 'player';
+        this.den = d;
+      }
+    }
+  }
+  triggerShed(){
+    // open modal for upgrades
+    showModalShedding(this);
+  }
+  attack(full=false){
+    if(this.recovery>0) return;
+    if(full){
+      if(this.venom < 2) { log('Not enough venom for full strike'); return; }
+      this.venom -= 2;
+      this.recovery = 3.5;
+      this.venomCooldown = 1.5;
+      // full strike: kill if target in range
+      const target = entities.find(e=>e!==this && e.alive && dist(e,this)<28);
+      if(target){
+        // timed strike microgame
+        runTimedStrike((acc)=>{
+          if(acc>0.6){
+            target.alive=false;
+            this.xp += 25 * this.venomPotency;
+            log('Full strike: kill!');
+          } else {
+            target.health -= 6;
+            log('Full strike: partial - prey wounded');
+          }
+        });
+      }
+    } else {
+      // dry bite: mark/subdue
+      if(this.venom <= 0){ log('No venom for dry bite'); return; }
+      this.venom -=1;
+      this.venomCooldown = 0.6;
+      const target = entities.find(e=>e!==this && e.alive && dist(e,this)<26);
+      if(target){
+        target.alert = Math.max(0,target.alert-1);
+        target.health -= 2;
+        this.xp += 6 * this.venomPotency;
+        log('Dry bite: subdued/marked');
+      }
+    }
+  }
+}
+
+// --- Helpers ---
+function getTerrainAt(x,y){
+  const gx = clamp(Math.floor(x/TILE),0,MAP_COLS-1);
+  const gy = clamp(Math.floor(y/TILE),0,MAP_ROWS-1);
+  return TerrainTypes[terrain[gy][gx]];
+}
+function lerpAngle(a,b,t){ let d=angleDiff(a,b); return a + d*t; }
+
+// --- Input Handling ---
+const input = {up:false,down:false,left:false,right:false,attack:false,fullAttack:false};
+window.addEventListener('keydown',(e)=>{
+  if(e.key==='ArrowUp' || e.key==='w') input.up=true;
+  if(e.key==='ArrowDown' || e.key==='s') input.down=true;
+  if(e.key==='ArrowLeft' || e.key==='a') input.left=true;
+  if(e.key==='ArrowRight' || e.key==='d') input.right=true;
+  if(e.key===' '){ input.fullAttack=true; }
+  if(e.key==='h' || e.key==='H'){ player.heatSense = !player.heatSense; toggleUIHeat(); }
+});
+window.addEventListener('keyup',(e)=>{
+  if(e.key==='ArrowUp' || e.key==='w') input.up=false;
+  if(e.key==='ArrowDown' || e.key==='s') input.down=false;
+  if(e.key==='ArrowLeft' || e.key==='a') input.left=false;
+  if(e.key==='ArrowRight' || e.key==='d') input.right=false;
+  if(e.key===' '){ input.fullAttack=false; player.attack(true); }
+});
+
+// Mouse attack
+canvas.addEventListener('mousedown',(ev)=>{
+  // simple: dry bite
+  player.attack(false);
+});
+
+// Gamepad support
+function pollGamepad(){
+  const g = navigator.getGamepads && navigator.getGamepads()[0];
+  if(!g) return;
+  const lx = g.axes[0], ly = g.axes[1];
+  input.left = lx < -0.3; input.right = lx > 0.3; input.up = ly < -0.3; input.down = ly > 0.3;
+  if(g.buttons[0].pressed) player.attack(false);
+  if(g.buttons[1].pressed) player.attack(true);
+}
+
+// --- Entities spawn ---
+function spawnEntities(){
+  entities = [];
+  // player spawn
+  player = new Player(W/2, H/2);
+  entities.push(player);
+  // spawn prey herds
+  for(let i=0;i<18;i++){
+    const x = rint(40,W-40), y = rint(40,H-40);
+    const p = new Entity('prey',x,y);
+    p.group = null;
+    entities.push(p);
+  }
+  // spawn predators
+  for(let i=0;i<6;i++){
+    const x=rint(20,W-20), y=rint(20,H-20);
+    const pr = new Entity('predator',x,y);
+    entities.push(pr);
+  }
+}
+
+// --- Rendering ---
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  // draw terrain via tiles
+  for(let y=0;y<MAP_ROWS;y++){
+    for(let x=0;x<MAP_COLS;x++){
+      const t = TerrainTypes[terrain[y][x]];
+      ctx.fillStyle = t.col;
+      ctx.fillRect(x*TILE,y*TILE,TILE,TILE);
+      // subtle noise
+      ctx.globalAlpha = 0.05;
+      ctx.fillStyle = '#000';
+      ctx.fillRect(x*TILE,y*TILE,Math.random()*TILE,Math.random()*TILE);
+      ctx.globalAlpha = 1;
+    }
+  }
+  // draw dens
+  for(const d of dens){
+    ctx.fillStyle = d.owner?'#caa85b':'#3b3b3b';
+    ctx.fillRect(d.x*TILE+2, d.y*TILE+2, TILE-4, TILE-4);
+    ctx.strokeStyle = '#000'; ctx.strokeRect(d.x*TILE+2, d.y*TILE+2, TILE-4, TILE-4);
+  }
+  // sensory overlay: if heatSense active, show warm blobs for entities
+  if(player.heatSense){
+    const contrast = parseFloat(thermalContrast.value);
+    for(const e of entities){
+      if(e.alive && e.warmth>0.5){
+        const intensity = clamp(e.warmth*contrast,0,2);
+        const r = (e.type==='player')?24: (e.type==='predator'?18:12);
+        const grd = ctx.createRadialGradient(e.x,e.y,0,e.x,e.y,r*intensity);
+        grd.addColorStop(0, 'rgba(255,180,0,'+0.5*intensity+')');
+        grd.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = grd;
+        ctx.fillRect(e.x-r*intensity, e.y-r*intensity, r*intensity*2, r*intensity*2);
+      }
+    }
+  }
+  // draw entities ordered by type
+  const drawOrder = entities.slice().sort((a,b)=> (a.type==='player')?-1:1);
+  for(const e of drawOrder){
+    if(!e.alive) continue;
+    if(e.type==='prey') drawPrey(e);
+    if(e.type==='predator') drawPred(e);
+    if(e.type==='player') drawPlayer(e);
+  }
+  // minimal HUD overlays on canvas: subtle vignette
+  ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.strokeRect(0,0,W,H);
+  // show mini legend when heatSense off about cover
+  if(!player.heatSense){
+    ctx.fillStyle='rgba(255,255,255,0.02)'; ctx.fillRect(0,0,W,H);
+  }
+  // minimap
+  drawMinimap();
+}
+function drawPlayer(p){
+  // draw body segments (pixel art)
+  for(let i=p.segments.length-1;i>=0;i--){
+    const seg = p.segments[i];
+    const size = 6 - i*0.2;
+    ctx.fillStyle = (i%2===0)?'#b45b2f':'#6b2f20';
+    ctx.fillRect(seg.x-size/2, seg.y-size/2, size, size);
+  }
+  // head
+  ctx.save();
+  ctx.translate(p.x,p.y);
+  ctx.rotate(p.dir);
+  // head pixel
+  ctx.fillStyle = '#8f3b23';
+  ctx.fillRect(-8,-6,12,12);
+  // eye (thermal sensitive)
+  ctx.fillStyle = p.heatSense? '#ffedb8' : '#fff';
+  ctx.fillRect(4,-3,3,3);
+  ctx.restore();
+}
+function drawPrey(e){
+  ctx.fillStyle = '#bddb9b';
+  ctx.fillRect(e.x-4,e.y-4,8,8);
+  if(e.alert>0){
+    ctx.strokeStyle = 'rgba(255,80,60,'+Math.min(1,e.alert)+')';
+    ctx.strokeRect(e.x-6,e.y-6,12,12);
+  }
+}
+function drawPred(e){
+  ctx.fillStyle = '#d88b8b';
+  ctx.fillRect(e.x-6,e.y-6,12,12);
+  ctx.fillStyle = '#b33';
+  ctx.fillRect(e.x-3,e.y-3,6,6);
+}
+// minimap draw
+function drawMinimap(){
+  miniCtx.clearRect(0,0,MINIMAP.width,MINIMAP.height);
+  const mx = MINIMAP.width/MAP_COLS, my = MINIMAP.height/MAP_ROWS;
+  for(let y=0;y<MAP_ROWS;y++){
+    for(let x=0;x<MAP_COLS;x++){
+      miniCtx.fillStyle = TerrainTypes[terrain[y][x]].col;
+      miniCtx.fillRect(x*mx,y*my,mx,my);
+    }
+  }
+  for(const d of dens){
+    miniCtx.fillStyle = d.owner?'#ffe08a':'#333';
+    miniCtx.fillRect(d.x*mx,d.y*my,2,2);
+  }
+  // entities
+  for(const e of entities){
+    if(!e.alive) continue;
+    miniCtx.fillStyle = (e.type==='player')? '#fff' : (e.type==='predator'? '#f55' : '#9fe');
+    miniCtx.fillRect((e.x/TILE)*mx-1,(e.y/TILE)*my-1,2,2);
+  }
+}
+
+// --- Game Loop ---
+let lastT = 0;
+function loop(t){
+  if(!running) return;
+  const dt = Math.min(0.05,(t-lastT)/1000 || 0.016);
+  lastT = t;
+  time += dt;
+  // poll gamepad
+  pollGamepad();
+  // update entities
+  for(const e of entities){
+    if(e.type==='player') e.update(dt,input);
+    else e.update(dt);
+  }
+  // remove dead entities and spawn carrion effects
+  const dead = entities.filter(e=>!e.alive);
+  for(const d of dead){
+    if(d.type==='prey'){ player.xp += 8; maybeSpawnLoot(d); }
+    entities = entities.filter(e=>e.alive);
+  }
+  // AI ecosystem reaction: if overpredation reduce prey spawn rate
+  if(time % 6 < dt){
+    // spawn occasional prey if endless or hunger low
+    if(mode==='endless' || Math.random()<0.3){
+      const x=rint(20,W-20), y=rint(20,H-20);
+      entities.push(new Entity('prey',x,y));
+    }
+    // predators reproduce if many prey
+    const preyCount = entities.filter(e=>e.type==='prey').length;
+    if(preyCount>28 && Math.random()<0.25) entities.push(new Entity('predator',rint(20,W-20),rint(20,H-20)));
+  }
+  // UI updates
+  staminaBar.style.width = (player.stamina/100*100)+'%';
+  staminaVal.innerText = Math.round(player.stamina);
+  venomBar.style.width = (player.venom/player.venomMax*100)+'%';
+  venomVal.innerText = player.venom + '/' + player.venomMax;
+  heatCostEl.innerText = player.heatSense? 'Heat: On' : '';
+  draw();
+  requestAnimationFrame(loop);
+}
+
+// --- Spawn loot / diet upgrades ---
+function maybeSpawnLoot(e){
+  // loot increases venom capacity rarely or stamina restoration
+  if(Math.random()<0.15){
+    player.venomMax = Math.min(12, player.venomMax+1);
+    log('Diet improved: venom capacity increased');
+    unlocks.diet = true; saveUnlocks();
+  } else {
+    player.stamina = Math.min(100, player.stamina+12);
+  }
+}
+
+// --- Modal UI functions ---
+function showModal(html){
+  modal.innerHTML = html;
+  modal.style.display = 'block';
+}
+function hideModal(){ modal.style.display = 'none'; }
+
+// Shedding modal
+function showModalShedding(player){
+  const html = `<div><strong>Shedding — Level Up</strong>
+  <div class="small">Choose one upgrade upon shedding. Your skin patterns can change to affect stealth/intimidation.</div>
+  <div class="modalRow tiles">
+    <div class="tile"><button onclick="applyShear('speed')">Speed</button></div>
+    <div class="tile"><button onclick="applyShear('stealth')">Stealth</button></div>
+    <div class="tile"><button onclick="applyShear('venom')">Venom Capacity</button></div>
+    <div class="tile"><button onclick="applyShear('pattern')">Skin Pattern</button></div>
+  </div>
+  <div class="modalRow"><button onclick="closeShear()">Close</button></div></div>`;
+  showModal(html);
+  window.applyShear = function(choice){
+    if(choice==='speed'){ player.speed += 0.12; log('Speed increased via shedding'); }
+    if(choice==='stealth'){ player.stealth += 0.08; log('Stealth improved via shedding'); }
+    if(choice==='venom'){ player.venomMax += 2; player.venom = player.venomMax; log('Venom capacity expanded'); }
+    if(choice==='pattern'){ player.skin = (player.skin+1)%4; log('New skin pattern adopted'); }
+    hideModal(); 
+  };
+  window.closeShear = function(){ hideModal(); };
+}
+
+// Venom mixing microgame
+mixBtn.addEventListener('click', runVenomMix);
+function runVenomMix(){
+  const target = [rint(20,80), rint(20,80), rint(20,80)];
+  const start = [rint(10,90), rint(10,90), rint(10,90)];
+  const html = `<div><strong>Venom Mixing</strong>
+  <div class="small">Match the target ratios. Success increases potency.</div>
+  <div style="margin-top:8px">Target: ${target.map(v=>Math.round(v)).join(' / ')}</div>
+  <div style="margin-top:8px">
+  <label>Comp A <input id="vA" type="range" min=0 max=100 value=${start[0]}></label><br>
+  <label>Comp B <input id="vB" type="range" min=0 max=100 value=${start[1]}></label><br>
+  <label>Comp C <input id="vC" type="range" min=0 max=100 value=${start[2]}></label>
+  </div>
+  <div class="modalRow"><button id="vmixOk">Mix</button><button onclick="hideModal()">Cancel</button></div></div>`;
+  showModal(html);
+  document.getElementById('vmixOk').onclick = ()=>{
+    const a=+document.getElementById('vA').value;
+    const b=+document.getElementById('vB').value;
+    const c=+document.getElementById('vC').value;
+    const score = 1 - (Math.abs(a-target[0])+Math.abs(b-target[1])+Math.abs(c-target[2]))/300;
+    if(score>0.6){
+      player.venomPotency = Math.min(3, player.venomPotency + 0.2);
+      player.venom = Math.min(player.venomMax, player.venom+2);
+      log('Venom mixing success! Potency increased.');
+      unlocks.mix = true; saveUnlocks();
+    } else {
+      player.stamina = Math.max(0, player.stamina-10);
+      log('Mix failed: you lost stamina.');
+    }
+    hideModal();
+  };
+}
+
+// Nest-building puzzle
+nestBtn.addEventListener('click', runNestPuzzle);
+function runNestPuzzle(){
+  // small 4x4 tile puzzle: fill target pattern
+  const size=4;
+  let board = Array.from({length:size},()=>Array(size).fill(0));
+  const target = Array.from({length:size},()=>Array(size).fill(0));
+  const holes = rint(3,6);
+  for(let i=0;i<holes;i++){ target[rint(0,size-1)][rint(0,size-1)]=1; }
+  const html = `<div><strong>Nest Building</strong><div class="small">Arrange tiles to match the nest template within time.</div>
+    <div id="puzzle" style="display:flex;gap:8px;margin-top:8px">
+      <div>
+        <div>Template</div>
+        <div style="display:grid;grid-template-columns:repeat(${size},28px);gap:2px">${target.flat().map(v=>`<div style="width:28px;height:28px;background:${v?'#caa85b':'#111'};border:1px solid #222"></div>`).join('')}</div>
+      </div>
+      <div>
+        <div>Your Build</div>
+        <div id="buildGrid" style="display:grid;grid-template-columns:repeat(${size},28px);gap:2px"></div>
+      </div>
+    </div>
+    <div class="modalRow"><button id="puzzleOk">Finish</button><button onclick="hideModal()">Cancel</button></div></div>`;
+  showModal(html);
+  const bg = document.getElementById('buildGrid');
+  function refresh(){ bg.innerHTML = board.flat().map((v,i)=>`<div data-i="${i}" style="width:28px;height:28px;background:${v?'#caa85b':'#111'};border:1px solid #222"></div>`).join(''); 
+    bg.querySelectorAll('div').forEach(d=>d.onclick=function(){ const i=+this.dataset.i; board[Math.floor(i/size)][i%size]^=1; refresh(); });
+  }
+  refresh();
+  document.getElementById('puzzleOk').onclick = ()=>{
+    const ok = JSON.stringify(board) === JSON.stringify(target);
+    if(ok){
+      player.xp += 30;
+      player.den && (player.den.level = Math.min(5, player.den.level+1));
+      log('Nest built successfully. Den improved.');
+    } else {
+      player.stamina -= 12;
+      log('Nest build failed.');
+    }
+    hideModal();
+  };
+}
+
+// Timed strike microgame
+timedBtn.addEventListener('click', ()=>runTimedStrike(()=>{}));
+function runTimedStrike(cb){
+  const html = `<div><strong>Timed Strike</strong><div class="small">Press when the indicator is within the green zone.</div>
+  <canvas id="strikeCanvas" width=300 height=60 style="background:#05161a;border:1px solid #111;display:block;margin:8px 0"></canvas>
+  <div class="modalRow"><button id="strikeGo">Start</button><button onclick="hideModal()">Cancel</button></div></div>`;
+  showModal(html);
+  const sc = document.getElementById('strikeCanvas'); const sctx = sc.getContext('2d');
+  let running=false, t0=0;
+  function render(){
+    sctx.clearRect(0,0,300,60);
+    // green zone
+    sctx.fillStyle = '#0b3'; sctx.globalAlpha=0.18; sctx.fillRect(180,8,40,44); sctx.globalAlpha=1;
+    // moving bar
+    const x = 20 + ((Date.now()-t0)/10)%260;
+    sctx.fillStyle = '#fff'; sctx.fillRect(x-6,10,12,40);
+    if(running) requestAnimationFrame(render);
+  }
+  document.getElementById('strikeGo').onclick = ()=>{
+    running=true; t0 = Date.now(); render();
+    sc.onclick = ()=>{
+      running=false;
+      const x = 20 + ((Date.now()-t0)/10)%260;
+      const acc = 1 - Math.abs(x - 200)/140;
+      hideModal();
+      cb(acc);
+    };
+  };
+}
+
+// --- Start / Reset Game ---
+startBtn.onclick = ()=>{
+  mode = modeSelect.value;
+  generateTerrain();
+  spawnEntities();
+  running = true;
+  lastT = performance.now(); time = 0;
+  requestAnimationFrame(loop);
+  log('Game started: ' + mode);
+  // resume audio on first interaction (browsers require)
+  if(audio.state === 'suspended') audio.resume();
+};
+
+// share run: encode summary in hash
+shareBtn.addEventListener('click', ()=>{
+  const summary = {seed:rngSeed, mode:mode, time:Math.floor(time), xp:player.xp, venom:player.venom, skin:player.skin};
+  const encoded = btoa(JSON.stringify(summary));
+  location.hash = encoded;
+  navigator.clipboard && navigator.clipboard.writeText(location.href);
+  log('Run shared to URL hash (copied to clipboard if available).');
+});
+
+// force shed (debug)
+shedBtn.addEventListener('click', ()=> player.triggerShed());
+
+// heat toggle
+toggleHeatBtn.addEventListener('click', ()=>{ player.heatSense = !player.heatSense; toggleUIHeat(); });
+function toggleUIHeat(){ toggleHeatBtn.innerText = player.heatSense? 'Heat: ON (H)' : 'Toggle (H)'; }
+
+// save unlocks
+function saveUnlocks(){ localStorage.setItem('vv_unl', JSON.stringify(unlocks)); }
+
+// --- Initial boot ---
+(function init(){
+  draw();
+  log('Viper initialization...');
+  // load from hash if present
+  if(location.hash.length>2){
+    try{
+      const data = JSON.parse(atob(location.hash.slice(1)));
+      if(data.seed) rngSeed = data.seed;
+      log('Loaded shared run: ' + (data.mode||'?'));
+    } catch(e){}
+  }
+  // quick auto-start in demo
+  startBtn.click();
+})();
+
+// small helper to create initial entities if not present
+function maybePopulate(){
+  if(!player) spawnEntities();
+}
+maybePopulate();
+
+</script>
+</body>
+</html>
