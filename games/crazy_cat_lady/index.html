@@ -1,0 +1,998 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Crazy Cat Lady — Vertical Slice Prototype</title>
+<style>
+  :root{
+    --bg:#f7f4f2;--panel:#fff;--accent:#ff6b8a;--muted:#6c6c6c;
+  }
+  html,body{height:100%;margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+  body{background:linear-gradient(180deg,#fdf7f9 0%,#f7f4f2 100%);display:flex;align-items:stretch;gap:12px;padding:12px;color:#222;}
+  #app{display:flex;flex:1;gap:12px;align-items:stretch;min-height:600px;}
+  #left,#right{width:320px;flex-shrink:0;background:var(--panel);border-radius:12px;padding:12px;box-shadow:0 6px 18px rgba(0,0,0,0.06);}
+  #center{flex:1;display:flex;flex-direction:column;gap:12px;}
+  .panelTitle{font-weight:700;margin-bottom:8px;color:#333}
+  canvas{background:linear-gradient(180deg,#eaf7ff 0%,#fdf7f9 100%);border-radius:12px;display:block;width:100%;height:560px;box-shadow:0 8px 24px rgba(0,0,0,0.08);cursor:crosshair;}
+  button{background:var(--accent);color:#fff;border:none;padding:8px 12px;border-radius:8px;cursor:pointer;font-weight:700}
+  button.secondary{background:#eee;color:#222}
+  .small{font-size:13px;color:var(--muted)}
+  .row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+  .roster{display:flex;flex-direction:column;gap:8px}
+  .nekoCard{display:flex;gap:8px;align-items:center;padding:8px;border-radius:8px;background:#fff;border:1px solid #f0f0f0}
+  .nekoIcon{width:48px;height:48px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:800;color:#fff}
+  .meter{height:12px;border-radius:6px;background:#eee;overflow:hidden}
+  .meterFill{height:100%;background:linear-gradient(90deg,#7be6ff,#ffb6e0)}
+  .controls{display:flex;gap:8px;flex-wrap:wrap}
+  label{font-size:13px;color:#444}
+  input[type=range]{width:100%}
+  .muted{color:#666;font-size:12px}
+  .hud{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .bigNum{font-weight:900;font-size:18px;color:var(--accent)}
+  .status{display:inline-block;padding:4px 6px;border-radius:6px;background:#fff;border:1px dashed #eee;font-size:12px}
+  .centerRow{display:flex;align-items:center;justify-content:center;height:100%}
+  .modal{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);background:#fff;padding:16px;border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,0.2);z-index:1000;width:520px;max-width:95%}
+  .overlay{position:fixed;inset:0;background:rgba(0,0,0,0.35);z-index:900}
+  .tiny{font-size:12px;color:#666}
+  .propLegend{display:flex;gap:6px;flex-wrap:wrap}
+  .propLegend div{display:flex;gap:6px;align-items:center}
+  .propBadge{width:18px;height:18px;border-radius:4px;display:inline-block}
+  .footer{font-size:12px;color:#666;text-align:center;padding:6px}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="left">
+    <div class="panelTitle">Roster • Deploy up to 3</div>
+    <div class="roster" id="roster"></div>
+    <div style="height:12px"></div>
+    <div class="panelTitle">Mind-Influence Meter</div>
+    <div class="row">
+      <div style="flex:1">
+        <div class="meter" title="Mind Meter"><div id="mindFill" class="meterFill" style="width:50%"></div></div>
+        <div class="tiny" style="margin-top:4px">Calm ← Mind → Playful ← Mischievous</div>
+      </div>
+      <div style="width:90px;text-align:right"><div id="mindLabel" class="small muted">Playful</div></div>
+    </div>
+    <div class="panelTitle">Base & Progression</div>
+    <div class="muted tiny">Base upgrades provide quality of life bonuses (save/load, auto-skip tutorial, extra stash size)</div>
+    <div class="row" style="margin-top:8px">
+      <button id="upgradeButton">Upgrade Base (50 fish)</button>
+      <div style="flex:1;text-align:right"><span id="fishCount" class="bigNum">0</span> <span class="tiny">fish</span></div>
+    </div>
+    <div style="height:12px"></div>
+    <div class="panelTitle">Accessibility</div>
+    <label>Difficulty: <span id="diffLabel">Normal</span></label>
+    <input id="difficulty" type="range" min="0" max="2" step="1" value="1" />
+    <div style="height:8px"></div>
+    <label><input id="colorblind" type="checkbox" /> Colorblind mode (shapes)</label><br/>
+    <label><input id="autoAim" type="checkbox" /> Assist aim (toggle)</label>
+  </div>
+
+  <div id="center">
+    <div style="display:flex;gap:12px;align-items:center;">
+      <div style="flex:1">
+        <div class="panelTitle">Explore Map • Find NekoNims & Quests</div>
+        <div class="muted tiny">Click spawn points to start skirmishes or friendly encounters. Tutorial available.</div>
+      </div>
+      <div class="hud">
+        <div class="status">Mode: <span id="modeLabel">Explore</span></div>
+        <div class="status">Env: <span id="envLabel">Meadow</span></div>
+        <div class="status">Turn: <span id="turnLabel">—</span></div>
+      </div>
+    </div>
+    <canvas id="gameCanvas" width="1200" height="560"></canvas>
+    <div style="display:flex;gap:8px;align-items:center;justify-content:space-between">
+      <div class="controls">
+        <button id="tutorialBtn">Tutorial</button>
+        <button id="deployBtn">Enter Skirmish</button>
+        <button id="captureTestBtn" class="secondary">Test Capture</button>
+        <button id="switchEnv" class="secondary">Change Environment</button>
+      </div>
+      <div class="muted tiny">Vertical slice prototype • Family-friendly mischief</div>
+    </div>
+  </div>
+
+  <div id="right">
+    <div class="panelTitle">Encounter Info</div>
+    <div id="encounterInfo" class="muted tiny">Select an encounter marker on the map.</div>
+    <div style="height:12px"></div>
+    <div class="panelTitle">Active Effects</div>
+    <div id="effectsList" class="muted tiny">None</div>
+    <div style="height:12px"></div>
+    <div class="panelTitle">Props & Legend</div>
+    <div class="propLegend">
+      <div><span class="propBadge" style="background:#fde04a"></span> Banana Peel</div>
+      <div><span class="propBadge" style="background:#fff"></span><svg width="18" height="18"><rect x=0 y=0 width=18 height=18 rx=4 fill="#9be3ff"/></svg> Gust</div>
+      <div><span class="propBadge" style="background:#ffd1ff"></span> Feather Pile</div>
+      <div><span class="propBadge" style="background:#c7ffd1"></span> Trampoline</div>
+      <div><span class="propBadge" style="background:#ffecd1"></span> Slingshot</div>
+    </div>
+    <div style="height:12px"></div>
+    <div class="panelTitle">Tutorial & Goals</div>
+    <div class="muted tiny">Goals: capture / charm / incapacitate / force retreat. No lethal damage. Unlock NekoNims, level up, customize outfits, upgrade base.</div>
+  </div>
+</div>
+
+<div id="modalRoot"></div>
+
+<div class="footer">Prototype build • Premium + cosmetic DLC design</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d', {alpha:false});
+  canvas.width = 1200; canvas.height = 560;
+
+  // Utility
+  const rand = (a,b)=>a+Math.random()*(b-a);
+  const randInt=(a,b)=>Math.floor(rand(a,b+1));
+  const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+  const copy=(o)=>JSON.parse(JSON.stringify(o));
+
+  // Game Data
+  const NAMES = ["Miso","Pumpkin","Sprocket","Luna","Kumo","Ziggy"];
+  const BASE_NEKOS = [
+    {id:0,name:"Miso",color:"#ffb6b6",role:"Brawler",base:{accuracy:0.85,prankPower:1,control:0.8}},
+    {id:1,name:"Pumpkin",color:"#ffd6a5",role:"Trickster",base:{accuracy:0.78,prankPower:1.2,control:0.9}},
+    {id:2,name:"Sprocket",color:"#d0c6ff",role:"Engineer",base:{accuracy:0.8,prankPower:0.95,control:1.0}},
+    {id:3,name:"Luna",color:"#c4f0ff",role:"Charmer",base:{accuracy:0.88,prankPower:0.9,control:1.1}},
+    {id:4,name:"Kumo",color:"#e6ffd1",role:"Scout",base:{accuracy:0.9,prankPower:0.8,control:0.95}},
+    {id:5,name:"Ziggy",color:"#ffd1f0",role:"Mayhem",base:{accuracy:0.82,prankPower:1.3,control:0.75}}
+  ];
+
+  const ENVIRONMENTS = [
+    {id:0,name:"Meadow",bg:"#eaf7ff",props:[
+      {type:'banana',x:420,y:320},
+      {type:'feather',x:860,y:200},
+      {type:'gust',x:600,y:420,w:160,h:80},
+      {type:'trampoline',x:200,y:420},
+      {type:'slingshot',x:980,y:380}
+    ]},
+    {id:1,name:"Children's Park",bg:"#fff7e6",props:[
+      {type:'feather',x:300,y:180},
+      {type:'banana',x:720,y:280},
+      {type:'trampoline',x:520,y:450},
+      {type:'gust',x:900,y:120,w:120,h:160},
+      {type:'slingshot',x:80,y:220}
+    ]},
+    {id:2,name:"Rooftops",bg:"#f3f0ff",props:[
+      {type:'slingshot',x:600,y:120},
+      {type:'feather',x:1000,y:320},
+      {type:'banana',x:220,y:300},
+      {type:'gust',x:420,y:200,w:200,h:80},
+      {type:'trampoline',x:840,y:420}
+    ]}
+  ];
+
+  // State
+  const state = {
+    mode: 'explore', // explore | battle | capture | tutorial
+    envIndex: 0,
+    spawnPoints: [],
+    selectedSpawn: null,
+    roster: [],
+    deployed: [],
+    enemies: [],
+    turn: 'player', // 'player' or 'enemy'
+    mind: 0.5, // 0..1 (0 calm, 0.5 playful, 1 mischievous)
+    fish: 120,
+    baseUpgrades: {stash:1,autoTutorial:false},
+    difficulty:1, // 0 easy,1 normal,2 hard
+    colorblind:false,
+    assistAim:true,
+    effects:[],
+    tutorialSeen:false,
+    lastTick:0
+  };
+
+  // Initialize roster with 6 NekoNims
+  state.roster = BASE_NEKOS.map((b,i)=>({
+    id:b.id,
+    name:b.name,
+    color:b.color,
+    role:b.role,
+    level:1,
+    xp:0,
+    outfit:0,
+    unlockedSkills:['Throw'],
+    base:b.base,
+    skills:[], // later unlock
+  }));
+
+  // Spawn points generation for explore map
+  function generateSpawns(){
+    state.spawnPoints = [];
+    for(let i=0;i<6;i++){
+      state.spawnPoints.push({
+        id:i,
+        x: randInt(140,1050),
+        y: randInt(120,430),
+        encountered:false,
+        type: Math.random()<0.6 ? 'neutral' : 'hostile',
+        neko: BASE_NEKOS[randInt(0,BASE_NEKOS.length-1)].id
+      });
+    }
+  }
+
+  generateSpawns();
+
+  // DOM updates
+  const rosterEl = document.getElementById('roster');
+  const mindFill = document.getElementById('mindFill');
+  const mindLabel = document.getElementById('mindLabel');
+  const fishCount = document.getElementById('fishCount');
+  const envLabel = document.getElementById('envLabel');
+  const modeLabel = document.getElementById('modeLabel');
+  const turnLabel = document.getElementById('turnLabel');
+  const encounterInfo = document.getElementById('encounterInfo');
+  const effectsList = document.getElementById('effectsList');
+  const diffLabel = document.getElementById('diffLabel');
+
+  function renderRoster(){
+    rosterEl.innerHTML = '';
+    state.roster.forEach((n,i)=>{
+      const div = document.createElement('div'); div.className='nekoCard';
+      const icon = document.createElement('div'); icon.className='nekoIcon'; icon.style.background=n.color;
+      icon.textContent=n.name[0];
+      if(state.colorblind){
+        icon.style.background='linear-gradient(45deg,#fff,#ccc)';
+        icon.textContent = n.role[0];
+      }
+      const info = document.createElement('div'); info.style.flex='1';
+      info.innerHTML = `<div style="font-weight:700">${n.name} <span style="font-weight:600;color:#888">Lv ${n.level}</span></div>
+      <div class="tiny">${n.role} • XP ${n.xp}</div>`;
+      const btn = document.createElement('button'); btn.textContent='Deploy';
+      btn.onclick = ()=>toggleDeploy(i);
+      div.appendChild(icon); div.appendChild(info); div.appendChild(btn);
+      rosterEl.appendChild(div);
+    });
+  }
+  function toggleDeploy(idx){
+    const exists = state.deployed.find(d=>d.idx===idx);
+    if(exists){
+      state.deployed = state.deployed.filter(d=>d.idx!==idx);
+    } else {
+      if(state.deployed.length>=3) {
+        alert("You can deploy up to 3 NekoNims.");
+        return;
+      }
+      state.deployed.push({idx,cooldown:0});
+    }
+    renderRoster();
+  }
+
+  function updateHUD(){
+    mindFill.style.width = (state.mind*100)+'%';
+    mindLabel.textContent = state.mind < 0.33 ? 'Calm' : state.mind < 0.66 ? 'Playful' : 'Mischievous';
+    fishCount.textContent = state.fish;
+    envLabel.textContent = ENVIRONMENTS[state.envIndex].name;
+    modeLabel.textContent = state.mode.charAt(0).toUpperCase()+state.mode.slice(1);
+    turnLabel.textContent = state.mode==='battle' ? state.turn.charAt(0).toUpperCase()+state.turn.slice(1) : '—';
+    effectsList.textContent = state.effects.length ? state.effects.map(e=>e.name+"("+e.dur+")").join(', ') : 'None';
+    diffLabel.textContent = state.difficulty===0 ? 'Easy' : state.difficulty===1 ? 'Normal' : 'Hard';
+  }
+
+  // Canvas rendering: explore map & battle area
+  function draw(){
+    ctx.save();
+    // Background
+    ctx.fillStyle = ENVIRONMENTS[state.envIndex].bg;
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    // Props
+    ENVIRONMENTS[state.envIndex].props.forEach(p=>{
+      if(p.type==='banana'){
+        ctx.fillStyle='#fde04a'; ctx.beginPath(); ctx.ellipse(p.x,p.y,18,10,0,0,2*Math.PI); ctx.fill();
+        ctx.fillStyle='#b88'; ctx.fillRect(p.x+6,p.y-10,6,2);
+      } else if(p.type==='feather'){
+        ctx.fillStyle='#ffd1ff'; ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(p.x+12,p.y-4); ctx.lineTo(p.x+8,p.y+8); ctx.fill();
+      } else if(p.type==='gust'){
+        ctx.fillStyle='rgba(155,227,255,0.18)'; ctx.fillRect(p.x-p.w/2,p.y-p.h/2,p.w,p.h);
+        ctx.fillStyle='#9be3ff'; ctx.fillRect(p.x-p.w/2,p.y-p.h/2,4,p.h);
+      } else if(p.type==='trampoline'){
+        ctx.fillStyle='#c7ffd1'; ctx.beginPath(); ctx.ellipse(p.x,p.y,36,12,0,0,2*Math.PI); ctx.fill();
+        ctx.strokeStyle='#9dbb99'; ctx.stroke();
+      } else if(p.type==='slingshot'){
+        ctx.fillStyle='#ffecd1'; ctx.fillRect(p.x-12,p.y-12,24,24);
+        ctx.fillStyle='#ffb65a'; ctx.fillRect(p.x-4,p.y-18,8,8);
+      }
+    });
+
+    // Spawn points / exploration
+    if(state.mode==='explore'){
+      state.spawnPoints.forEach(s=>{
+        ctx.fillStyle = s.type==='neutral' ? '#fff' : '#ffd1d1';
+        ctx.strokeStyle = s.encountered ? '#aaa' : '#777';
+        ctx.beginPath(); ctx.rect(s.x-18,s.y-18,36,36); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = '#222'; ctx.font='bold 14px sans-serif'; ctx.fillText('?', s.x-6,s.y+6);
+      });
+      // Player base icon
+      ctx.fillStyle='#ffb6d1'; ctx.beginPath(); ctx.roundRect(60,60,80,50,10); ctx.fill(); ctx.fillStyle='#fff'; ctx.fillText('Home',72,92);
+      // Deployed preview
+      ctx.fillStyle='#222'; ctx.font='13px sans-serif';
+      ctx.fillText('Roster: Click deploy in left panel then click a spawn to deploy & start battle', 220,30);
+    }
+
+    // Battle mode: draw player and enemies
+    if(state.mode==='battle' || state.mode==='capture' || state.mode==='tutorial'){
+      // playfield border
+      ctx.strokeStyle='#e2e2e2'; ctx.strokeRect(40,40,1120,480);
+      // draw deployed neko positions
+      const positions = [
+        {x:220,y:420},{x:350,y:420},{x:480,y:420}
+      ];
+      state.deployed.forEach((d,i)=>{
+        const rosterItem = state.roster[d.idx];
+        const pos = positions[i] || {x:200+120*i,y:420};
+        drawNeko(rosterItem,pos.x,pos.y,true,d);
+      });
+
+      // enemies
+      state.enemies.forEach((e,idx)=>{
+        const pos = e.pos;
+        drawNeko(e,pos.x,pos.y,false,null);
+        // if stunned or charmed overlay
+        if(e.status.includes('stun')){
+          ctx.fillStyle='rgba(255,255,255,0.7)'; ctx.beginPath(); ctx.arc(pos.x,pos.y-32,18,0,2*Math.PI); ctx.fill();
+          ctx.fillStyle='#222'; ctx.fillText('Zzz',pos.x-12,pos.y-27);
+        } else if(e.status.includes('glamour')){
+          ctx.fillStyle='rgba(255,200,255,0.8)'; ctx.beginPath(); ctx.arc(pos.x,pos.y-32,18,0,2*Math.PI); ctx.fill();
+          ctx.fillStyle='#222'; ctx.fillText('♥',pos.x-6,pos.y-27);
+        }
+      });
+
+      // trajectory preview if aiming
+      if(aiming.state){
+        drawTrajectoryPreview();
+      }
+
+      // HUD: objectives
+      ctx.fillStyle='#222'; ctx.font='bold 14px sans-serif';
+      ctx.fillText('Objective: ' + (state.currentObjective||'Capture or charm the target NekoNim'), 60,60);
+    }
+
+    // Top overlay: mode
+    ctx.restore();
+  }
+
+  function drawNeko(n,posx,posy,isPlayer,deployInfo){
+    const x=posx,y=posy;
+    ctx.save();
+    ctx.translate(x,y);
+    ctx.beginPath(); ctx.arc(0,0,28,0,2*Math.PI);
+    ctx.fillStyle = isPlayer ? state.roster.find(r=>r.id===n.id)?.color || n.color : n.color || '#fff';
+    ctx.fill(); ctx.lineWidth=2; ctx.strokeStyle='#fff'; ctx.stroke();
+    // face
+    ctx.fillStyle='#222'; ctx.fillRect(-6,-4,4,4); ctx.fillRect(4,-4,4,4);
+    ctx.fillRect(-2,4,4,2);
+    // outfit badge
+    ctx.fillStyle='#fff'; ctx.fillRect(-26,-26,14,14);
+    ctx.restore();
+
+    // name & status
+    ctx.fillStyle='#222'; ctx.font='12px sans-serif';
+    ctx.fillText((n.name||'Neko') + (n.level?(' Lv'+n.level):''), x-28, y+48);
+    // status badges
+    const sx = x+30, sy=y-20;
+    let dx=0;
+    if(n.status && n.status.length){
+      n.status.forEach(s=>{
+        ctx.fillStyle='rgba(255,255,255,0.85)'; ctx.fillRect(sx+dx-6,sy-6,36,16);
+        ctx.fillStyle='#222'; ctx.font='11px sans-serif'; ctx.fillText(s.slice(0,6), sx+dx, sy+6);
+        dx+=40;
+      });
+    }
+    // deployed cooldown
+    if(deployInfo){
+      ctx.fillStyle='rgba(0,0,0,0.06)'; ctx.fillRect(x-28,y+34,56,6);
+      const pct = deployInfo.cooldown>0 ? clamp(1-deployInfo.cooldown/3,0,1) : 1;
+      ctx.fillStyle='#9be3ff'; ctx.fillRect(x-28,y+34,56*pct,6);
+    }
+  }
+
+  // Aim & Throw system
+  const aiming = {state:false, start:null, current:null, shooter:null, power:0, angle:0, previewPath:[]};
+
+  function startAiming(shooter){
+    aiming.state=true; aiming.start=null; aiming.current=null; aiming.shooter=shooter;
+    canvas.style.cursor='crosshair';
+  }
+  function stopAiming(targetX,targetY){
+    if(!aiming.state) return;
+    aiming.state=false; canvas.style.cursor='default';
+    // compute shot based on start and end
+    const start = aiming.shooter.pos;
+    const dx = targetX - start.x, dy = targetY - start.y;
+    const angle = Math.atan2(dy,dx);
+    const rawPower = clamp(Math.hypot(dx,dy)/120,0.2,2.2);
+    // accuracy tradeoff: more power reduces accuracy (adds spread)
+    const accBase = aiming.shooter.accuracy;
+    const power = rawPower;
+    const spread = (1-power*0.35) * (1-accBase) * (0.5 + (1-state.mind)); // mind influences accuracy slightly
+    // apply spread unless assistAim
+    let finalAngle = angle;
+    if(!state.assistAim) finalAngle += rand(-spread,spread);
+    // initial velocity
+    const speed = 240 * power;
+    const vx = Math.cos(finalAngle)*speed;
+    const vy = Math.sin(finalAngle)*speed;
+    // simulate projectile
+    const path = simulateProjectile({x:start.x,y:start.y,vx,vy}, 120, {bounce:true});
+    // apply environment boosts by checking path through props
+    const effectsHit = checkProjPathEffects(path);
+    // resolve hit: apply pranks to first enemy hit
+    const hit = path.find(p=>p.hitEnemy);
+    if(hit){
+      applyPrankToEnemy(hit.hitEnemy, aiming.shooter, power, effectsHit);
+    } else {
+      // maybe hit prop: apply prop interactions (banana peel knocks nearby enemies)
+      if(effectsHit.includes('banana')){
+        // banana peel breaks and causes nearby enemies to trip
+        state.enemies.forEach(e=>{
+          if(Math.hypot(e.pos.x - path[path.length-1].x, e.pos.y - path[path.length-1].y) < 72){
+            addStatus(e,'banana',2);
+          }
+        });
+      }
+    }
+    // reduce action or set cooldown
+    aiming.shooter.cooldown = 2; // simple cooldown
+    // mind influence shifts: playful for pranks, mischievous for stronger CC, calm for capture attempts
+    const mindShift = 0.05 * (aiming.shooter.prankPower > 1 ? 1 : 0.5);
+    state.mind = clamp(state.mind + mindShift * (aiming.shooter.role==='Charmer'? -0.6 : 1), 0,1);
+    updateHUD();
+  }
+
+  function simulateProjectile(init, steps=80, opts={bounce:false}){
+    const g = 600; // gravity px/s^2
+    const dt = 1/60;
+    let p = {x:init.x,y:init.y,vx:init.vx,vy:init.vy};
+    const path = [];
+    for(let i=0;i<steps;i++){
+      // step
+      p.vy += g*dt;
+      p.x += p.vx*dt;
+      p.y += p.vy*dt;
+      // bounds bounce
+      if(opts.bounce){
+        if(p.x < 40){ p.x = 40; p.vx = -p.vx*0.6; }
+        if(p.x > 1160){ p.x = 1160; p.vx = -p.vx*0.6; }
+        if(p.y < 40){ p.y = 40; p.vy = -p.vy*0.6; }
+        if(p.y > 520){ p.y = 520; p.vy = -p.vy*0.6; }
+      } else {
+        if(p.x<40||p.x>1160||p.y<40||p.y>520) break;
+      }
+      // check collisions with enemies
+      let hitEnemy = null;
+      for(const e of state.enemies){
+        if(Math.hypot(e.pos.x - p.x, e.pos.y - p.y) < 32 && !e.incapacitated){
+          hitEnemy = e; break;
+        }
+      }
+      path.push({x:p.x,y:p.y,vx:p.vx,vy:p.vy,hitEnemy});
+      if(hitEnemy) break;
+      // check props interaction - trampoline bounce
+      ENVIRONMENTS[state.envIndex].props.forEach(prop=>{
+        if(prop.type==='trampoline'){
+          if(Math.hypot(prop.x - p.x, prop.y - p.y) < 44){
+            p.vy = -Math.abs(p.vy)*1.7;
+            p.vx *= 0.9;
+          }
+        }
+        if(prop.type==='slingshot'){
+          if(Math.hypot(prop.x - p.x, prop.y - p.y) < 26){
+            p.vx *= 1.6; p.vy *= 1.1;
+          }
+        }
+      });
+    }
+    return path;
+  }
+
+  function checkProjPathEffects(path){
+    const effects = [];
+    for(const point of path){
+      for(const p of ENVIRONMENTS[state.envIndex].props){
+        if(p.type==='banana' && Math.hypot(p.x-point.x,p.y-point.y) < 24) effects.push('banana');
+        if(p.type==='feather' && Math.hypot(p.x-point.x,p.y-point.y) < 24) effects.push('feather');
+        if(p.type==='gust' && point.x > p.x-p.w/2 && point.x < p.x+p.w/2 && point.y > p.y-p.h/2 && point.y < p.y+p.h/2) effects.push('gust');
+        if(p.type==='trampoline' && Math.hypot(p.x-point.x,p.y-point.y) < 40) effects.push('trampoline');
+        if(p.type==='slingshot' && Math.hypot(p.x-point.x,p.y-point.y) < 28) effects.push('slingshot');
+      }
+    }
+    return [...new Set(effects)];
+  }
+
+  function applyPrankToEnemy(enemy, shooter, power, envEffects){
+    // Compute prank potency based on shooter base and mind influence
+    const basePower = shooter.prankPower * power;
+    const mindMod = state.mind < 0.33 ? 0.9 : state.mind < 0.66 ? 1 : 1.2;
+    const potency = basePower * mindMod;
+    // Choose a status based on randomness and shooter role
+    const roll = Math.random();
+    if(roll < 0.25 || shooter.role === 'Brawler'){
+      addStatus(enemy,'banana',2 + Math.round(potency));
+    } else if(roll < 0.55 || shooter.role === 'Trickster'){
+      addStatus(enemy,'feather',2 + Math.round(potency));
+    } else if(roll < 0.8 || shooter.role === 'Charmer'){
+      addStatus(enemy,'glamour',1 + Math.round((potency-0.5)));
+      // charm may convert for a turn
+      if(Math.random() < 0.3 * state.mind + 0.2){
+        // temporary convert: enemy becomes ally for one turn
+        enemy.charmed = 2;
+      }
+    } else {
+      addStatus(enemy,'static',1 + Math.round(potency/2));
+    }
+    // knockback effect visually: move enemy slightly
+    const dx = (enemy.pos.x - shooter.pos.x);
+    const dy = (enemy.pos.y - shooter.pos.y);
+    const mag = Math.hypot(dx,dy)||1;
+    enemy.pos.x += (dx/mag)*20*power;
+    enemy.pos.y += (dy/mag)*8*power;
+    // if envEffects include gust etc, enhance
+    if(envEffects.includes('gust')) addStatus(enemy,'feather',1);
+    if(envEffects.includes('banana')) addStatus(enemy,'banana',1);
+    if(envEffects.includes('trampoline')) addStatus(enemy,'stun',1);
+  }
+
+  function addStatus(target,name,duration){
+    target.status = target.status || [];
+    if(!target.status.includes(name)) target.status.push(name);
+    target.statusDur = target.statusDur || {};
+    target.statusDur[name] = Math.max(target.statusDur[name]||0,duration);
+    // handle immediate effects
+    if(name==='banana') {
+      // immediately trip a bit
+      if(!target.incapacitated) target.incapacitated = true;
+      setTimeout(()=>{ if(target) target.incapacitated=false; }, 1200);
+    }
+  }
+
+  // Explore interactions: clicking spawn to start battle
+  canvas.addEventListener('click', (e)=>{
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left)*(canvas.width/rect.width);
+    const y = (e.clientY - rect.top)*(canvas.height/rect.height);
+    if(state.mode==='explore'){
+      // check spawn hit
+      const sp = state.spawnPoints.find(s=>Math.hypot(s.x-x,s.y-y) < 28);
+      if(sp){
+        state.selectedSpawn = sp;
+        startEncounter(sp);
+      }
+    } else if(state.mode==='battle'){
+      // if player is selecting aim: choose shooter from deployed by clicking their icon
+      if(aiming.shootSelect){
+        // ignore
+      } else {
+        // find if clicked deployed neko
+        const pos = [{x:220,y:420},{x:350,y:420},{x:480,y:420}];
+        for(let i=0;i<state.deployed.length;i++){
+          const d = state.deployed[i];
+          const p = pos[i];
+          if(Math.hypot(p.x-x,p.y-y)<36){
+            // start aiming with this roster member
+            const rosterItem = state.roster[d.idx];
+            // shooter object for aiming must include pos, accuracy, prankPower
+            startAiming({pos:{x:p.x,y:p.y},accuracy:rosterItem.base.accuracy,prankPower:rosterItem.base.prankPower,role:rosterItem.role,cooldown:d});
+            aiming.start = {x:p.x,y:p.y};
+            aiming.current = {x,y};
+            aiming.shooter = {pos:{x:p.x,y:p.y},accuracy:rosterItem.base.accuracy,prankPower:rosterItem.base.prankPower,role:rosterItem.role,cooldown:d,idx:d.idx};
+            aiming.shooter.rosterRef = rosterItem;
+          }
+        }
+      }
+    } else if(state.mode==='capture'){
+      // may implement later
+    }
+  });
+
+  canvas.addEventListener('mousemove',(e)=>{
+    if(!aiming.state) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left)*(canvas.width/rect.width);
+    const y = (e.clientY - rect.top)*(canvas.height/rect.height);
+    aiming.current = {x,y};
+    // generate preview
+    const dx = x - aiming.shooter.pos.x, dy = y - aiming.shooter.pos.y;
+    const angle = Math.atan2(dy,dx);
+    const power = clamp(Math.hypot(dx,dy)/120,0.2,2.2);
+    const speed = 240 * power;
+    aiming.previewPath = simulateProjectile({x:aiming.shooter.pos.x,y:aiming.shooter.pos.y,vx:Math.cos(angle)*speed,vy:Math.sin(angle)*speed},120,{bounce:true});
+  });
+
+  canvas.addEventListener('mouseup',(e)=>{
+    if(aiming.state){
+      const rect = canvas.getBoundingClientRect();
+      const x = (e.clientX - rect.left)*(canvas.width/rect.width);
+      const y = (e.clientY - rect.top)*(canvas.height/rect.height);
+      stopAiming(x,y);
+    }
+  });
+
+  function drawTrajectoryPreview(){
+    ctx.save();
+    ctx.lineWidth=2;
+    ctx.strokeStyle='rgba(0,0,0,0.12)';
+    ctx.beginPath();
+    for(let i=0;i<aiming.previewPath.length;i++){
+      const p = aiming.previewPath[i];
+      if(i===0) ctx.moveTo(p.x,p.y); else ctx.lineTo(p.x,p.y);
+    }
+    ctx.stroke();
+    // draw last point
+    const last = aiming.previewPath[aiming.previewPath.length-1];
+    if(last){
+      ctx.fillStyle='rgba(255,120,120,0.9)'; ctx.beginPath(); ctx.arc(last.x,last.y,6,0,2*Math.PI); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // Encounter start: spawn enemies based on spawn point
+  function startEncounter(spawn){
+    state.mode='battle';
+    state.turn='player';
+    state.enemies = [];
+    // create 1-2 enemies
+    const count = spawn.type==='neutral' ? 1 : 2;
+    for(let i=0;i<count;i++){
+      const base = BASE_NEKOS[spawn.neko] || BASE_NEKOS[randInt(0,BASE_NEKOS.length-1)];
+      state.enemies.push({
+        id:Date.now()+i,
+        name: base.name,
+        color: base.color,
+        level: randInt(1,3),
+        pos: {x:800 + i*80, y:150 + i*40},
+        status: [],
+        statusDur: {},
+        incapacitated:false,
+        charmed:0,
+        accuracy: base.base.accuracy,
+        prankPower: base.base.prankPower
+      });
+    }
+    state.currentObjective = spawn.type==='neutral' ? 'Befriend the neutral NekoNim' : 'Prank & force retreat or incapacitate';
+    updateHUD();
+  }
+
+  // Turn resolution & enemy AI simple
+  function enemyTurn(){
+    // each enemy acts: choose to prank a random deployed neko or retreat if charmed/incapacitated
+    for(const e of state.enemies){
+      // handle status durations
+      Object.keys(e.statusDur || {}).forEach(k=>{
+        e.statusDur[k] = Math.max(0,e.statusDur[k]-1);
+        if(e.statusDur[k]===0){
+          e.status = e.status.filter(s=>s!==k);
+        }
+      });
+      if(e.charmed>0){
+        // sometimes convert: heal or confuse
+        if(Math.random()<0.7){
+          // do nothing
+        }
+        e.charmed--;
+        continue;
+      }
+      if(e.status.includes('stun') || e.status.includes('banana')){
+        // skip
+        continue;
+      }
+      // attempt an attack / prank
+      const targetIndex = state.deployed.length ? randInt(0,state.deployed.length-1) : null;
+      if(targetIndex !== null){
+        const target = state.deployed[targetIndex];
+        const rosterItem = state.roster[target.idx];
+        // simple prank: choose a random type
+        const roll = Math.random();
+        if(roll<0.25) addStatus(rosterItem,'banana',1);
+        else if(roll<0.6) addStatus(rosterItem,'feather',1);
+        else addStatus(rosterItem,'static',1);
+      }
+    }
+    // after enemy actions, check win/lose
+    checkBattleOutcome();
+    state.turn='player';
+    updateHUD();
+  }
+
+  function checkBattleOutcome(){
+    // Win conditions: all enemies incapacitated (stun) or charmed or retreat (if morale)
+    const allIncap = state.enemies.every(e => e.status && (e.status.includes('stun')||e.status.includes('banana')));
+    const anyCharmed = state.enemies.some(e=>e.charmed>0 || (e.status && e.status.includes('glamour')));
+    if(allIncap || anyCharmed){
+      // prompt capture mini-game for first eligible enemy
+      const target = state.enemies.find(e=> e.charmed>0 || e.status.includes('stun') || e.status.includes('glamour'));
+      if(target){
+        // Enter capture mini-game
+        setTimeout(()=>startCapture(target),300);
+      } else {
+        endEncounter(true);
+      }
+    }
+    // retreat logic: if many pranks hit, chance to retreat
+    const morale = Math.random();
+    if(morale < 0.08 * (state.mind>0.66?1.4:1) ){
+      endEncounter(true, 'retreat');
+    }
+  }
+
+  // Capture mini-games
+  function startCapture(target){
+    state.mode='capture';
+    showModalCapture(target);
+  }
+
+  function showModalCapture(target){
+    const modalRoot = document.getElementById('modalRoot');
+    modalRoot.innerHTML = '';
+    const overlay = document.createElement('div'); overlay.className='overlay';
+    const modal = document.createElement('div'); modal.className='modal';
+    modal.innerHTML = `<div style="font-weight:800;font-size:18px">Capture ${target.name}?</div>
+      <div class="tiny muted" style="margin-top:8px">Complete the mini-game to befriend. Failing makes them retreat.</div>
+      <div style="height:12px"></div>
+      <div id="miniGameArea"></div>
+      <div style="height:12px"></div>
+      <div style="display:flex;justify-content:flex-end;gap:8px"><button id="cancelCap" class="secondary">Cancel</button></div>
+      `;
+    modalRoot.appendChild(overlay); modalRoot.appendChild(modal);
+
+    const mg = document.getElementById('miniGameArea');
+    // Choose mini-game type: timing or pattern based on mind
+    const mgType = state.mind < 0.33 ? 'timing' : Math.random()<0.5 ? 'timing':'pattern';
+    if(mgType==='timing'){
+      // timing: moving bar to stop in green zone
+      mg.innerHTML = `<div style="height:14px;background:#eee;border-radius:8px;position:relative">
+        <div id="greenZone" style="position:absolute;height:14px;border-radius:8px;background:#9be3ff;width:18%;left:46%"></div>
+        <div id="movingBar" style="position:absolute;height:14px;border-radius:8px;background:#ffb6b6;width:6%;left:0"></div>
+      </div>
+      <div class="tiny muted" style="margin-top:8px">Press space to stop the moving bar in the green area.</div>`;
+      let bar = document.getElementById('movingBar');
+      const leftLimit = 0, rightLimit = 100-6; // %
+      let pos = 0, dir = 1;
+      let running = true;
+      function tick(){
+        if(!running) return;
+        pos += dir*0.9*(1+state.difficulty*0.3);
+        if(pos < leftLimit){ pos=leftLimit; dir=1; }
+        if(pos > rightLimit){ pos=rightLimit; dir=-1; }
+        bar.style.left = pos+'%';
+        requestAnimationFrame(tick);
+      }
+      tick();
+      function stopAttempt(){
+        running=false;
+        const green = document.getElementById('greenZone');
+        const gLeft = parseFloat(green.style.left);
+        const gWidth = parseFloat(green.style.width);
+        const barLeft = pos;
+        if(barLeft >= gLeft && barLeft <= gLeft+gWidth){
+          // success
+          closeModal();
+          befriendSuccess(target,true);
+        } else {
+          closeModal();
+          befriendSuccess(target,false);
+        }
+      }
+      document.getElementById('cancelCap').onclick = ()=>{ closeModal(); befriendSuccess(target,false); };
+      function keyHandler(ev){
+        if(ev.code==='Space'){ stopAttempt(); }
+      }
+      window.addEventListener('keydown', keyHandler);
+      function closeModal(){
+        window.removeEventListener('keydown', keyHandler);
+        modalRoot.innerHTML='';
+      }
+    } else {
+      // pattern match: show arrow sequence
+      const seqLen = Math.min(6,3 + Math.floor(state.mind*3));
+      const arrows = ['←','↑','→','↓'];
+      const seq = Array.from({length:seqLen},()=>arrows[randInt(0,3)]);
+      mg.innerHTML = `<div style="font-weight:700">Repeat the pattern:</div><div style="font-size:28px;margin-top:8px" id="patternSeq"></div>
+        <div style="margin-top:12px" class="tiny muted">Press arrow keys to match the pattern. Be quick!</div>`;
+      document.getElementById('patternSeq').textContent = seq.join(' ');
+      let idx=0;
+      function keyHandler(ev){
+        const map = {'ArrowLeft':'←','ArrowUp':'↑','ArrowRight':'→','ArrowDown':'↓'};
+        if(!map[ev.key]) return;
+        if(map[ev.key] === seq[idx]){
+          idx++;
+          if(idx >= seq.length){
+            closeModal();
+            befriendSuccess(target,true);
+          }
+        } else {
+          closeModal();
+          befriendSuccess(target,false);
+        }
+      }
+      document.getElementById('cancelCap').onclick = ()=>{ closeModal(); befriendSuccess(target,false); };
+      window.addEventListener('keydown', keyHandler);
+      function closeModal(){ window.removeEventListener('keydown', keyHandler); modalRoot.innerHTML=''; }
+    }
+  }
+
+  function befriendSuccess(target,success){
+    if(success){
+      // Add to roster if neutral, else earn fish
+      if(state.selectedSpawn.type === 'neutral'){
+        // add to roster (if not already)
+        const newNeko = {id:Date.now(),name:target.name, color:target.color, role:'Buddy', level:1, xp:0, outfit:0, unlockedSkills:['Throw'], base:{accuracy:0.8,prankPower:1,control:1}};
+        state.roster.push(newNeko);
+        alert(`${target.name} joined your crew!`);
+      } else {
+        // hostile befriended for a turn (converted)
+        alert(`${target.name} was charmed and calmed down!`);
+      }
+      // reward fish and xp
+      state.fish += 20;
+      state.roster.forEach(r=> r.xp += 3);
+      endEncounter(true,'captured');
+    } else {
+      alert(`${target.name} retreated!`);
+      endEncounter(false,'retreat');
+    }
+  }
+
+  function endEncounter(success,reason){
+    state.mode='explore';
+    // mark spawn encountered
+    if(state.selectedSpawn) state.selectedSpawn.encountered = true;
+    generateSpawns(); // refresh explore points
+    state.selectedSpawn = null;
+    state.enemies = [];
+    // small rewards
+    if(success){ state.fish += 15; }
+    state.deployed.forEach(d=> d.cooldown = Math.max(0,d.cooldown-1));
+    updateHUD();
+  }
+
+  // UI event wiring
+  document.getElementById('deployBtn').onclick = ()=>{
+    if(state.mode==='explore'){
+      alert('Deploy your selected NekoNims and click a spawn to start a skirmish.');
+    }
+  };
+  document.getElementById('tutorialBtn').onclick = ()=>showTutorial();
+  document.getElementById('switchEnv').onclick = ()=>{
+    state.envIndex = (state.envIndex+1)%ENVIRONMENTS.length;
+    updateHUD();
+  };
+  document.getElementById('captureTestBtn').onclick = ()=>{
+    if(state.roster.length) startCapture({name:'Test Neko'});
+  };
+  document.getElementById('upgradeButton').onclick = ()=>{
+    if(state.fish >= 50){ state.fish -= 50; state.baseUpgrades.stash++; alert('Base upgraded! Stash increased.'); updateHUD(); }
+    else alert('Not enough fish.');
+  };
+  document.getElementById('difficulty').addEventListener('input',(e)=>{ state.difficulty = parseInt(e.target.value,10); updateHUD(); });
+  document.getElementById('colorblind').addEventListener('change',(e)=>{ state.colorblind = e.target.checked; renderRoster(); updateHUD(); });
+  document.getElementById('autoAim').addEventListener('change',(e)=>{ state.assistAim = e.target.checked; });
+
+  // Basic tutorial modal
+  function showTutorial(){
+    if(state.baseUpgrades.autoTutorial && state.tutorialSeen) return;
+    state.tutorialSeen = true;
+    const modalRoot = document.getElementById('modalRoot');
+    modalRoot.innerHTML = '';
+    const overlay = document.createElement('div'); overlay.className='overlay';
+    const modal = document.createElement('div'); modal.className='modal';
+    modal.innerHTML = `<div style="font-weight:900;font-size:18px">Welcome to Crazy Cat Lady — Tutorial</div>
+      <div class="tiny muted" style="margin-top:8px">Explore to find NekoNims, deploy up to 3 into non-lethal pranking skirmishes. Use throws to apply comedic status effects and befriend or force retreat. Mind meter influences behavior.</div>
+      <div style="height:12px"></div>
+      <ol style="padding-left:18px">
+        <li>Deploy: select up to 3 from the roster on the left.</li>
+        <li>Click a spawn on the map to begin a skirmish.</li>
+        <li>Click a deployed Neko to aim and drag to set power & angle. Release to throw.</li>
+        <li>Watch trajectory preview and interact with props (slingshot, gusts, trampolines).</li>
+        <li>Complete capture mini-games to befriend neutral NekoNims.</li>
+      </ol>
+      <div style="height:8px"></div>
+      <div style="display:flex;justify-content:space-between">
+        <label><input id="dontShow" type="checkbox" /> Don't auto-show next time</label>
+        <div><button id="closeTut">Start Exploring</button></div>
+      </div>`;
+    modalRoot.appendChild(overlay); modalRoot.appendChild(modal);
+    document.getElementById('closeTut').onclick = ()=>{
+      const dont = document.getElementById('dontShow').checked;
+      state.baseUpgrades.autoTutorial = dont;
+      modalRoot.innerHTML='';
+    };
+  }
+
+  // Game loop
+  function tick(ts){
+    const dt = (ts - (state.lastTick||ts))/1000; state.lastTick = ts;
+    // simple per-second status dur decrement
+    // update statuses
+    if(state.mode==='battle'){
+      // decrease statuses durations for enemies
+      state.enemies.forEach(e=>{
+        if(e.statusDur){
+          Object.keys(e.statusDur).forEach(k=>{
+            if(e.statusDur[k]>0) e.statusDur[k] = Math.max(0,e.statusDur[k] - dt);
+            if(e.statusDur[k] <= 0){
+              e.status = e.status.filter(s=>s!==k);
+            }
+          });
+        }
+        // mark incapacitated if stun present
+        e.incapacitated = (e.status && (e.status.includes('stun') || e.status.includes('banana')));
+      });
+      // player's deployed cooldowns decrease per second
+      state.deployed.forEach(d=>{ if(d.cooldown>0) d.cooldown = Math.max(0, d.cooldown - dt); });
+      // AI turn simplified: alternate per few seconds if it's enemy turn
+      if(state.turn==='enemy'){
+        // allow some time then act
+        setTimeout(()=>{ enemyTurn(); }, 500);
+      }
+      // check auto end
+      checkBattleOutcome();
+    }
+
+    draw();
+    requestAnimationFrame(tick);
+  }
+
+  // initial render
+  renderRoster();
+  updateHUD();
+  requestAnimationFrame(tick);
+
+  // simple keyboard shortcuts for remapping
+  window.addEventListener('keydown',(e)=>{
+    if(e.key==='t') showTutorial();
+    if(e.key==='m') state.mind = clamp(state.mind + 0.05,0,1);
+    if(e.key==='n') state.mind = clamp(state.mind - 0.05,0,1);
+    updateHUD();
+  });
+
+  // Polyfill for roundRect for some browsers
+  if(!CanvasRenderingContext2D.prototype.roundRect){
+    CanvasRenderingContext2D.prototype.roundRect = function(x,y,w,h,r){
+      if(typeof r==='undefined') r=6;
+      this.beginPath();
+      this.moveTo(x+r,y);
+      this.arcTo(x+w,y,x+w,y+h,r);
+      this.arcTo(x+w,y+h,x,y+h,r);
+      this.arcTo(x,y+h,x,y,r);
+      this.arcTo(x,y,x+w,y,r);
+      this.closePath();
+      return this;
+    };
+  }
+
+  // Minimal save/load (localStorage)
+  function saveProgress(){ localStorage.setItem('ccl_save',JSON.stringify({roster:state.roster,fish:state.fish,baseUpgrades:state.baseUpgrades})); alert('Saved'); }
+  function loadProgress(){ const d = localStorage.getItem('ccl_save'); if(d){ const obj=JSON.parse(d); state.roster=obj.roster; state.fish=obj.fish; state.baseUpgrades=obj.baseUpgrades; renderRoster(); updateHUD(); alert('Loaded'); } else alert('No save found.'); }
+  window.saveProgress = saveProgress; window.loadProgress = loadProgress;
+
+  // expose minimal editor placeholder
+  window.openLevelEditor = ()=>{ alert('Level editor prototype placeholder.'); };
+
+  // small UI: right-click to quick-deploy first three
+  canvas.addEventListener('contextmenu',(e)=>{ e.preventDefault(); if(state.mode==='explore'){ state.deployed = []; for(let i=0;i<Math.min(3,state.roster.length);i++) state.deployed.push({idx:i,cooldown:0}); renderRoster(); } });
+
+  // small control: click spawn to deploy and start battle if deployed roster not empty
+  canvas.addEventListener('dblclick',(e)=>{
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left)*(canvas.width/rect.width);
+    const y = (e.clientY - rect.top)*(canvas.height/rect.height);
+    if(state.mode==='explore'){
+      const sp = state.spawnPoints.find(s=>Math.hypot(s.x-x,s.y-y) < 28);
+      if(sp){
+        if(state.deployed.length===0){ alert('No NekoNims deployed. Use Deploy button in roster to select up to 3.'); return; }
+        startEncounter(sp);
+      }
+    }
+  });
+
+})();
+</script>
+</body>
+</html>
