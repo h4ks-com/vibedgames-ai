@@ -1,0 +1,952 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>Firerun — Ask for Fire</title>
+<style>
+  html,body{height:100%;margin:0;background:#111;overflow:hidden;font-family:monospace;color:#fff}
+  canvas{display:block;background:#000}
+  #ui{
+    position:fixed;left:8px;top:8px;z-index:10;
+    background:rgba(0,0,0,0.3);padding:8px;border-radius:6px;
+  }
+  #ui div{margin:4px 0;font-size:14px}
+  #overlay{
+    position:fixed;left:0;top:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;
+    pointer-events:none;
+  }
+  .panel{
+    pointer-events:auto;
+    background:rgba(10,10,10,0.95);padding:18px;border-radius:10px;border:2px solid rgba(255,140,0,0.2);
+    width:720px;max-width:94%;color:#fff;
+  }
+  .shop-row{display:flex;justify-content:space-between;align-items:center;margin:10px 0}
+  .btn{background:#ff7a00;border:none;padding:8px 12px;border-radius:6px;color:#111;font-weight:700;cursor:pointer}
+  .small{font-size:12px;color:#ddd}
+  .center{display:flex;justify-content:center}
+  #instructions{position:fixed;right:8px;top:8px;background:rgba(0,0,0,0.3);padding:8px;border-radius:6px;font-size:13px}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="ui">
+  <div>Level: <span id="level">1</span></div>
+  <div>Time: <span id="time">60</span>s</div>
+  <div>Flames: <span id="flames">0</span>/10</div>
+  <div>Coins: <span id="coins">0</span></div>
+  <div>Bombs: <span id="bombs">0</span></div>
+  <div>HP: <span id="hp">3</span> Armor: <span id="armor">0</span></div>
+</div>
+<div id="instructions">
+  WASD: Move/Jump<br>
+  B: Shoot fireball &nbsp; C: Use bomb
+</div>
+<div id="overlay"></div>
+<script>
+(() => {
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W=innerWidth, H=innerHeight;
+canvas.width=W; canvas.height=H;
+window.addEventListener('resize', ()=>{W=innerWidth;H=innerHeight;canvas.width=W;canvas.height=H;});
+
+// UI elements
+const elLevel=document.getElementById('level');
+const elTime=document.getElementById('time');
+const elFlames=document.getElementById('flames');
+const elCoins=document.getElementById('coins');
+const elBombs=document.getElementById('bombs');
+const elHp=document.getElementById('hp');
+const elArmor=document.getElementById('armor');
+const overlay=document.getElementById('overlay');
+
+// Game constants
+const GRAVITY = 0.9;
+const GROUND_Y = H*0.78;
+const PATH_SEGMENT_WIDTH = W; // one screen width
+const PATH_LENGTH_SCREENS = 3; // one path lasts 3 screen widths
+const PATH_SEGMENT_TOTAL = PATH_SEGMENT_WIDTH * PATH_LENGTH_SCREENS;
+
+// State
+let keys = {};
+window.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; if (e.key===' '){e.preventDefault();} });
+window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+let game = {
+  level:1,
+  timeLeft:60,
+  coins:0,
+  bombsOwned:0,
+  speedUpgrade:0, // permanent percent
+  armorUpgrade:0,
+  inShop:false,
+  paused:false,
+};
+
+// Player
+let player = {
+  x: W*0.2,
+  y: GROUND_Y - 36,
+  w: 40,
+  h: 48,
+  vy:0,
+  onGround:true,
+  baseSpeed: 3.2,
+  hp: 3,
+  flamesCollected:0,
+  isMega:false,
+  megaTimer:0
+};
+
+// World scroll (how far world scrolled)
+let worldX = 0; // increases as player runs
+
+// Path generation: create path segments with unique random visuals, each path is 3 screens wide. We'll chain paths.
+let pathQueue = []; // array of path segments, each {id,name,colors,features, length}
+let currentPathIndex = 0;
+let rng = mulberry32(Date.now());
+
+// Helpers
+function rand(min, max){ return rng()*(max-min) + min; }
+function rint(min,max){ return Math.floor(rand(min,max+1)); }
+function choice(arr){ return arr[Math.floor(rng()*arr.length)]; }
+function mulberry32(a){
+  return function() {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    var t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  }
+}
+
+// Path naming pieces
+const ADJ = ["Ember","Crimson","Singe","Ashen","Blazing","Scorch","Cinder","Inferno","Flare","Kindle","Molten","Charred"];
+const NOUN = ["Ridge","Vale","Hollow","Run","Dunes","Hearth","Plateau","Spire","Pass","Haven","Gorge","Fields"];
+
+// Parallax layer factors (six layers):
+// layer 0: sky/horizon (very slow), 1: distant clouds, 2: mountains, 3: far trees, 4: near trees, 5: path edge/details (near)
+const LAYERS = 6;
+const PARALLAX = [0.05, 0.12, 0.24, 0.4, 0.6, 1.0];
+
+// Entities
+let flames = []; // red flames collectibles
+let coins = [];
+let enemies = []; // spiders
+let projectiles = []; // fireballs
+let particles = []; // visual FX
+
+// Spawning parameters per path
+function makePath(id) {
+  // seed-specific rng for consistent per-path design
+  const seed = Math.floor(rng()*1000000) ^ (game.level*1009) ^ id;
+  const r = mulberry32(seed);
+  const pRand = (a,b)=> r()*(b-a)+a;
+  const pInt = (a,b)=> Math.floor(pRand(a,b+1));
+  const name = choice(ADJ) + " " + choice(NOUN) + (r() < 0.25 ? " " + pInt(1,99) : "");
+  // palette choices
+  const skyHue = pInt(0,50) / 1.0 + (rIntEnsure(seed,3)*10 || 0); // quirky
+  const sky = `hsl(${pInt(0,50)},${pInt(40,70)}%,${pInt(10,22)}%)`;
+  const sun = r() < 0.6;
+  const cloudColor = `hsla(${pInt(0,50)},${pInt(10,50)}%,${pInt(70,95)}%,${pRand(0.35,0.9).toFixed(2)})`;
+  const mountainColor = `hsl(${pInt(0,30)},${pInt(15,40)}%,${pInt(15,35)}%)`;
+  const farTree = `hsl(${pInt(0,30)},${pInt(20,50)}%,${pInt(10,25)}%)`;
+  const nearTree = `hsl(${pInt(0,35)},${pInt(30,60)}%,${pInt(7,20)}%)`;
+  const ground = `hsl(${pInt(0,30)},${pInt(30,60)}%,${pInt(6,15)}%)`;
+  const colorScheme = {sky,cloudColor,mountainColor,farTree,nearTree,ground,sun};
+  // clouds, mountains, trees counts varied
+  const cloudsCount = pInt(6,12);
+  const mountainsCount = pInt(2,5);
+  const farTreesCount = pInt(6,12);
+  const nearTreesCount = pInt(8,18);
+  // features arrays to render
+  const clouds = new Array(cloudsCount).fill(0).map(()=>({
+    x: pRand(0, PATH_SEGMENT_TOTAL),
+    y: pRand(H*0.05, H*0.35),
+    size: pRand(60, 220),
+    drift: pRand(-0.2, 0.6)
+  }));
+  const mountains = new Array(mountainsCount).fill(0).map(()=>({
+    x: pRand(0, PATH_SEGMENT_TOTAL),
+    baseY: pRand(H*0.45, H*0.62),
+    h: pRand(H*0.12, H*0.35),
+    w: pRand(220, 420),
+    twist: pRand(-40,40)
+  }));
+  const farTrees = new Array(farTreesCount).fill(0).map(()=>({
+    x: pRand(0, PATH_SEGMENT_TOTAL),
+    h: pRand(40,90)
+  }));
+  const nearTrees = new Array(nearTreesCount).fill(0).map(()=>({
+    x: pRand(0, PATH_SEGMENT_TOTAL),
+    h: pRand(90,180)
+  }));
+  // decorative edge rocks or bushes
+  const details = new Array(pInt(10,24)).fill(0).map(()=>({
+    x: pRand(0, PATH_SEGMENT_TOTAL),
+    size: pRand(6,28),
+    yoff: pRand(-10,20)
+  }));
+  // spawn items & enemies
+  const localFlames = [];
+  const localCoins = [];
+  const localEnemies = [];
+  // spawn flames at random places along this path
+  const flameCount = pInt(6,12);
+  for(let i=0;i<flameCount;i++){
+    localFlames.push({
+      x: Math.floor(pRand(40, PATH_SEGMENT_TOTAL-60)),
+      y: GROUND_Y - 34 - Math.floor(pRand(0,140)),
+      r: 9
+    });
+  }
+  const coinCount = pInt(8,16);
+  for(let i=0;i<coinCount;i++){
+    localCoins.push({
+      x: Math.floor(pRand(40, PATH_SEGMENT_TOTAL-60)),
+      y: GROUND_Y - Math.floor(pRand(8,60)),
+      r: 8
+    });
+  }
+  const enemyCount = pInt(4,9) + Math.floor(game.level/3);
+  for(let i=0;i<enemyCount;i++){
+    localEnemies.push({
+      x: Math.floor(pRand(80, PATH_SEGMENT_TOTAL-80)),
+      y: GROUND_Y - 10,
+      w: 34, h: 18,
+      vx: (r() < 0.5 ? -1 : 1) * pRand(0.2, 0.9),
+      jumpTimer: pInt(20,120),
+      jumpCooldown: pInt(60,160),
+      onGround:true,
+      vy:0
+    });
+  }
+  return {
+    id, name, colorScheme, clouds, mountains, farTrees, nearTrees, details,
+    flames: localFlames, coins: localCoins, enemies: localEnemies,
+    length: PATH_SEGMENT_TOTAL
+  };
+  // helper for weird rint
+  function rIntEnsure(s,m){ return Math.abs((s * (m+1)) % (m+5)); }
+}
+
+// Ensure pathQueue has few segments ahead
+function ensurePaths(count=3){
+  while(pathQueue.length < count){
+    const id = pathQueue.length + Date.now()%10000 + Math.floor(rng()*9999);
+    pathQueue.push(makePath(id));
+  }
+}
+
+// Initialize world
+function resetLevel(){
+  worldX = 0;
+  currentPathIndex = 0;
+  pathQueue = [];
+  ensurePaths(6);
+  flames = [];
+  coins = [];
+  enemies = [];
+  projectiles = [];
+  particles = [];
+  // seed spawn from first two paths
+  for(let i=0;i<4;i++){
+    const p = pathQueue[i];
+    // offset x positions by cumulative path offset
+    const base = i * PATH_SEGMENT_TOTAL;
+    p.flames.forEach(f => flames.push({x:f.x+base,y:f.y,r:f.r, collected:false}));
+    p.coins.forEach(c => coins.push({x:c.x+base,y:c.y,r:c.r, collected:false}));
+    p.enemies.forEach(e => enemies.push({...e,x:e.x+base}));
+  }
+  // player reset
+  player.x = W*0.2;
+  player.y = GROUND_Y - player.h;
+  player.vy = 0;
+  player.onGround = true;
+  player.hp = 3 + game.armorUpgrade;
+  player.flamesCollected = 0;
+  player.isMega = false;
+  player.megaTimer = 0;
+  game.timeLeft = 60;
+  game.inShop = false;
+  game.paused = false;
+  updateUI();
+}
+function updateUI(){
+  elLevel.textContent = game.level;
+  elTime.textContent = Math.ceil(game.timeLeft);
+  elFlames.textContent = player.flamesCollected;
+  elCoins.textContent = game.coins;
+  elBombs.textContent = game.bombsOwned;
+  elHp.textContent = player.hp;
+  elArmor.textContent = game.armorUpgrade;
+}
+
+// Game loop
+let lastTs = performance.now();
+function loop(ts){
+  const dt = Math.min(0.04, (ts - lastTs) / 1000);
+  lastTs = ts;
+  if(!game.paused && !game.inShop){
+    update(dt);
+    render();
+  } else {
+    render(); // still render paused screen or shop overlay below overlay panel
+  }
+  requestAnimationFrame(loop);
+}
+
+// Update game logic
+function update(dt){
+  // decrement timers
+  game.timeLeft -= dt;
+  if(game.timeLeft <= 0){
+    // level end -> shop
+    openShop();
+    return;
+  }
+  // player controls
+  let move = 0;
+  if(keys['a']) move -= 1;
+  if(keys['d']) move += 1;
+  if(keys['w'] || keys[' ']) {
+    if(player.onGround){
+      player.vy = -13;
+      player.onGround = false;
+    }
+  }
+  // speed factoring
+  let speed = player.baseSpeed * (1 + 0.12*game.speedUpgrade);
+  if(player.isMega) speed *= 5;
+  // horizontal movement influences world scroll: player tries to move right, world scrolls instead for forward feel
+  // We'll allow some manual backward movement.
+  const desired = move * speed * (1 + game.level * 0.01) * (1 + player.flamesCollected*0.02);
+  // when moving right, we scroll world faster. Left moves can move player left a bit.
+  if(desired > 0){
+    worldX += desired;
+  } else {
+    // allow small backward travel but constrained
+    worldX += desired * 0.6;
+    if(worldX < 0) worldX = 0;
+  }
+  // apply gravity
+  player.vy += GRAVITY;
+  player.y += player.vy;
+  if(player.y + player.h >= GROUND_Y){
+    player.y = GROUND_Y - player.h;
+    player.vy = 0;
+    player.onGround = true;
+  } else {
+    player.onGround = false;
+  }
+  // update path queue: ensure segments ahead based on worldX
+  const neededSegments = Math.ceil((worldX + W*2) / PATH_SEGMENT_TOTAL) + 1;
+  ensurePaths(neededSegments + 3);
+  // instantiate items/enemies for upcoming paths as we approach them
+  // enemies, coins, flames are created when path added to scene; we created initial ones earlier.
+  // Remove off-screen behind to save cycles
+  const pruneBehind = worldX - W*1.5;
+  flames = flames.filter(f => !f.collected && f.x > pruneBehind);
+  coins = coins.filter(c => !c.collected && c.x > pruneBehind);
+  enemies = enemies.filter(e => e.x > pruneBehind - 400);
+  // collisions with flames (collectible)
+  for(let i=0;i<flames.length;i++){
+    const f = flames[i];
+    if(distance(player.x + player.w/2, player.y + player.h/2, f.x - worldX + 0, f.y) < 36 && !f.collected){
+      f.collected = true; player.flamesCollected++;
+      spawnParticles(f.x - worldX, f.y, 8, 'orange');
+      if(player.flamesCollected >= 10){
+        player.flamesCollected -= 10;
+        triggerMega();
+      }
+    }
+  }
+  // coins
+  for(let i=0;i<coins.length;i++){
+    const c = coins[i];
+    if(distance(player.x + player.w/2, player.y + player.h/2, c.x - worldX + 0, c.y) < 30 && !c.collected){
+      c.collected = true; game.coins += 1;
+      spawnParticles(c.x - worldX, c.y, 6, 'gold');
+    }
+  }
+  // enemies movement & collisions
+  enemies.forEach(en=>{
+    // local x relative to world
+    const ex = en.x - worldX;
+    // simple AI: move toward player horizontally
+    const dir = ((player.x + player.w/2) - ex) > 0 ? 1 : -1;
+    en.x += en.vx * (1 + game.level*0.02) * dt * 60;
+    // jumping behavior
+    en.jumpTimer--;
+    if(en.jumpTimer <= 0 && en.onGround){
+      en.vy = -8 - Math.random()*4;
+      en.onGround = false;
+      en.jumpTimer = en.jumpCooldown;
+    }
+    en.vy += GRAVITY*0.7;
+    en.y += en.vy;
+    if(en.y + en.h >= GROUND_Y){
+      en.y = GROUND_Y - en.h;
+      en.vy = 0;
+      en.onGround = true;
+    }
+    // collision with player body (damage)
+    const px = player.x + player.w/2;
+    const py = player.y + player.h/2;
+    if(distance(px, py, ex + en.w/2, en.y + en.h/2) < 40){
+      // hurt player
+      if(!en._hitCooldown){
+        en._hitCooldown = 40;
+        const dmg = Math.max(1, 1 - game.armorUpgrade*0.2);
+        player.hp -= dmg;
+        spawnParticles(player.x+20, player.y+10, 12, 'red');
+        if(player.hp <= 0){
+          // respawn: lose coins, reset to start of level
+          game.coins = Math.max(0, game.coins - Math.floor(game.coins*0.25));
+          resetLevel();
+          return;
+        }
+      }
+    }
+    if(en._hitCooldown) en._hitCooldown--;
+  });
+  // projectiles update & collisions with enemies
+  for(let i=projectiles.length-1;i>=0;i--){
+    const p = projectiles[i];
+    p.x += p.vx * dt * 60;
+    p.y += p.vy * dt * 60;
+    p.vy += GRAVITY*0.3;
+    // check out of bounds
+    if(p.x < -200 || p.x > worldX + W + 200 || p.y > H + 200){
+      projectiles.splice(i,1); continue;
+    }
+    // check enemies
+    for(let j=enemies.length-1;j>=0;j--){
+      const e = enemies[j];
+      if(distance(p.x, p.y, e.x - worldX + 0, e.y + e.h/2) < 30){
+        // hit
+        spawnParticles(e.x - worldX, e.y, 10, 'orange');
+        enemies.splice(j,1);
+        if(Math.random() < 0.45) { game.coins += 1; }
+        projectiles.splice(i,1);
+        break;
+      }
+    }
+  }
+  // projectiles lifetime - nothing else
+  // spawn more ahead if we pass into new path segments
+  const highestPathIndex = Math.floor((worldX + W*2) / PATH_SEGMENT_TOTAL);
+  // ensure next few segments instantiated into world entities
+  for(let i=currentPathIndex; i <= highestPathIndex + 3; i++){
+    // if we've already integrated this path index into enemies/flames arrays or not
+    // We'll track a simple marker on pathQueue elements addedAtWorld to avoid duplicate adding
+    if(pathQueue[i] && !pathQueue[i]._addedToWorld){
+      const p = pathQueue[i];
+      const base = i * PATH_SEGMENT_TOTAL;
+      p.flames.forEach(f => flames.push({x:f.x+base,y:f.y,r:f.r, collected:false}));
+      p.coins.forEach(c => coins.push({x:c.x+base,y:c.y,r:c.r, collected:false}));
+      p.enemies.forEach(e => enemies.push({...e,x:e.x+base}));
+      p._addedToWorld = true;
+    }
+  }
+  // allow shooting
+  if(keys['b'] && !keys._lastB){
+    // spawn fireball near player pointing forward
+    const dir = 1;
+    projectiles.push({x: player.x + 30, y: player.y + 8, vx: 12 * dir * (player.isMega ? 2 : 1), vy: -2});
+    keys._lastB = true;
+  }
+  if(!keys['b']) keys._lastB = false;
+  // bomb usage
+  if(keys['c'] && !keys._lastC){
+    if(game.bombsOwned > 0){
+      useBomb();
+      game.bombsOwned--;
+      keys._lastC = true;
+    }
+  }
+  if(!keys['c']) keys._lastC = false;
+  // Mega timer
+  if(player.isMega){
+    player.megaTimer -= dt;
+    if(player.megaTimer <= 0){
+      player.isMega = false;
+      spawnParticles(player.x+20, player.y+10, 20, 'yellow');
+    }
+  }
+  // minimal particle update
+  for(let i=particles.length-1;i>=0;i--){
+    const p = particles[i];
+    p.vy += 0.3;
+    p.x += p.vx;
+    p.y += p.vy;
+    p.life -= 1;
+    if(p.life <= 0) particles.splice(i,1);
+  }
+  // update UI
+  updateUI();
+}
+
+// Trigger megaflame
+function triggerMega(){
+  player.isMega = true;
+  player.megaTimer = 6 + Math.min(6, game.level*0.1); // duration
+  spawnParticles(player.x+20, player.y+10, 40, 'yellow');
+}
+
+// Bomb usage: clear nearby enemies visually
+function useBomb(){
+  const bombX = worldX + player.x + 60;
+  const radius = 260;
+  // destroy enemies within radius
+  for(let i=enemies.length-1;i>=0;i--){
+    const e=enemies[i];
+    if(Math.abs(e.x - bombX) < radius){
+      spawnParticles(e.x - worldX, e.y, 16, 'orange');
+      enemies.splice(i,1);
+      game.coins += 1;
+    }
+  }
+  // visual explosion particles
+  for(let i=0;i<60;i++){
+    particles.push({
+      x: (player.x + Math.random()*200) ,
+      y: player.y + Math.random()*80 - 30,
+      vx: Math.random()*10-5,
+      vy: Math.random()*-6,
+      life: 30,
+      color: 'orange'
+    });
+  }
+}
+
+// Render
+function render(){
+  // clear
+  ctx.clearRect(0,0,W,H);
+  // determine current path index to sample visuals
+  const baseIndex = Math.floor(worldX / PATH_SEGMENT_TOTAL);
+  const localOffset = worldX - baseIndex * PATH_SEGMENT_TOTAL;
+  // draw sky/horizon
+  // determine a blended palette from the current path and next path for seamless transition
+  const pA = pathQueue[baseIndex] || pathQueue[0];
+  const pB = pathQueue[baseIndex+1] || pA;
+  const t = (localOffset / PATH_SEGMENT_TOTAL);
+  const skyA = pA ? pA.colorScheme.sky : '#150000';
+  const skyB = pB ? pB.colorScheme.sky : '#0b0000';
+  // simple gradient
+  const grad = ctx.createLinearGradient(0,0,0,H*0.7);
+  grad.addColorStop(0, lerpColor(skyA, skyB, t));
+  grad.addColorStop(1, '#050202');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0,0,W,H*0.7);
+  // draw sun hint if any
+  if(pA && pA.colorScheme.sun){
+    ctx.beginPath();
+    ctx.fillStyle = 'rgba(255,120,30,0.12)';
+    ctx.arc(W*0.85 - t*200, H*0.18, 80, 0, Math.PI*2);
+    ctx.fill();
+  }
+  // parallax layers rendering function
+  for(let layer=0; layer<LAYERS; layer++){
+    const speed = PARALLAX[layer];
+    // draw elements from pathQueue segments that cover screen range
+    const segStart = Math.floor(worldX/(PATH_SEGMENT_TOTAL))-1;
+    const segEnd = Math.floor((worldX+W)/(PATH_SEGMENT_TOTAL))+1;
+    for(let si=segStart; si<=segEnd; si++){
+      const seg = pathQueue[si];
+      if(!seg) continue;
+      const segBase = si * PATH_SEGMENT_TOTAL;
+      const localScroll = (worldX - segBase) * speed;
+      if(layer===0){
+        // horizon strip color band
+        ctx.fillStyle = seg.colorScheme.ground;
+        ctx.fillRect(-localScroll, GROUND_Y+player.h, PATH_SEGMENT_TOTAL, H - GROUND_Y);
+      } else if(layer===1){
+        // clouds
+        seg.clouds.forEach(c=>{
+          const cx = (c.x - localScroll) % (PATH_SEGMENT_TOTAL);
+          const drawX = cx;
+          const drawY = c.y + Math.sin((worldX + c.x) * 0.002) * 8;
+          ctx.beginPath();
+          ctx.fillStyle = seg.colorScheme.cloudColor;
+          drawCloud(ctx, drawX, drawY, c.size);
+          ctx.fill();
+        });
+      } else if(layer===2){
+        // mountains
+        seg.mountains.forEach(m=>{
+          const mx = m.x - localScroll;
+          const peakX = mx;
+          const baseY = m.baseY;
+          ctx.beginPath();
+          ctx.moveTo(peakX - m.w/2, baseY);
+          ctx.lineTo(peakX, baseY - m.h);
+          ctx.lineTo(peakX + m.w/2, baseY);
+          ctx.closePath();
+          ctx.fillStyle = seg.colorScheme.mountainColor;
+          ctx.fill();
+        });
+      } else if(layer===3){
+        // far trees
+        seg.farTrees.forEach(tn=>{
+          const tx = tn.x - localScroll;
+          ctx.fillStyle = seg.colorScheme.farTree;
+          drawTriangleTree(ctx, tx, GROUND_Y - tn.h - 6, tn.h);
+        });
+      } else if(layer===4){
+        // near trees
+        seg.nearTrees.forEach(nt=>{
+          const nx = nt.x - localScroll;
+          ctx.fillStyle = seg.colorScheme.nearTree;
+          drawTriangleTree(ctx, nx, GROUND_Y - nt.h - 2, nt.h);
+        });
+      } else if(layer===5){
+        // path details along ground
+        seg.details.forEach(d=>{
+          const dx = d.x - localScroll;
+          ctx.fillStyle = '#2b1a0f';
+          ctx.beginPath();
+          ctx.ellipse(dx, GROUND_Y + d.yoff, d.size, d.size*0.6, 0, 0, Math.PI*2);
+          ctx.fill();
+        });
+      }
+    }
+  }
+  // Draw ground path line
+  ctx.fillStyle = '#2c1206';
+  ctx.fillRect(0,GROUND_Y, W, H - GROUND_Y);
+
+  // Draw coins
+  coins.forEach(c=>{
+    if(c.collected) return;
+    const sx = c.x - worldX;
+    if(sx < -80 || sx > W + 80) return;
+    drawCoin(ctx, sx, c.y, c.r);
+  });
+
+  // Draw flames (red orbs)
+  flames.forEach(f=>{
+    if(f.collected) return;
+    const sx = f.x - worldX;
+    if(sx < -80 || sx > W + 80) return;
+    drawFlame(ctx, sx, f.y, f.r, true);
+  });
+
+  // Draw enemies (spiders)
+  enemies.forEach(e=>{
+    const sx = e.x - worldX;
+    if(sx < -120 || sx > W + 120) return;
+    drawSpider(ctx, sx, e.y, e.w, e.h);
+  });
+
+  // Draw projectiles
+  projectiles.forEach(p=>{
+    const sx = p.x - worldX;
+    ctx.beginPath();
+    ctx.fillStyle = 'rgba(255,160,40,0.95)';
+    ctx.ellipse(sx, p.y, 8, 6, 0, 0, Math.PI*2);
+    ctx.fill();
+  });
+
+  // Draw player (fiery running flame)
+  drawPlayer(ctx, player.x, player.y, player.w, player.h, player.isMega ? '#ffd84d' : '#ff6b1a');
+
+  // Draw particles
+  particles.forEach(p=>{
+    ctx.fillStyle = p.color || 'orange';
+    ctx.fillRect(p.x, p.y, 3, 3);
+  });
+
+  // HUD (level name and segment names)
+  const currentSeg = pathQueue[baseIndex];
+  if(currentSeg){
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(12, H-84, 360, 68);
+    ctx.fillStyle = '#ffb27f';
+    ctx.font = '20px monospace';
+    ctx.fillText(currentSeg.name || 'Unknown', 22, H-58);
+    ctx.font = '13px monospace';
+    ctx.fillStyle = '#fff';
+    ctx.fillText('Path ' + (baseIndex+1) + ' of run', 22, H-36);
+  }
+
+  // If paused or shop, overlay
+  if(game.paused){
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(0,0,W,H);
+    ctx.fillStyle = '#fff';
+    ctx.font = '32px monospace';
+    ctx.fillText('PAUSED', W/2 - 70, H/2);
+  }
+}
+
+// UI Render helpers
+function drawCloud(ctx,x,y,size){
+  ctx.moveTo(x,y);
+  ctx.ellipse(x, y, size*0.6, size*0.4, 0, 0, Math.PI*2);
+  ctx.ellipse(x + size*0.32, y - size*0.08, size*0.44, size*0.32, 0, 0, Math.PI*2);
+  ctx.ellipse(x - size*0.28, y - size*0.06, size*0.34, size*0.28, 0, 0, Math.PI*2);
+}
+function drawTriangleTree(ctx,x,y,h){
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x - h*0.4, y + h*0.6);
+  ctx.lineTo(x + h*0.4, y + h*0.6);
+  ctx.closePath();
+  ctx.fill();
+  // trunk
+  ctx.fillStyle = '#2a1407';
+  ctx.fillRect(x - 4, y + h*0.6, 8, 10);
+}
+function drawCoin(ctx,x,y,r){
+  ctx.beginPath();
+  ctx.fillStyle = 'gold';
+  ctx.ellipse(x, y, r, r, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(0,0,0,0.18)';
+  ctx.fillRect(x-2, y-6, 4, 12);
+}
+function drawFlame(ctx,x,y,r,glow){
+  // glow
+  if(glow){
+    const g = ctx.createRadialGradient(x,y,2,x,y,40);
+    g.addColorStop(0, 'rgba(255,160,40,0.9)');
+    g.addColorStop(1, 'rgba(255,40,40,0.02)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(x, y, 36, 46, 0, 0, Math.PI*2);
+    ctx.fill();
+  }
+  // core flame
+  ctx.beginPath();
+  ctx.fillStyle = '#ff3c00';
+  ctx.moveTo(x, y - r);
+  ctx.quadraticCurveTo(x + r*0.8, y, x, y + r);
+  ctx.quadraticCurveTo(x - r*0.8, y, x, y - r);
+  ctx.fill();
+  ctx.fillStyle = 'yellow';
+  ctx.beginPath();
+  ctx.ellipse(x, y - 2, r*0.4, r*0.6, 0, 0, Math.PI*2);
+  ctx.fill();
+}
+function drawSpider(ctx,x,y,w,h){
+  ctx.save();
+  ctx.translate(x, y);
+  // body
+  ctx.fillStyle = '#111';
+  ctx.beginPath();
+  ctx.ellipse(0, -6, w*0.38, h*0.6, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(0, 8, w*0.28, h*0.5, 0, 0, Math.PI*2);
+  ctx.fillStyle = '#222';
+  ctx.fill();
+  // legs
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 3;
+  for(let i=-1;i<=1;i+=2){
+    for(let j=0;j<4;j++){
+      ctx.beginPath();
+      ctx.moveTo(i*6, j*4 - 8);
+      ctx.quadraticCurveTo(i*(10+j*2), j*8-2, i*(20+j*6), j*12 + 4);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+function drawPlayer(ctx,x,y,w,h,color){
+  // flickering flame head + small body
+  const t = Date.now()/120;
+  ctx.save();
+  ctx.translate(x,y);
+  // legs -> running animation
+  const legA = Math.sin(t)*6;
+  ctx.fillStyle = '#330800';
+  ctx.fillRect(6, h-6, 8+legA, 6);
+  ctx.fillRect(20, h-6, 8-legA, 6);
+  // flame head
+  const cx = w/2;
+  const cy = 10;
+  // glow
+  const g = ctx.createRadialGradient(cx, cy, 2, cx, cy, 50);
+  g.addColorStop(0, 'rgba(255,100,20,0.9)');
+  g.addColorStop(1, 'rgba(255,30,10,0.02)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, 36, 46, 0, 0, Math.PI*2);
+  ctx.fill();
+  // outer flame
+  ctx.beginPath();
+  ctx.fillStyle = color;
+  ctx.moveTo(cx, cy-18+Math.sin(t*1.4)*6);
+  ctx.quadraticCurveTo(cx+22, cy, cx, cy+20);
+  ctx.quadraticCurveTo(cx-22, cy, cx, cy-18+Math.sin(t*1.4)*6);
+  ctx.fill();
+  // inner glow
+  ctx.fillStyle = '#fff3c6';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy-2, 10, 14, 0, 0, Math.PI*2);
+  ctx.fill();
+  // eyes
+  ctx.fillStyle = '#330000';
+  ctx.fillRect(cx-6, cy+2, 3,3);
+  ctx.fillRect(cx+3, cy+2, 3,3);
+  ctx.restore();
+}
+
+// Utilities
+function distance(x1,y1,x2,y2){ return Math.hypot(x1-x2,y1-y2); }
+function spawnParticles(x,y,n,color){
+  for(let i=0;i<n;i++){
+    particles.push({
+      x: x + Math.random()*40 - 20,
+      y: y + Math.random()*20 - 10,
+      vx: Math.random()*6 - 3,
+      vy: Math.random()*-6,
+      life: 12 + Math.floor(Math.random()*20),
+      color: color
+    });
+  }
+}
+function lerpColor(a,b,t){
+  // simple parse of hsl or hex fallback to rgba; we'll do a crude mix by drawing temp canvas for gradient -> Not needed
+  // attempt to parse hsl strings like hsl(x,s%,l%)
+  try{
+    if(a.startsWith('hsl') && b.startsWith('hsl')){
+      const pa = a.match(/hsl\((\d+),(\d+)%,(\d+)%\)/);
+      const pb = b.match(/hsl\((\d+),(\d+)%,(\d+)%\)/);
+      if(pa && pb){
+        const ha = +pa[1], sa = +pa[2], la = +pa[3];
+        const hb = +pb[1], sb = +pb[2], lb = +pb[3];
+        const h = Math.round(ha*(1-t)+hb*t);
+        const s = Math.round(sa*(1-t)+sb*t);
+        const l = Math.round(la*(1-t)+lb*t);
+        return `hsl(${h},${s}%,${l}%)`;
+      }
+    }
+  }catch(e){}
+  return a;
+}
+
+// Shop UI
+function openShop(){
+  game.inShop = true;
+  game.paused = true;
+  overlay.innerHTML = '';
+  const panel = document.createElement('div');
+  panel.className = 'panel';
+  panel.innerHTML = `<h2 style="margin:0 0 6px 0">Level ${game.level} Complete</h2>
+    <div class="small">Time up — purchase upgrades before Level ${game.level+1}</div>
+    <div style="margin-top:14px">Coins: <strong>${game.coins}</strong></div>`;
+  // shop options
+  const row1 = document.createElement('div'); row1.className='shop-row';
+  row1.innerHTML = `<div>Speed +1 (permanent)</div><div>${100 + game.speedUpgrade*20} coins</div>`;
+  const btn1 = document.createElement('button'); btn1.className='btn'; btn1.textContent='Buy';
+  row1.appendChild(btn1);
+  panel.appendChild(row1);
+  const row2 = document.createElement('div'); row2.className='shop-row';
+  row2.innerHTML = `<div>Armor +1 (permanent)</div><div>${120 + game.armorUpgrade*25} coins</div>`;
+  const btn2 = document.createElement('button'); btn2.className='btn'; btn2.textContent='Buy';
+  row2.appendChild(btn2);
+  panel.appendChild(row2);
+  const row3 = document.createElement('div'); row3.className='shop-row';
+  row3.innerHTML = `<div>Bomb (usable)</div><div>40 coins</div>`;
+  const btn3 = document.createElement('button'); btn3.className='btn'; btn3.textContent='Buy';
+  row3.appendChild(btn3);
+  panel.appendChild(row3);
+  const row4 = document.createElement('div'); row4.className='shop-row';
+  row4.innerHTML = `<div>Proceed to Next Level</div><div></div>`;
+  const btn4 = document.createElement('button'); btn4.className='btn'; btn4.textContent='Continue';
+  row4.appendChild(btn4);
+  panel.appendChild(row4);
+  const info = document.createElement('div');
+  info.className='small';
+  info.style.marginTop='12px';
+  info.innerHTML = `Tip: Press C during a run to detonate a bomb. Collect 10 red flames to become a MegaFlame (5x speed).`;
+  panel.appendChild(info);
+  overlay.appendChild(panel);
+
+  // Button handlers
+  btn1.addEventListener('click', ()=>{
+    const cost = 100 + game.speedUpgrade*20;
+    if(game.coins >= cost){
+      game.coins -= cost;
+      game.speedUpgrade++;
+      panelPulse(panel, 'Purchased Speed');
+      updateUI();
+    } else alert('Not enough coins');
+  });
+  btn2.addEventListener('click', ()=>{
+    const cost = 120 + game.armorUpgrade*25;
+    if(game.coins >= cost){
+      game.coins -= cost;
+      game.armorUpgrade++;
+      updateUI();
+      panelPulse(panel, 'Purchased Armor');
+    } else alert('Not enough coins');
+  });
+  btn3.addEventListener('click', ()=>{
+    const cost = 40;
+    if(game.coins >= cost){
+      game.coins -= cost;
+      game.bombsOwned++;
+      updateUI();
+      panelPulse(panel, 'Purchased Bomb');
+    } else alert('Not enough coins');
+  });
+  btn4.addEventListener('click', ()=>{
+    // proceed: increment level and restart
+    overlay.innerHTML = '';
+    game.inShop = false;
+    game.paused = false;
+    game.level++;
+    resetLevel();
+  });
+}
+function panelPulse(panel, text){
+  const el = document.createElement('div');
+  el.style.marginTop = '8px';
+  el.style.color = '#ffd8a6';
+  el.textContent = text;
+  panel.appendChild(el);
+  setTimeout(()=>{ if(el.parentNode) el.parentNode.removeChild(el); }, 1600);
+}
+
+// Initialization
+resetLevel();
+requestAnimationFrame(loop);
+updateUI();
+
+// Helper: random integers using global rng for initial seeding in name fallback
+function rIntEnsure(seed, m){ return Math.abs((seed * (m+1)) % (m+5)); }
+
+// Basic instructions & click to start
+const startPanel = document.createElement('div');
+startPanel.className='panel center';
+startPanel.innerHTML = `<div style="text-align:center">
+  <h1 style="margin:0 0 6px 0;color:#ff8a3d">Firerun — Ask For Fire</h1>
+  <div class="small" style="margin-bottom:10px">You are a fiery running flame. Run along ever-changing paths. Gather red flames (10) to become a MegaFlame. Shoot with B. Use bombs with C.</div>
+  <div><button id="startBtn" class="btn">Start Run</button></div>
+</div>`;
+overlay.appendChild(startPanel);
+document.getElementById('startBtn').addEventListener('click', ()=>{
+  overlay.innerHTML = '';
+  game.paused = false;
+});
+
+// Keyboard toggles for debug pause
+window.addEventListener('keydown', (e)=>{
+  if(e.key.toLowerCase()==='p'){ game.paused = !game.paused; }
+});
+
+// Simple seeded RNG note if needed for reproducibility (not used further)
+function randomSeed(n){
+  rng = mulberry32(n);
+}
+
+// Done
+
+})();
+</script>
+</body>
+</html>
