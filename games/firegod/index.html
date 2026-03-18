@@ -1,0 +1,726 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>Fire God: Ask For Fire</title>
+<style>
+  html,body { margin:0; height:100%; background:#111; overflow:hidden; }
+  canvas { display:block; background:#87ceeb; }
+  #overlay {
+    position:absolute; left:10px; top:10px; color:#fff; font-family:monospace; z-index:10;
+    text-shadow:0 0 6px #000;
+  }
+  #shop {
+    position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+    background:rgba(0,0,0,0.8); color:#fff; padding:18px; border-radius:8px;
+    font-family:monospace; z-index:20; display:none; min-width:380px;
+  }
+  .btn { background:#ff4500; color:#fff; padding:8px 10px; margin:6px; border-radius:6px; cursor:pointer; display:inline-block;}
+  .small { font-size:13px; opacity:0.9; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="overlay"></div>
+<div id="shop">
+  <h3 id="shopTitle">Level Complete</h3>
+  <div id="shopBody"></div>
+  <div style="margin-top:12px;">
+    <span class="btn" id="continueBtn">Continue</span>
+    <span class="btn" id="exitBtn">Exit</span>
+  </div>
+  <div style="margin-top:8px; font-size:12px; color:#ddd;">Controls: WASD to move/jump, B to shoot, C to use bomb</div>
+</div>
+<script>
+/*
+Fire God - Single File Game
+Controls: WASD = movement (W jump), B = shoot fireball, C = bomb (if purchased)
+Collect red flames to become megaflame (10 flames) -> 5x speed for a short burst.
+At end of each level (10 screen widths) there's a shop to buy Speed, Armor, Bomb.
+Infinite levels, procedural segments (each segment = 2 screen widths).
+*/
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W = canvas.width = innerWidth;
+let H = canvas.height = innerHeight;
+
+window.addEventListener('resize', ()=>{ W = canvas.width = innerWidth; H = canvas.height = innerHeight; });
+
+const overlay = document.getElementById('overlay');
+const shop = document.getElementById('shop');
+const shopBody = document.getElementById('shopBody');
+const shopTitle = document.getElementById('shopTitle');
+const continueBtn = document.getElementById('continueBtn');
+const exitBtn = document.getElementById('exitBtn');
+
+let keys = {};
+window.addEventListener('keydown', e=>{ keys[e.key.toLowerCase()] = true; if (['b','c'].includes(e.key.toLowerCase())) e.preventDefault();});
+window.addEventListener('keyup', e=>{ keys[e.key.toLowerCase()] = false; });
+
+let seedRandom = (s=>{ let a=1103515245,c=12345,m=2**31; let z=s% m; return ()=>{ z=(a*z+c)%m; return z/m; }; })(Math.floor(Math.random()*1e9));
+
+function rand(min,max){ return min + seedRandom()*(max-min); }
+function rint(min,max){ return Math.floor(rand(min,max+1)); }
+function choose(arr){ return arr[Math.floor(rand(0,arr.length))]; }
+
+// Game variables
+let levelNum = 1;
+let coins = 0;
+let bombs = 0;
+let globalSpeedStat = 1; // upgradeable
+let armorStat = 0; // reduces damage
+let baseScroll = 220; // px/s base speed
+let worldX = 0; // distance traveled in current level
+const screenW = ()=>W, screenH = ()=>H;
+const levelScreenCount = 10;
+const pathScreens = 2; // each segment = 2 screen widths
+const segmentWidth = ()=>screenW()*pathScreens;
+const levelWidth = ()=>screenW()*levelScreenCount;
+
+let segments = []; // current level segments
+let entities = []; // enemies, items, projectiles
+let particles = [];
+
+// Player
+let player = {
+  x: screenW()*0.18,
+  y: screenH()*0.75,
+  vx:0, vy:0, w:36, h:46,
+  onGround:true,
+  health: 3,
+  maxHealth:3,
+  flameCount:0,
+  isMega:false,
+  megaTimer:0,
+  shootCooldown:0.18,
+  shootTimer:0,
+  invuln:0
+};
+
+// Generate random themed segment
+const names = ["Crimson Ridge","Ember Vale","Ashen Hollow","Singe Coast","Flaregrove","Smolder Dunes","Cinder Heights","Blaze Flats","Sparkmoor","Torchwind"];
+const cloudTypes = ["wispy","puffy","streaks","scattered","banded"];
+const mountainPalettes = [
+  ["#3b2f2f","#6b504b","#9b7b73"],
+  ["#2b3b4b","#475c78","#7aa0d0"],
+  ["#4b3528","#7b5b44","#a78363"],
+  ["#2d2f2d","#5a5d59","#8b8f8b"]
+];
+const treePalettes = [
+  ["#1b5e20","#2e7d32","#4caf50"],
+  ["#2e8b57","#3cb371","#98fb98"],
+  ["#6b8e23","#9acd32","#bdb76b"],
+  ["#4b2e2e","#7b4b3b","#a36b5b"]
+];
+const animalsList = ["bird","deer","wolf","fox","hare","lizard"];
+
+// Create segments for level
+function genLevelSegments(level){
+  segments = [];
+  for(let i=0;i<levelScreenCount / (pathScreens); i++){
+    // each segment spans 2 screens; create attribute set
+    let name = choose(names) + " " + (level + i);
+    let horizonColor = `hsl(${rint(10,40)},${rint(55,85)}%,${rint(30,55)}%)`;
+    let skyTop = `hsl(${rint(190,220)},${rint(60,90)}%,${rint(50,70)}%)`;
+    let clouds = choose(cloudTypes);
+    let mountains = choose(mountainPalettes);
+    let trees = choose(treePalettes);
+    let animal = choose(animalsList);
+    let pathColor = `hsl(${rint(15,40)},${rint(60,90)}%,${rint(35,55)}%)`;
+    let accent = `hsl(${rint(0,40)},${rint(60,100)}%,${rint(45,60)}%)`;
+    segments.push({name, horizonColor, skyTop, clouds, mountains, trees, animal, pathColor, accent});
+  }
+  // Ensure segments length = levelScreenCount / pathScreens
+}
+
+// Spawn items/enemies based on world offset
+function populateEntitiesForSegment(segIndex){
+  // spawn some spiders, flames, coins
+  let segStart = segIndex * segmentWidth();
+  let segEnd = segStart + segmentWidth();
+  // spiders
+  let spiderCount = rint(2 + levelNum, 4 + levelNum*2);
+  for(let i=0;i<spiderCount;i++){
+    let x = segStart + rand(200, segmentWidth()-100);
+    let yBase = screenH()*0.75;
+    entities.push({
+      type:'spider',
+      x, y:yBase,
+      vx: -rand(10,35),
+      baseY:yBase,
+      jumpTimer: rand(0,2),
+      size: rint(18,28),
+      hp:1 + Math.floor(levelNum/3),
+      dir: -1
+    });
+  }
+  // red flames
+  let flameCount = rint(1,4);
+  for(let i=0;i<flameCount;i++){
+    let x = segStart + rand(150, segmentWidth()-150);
+    entities.push({type:'redflame', x, y: screenH()*0.7 - rand(0,90), r:10});
+  }
+  // coins
+  let coinCount = rint(3,7);
+  for(let i=0;i<coinCount;i++){
+    let x = segStart + rand(120, segmentWidth()-120);
+    entities.push({type:'coin', x, y: screenH()*0.7 - rand(0,140), r:8, value:1});
+  }
+  // decorative animals (non-hostile)
+  let animalCount = rint(0,2);
+  for(let i=0;i<animalCount;i++){
+    let x = segStart + rand(200, segmentWidth()-200);
+    entities.push({type:'animal', x, y: screenH()*0.75, species:choose(animalsList)});
+  }
+}
+
+// Init first level
+function startLevel(l){
+  worldX = 0;
+  player.x = screenW()*0.18;
+  player.y = screenH()*0.75;
+  player.vx = player.vy = 0;
+  player.onGround = true;
+  player.shootTimer = 0;
+  player.invuln = 0;
+  player.megaTimer = 0;
+  player.isMega = false;
+  player.flameCount = 0;
+  player.health = Math.min(player.maxHealth, player.health || 3);
+  entities = [];
+  particles = [];
+  genLevelSegments(l);
+  // populate per segment
+  for(let i=0;i<segments.length;i++) populateEntitiesForSegment(i);
+}
+
+startLevel(levelNum);
+
+// Utility draw helpers
+function drawRoundedRect(x,y,w,h,r,color){
+  ctx.fillStyle=color;
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);
+  ctx.arcTo(x,y,x+w,y,r);
+  ctx.fill();
+}
+
+// Parallax rendering
+function renderBackground(){
+  // sky gradient per current segment
+  let segIndex = Math.floor(worldX/segmentWidth());
+  let seg = segments[segIndex] || segments[0];
+  // sky
+  let g = ctx.createLinearGradient(0,0,0,H*0.6);
+  g.addColorStop(0, seg.skyTop);
+  g.addColorStop(1, '#87CEEB');
+  ctx.fillStyle = g;
+  ctx.fillRect(0,0,W,H);
+  // horizon band
+  ctx.fillStyle = seg.horizonColor;
+  ctx.fillRect(0,H*0.6,W,H*0.4);
+  // layers: clouds, mountains, far trees, mid trees, edge, path
+  let px = worldX;
+  // Clouds (layer 0 - slowest)
+  ctx.globalAlpha = 0.9;
+  let cloudSpeed = 0.08 * (0.8 + 0.4 * globalSpeedStat);
+  for(let i= -1; i<6; i++){
+    let cx = ((i*350) - (px*cloudSpeed)%800 + 1200) % 1200 - 200;
+    let cy = 60 + (i%3)*20;
+    drawCloud(cx, cy, seg.clouds, seg.accent);
+  }
+  // Mountains (layer1)
+  let mSpeed = 0.18;
+  drawMountains(px*mSpeed, seg.mountains);
+  // Far trees (layer2)
+  let fSpeed = 0.32;
+  drawTrees(px*fSpeed, seg.trees, 0.6, 0.78);
+  // Mid trees (3)
+  drawTrees(px*0.6, seg.trees, 0.8, 0.82);
+  // Edge (4)
+  drawEdge(px*0.9, seg);
+  // Path (foreground) (5)
+  drawPath(px, seg);
+  ctx.globalAlpha = 1.0;
+}
+
+function drawCloud(x,y,type,accent){
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  if(type==='puffy'){
+    ctx.beginPath();
+    ctx.ellipse(x,y,40,25,0,0,Math.PI*2);
+    ctx.ellipse(x+30,y+5,35,23,0,0,Math.PI*2);
+    ctx.ellipse(x-30,y+4,30,20,0,0,Math.PI*2);
+    ctx.fill();
+  } else if(type==='wispy'){
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.beginPath();
+    ctx.ellipse(x,y,70,10,0,0,Math.PI*2);
+    ctx.fill();
+  } else if(type==='streaks'){
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.fillRect(x-80,y-6,160,12);
+  } else {
+    // scattered or banded
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.beginPath();
+    ctx.ellipse(x,y,28,18,0,0,Math.PI*2);
+    ctx.ellipse(x+40,y+4,22,14,0,0,Math.PI*2);
+    ctx.fill();
+  }
+}
+
+function drawMountains(offset, palette){
+  let baseY = H*0.62;
+  for(let i=0;i<6;i++){
+    let x = (i*300 - offset%900);
+    let h = 120 + (i%3)*80;
+    ctx.fillStyle = palette[i%palette.length];
+    ctx.beginPath();
+    ctx.moveTo(x-150, baseY+60);
+    ctx.lineTo(x+150, baseY+60);
+    ctx.lineTo(x, baseY+60 - h);
+    ctx.closePath();
+    ctx.fill();
+  }
+}
+
+function drawTrees(offset, palettes, scale, yFrac){
+  let baseY = H * yFrac;
+  for(let i=0;i<12;i++){
+    let x = (i*220 - offset%2640);
+    let s = (0.6 + ((i%3)/3))*scale;
+    ctx.fillStyle = palettes[i%palettes.length];
+    ctx.beginPath();
+    ctx.moveTo(x, baseY - 60*s);
+    ctx.lineTo(x-25*s, baseY);
+    ctx.lineTo(x+25*s, baseY);
+    ctx.closePath();
+    ctx.fill();
+    // trunk
+    ctx.fillStyle = '#3a2a20';
+    ctx.fillRect(x-4*s, baseY, 8*s, 18*s);
+  }
+}
+
+function drawEdge(offset, seg){
+  // small foreground shrubs and rocks
+  let baseY = H*0.75;
+  for(let i=0;i<20;i++){
+    let x = (i*160 - offset%3200);
+    ctx.fillStyle = seg.accent;
+    ctx.beginPath();
+    ctx.ellipse(x, baseY - 8, 16, 8, 0,0,Math.PI*2);
+    ctx.fill();
+  }
+}
+
+function drawPath(offset, seg){
+  // main ground
+  let baseY = H*0.78;
+  ctx.fillStyle = seg.pathColor;
+  ctx.fillRect(0, baseY, W, H - baseY);
+  // path lines
+  ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+  ctx.lineWidth = 2;
+  for(let i=0;i<20;i++){
+    let x = (i*140 - (offset)%1400);
+    ctx.beginPath();
+    ctx.moveTo(x, baseY + 8);
+    ctx.lineTo(x+60, baseY + 8);
+    ctx.stroke();
+  }
+  // path edges
+  ctx.fillStyle = 'rgba(0,0,0,0.04)';
+  ctx.fillRect(0, baseY+32, W, 6);
+}
+
+// Player draw
+function drawPlayer(){
+  const p = player;
+  // flickering flame
+  let t = performance.now()*0.01;
+  let flick = Math.sin(t*10)*6;
+  ctx.save();
+  // glow
+  let grad = ctx.createRadialGradient(p.x, p.y-12, 8, p.x, p.y-12, 60);
+  ctx.globalCompositeOperation = 'lighter';
+  grad.addColorStop(0, p.isMega ? 'rgba(255,180,20,0.9)' : 'rgba(255,120,20,0.9)');
+  grad.addColorStop(1, 'rgba(255,80,10,0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath(); ctx.ellipse(p.x, p.y-12, p.w, p.h, 0,0,Math.PI*2); ctx.fill();
+  ctx.globalCompositeOperation = 'source-over';
+  // body
+  ctx.fillStyle = p.isMega ? '#ffb347' : '#ff4500';
+  ctx.beginPath();
+  ctx.ellipse(p.x, p.y-12, p.w*0.6 + flick*0.05, p.h*0.6 + Math.abs(flick)*0.05, 0,0,Math.PI*2);
+  ctx.fill();
+  // eyes
+  ctx.fillStyle = '#111';
+  ctx.beginPath(); ctx.ellipse(p.x+6, p.y-18, 4,6,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(p.x-3, p.y-16, 3,4,0,0,Math.PI*2); ctx.fill();
+  // flame tip
+  ctx.fillStyle = '#fff2';
+  ctx.beginPath(); ctx.moveTo(p.x, p.y-40); ctx.quadraticCurveTo(p.x+18,p.y-24,p.x,p.y-12); ctx.fill();
+  ctx.restore();
+}
+
+// Entities draw and logic
+function updateEntities(dt){
+  for(let i=entities.length-1;i>=0;i--){
+    let e = entities[i];
+    if(e.type==='spider'){
+      // simple AI: horizontal patrol with jumps
+      e.jumpTimer += dt;
+      if(e.jumpTimer > 1.1 + Math.random()*1.3){
+        e.jumpTimer = 0;
+        e.vy = -220 - Math.random()*60;
+      }
+      e.vy = (e.vy || 0) + 900*dt;
+      e.y += e.vy*dt;
+      // ground coll
+      let ground = H*0.75;
+      if(e.y > ground){ e.y = ground; e.vy = 0; }
+      // lateral: move towards player somewhat
+      let px = (player.x + worldX);
+      if(e.x > px + 100){ e.x -= (30+Math.min(levelNum*4,120))*dt; e.dir = -1; }
+      else if(e.x < px - 120){ e.x += (30+Math.min(levelNum*4,120))*dt; e.dir = 1; }
+      // collisions with player
+      if(!player.invuln){
+        let dist = Math.hypot((e.x - (player.x + worldX)), (e.y - player.y));
+        if(dist < e.size + 18){
+          // damage
+          let dmg = Math.max(1, 1 - armorStat);
+          player.health -= dmg;
+          player.invuln = 1.2;
+          // knockback
+          player.vy = -220;
+          // create hit particles
+          for(let p=0;p<8;p++) particles.push({x: player.x+worldX, y:player.y, vx: rand(-120,120), vy: rand(-220,-60), life:0.6, col:'#ff6633'});
+          if(player.health<=0){ gameOver(); return; }
+        }
+      }
+      // projectiles collision
+      // check bullets
+    } else if(e.type==='coin'){
+      // float
+      e.y += Math.sin(performance.now()*0.002 + e.x) * 0.2;
+      let dist = Math.hypot((e.x - (player.x + worldX)), (e.y - player.y));
+      if(dist < 28){
+        coins += e.value || 1;
+        entities.splice(i,1);
+        continue;
+      }
+    } else if(e.type==='redflame'){
+      e.y += Math.sin(performance.now()*0.002 + e.x) * 0.2;
+      let dist = Math.hypot((e.x - (player.x + worldX)), (e.y - player.y));
+      if(dist < 28){
+        player.flameCount++;
+        entities.splice(i,1);
+        // pickup particles
+        for(let p=0;p<6;p++) particles.push({x: e.x, y:e.y, vx: rand(-80,80), vy: rand(-200,-50), life:0.5, col:'#ff2222'});
+        if(player.flameCount >= 10){
+          becomeMega();
+        }
+        continue;
+      }
+    } else if(e.type==='animal'){
+      // gentle side movement for depth
+      e.x += Math.sin(performance.now()*0.001 + e.x) * 0.1;
+    }
+  }
+}
+
+// draw entities
+function drawEntities(){
+  for(let e of entities){
+    let sx = e.x - worldX;
+    if(e.type==='spider'){
+      // simple spider: body + legs
+      let s = e.size;
+      ctx.save();
+      ctx.translate(sx, e.y);
+      // legs
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 2;
+      for(let i=0;i<8;i++){
+        let a = (i/8)*Math.PI*2 + performance.now()*0.005*(i%2?1:-1);
+        ctx.beginPath();
+        ctx.moveTo(0,0);
+        ctx.lineTo(Math.cos(a)*s*0.9, Math.sin(a)*s*0.9);
+        ctx.stroke();
+      }
+      // body
+      ctx.fillStyle = '#2b2b2b';
+      ctx.beginPath(); ctx.ellipse(0,0,s*0.9,s*0.7,0,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#552'; ctx.beginPath(); ctx.ellipse(-s*0.25, -s*0.15,s*0.25,s*0.18,0,0,Math.PI*2); ctx.fill();
+      ctx.restore();
+    } else if(e.type==='coin'){
+      let s = e.r;
+      ctx.save();
+      ctx.translate(sx, e.y);
+      ctx.fillStyle = '#ffd700';
+      ctx.beginPath(); ctx.arc(0,0,s,0,Math.PI*2); ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.2)'; ctx.lineWidth = 2; ctx.stroke();
+      ctx.restore();
+    } else if(e.type==='redflame'){
+      ctx.save();
+      ctx.translate(sx, e.y);
+      let t = performance.now()*0.02;
+      ctx.fillStyle = '#ff3300';
+      ctx.beginPath(); ctx.ellipse(0,0, e.r+Math.sin(t)*2, e.r+Math.cos(t)*1.2, 0,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#ffdd00';
+      ctx.beginPath(); ctx.ellipse(0,-6, e.r*0.4, e.r*0.6, 0,0,Math.PI*2); ctx.fill();
+      ctx.restore();
+    } else if(e.type==='animal'){
+      // small shape
+      ctx.save();
+      ctx.translate(sx, e.y);
+      ctx.fillStyle = '#222';
+      ctx.fillRect(-8, -8, 16, 10);
+      ctx.restore();
+    }
+  }
+}
+
+// Projectiles
+function spawnFireball(){
+  if(player.shootTimer > 0) return;
+  player.shootTimer = player.shootCooldown;
+  entities.push({
+    type:'fireball',
+    x: player.x + worldX + 18,
+    y: player.y - 18,
+    vx: 480 * (player.isMega?2:1),
+    size:8,
+    life:2
+  });
+}
+function updateProjectiles(dt){
+  for(let i=entities.length-1;i>=0;i--){
+    let e = entities[i];
+    if(e.type==='fireball'){
+      e.x += e.vx*dt;
+      e.life -= dt;
+      // hit spiders
+      for(let j=entities.length-1;j>=0;j--){
+        let t = entities[j];
+        if(t.type==='spider'){
+          let dist = Math.hypot((t.x - e.x), (t.y - e.y));
+          if(dist < t.size + e.size){
+            t.hp -= (player.isMega?2:1);
+            entities.splice(i,1);
+            if(t.hp<=0) {
+              // drop coin or small flames
+              if(Math.random()<0.6) entities.push({type:'coin', x:t.x, y:t.y-10, r:8, value:1});
+              entities.splice(j,1);
+              for(let p=0;p<6;p++) particles.push({x: t.x, y:t.y, vx: rand(-120,120), vy: rand(-200,-60), life:0.6, col:'#333'});
+            }
+            break;
+          }
+        }
+      }
+      if(e.life<=0) entities.splice(i,1);
+    }
+  }
+}
+
+// Particles update/draw
+function updateParticles(dt){
+  for(let i=particles.length-1;i>=0;i--){
+    let p = particles[i];
+    p.x += p.vx*dt;
+    p.y += p.vy*dt;
+    p.vy += 600*dt;
+    p.life -= dt;
+    if(p.life<=0) particles.splice(i,1);
+  }
+}
+function drawParticles(){
+  for(let p of particles){
+    ctx.fillStyle = p.col;
+    ctx.beginPath(); ctx.arc(p.x - worldX, p.y, 3, 0, Math.PI*2); ctx.fill();
+  }
+}
+
+// Bomb
+function useBomb(){
+  if(bombs<=0) return;
+  bombs--;
+  // clear spiders within range
+  for(let i=entities.length-1;i>=0;i--){
+    if(entities[i].type==='spider'){
+      // explosion effect
+      for(let p=0;p<12;p++) particles.push({x: entities[i].x, y:entities[i].y, vx: rand(-220,220), vy: rand(-260,-40), life:0.9, col:'#ff8855'});
+      entities.splice(i,1);
+      coins += 1;
+    }
+  }
+}
+
+// Become Mega
+function becomeMega(){
+  player.isMega = true;
+  player.megaTimer = 6.0; // seconds
+  player.flameCount = 0;
+  player.shootCooldown = 0.08;
+}
+
+// Game over
+function gameOver(){
+  // reset some stats
+  player.health = player.maxHealth;
+  player.invuln = 0;
+  // drop to shop? For simplicity restart at level 1 but keep coins and upgrades
+  levelNum = 1;
+  startLevel(levelNum);
+}
+
+// Main loop
+let last = performance.now();
+function loop(now){
+  let dt = Math.min(0.04, (now - last)/1000);
+  last = now;
+  // update
+  update(dt);
+  // render
+  ctx.clearRect(0,0,W,H);
+  renderBackground();
+  drawEntities();
+  drawParticles();
+  drawPlayer();
+  drawHUD();
+  requestAnimationFrame(loop);
+}
+
+function update(dt){
+  // timers
+  if(player.shootTimer>0) player.shootTimer -= dt;
+  if(player.invuln>0) player.invuln -= dt;
+  if(player.megaTimer>0){
+    player.megaTimer -= dt;
+    if(player.megaTimer<=0){ player.isMega = false; player.shootCooldown = 0.18; }
+  }
+  // control & physics
+  const left = keys['a'];
+  const right = keys['d'];
+  const up = keys['w'];
+  const down = keys['s'];
+  // horizontal movement small while world auto-scrolls
+  let playerSpeed = 140 * globalSpeedStat;
+  if(player.isMega) playerSpeed *= 5;
+  if(left) player.x -= playerSpeed*dt;
+  if(right) player.x += playerSpeed*dt;
+  // clamp to screen bounds
+  player.x = Math.max(30, Math.min(W - 60, player.x));
+  // jumping
+  if(up && player.onGround){
+    player.vy = -520;
+    player.onGround = false;
+  }
+  // gravity
+  player.vy = (player.vy || 0) + 1400*dt;
+  player.y += player.vy*dt;
+  let groundY = H*0.75;
+  if(player.y > groundY){ player.y = groundY; player.vy = 0; player.onGround = true; }
+
+  // auto-scrolling world
+  let scrollSpeed = baseScroll * globalSpeedStat * (player.isMega?5:1);
+  worldX += scrollSpeed*dt;
+  // player can 'run' forward by pressing D -> give slight extra world shift
+  if(right) worldX += 40*dt * globalSpeedStat;
+
+  // picks up world collisions and entity updates
+  updateEntities(dt);
+  updateProjectiles(dt);
+  updateParticles(dt);
+
+  // shooting
+  if(keys['b']){ spawnFireball(); }
+
+  // bomb key
+  if(keys['c']){
+    if(!keys._cHandled){
+      useBomb();
+      keys._cHandled = true;
+    }
+  } else keys._cHandled = false;
+
+  // level complete
+  if(worldX >= levelWidth()){
+    openShop();
+  }
+}
+
+function drawHUD(){
+  overlay.innerHTML = `Level: ${levelNum} &nbsp;&nbsp; Coins: ${coins} &nbsp;&nbsp; Bombs: ${bombs} &nbsp;&nbsp; Flames: ${player.flameCount}/10 &nbsp;&nbsp; Health: ${player.health}/${player.maxHealth} &nbsp;&nbsp; Speed+: ${globalSpeedStat.toFixed(2)} &nbsp;&nbsp; Armor: ${armorStat}`;
+  // info bottom-left
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.fillRect(12, H-58, 280, 46);
+  ctx.fillStyle = '#fff';
+  ctx.font = '13px monospace';
+  ctx.fillText('Controls: WASD move/jump  B shoot  C bomb', 20, H-34);
+  ctx.fillStyle = player.isMega ? '#ffb347' : '#ff4500';
+  ctx.font = '16px monospace';
+  ctx.fillText(player.isMega ? 'MEGAFLAME ACTIVE!' : 'Fiery Runner', 20, H-68 < 20 ? 20 : H-68);
+}
+
+// Shop overlay
+function openShop(){
+  // build shop interface
+  shopTitle.innerText = `Level ${levelNum} Complete!`;
+  shopBody.innerHTML = `
+    <div style="margin-bottom:8px;">Welcome to the Ember Bazaar. Spend coins: <b>${coins}</b></div>
+    <div style="margin-bottom:6px;">
+      <div class="small">1) Speed Upgrade: increase base speed multiplier</div>
+      <div>Cost: <b>${10 + levelNum*2}</b> coins &nbsp; <span class="btn" id="buySpeed">Buy</span></div>
+    </div>
+    <div style="margin-bottom:6px;">
+      <div class="small">2) Armor Upgrade: reduces damage taken (caps at 1)</div>
+      <div>Cost: <b>${8 + levelNum*2}</b> coins &nbsp; <span class="btn" id="buyArmor">Buy</span></div>
+    </div>
+    <div style="margin-bottom:6px;">
+      <div class="small">3) C-Bomb: one-time use clears spiders</div>
+      <div>Cost: <b>${6 + Math.floor(levelNum/2)}</b> coins &nbsp; <span class="btn" id="buyBomb">Buy</span></div>
+    </div>
+    <div style="margin-top:8px; font-size:12px; color:#ddd;">Tip: Collect 10 red flames to become a Megaflame (5x speed for a short time)</div>
+  `;
+  shop.style.display = 'block';
+  // button handlers
+  document.getElementById('buySpeed').onclick = ()=>{
+    let cost = 10 + levelNum*2;
+    if(coins >= cost){ coins -= cost; globalSpeedStat += 0.12; shopBody.innerHTML += '<div style="color:#8f8">Speed purchased</div>'; }
+    else shopBody.innerHTML += '<div style="color:#f88">Not enough coins</div>';
+  };
+  document.getElementById('buyArmor').onclick = ()=>{
+    let cost = 8 + levelNum*2;
+    if(coins >= cost){ coins -= cost; armorStat = Math.min(armorStat + 1, 1); shopBody.innerHTML += '<div style="color:#8f8">Armor purchased</div>'; }
+    else shopBody.innerHTML += '<div style="color:#f88">Not enough coins</div>';
+  };
+  document.getElementById('buyBomb').onclick = ()=>{
+    let cost = 6 + Math.floor(levelNum/2);
+    if(coins >= cost){ coins -= cost; bombs += 1; shopBody.innerHTML += '<div style="color:#8f8">Bomb purchased</div>'; }
+    else shopBody.innerHTML += '<div style="color:#f88">Not enough coins</div>';
+  };
+  continueBtn.onclick = ()=>{
+    shop.style.display = 'none';
+    // proceed to next level
+    levelNum++;
+    startLevel(levelNum);
+  };
+  exitBtn.onclick = ()=>{ shop.style.display='none'; levelNum=1; startLevel(levelNum); };
+}
+
+// Initialize
+requestAnimationFrame(loop);
+
+// small fallback to avoid stuck keys
+setInterval(()=>{ keys['b'] = keys['b'] && false; }, 4000);
+
+</script>
+</body>
+</html>
