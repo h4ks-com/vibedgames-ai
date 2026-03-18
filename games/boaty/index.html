@@ -1,0 +1,768 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Wang River Tiles with Boats & Sharks</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    html,body{height:100%;margin:0;font-family:Segoe UI,Arial,Helvetica,sans-serif;background:#0b1720;color:#e8f0f2;display:flex;align-items:stretch}
+    #app{display:flex;gap:12px;padding:12px;flex:1}
+    #left{flex:1;background:#071219;border-radius:10px;padding:12px;box-shadow:0 8px 30px rgba(0,0,0,0.6);display:flex;flex-direction:column;align-items:center}
+    canvas{border-radius:6px;background:#062226;box-shadow:inset 0 0 40px rgba(0,0,0,0.5)}
+    #right{width:360px;background:#0b1820;border-radius:10px;padding:12px;box-shadow:0 8px 30px rgba(0,0,0,0.6);overflow:auto}
+    h2{margin:8px 0 12px 0;font-size:16px;color:#cfeff8}
+    .row{display:flex;gap:8px;margin-bottom:8px}
+    button{background:#0f2b34;border:1px solid #13333a;color:#dff6fb;padding:8px;border-radius:6px;cursor:pointer}
+    button:hover{background:#124149}
+    .small{font-size:12px;color:#99c6cc}
+    .loc-list{margin-top:8px}
+    .loc-item{display:flex;align-items:center;gap:8px;padding:6px;border-radius:6px;background:rgba(255,255,255,0.02);margin-bottom:6px}
+    .loc-item input.name{flex:1;background:transparent;border:none;color:#e8f0f2;padding:6px}
+    .loc-item select{background:#082a2f;color:#dff6fb;border:1px solid #13333a;padding:5px;border-radius:4px}
+    .cars-list{margin-top:8px}
+    .car-item{display:flex;align-items:center;gap:8px;padding:6px;border-radius:6px;background:rgba(255,255,255,0.02);margin-bottom:6px}
+    .swatch{width:26px;height:16px;border-radius:4px;border:1px solid rgba(0,0,0,0.6)}
+    .control-note{margin-top:8px;color:#99c6cc;font-size:13px}
+    label{font-size:13px;color:#9fdfe6}
+    input[type="text"]{padding:6px;border-radius:6px;border:1px solid #13333a;background:#072629;color:#dff6fb}
+    .footer{margin-top:12px;font-size:12px;color:#6a9aa0}
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="left">
+      <canvas id="world" width="512" height="512"></canvas>
+      <div style="margin-top:10px;display:flex;gap:8px">
+        <button id="regenTiles">New Tile Art</button>
+        <button id="regenMap">New Map</button>
+        <button id="respawnBoats">Respawn Boats</button>
+        <button id="respawnSharks">Respawn Sharks</button>
+      </div>
+      <div class="control-note">Controls: W/A/S/D or Arrow keys to control player boat. Boats stay on water. Click a location's "Edit Pos" then click map to set it.</div>
+    </div>
+
+    <div id="right">
+      <h2>Locations (editable)</h2>
+      <div class="row">
+        <select id="locType">
+          <option value="dock">Dock</option>
+          <option value="island">Island</option>
+          <option value="lighthouse">Lighthouse</option>
+          <option value="custom">Custom</option>
+        </select>
+        <input id="locName" placeholder="Name (optional)" />
+        <button id="addLoc">Add</button>
+      </div>
+
+      <div class="loc-list" id="locList"></div>
+
+      <h2 style="margin-top:12px">Boats</h2>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <label style="align-items:center;display:flex;gap:6px"><input id="boatCount" type="number" value="5" min="1" max="16" style="width:60px" /> count</label>
+        <button id="spawnBoats">Spawn</button>
+      </div>
+      <div class="cars-list" id="boatsList"></div>
+
+      <h2 style="margin-top:12px">Sharks</h2>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <label style="align-items:center;display:flex;gap:6px"><input id="sharkCount" type="number" value="3" min="0" max="12" style="width:60px" /> count</label>
+        <button id="spawnSharks">Spawn</button>
+      </div>
+      <div class="cars-list" id="sharksList"></div>
+
+      <div style="margin-top:10px;display:flex;gap:8px">
+        <button id="pickNext">Switch Player Boat</button>
+        <button id="removePlayer">Remove Player Control</button>
+      </div>
+
+      <div class="footer">Boats and sharks navigate the river graph. Locations can be teleported to by clicking "Go". Edit position by entering Edit Pos and clicking the map.</div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  // Config
+  const GRID_N = 8;
+  const TILE_PX = 64;
+  const CANVAS_PX = GRID_N * TILE_PX;
+  const canvas = document.getElementById('world');
+  const ctx = canvas.getContext('2d');
+  canvas.width = CANVAS_PX; canvas.height = CANVAS_PX;
+  canvas.style.width = CANVAS_PX + 'px'; canvas.style.height = CANVAS_PX + 'px';
+
+  // Input
+  const input = { up:false,down:false,left:false,right:false };
+  window.addEventListener('keydown', (e)=> {
+    if (e.key==='ArrowUp'||e.key==='w'||e.key==='W') input.up=true;
+    if (e.key==='ArrowDown'||e.key==='s'||e.key==='S') input.down=true;
+    if (e.key==='ArrowLeft'||e.key==='a'||e.key==='A') input.left=true;
+    if (e.key==='ArrowRight'||e.key==='d'||e.key==='D') input.right=true;
+  });
+  window.addEventListener('keyup', (e)=> {
+    if (e.key==='ArrowUp'||e.key==='w'||e.key==='W') input.up=false;
+    if (e.key==='ArrowDown'||e.key==='s'||e.key==='S') input.down=false;
+    if (e.key==='ArrowLeft'||e.key==='a'||e.key==='A') input.left=false;
+    if (e.key==='ArrowRight'||e.key==='d'||e.key==='D') input.right=false;
+  });
+
+  // Wang tile generation (river arms)
+  let tiles = [];
+  let tileBackgroundHue = 120;
+  function genTiles(seedHue=120){
+    tiles = [];
+    tileBackgroundHue = seedHue + Math.floor(Math.random()*30 - 15);
+    for (let id=0; id<16; id++){
+      tiles.push(drawTile(id, TILE_PX, tileBackgroundHue));
+    }
+  }
+
+  function drawTile(id, size, hue){
+    const c = document.createElement('canvas'); c.width=size; c.height=size;
+    const g = c.getContext('2d');
+    const top = (id>>0)&1, right=(id>>1)&1, bottom=(id>>2)&1, left=(id>>3)&1;
+    // ground background (slightly varied)
+    g.fillStyle = `hsl(${hue} ${30 + Math.random()*10}% ${18 + Math.random()*6}%)`;
+    g.fillRect(0,0,size,size);
+    // add small texture
+    if (Math.random() < 0.6){
+      const grad = g.createLinearGradient(0,0,size,size);
+      grad.addColorStop(0, `rgba(255,255,255,0.02)`);
+      grad.addColorStop(1, `rgba(0,0,0,0.06)`);
+      g.fillStyle = grad; g.fillRect(0,0,size,size);
+    }
+    const cx=size/2, cy=size/2;
+    const riverW = Math.max(12, Math.floor(size*0.2));
+    // draw river base (outer darker then inner lighter)
+    g.fillStyle = '#1a4a6b';
+    if (top) g.fillRect(cx-riverW/2-4, 0, riverW+8, cy);
+    if (bottom) g.fillRect(cx-riverW/2-4, cy, riverW+8, cy);
+    if (left) g.fillRect(0, cy-riverW/2-4, cx, riverW+8);
+    if (right) g.fillRect(cx, cy-riverW/2-4, cx, riverW+8);
+    g.fillStyle = '#2ca3e0';
+    if (top) g.fillRect(cx-riverW/2, 0, riverW, cy-2);
+    if (bottom) g.fillRect(cx-riverW/2, cy+2, riverW, cy-2);
+    if (left) g.fillRect(0, cy-riverW/2, cx-2, riverW);
+    if (right) g.fillRect(cx+2, cy-riverW/2, cx-2, riverW);
+    // center pool if any arm exists
+    if (top||right||bottom||left){
+      const rad = riverW * 0.95;
+      g.beginPath(); g.fillStyle = '#2ca3e0'; g.arc(cx,cy,rad,0,Math.PI*2); g.fill();
+      g.beginPath(); g.strokeStyle = '#1a6b94'; g.lineWidth=2; g.arc(cx,cy,rad,0,Math.PI*2); g.stroke();
+    }
+    // gentle highlights (ripples)
+    g.strokeStyle = 'rgba(255,255,255,0.12)';
+    g.lineWidth = Math.max(1, Math.floor(size*0.02));
+    g.setLineDash([4,6]);
+    if (top){ g.beginPath(); g.moveTo(cx, cy*0.1); g.quadraticCurveTo(cx+10, cy*0.25, cx, cy*0.45); g.stroke(); }
+    if (bottom){ g.beginPath(); g.moveTo(cx, cy+size*0.05); g.quadraticCurveTo(cx-10, cy+cy*0.25, cx, cy+cy*0.45); g.stroke(); }
+    if (left){ g.beginPath(); g.moveTo(size*0.05, cy); g.quadraticCurveTo(cx*0.25, cy+10, cx*0.45, cy); g.stroke(); }
+    if (right){ g.beginPath(); g.moveTo(cx+size*0.05, cy); g.quadraticCurveTo(cx+cx*0.25, cy-10, cx+cx*0.45, cy); g.stroke(); }
+    g.setLineDash([]);
+    // subtle border
+    g.strokeStyle = 'rgba(0,0,0,0.18)'; g.lineWidth=1; g.strokeRect(0.5,0.5,size-1,size-1);
+    return c;
+  }
+
+  // Generate grid with Wang matching
+  let grid = [];
+  function genGrid(){
+    grid = Array.from({length:GRID_N}, ()=> new Array(GRID_N).fill(0));
+    for (let y=0;y<GRID_N;y++){
+      for (let x=0;x<GRID_N;x++){
+        const topNeed = (y>0) ? ((grid[y-1][x]>>2)&1) : null;
+        const leftNeed = (x>0) ? ((grid[y][x-1]>>1)&1) : null;
+        const candidates = [];
+        for (let id=0; id<16; id++){
+          const top = (id>>0)&1;
+          const left = (id>>3)&1;
+          if ((topNeed===null || top===topNeed) && (leftNeed===null || left===leftNeed)) candidates.push(id);
+        }
+        grid[y][x] = candidates[Math.floor(Math.random()*candidates.length)];
+      }
+    }
+    // ensure some water exists, if none, carve some
+    let any = false;
+    for (let y=0;y<GRID_N;y++) for (let x=0;x<GRID_N;x++) if (grid[y][x] !== 0) any = true;
+    if (!any){
+      const rx = Math.floor(Math.random()*GRID_N), ry = Math.floor(Math.random()*GRID_N);
+      grid[ry][rx] = 1|2|4|8; // full cross
+    }
+  }
+
+  // Build graph for river navigation
+  let nodes = {}; // key->{key,x,y,edges:[]}
+  let edges = []; // {key,u,v,ux,uy,vx,vy,len}
+  function buildGraph(){
+    nodes = {}; edges = [];
+    function centerKey(x,y){ return `C_${x}_${y}`; }
+    function edgeKey(x,y,side){
+      // canonicalize so top uses bottom of above tile if y>0; left uses right of left tile if x>0
+      if (side==='T') return (y>0) ? `E_${x}_${y-1}_B` : `E_${x}_${y}_T`;
+      if (side==='L') return (x>0) ? `E_${x-1}_${y}_R` : `E_${x}_${y}_L`;
+      if (side==='R') return `E_${x}_${y}_R`;
+      if (side==='B') return `E_${x}_${y}_B`;
+    }
+    // create center nodes
+    for (let y=0;y<GRID_N;y++){
+      for (let x=0;x<GRID_N;x++){
+        const k = centerKey(x,y);
+        nodes[k] = { key:k, x: x*TILE_PX + TILE_PX/2, y: y*TILE_PX + TILE_PX/2, edges: [] };
+      }
+    }
+    // create edge nodes and segments
+    const addEdgeNodeIf = (tx,ty,side,exists) => {
+      if (!exists) return;
+      const ek = edgeKey(tx,ty,side);
+      if (!nodes[ek]){
+        let ex, ey;
+        if (side==='T'){ ex = tx*TILE_PX + TILE_PX/2; ey = ty*TILE_PX; }
+        if (side==='B'){ ex = tx*TILE_PX + TILE_PX/2; ey = ty*TILE_PX + TILE_PX; }
+        if (side==='L'){ ex = tx*TILE_PX; ey = ty*TILE_PX + TILE_PX/2; }
+        if (side==='R'){ ex = tx*TILE_PX + TILE_PX; ey = ty*TILE_PX + TILE_PX/2; }
+        nodes[ek] = { key:ek, x:ex, y:ey, edges: [] };
+      }
+      const centerK = centerKey(tx,ty);
+      const a = nodes[centerK], b = nodes[ek];
+      const len = Math.hypot(a.x - b.x, a.y - b.y);
+      const k = `${centerK}__${ek}`;
+      if (!edges.some(e=>e.key===k || e.key===`${ek}__${centerK}`)){
+        const e = { key:k, u:centerK, v:ek, ux:a.x, uy:a.y, vx:b.x, vy:b.y, len };
+        edges.push(e);
+        nodes[centerK].edges.push(e);
+        nodes[ek].edges.push(e);
+      }
+    };
+    for (let y=0;y<GRID_N;y++){
+      for (let x=0;x<GRID_N;x++){
+        const id = grid[y][x];
+        const hasTop = ((id>>0)&1), hasRight = ((id>>1)&1), hasBottom = ((id>>2)&1), hasLeft = ((id>>3)&1);
+        addEdgeNodeIf(x,y,'T',hasTop);
+        addEdgeNodeIf(x,y,'R',hasRight);
+        addEdgeNodeIf(x,y,'B',hasBottom);
+        addEdgeNodeIf(x,y,'L',hasLeft);
+      }
+    }
+    // edges and nodes ready
+  }
+
+  // Boats and sharks
+  let boats = []; // each: {id, edge, dir, t, speed, maxSpeed, color, isPlayer, wait}
+  let sharks = []; // each: {id, edge, dir, t, speed}
+  let playerIndex = null; // index in boats
+
+  function spawnBoats(count){
+    boats = [];
+    if (edges.length === 0) return;
+    const n = Math.max(1, Math.min(16, count));
+    for (let i=0;i<n;i++){
+      const e = edges[Math.floor(Math.random()*edges.length)];
+      const dir = Math.random() < 0.5 ? 1 : -1;
+      const t = Math.random();
+      boats.push({
+        id:i, edge:e, dir, t,
+        speed: 40 + Math.random()*80, maxSpeed: 220, accel: 200,
+        color: randomColor(), isPlayer:false, wait:0
+      });
+    }
+    if (boats.length > 0){
+      playerIndex = Math.floor(Math.random()*boats.length);
+      boats[playerIndex].isPlayer = true;
+    } else playerIndex = null;
+    refreshBoatsUI();
+  }
+
+  function spawnSharks(count){
+    sharks = [];
+    if (edges.length === 0) return;
+    const n = Math.max(0, Math.min(12, count));
+    for (let i=0;i<n;i++){
+      const e = edges[Math.floor(Math.random()*edges.length)];
+      const dir = Math.random() < 0.5 ? 1 : -1;
+      const t = Math.random();
+      sharks.push({
+        id:i, edge:e, dir, t,
+        speed: 80 + Math.random()*80
+      });
+    }
+    refreshSharksUI();
+  }
+
+  function randomColor(){
+    const h = Math.floor(Math.random()*360), s = 70 + Math.floor(Math.random()*10), l = 45 + Math.floor(Math.random()*8);
+    return `hsl(${h} ${s}% ${l}%)`;
+  }
+
+  // Update boats and sharks
+  function updateEntities(dt){
+    // boats
+    for (let i=0;i<boats.length;i++){
+      const b = boats[i];
+      // compute directed endpoints
+      const u = nodes[b.edge.u], v = nodes[b.edge.v];
+      let ux = u.x, uy = u.y, vx = v.x, vy = v.y;
+      if (b.dir === -1){ ux = v.x; uy = v.y; vx = u.x; vy = u.y; }
+      const segLen = Math.max(1e-6, Math.hypot(vx-ux, vy-uy));
+      // player control
+      if (b.isPlayer && playerIndex !== null && boats[playerIndex] === b){
+        if (input.up) b.speed = Math.min(b.maxSpeed, b.speed + b.accel * dt);
+        if (input.down) b.speed = Math.max(0, b.speed - b.accel * dt);
+      } else {
+        // AI cruise
+        if (b.speed < 60) b.speed += 40*dt;
+        if (b.speed > 120 && Math.random() < 0.2*dt) b.speed -= 20*dt;
+      }
+      const deltaT = (b.speed * dt) / segLen;
+      b.t += deltaT;
+      if (b.t >= 1 - 1e-6){
+        // arrived at node
+        const nodeKey = (b.dir === 1) ? b.edge.v : b.edge.u;
+        const node = nodes[nodeKey];
+        const options = node.edges.map(e => ({e, neighbor: (e.u===nodeKey)?e.v:e.u}));
+        if (options.length === 0){
+          b.dir *= -1; b.t = 1 - (b.t - 1); continue;
+        }
+        // avoid immediate back if others exist
+        const prevNodeKey = (b.dir===1) ? b.edge.u : b.edge.v;
+        let candidates = options;
+        if (options.length > 1) candidates = options.filter(o => o.neighbor !== prevNodeKey);
+        if (candidates.length === 0) candidates = options;
+        let chosen = null;
+        if (b.isPlayer && (input.left || input.right)){
+          const prev = nodes[prevNodeKey];
+          const angIn = Math.atan2(node.y - prev.y, node.x - prev.x);
+          let best = null, bestScore = Infinity;
+          for (const opt of candidates){
+            const neigh = nodes[opt.neighbor];
+            const angOut = Math.atan2(neigh.y - node.y, neigh.x - node.x);
+            let diff = angDiff(angIn, angOut);
+            let score;
+            if (input.left) score = Math.abs(diff - Math.PI/2); else score = Math.abs(diff + Math.PI/2);
+            if (Math.abs(diff) < 0.4) score += 0.6;
+            if (Math.abs(diff) > Math.PI*0.9) score += 2.0;
+            if (score < bestScore){ bestScore = score; best = opt; }
+          }
+          chosen = best;
+        } else {
+          chosen = candidates[Math.floor(Math.random()*candidates.length)];
+        }
+        if (!chosen){
+          b.dir *= -1; b.t = 1 - (b.t - 1); continue;
+        }
+        const newEdge = chosen.e;
+        if (nodeKey === newEdge.u){ b.edge = newEdge; b.dir = 1; b.t = 0 + (b.t - 1); }
+        else { b.edge = newEdge; b.dir = -1; b.t = 0 + (b.t - 1); }
+        if (!b.isPlayer && Math.random() < 0.08) b.wait = 0.2 + Math.random()*0.8;
+      }
+      if (b.wait > 0){
+        b.wait -= dt;
+        if (b.wait > 0) b.t = Math.max(0, b.t - deltaT);
+      }
+      b.t = Math.max(0, Math.min(1, b.t));
+    }
+
+    // sharks - simple random walkers, occasionally chase nearest boat
+    for (let i=0;i<sharks.length;i++){
+      const s = sharks[i];
+      const u = nodes[s.edge.u], v = nodes[s.edge.v];
+      let ux = u.x, uy = u.y, vx = v.x, vy = v.y;
+      if (s.dir === -1){ ux = v.x; uy = v.y; vx = u.x; vy = u.y; }
+      const segLen = Math.max(1e-6, Math.hypot(vx-ux, vy-uy));
+      const deltaT = (s.speed * dt) / segLen;
+      s.t += deltaT;
+      if (s.t >= 1 - 1e-6){
+        const nodeKey = (s.dir === 1) ? s.edge.v : s.edge.u;
+        const node = nodes[nodeKey];
+        const options = node.edges.map(e => ({e, neighbor:(e.u===nodeKey)?e.v:e.u}));
+        if (options.length === 0){
+          s.dir *= -1; s.t = 1 - (s.t - 1); continue;
+        }
+        // occasionally chase nearest boat
+        let chosen = null;
+        if (boats.length > 0 && Math.random() < 0.25){
+          // find nearest boat position
+          let bestBoat = null, bd = Infinity;
+          for (const b of boats){
+            const pos = posOnEdge(b.edge, b.dir, b.t);
+            const d = Math.hypot(pos.x - node.x, pos.y - node.y);
+            if (d < bd){ bd = d; bestBoat = b; }
+          }
+          if (bestBoat){
+            // choose neighbor that reduces distance to boat
+            let bestOpt = null, bestD = Infinity;
+            for (const opt of options){
+              const neigh = nodes[opt.neighbor];
+              const d = Math.hypot(neigh.x - bestBoat.x, neigh.y - bestBoat.y);
+              if (d < bestD){ bestD = d; bestOpt = opt; }
+            }
+            chosen = bestOpt;
+          }
+        }
+        if (!chosen) chosen = options[Math.floor(Math.random()*options.length)];
+        const newEdge = chosen.e;
+        if (nodeKey === newEdge.u){ s.edge = newEdge; s.dir = 1; s.t = 0 + (s.t - 1); } else { s.edge = newEdge; s.dir = -1; s.t = 0 + (s.t - 1); }
+      }
+      s.t = Math.max(0, Math.min(1, s.t));
+    }
+
+    // update boat x,y cache for easier distance checks
+    for (const b of boats){
+      const p = posOnEdge(b.edge, b.dir, b.t);
+      b.x = p.x; b.y = p.y;
+    }
+    for (const s of sharks){
+      const p = posOnEdge(s.edge, s.dir, s.t);
+      s.x = p.x; s.y = p.y;
+    }
+  }
+
+  function posOnEdge(edge, dir, t){
+    const u = nodes[edge.u], v = nodes[edge.v];
+    let ux = u.x, uy = u.y, vx = v.x, vy = v.y;
+    if (dir === -1){ ux = v.x; uy = v.y; vx = u.x; vy = u.y; }
+    const x = ux + (vx - ux) * t, y = uy + (vy - uy) * t;
+    return { x, y };
+  }
+
+  function angDiff(a,b){ let d = b - a; while (d <= -Math.PI) d += Math.PI*2; while (d > Math.PI) d -= Math.PI*2; return d; }
+
+  // Locations
+  let locations = []; // {id,type,name,tx,ty,x,y,editing}
+  function addLocation(type, name, tx, ty){
+    const txx = (tx !== undefined) ? tx : Math.floor(Math.random()*GRID_N);
+    const tyy = (ty !== undefined) ? ty : Math.floor(Math.random()*GRID_N);
+    const center = tileCenter(txx,tyy);
+    const loc = { id:'L_'+Math.random().toString(36).slice(2,9), type, name: name || defaultName(type), tx:txx, ty:tyy, x:center.x, y:center.y, editing:false };
+    locations.push(loc);
+    refreshLocationsUI();
+    return loc;
+  }
+  function defaultName(type){ return type==='dock'? 'Dock' : type==='island'? 'Island' : type==='lighthouse'? 'Lighthouse' : 'Place'; }
+  function tileCenter(tx,ty){ return { x: tx*TILE_PX + TILE_PX/2, y: ty*TILE_PX + TILE_PX/2 }; }
+
+  // canvas click sets editing location or teleports player if clicking on location
+  canvas.addEventListener('click', (ev) => {
+    const rect = canvas.getBoundingClientRect();
+    const cx = ev.clientX - rect.left, cy = ev.clientY - rect.top;
+    const tx = Math.floor(cx / TILE_PX), ty = Math.floor(cy / TILE_PX);
+    if (tx<0 || tx>=GRID_N || ty<0 || ty>=GRID_N) return;
+    const editing = locations.find(l=>l.editing);
+    if (editing){
+      editing.tx = tx; editing.ty = ty;
+      const cc = tileCenter(tx,ty); editing.x = cc.x; editing.y = cc.y; editing.editing = false;
+      refreshLocationsUI();
+      return;
+    }
+    // else check click near location
+    for (const loc of locations){
+      const d = Math.hypot(loc.x - cx, loc.y - cy);
+      if (d < TILE_PX*0.4){
+        teleportPlayerTo(loc);
+        return;
+      }
+    }
+  });
+
+  function teleportPlayerTo(loc){
+    if (playerIndex === null || !boats[playerIndex]) return;
+    const center = tileCenter(loc.tx, loc.ty);
+    let best = null, bd = Infinity;
+    for (const e of edges){
+      const px = e.ux, py = e.uy, qx = e.vx, qy = e.vy;
+      const dx = qx - px, dy = qy - py;
+      const denom = dx*dx + dy*dy;
+      let t = 0;
+      if (denom > 1e-6) t = ((center.x - px)*dx + (center.y - py)*dy) / denom;
+      t = Math.max(0, Math.min(1, t));
+      const ix = px + dx*t, iy = py + dy*t;
+      const d = Math.hypot(center.x - ix, center.y - iy);
+      if (d < bd){ bd = d; best = { e, t }; }
+    }
+    if (best){
+      const b = boats[playerIndex];
+      b.edge = best.e;
+      // choose dir by closer node
+      const distToU = Math.hypot(best.e.ux - (best.e.ux + (best.e.vx-best.e.ux)*best.t), best.e.uy - (best.e.uy + (best.e.vy-best.e.uy)*best.t));
+      // simpler: random direction or set to 1
+      b.dir = (Math.random() < 0.5) ? 1 : -1;
+      b.t = best.t;
+      b.speed = 0;
+    }
+  }
+
+  // UI DOM wiring
+  const locListDiv = document.getElementById('locList');
+  const boatsListDiv = document.getElementById('boatsList');
+  const sharksListDiv = document.getElementById('sharksList');
+
+  function refreshLocationsUI(){
+    locListDiv.innerHTML = '';
+    for (const loc of locations){
+      const div = document.createElement('div'); div.className = 'loc-item';
+      const inpt = document.createElement('input'); inpt.className='name'; inpt.value = loc.name;
+      inpt.addEventListener('change', ()=>{ loc.name = inpt.value; });
+      const sel = document.createElement('select');
+      sel.innerHTML = '<option value="dock">Dock</option><option value="island">Island</option><option value="lighthouse">Lighthouse</option><option value="custom">Custom</option>';
+      sel.value = loc.type; sel.addEventListener('change', ()=>{ loc.type = sel.value; refreshLocationsUI(); });
+      const editBtn = document.createElement('button'); editBtn.textContent = loc.editing ? 'Editing' : 'Edit Pos';
+      editBtn.addEventListener('click', ()=>{ loc.editing = !loc.editing; refreshLocationsUI(); });
+      const goBtn = document.createElement('button'); goBtn.textContent = 'Go';
+      goBtn.addEventListener('click', ()=>{ teleportPlayerTo(loc); });
+      const delBtn = document.createElement('button'); delBtn.textContent = 'Delete';
+      delBtn.addEventListener('click', ()=>{ locations = locations.filter(l=>l.id!==loc.id); refreshLocationsUI(); });
+      div.appendChild(inpt); div.appendChild(sel); div.appendChild(editBtn); div.appendChild(goBtn); div.appendChild(delBtn);
+      locListDiv.appendChild(div);
+    }
+  }
+
+  function refreshBoatsUI(){
+    boatsListDiv.innerHTML = '';
+    for (let i=0;i<boats.length;i++){
+      const b = boats[i];
+      const div = document.createElement('div'); div.className='car-item';
+      const sw = document.createElement('div'); sw.className='swatch'; sw.style.background = b.color;
+      const name = document.createElement('div'); name.style.flex='1'; name.textContent = 'Boat ' + b.id + (b.isPlayer ? ' (player)' : '');
+      const setBtn = document.createElement('button'); setBtn.textContent = 'Set Player';
+      setBtn.addEventListener('click', ()=> setPlayerBoat(i));
+      const tpBtn = document.createElement('button'); tpBtn.textContent = 'Teleport';
+      tpBtn.addEventListener('click', ()=>{ if (playerIndex !== null && boats[playerIndex]){ boats[playerIndex].edge = b.edge; boats[playerIndex].dir = b.dir; boats[playerIndex].t = b.t; boats[playerIndex].speed = 0; } });
+      div.appendChild(sw); div.appendChild(name); div.appendChild(setBtn); div.appendChild(tpBtn);
+      boatsListDiv.appendChild(div);
+    }
+  }
+
+  function refreshSharksUI(){
+    sharksListDiv.innerHTML = '';
+    for (let i=0;i<sharks.length;i++){
+      const s = sharks[i];
+      const div = document.createElement('div'); div.className='car-item';
+      const sw = document.createElement('div'); sw.className='swatch'; sw.style.background = 'linear-gradient(90deg,#222,#700)';
+      const name = document.createElement('div'); name.style.flex='1'; name.textContent = 'Shark ' + s.id;
+      div.appendChild(sw); div.appendChild(name);
+      sharksListDiv.appendChild(div);
+    }
+  }
+
+  function setPlayerBoat(idx){
+    if (playerIndex !== null && boats[playerIndex]) boats[playerIndex].isPlayer = false;
+    playerIndex = idx;
+    if (boats[playerIndex]) boats[playerIndex].isPlayer = true;
+    refreshBoatsUI();
+  }
+
+  // UI button hookups
+  document.getElementById('addLoc').addEventListener('click', ()=>{
+    const type = document.getElementById('locType').value;
+    const name = document.getElementById('locName').value.trim();
+    addLocation(type, name || defaultName(type));
+  });
+
+  document.getElementById('spawnBoats').addEventListener('click', ()=>{
+    const count = Math.max(1, Math.min(16, parseInt(document.getElementById('boatCount').value || 5)));
+    spawnBoats(count);
+  });
+  document.getElementById('spawnSharks').addEventListener('click', ()=>{
+    const count = Math.max(0, Math.min(12, parseInt(document.getElementById('sharkCount').value || 3)));
+    spawnSharks(count);
+  });
+  document.getElementById('respawnBoats').addEventListener('click', ()=> spawnBoats(1 + Math.floor(Math.random()*16)));
+  document.getElementById('respawnSharks').addEventListener('click', ()=> spawnSharks(1 + Math.floor(Math.random()*8)));
+  document.getElementById('pickNext').addEventListener('click', ()=>{
+    if (boats.length === 0) return;
+    const next = (playerIndex === null) ? 0 : (playerIndex + 1) % boats.length;
+    setPlayerBoat(next);
+  });
+  document.getElementById('removePlayer').addEventListener('click', ()=> { if (playerIndex !== null && boats[playerIndex]) boats[playerIndex].isPlayer=false; playerIndex=null; refreshBoatsUI(); });
+
+  document.getElementById('regenTiles').addEventListener('click', ()=> { genTiles(80 + Math.floor(Math.random()*200)); render(); });
+  document.getElementById('regenMap').addEventListener('click', ()=> {
+    genTiles(80 + Math.floor(Math.random()*200));
+    genGrid(); buildGraph();
+    // relocate locations randomly
+    for (const l of locations){
+      l.tx = Math.floor(Math.random()*GRID_N); l.ty = Math.floor(Math.random()*GRID_N);
+      const c = tileCenter(l.tx,l.ty); l.x=c.x; l.y=c.y;
+    }
+    spawnBoats(3 + Math.floor(Math.random()*6));
+    spawnSharks(1 + Math.floor(Math.random()*4));
+    refreshAllUI();
+  });
+
+  function refreshAllUI(){ refreshLocationsUI(); refreshBoatsUI(); refreshSharksUI(); }
+
+  // rendering
+  function render(){
+    ctx.clearRect(0,0,CANVAS_PX,CANVAS_PX);
+    // draw tiles
+    for (let y=0;y<GRID_N;y++){
+      for (let x=0;x<GRID_N;x++){
+        const id = grid[y][x];
+        const img = tiles[id];
+        ctx.drawImage(img, x*TILE_PX, y*TILE_PX, TILE_PX, TILE_PX);
+      }
+    }
+    // faint graph lines
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)'; ctx.lineWidth = 3; ctx.lineCap='round';
+    for (const e of edges){
+      ctx.beginPath(); ctx.moveTo(e.ux, e.uy); ctx.lineTo(e.vx, e.vy); ctx.stroke();
+    }
+    // draw locations
+    for (const loc of locations) drawLocation(loc);
+    // draw sharks
+    for (const s of sharks) drawShark(s);
+    // draw boats (non-player first)
+    for (let i=0;i<boats.length;i++){
+      if (boats[i].isPlayer) continue;
+      drawBoat(boats[i], false);
+    }
+    if (playerIndex !== null && boats[playerIndex]) drawBoat(boats[playerIndex], true);
+    // grid
+    ctx.strokeStyle = 'rgba(0,0,0,0.18)'; ctx.lineWidth = 1;
+    for (let i=0;i<=GRID_N;i++){
+      ctx.beginPath(); ctx.moveTo(0, i*TILE_PX + 0.5); ctx.lineTo(CANVAS_PX, i*TILE_PX + 0.5); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(i*TILE_PX + 0.5, 0); ctx.lineTo(i*TILE_PX + 0.5, CANVAS_PX); ctx.stroke();
+    }
+  }
+
+  function drawBoat(b, highlight){
+    const p = posOnEdge(b.edge, b.dir, b.t);
+    const ang = Math.atan2((b.dir===1 ? (nodes[b.edge.v].y - nodes[b.edge.u].y) : (nodes[b.edge.u].y - nodes[b.edge.v].y)),
+                           (b.dir===1 ? (nodes[b.edge.v].x - nodes[b.edge.u].x) : (nodes[b.edge.u].x - nodes[b.edge.v].x)));
+    const w = TILE_PX*0.42, h = TILE_PX*0.20;
+    ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(ang);
+    // hull
+    ctx.beginPath(); ctx.fillStyle = b.color; ctx.ellipse(0,0,w*0.45,h*0.6,0,0,Math.PI*2); ctx.fill();
+    // cabin
+    ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fillRect(-w*0.12, -h*0.28, w*0.35, h*0.45);
+    // highlight
+    if (highlight){ ctx.strokeStyle = 'rgba(255,230,120,0.95)'; ctx.lineWidth = 2; ctx.strokeRect(-w/2-3, -h/2-3, w+6, h+6); }
+    ctx.restore();
+  }
+
+  function drawShark(s){
+    const p = posOnEdge(s.edge, s.dir, s.t);
+    const ang = Math.atan2((s.dir===1 ? (nodes[s.edge.v].y - nodes[s.edge.u].y) : (nodes[s.edge.u].y - nodes[s.edge.v].y)),
+                           (s.dir===1 ? (nodes[s.edge.v].x - nodes[s.edge.u].x) : (nodes[s.edge.u].x - nodes[s.edge.v].x)));
+    const size = TILE_PX*0.45;
+    ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(ang);
+    ctx.beginPath(); ctx.fillStyle = 'rgba(120,20,20,0.95)';
+    ctx.moveTo(-size*0.4, -size*0.18); ctx.lineTo(size*0.3, 0); ctx.lineTo(-size*0.4, size*0.18); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.fillStyle='white'; ctx.arc(size*0.15, -size*0.06, Math.max(2, size*0.06), 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawLocation(loc){
+    const x = loc.x, y = loc.y, r = TILE_PX*0.28;
+    ctx.save(); ctx.translate(x,y);
+    ctx.beginPath(); ctx.fillStyle = loc.type==='dock' ? 'rgba(40,160,200,0.95)' : loc.type==='island' ? 'rgba(120,200,100,0.95)' : loc.type==='lighthouse' ? 'rgba(230,180,70,0.95)' : 'rgba(140,140,200,0.95)';
+    ctx.arc(0,0,r,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='white';
+    ctx.font=`${Math.max(10,Math.floor(r*0.6))}px sans-serif`; ctx.textAlign='center'; ctx.textBaseline='middle';
+    const glyph = loc.type==='dock' ? '⚓' : loc.type==='island' ? '⛰' : loc.type==='lighthouse' ? '🔆' : '★';
+    ctx.fillText(glyph,0,0);
+    ctx.font='12px sans-serif'; ctx.fillText(loc.name,0,r+12);
+    ctx.restore();
+  }
+
+  // utility functions
+  function angBetween(ax,ay,bx,by){ return Math.atan2(by-ay,bx-ax); }
+
+  // main loop
+  let last = performance.now();
+  function loop(now){
+    const dt = Math.min(0.06, (now - last)/1000);
+    last = now;
+    updateEntities(dt);
+    // update location x,y
+    for (const l of locations){ const c = tileCenter(l.tx, l.ty); l.x = c.x; l.y = c.y; }
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  // init
+  genTiles();
+  genGrid();
+  buildGraph();
+  // default locations
+  locations = [];
+  addLocation('dock','Dock');
+  addLocation('island','Island');
+  addLocation('lighthouse','Lighthouse');
+  spawnBoats(5);
+  spawnSharks(3);
+  refreshAllUI();
+  requestAnimationFrame(loop);
+
+  // helpers UI refresh
+  function refreshAllUI(){ refreshLocationsUI(); refreshBoatsUI(); refreshSharksUI(); }
+  function refreshLocationsUI(){
+    locListDiv.innerHTML = '';
+    for (const loc of locations){
+      const div = document.createElement('div'); div.className='loc-item';
+      const inpt = document.createElement('input'); inpt.className='name'; inpt.value = loc.name;
+      inpt.addEventListener('change', ()=>{ loc.name = inpt.value; });
+      const sel = document.createElement('select');
+      sel.innerHTML = '<option value="dock">Dock</option><option value="island">Island</option><option value="lighthouse">Lighthouse</option><option value="custom">Custom</option>';
+      sel.value = loc.type; sel.addEventListener('change', ()=>{ loc.type = sel.value; refreshLocationsUI(); });
+      const editBtn = document.createElement('button'); editBtn.textContent = loc.editing ? 'Editing' : 'Edit Pos';
+      editBtn.addEventListener('click', ()=>{ loc.editing = !loc.editing; refreshLocationsUI(); });
+      const goBtn = document.createElement('button'); goBtn.textContent = 'Go';
+      goBtn.addEventListener('click', ()=> teleportPlayerTo(loc));
+      const delBtn = document.createElement('button'); delBtn.textContent = 'Delete';
+      delBtn.addEventListener('click', ()=> { locations = locations.filter(l=>l.id!==loc.id); refreshLocationsUI(); });
+      div.appendChild(inpt); div.appendChild(sel); div.appendChild(editBtn); div.appendChild(goBtn); div.appendChild(delBtn);
+      locListDiv.appendChild(div);
+    }
+  }
+
+  function refreshBoatsUI(){
+    boatsListDiv.innerHTML = '';
+    for (let i=0;i<boats.length;i++){
+      const b = boats[i];
+      const div = document.createElement('div'); div.className='car-item';
+      const sw = document.createElement('div'); sw.className='swatch'; sw.style.background = b.color;
+      const name = document.createElement('div'); name.style.flex='1'; name.textContent = 'Boat ' + b.id + (b.isPlayer ? ' (player)' : '');
+      const setBtn = document.createElement('button'); setBtn.textContent = 'Set Player';
+      setBtn.addEventListener('click', ()=> setPlayerBoat(i));
+      const tpBtn = document.createElement('button'); tpBtn.textContent = 'Teleport';
+      tpBtn.addEventListener('click', ()=>{ if (playerIndex !== null && boats[playerIndex]){ boats[playerIndex].edge = b.edge; boats[playerIndex].dir = b.dir; boats[playerIndex].t = b.t; boats[playerIndex].speed = 0; }});
+      div.appendChild(sw); div.appendChild(name); div.appendChild(setBtn); div.appendChild(tpBtn);
+      boatsListDiv.appendChild(div);
+    }
+  }
+
+  function refreshSharksUI(){
+    sharksListDiv.innerHTML = '';
+    for (let i=0;i<sharks.length;i++){
+      const s = sharks[i];
+      const div = document.createElement('div'); div.className='car-item';
+      const sw = document.createElement('div'); sw.className='swatch'; sw.style.background = 'linear-gradient(90deg,#400,#800)';
+      const name = document.createElement('div'); name.style.flex='1'; name.textContent = 'Shark ' + s.id;
+      div.appendChild(sw); div.appendChild(name);
+      sharksListDiv.appendChild(div);
+    }
+  }
+
+  function setPlayerBoat(idx){
+    if (playerIndex !== null && boats[playerIndex]) boats[playerIndex].isPlayer = false;
+    playerIndex = idx;
+    if (boats[playerIndex]) boats[playerIndex].isPlayer = true;
+    refreshBoatsUI();
+  }
+
+  // UI hookups for spawn controls
+  document.getElementById('spawnBoats').addEventListener('click', ()=>{
+    const n = Math.max(1, Math.min(16, parseInt(document.getElementById('boatCount').value || 5)));
+    spawnBoats(n);
+  });
+  document.getElementById('spawnSharks').addEventListener('click', ()=>{
+    const n = Math.max(0, Math.min(12, parseInt(document.getElementById('sharkCount').value || 3)));
+    spawnSharks(n);
+  });
+
+  // helper: teleport player to location
+  // Already defined teleportPlayerTo()
+
+})();
+</script>
+</body>
+</html>
