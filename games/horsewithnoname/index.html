@@ -1,0 +1,547 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Horse With No Name — Wall Run & Blueberries</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    html,body{height:100%;margin:0;background:#0f1720;color:#e6f7ff;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+    #app{display:flex;gap:12px;padding:12px;height:100vh;box-sizing:border-box}
+    #gameWrap{flex:1;display:flex;align-items:center;justify-content:center}
+    canvas{background:linear-gradient(#9ad4ff,#d8f1ff);border-radius:10px;box-shadow:0 10px 40px rgba(0,0,0,0.6);max-width:100%}
+    #ui{width:360px;padding:14px;background:#071823;border-radius:10px;box-shadow:0 10px 40px rgba(0,0,0,0.6)}
+    h1{margin:6px 0 12px 0;font-size:18px;color:#cfefff}
+    .row{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+    .btn{background:#114349;border:1px solid #166064;color:#dffcff;padding:8px 10px;border-radius:8px;cursor:pointer}
+    .small{font-size:13px;color:#9fd8df}
+    .big{font-size:20px;font-weight:700;color:#fff}
+    .progress{height:12px;background:rgba(255,255,255,0.04);border-radius:8px;overflow:hidden}
+    .progressInner{height:100%;background:linear-gradient(90deg,#4fa8ff,#3bffbf);width:0%}
+    footer{margin-top:12px;color:#7fb6ca;font-size:12px}
+    .controls{display:flex;gap:8px;margin-top:12px}
+    .touchBtn{background:rgba(255,255,255,0.03);border-radius:8px;padding:8px;color:#dffcff;border:1px solid rgba(255,255,255,0.02);cursor:pointer}
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="gameWrap">
+      <canvas id="canvas" width="960" height="540"></canvas>
+    </div>
+    <div id="ui">
+      <h1>Horse With No Name</h1>
+      <div class="row"><div class="small">Goal:</div><div class="small">Collect 10 blueberries to turn blue</div></div>
+      <div class="row"><div class="big">Blueberries: <span id="count">0</span>/10</div></div>
+      <div class="progress" title="Progress"><div id="prog" class="progressInner"></div></div>
+      <div id="status" style="margin-top:12px;color:#cdeff8"></div>
+      <div class="controls">
+        <button id="restart" class="btn">Restart</button>
+        <button id="pause" class="btn">Pause</button>
+      </div>
+      <div style="margin-top:14px" class="small">Controls: WASD or Arrow keys. Hold into a wall (toward it) to run up/down its edge. Jump with W / Up / Space.</div>
+      <div style="margin-top:12px;display:flex;gap:6px">
+        <div class="touchBtn" id="tLeft">◀</div>
+        <div class="touchBtn" id="tJump">▲</div>
+        <div class="touchBtn" id="tRight">▶</div>
+      </div>
+      <footer>Run along edges, wild horse. No name required.</footer>
+    </div>
+  </div>
+
+<script>
+(() => {
+  // Canvas
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+
+  // Level dimensions
+  const levelWidth = 4200;
+  const groundY = H - 110;
+
+  // Horse
+  const horse = {
+    x: 140,
+    y: groundY - 48,
+    w: 76, h: 48,
+    vx: 0, vy: 0,
+    onGround: false,
+    onWall: false,
+    wallSide: null, // 'left' or 'right'
+    color: '#6b4a2a',
+    blue: false,
+    facing: 1
+  };
+
+  // Physics
+  const gravity = 1400;
+  const maxSpeed = 420;
+  const accel = 2800;
+  const airDrag = 0.98;
+  const groundFriction = 0.85;
+  const jumpSpeed = 560;
+
+  // Platforms (x,y,w,h) - y is top coordinate
+  const platforms = [
+    {x:0, y:groundY, w:levelWidth, h:160},
+    {x:400, y:groundY - 120, w:240, h:16},
+    {x:800, y:groundY - 220, w:200, h:16},
+    {x:1200, y:groundY - 160, w:220, h:16},
+    {x:1700, y:groundY - 200, w:260, h:16},
+    {x:2300, y:groundY - 150, w:220, h:16},
+    {x:2800, y:groundY - 240, w:260, h:16},
+    {x:3400, y:groundY - 180, w:220, h:16}
+  ];
+
+  // Vertical walls (x,y,w,h) - useful for wall running
+  const walls = [
+    {x:600, y: groundY - 320, w: 24, h: 320},
+    {x:1500, y: groundY - 360, w: 24, h: 360},
+    {x:2000, y: groundY - 300, w: 24, h: 300},
+    {x:2600, y: groundY - 420, w: 24, h: 420},
+    {x:3200, y: groundY - 340, w: 24, h: 340}
+  ];
+
+  // Blueberries (placed on platforms or along walls)
+  let berries = [];
+  function placeBerries(n){
+    berries = [];
+    for (let i=0;i<n;i++){
+      if (Math.random() < 0.5){
+        // place on platform (random)
+        const p = platforms[Math.floor(Math.random()*platforms.length)];
+        const bx = Math.min(Math.max(p.x + 20 + Math.random()*(p.w - 40), 40), levelWidth - 40);
+        const by = p.y - 18 - Math.random()*24;
+        berries.push({x:bx, y:by, r:10, collected:false, hue: 230 + Math.random()*60});
+      } else {
+        // place along wall surface
+        const w = walls[Math.floor(Math.random()*walls.length)];
+        const by = Math.min(Math.max(w.y + 20 + Math.random()*(w.h - 40), 40), groundY - 40);
+        const bx = (Math.random() < 0.5) ? w.x - 14 : w.x + w.w + 14;
+        berries.push({x:bx, y:by, r:10, collected:false, hue: 230 + Math.random()*60});
+      }
+    }
+  }
+
+  placeBerries(14);
+
+  // Game state
+  let blueberriesCollected = 0;
+  const target = 10;
+  let running = true;
+  let lastTime = performance.now();
+  let cameraX = 0;
+
+  // Input
+  const keys = {};
+  window.addEventListener('keydown', e => {
+    keys[e.key] = true;
+    if (['ArrowUp','w','W',' '].includes(e.key)) e.preventDefault();
+  });
+  window.addEventListener('keyup', e => { keys[e.key] = false; });
+
+  // UI
+  const countEl = document.getElementById('count');
+  const progEl = document.getElementById('prog');
+  const statusEl = document.getElementById('status');
+  const restartBtn = document.getElementById('restart');
+  const pauseBtn = document.getElementById('pause');
+
+  restartBtn.addEventListener('click', init);
+  pauseBtn.addEventListener('click', ()=> { running = !running; pauseBtn.textContent = running ? 'Pause' : 'Resume'; lastTime = performance.now(); });
+
+  // Touch buttons
+  function bindTouch(el, key){
+    el.addEventListener('pointerdown', ()=> keys[key] = true);
+    el.addEventListener('pointerup', ()=> keys[key] = false);
+    el.addEventListener('pointercancel', ()=> keys[key] = false);
+    el.addEventListener('pointerout', ()=> keys[key] = false);
+  }
+  bindTouch(document.getElementById('tLeft'), 'ArrowLeft');
+  bindTouch(document.getElementById('tRight'), 'ArrowRight');
+  bindTouch(document.getElementById('tJump'), 'ArrowUp');
+
+  // Utility
+  function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+
+  // Collision helpers
+  function rectOverlap(ax,ay,aw,ah,bx,by,bw,bh){
+    return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+  }
+
+  // Wall detection: check if horse is touching a wall side and pressing into it
+  function detectWallStick(h){
+    h.onWall = false; h.wallSide = null;
+    // approximate horse body box
+    const hBox = {x: h.x - h.w*0.5, y: h.y - h.h*0.5, w: h.w, h: h.h};
+    for (const w of walls){
+      // check overlap in vertical range
+      if (hBox.y + hBox.h > w.y && hBox.y < w.y + w.h){
+        // left side of wall
+        const leftEdge = w.x - 2;
+        const rightEdge = w.x + w.w + 2;
+        // if horse near left side (horse center left of wall and within small horizontal threshold)
+        if (hBox.x + hBox.w > w.x - 12 && hBox.x < w.x && (keys['ArrowRight'] || keys['d'] || keys['D'])){
+          // touching left face and player pressing into wall? Actually pressing toward it: pressing right to stick to left face
+          // position horse flush
+          h.onWall = true; h.wallSide = 'left'; h.wallRef = w;
+          return;
+        }
+        // if horse near right side and pressing left
+        if (hBox.x < w.x + w.w + 12 && hBox.x + hBox.w > w.x + w.w && (keys['ArrowLeft'] || keys['a'] || keys['A'])){
+          h.onWall = true; h.wallSide = 'right'; h.wallRef = w;
+          return;
+        }
+      }
+    }
+  }
+
+  // Platform collision (vertical landing)
+  function resolvePlatforms(h){
+    h.onGround = false;
+    const hBox = {x: h.x - h.w*0.48, y: h.y - h.h/2, w: h.w*0.96, h: h.h};
+    for (const p of platforms){
+      const top = p.y;
+      // check horizontal overlap
+      if (hBox.x + hBox.w > p.x && hBox.x < p.x + p.w){
+        // if falling and crosses platform top
+        if (h.vy >= 0 && (h.y + h.h/2) >= top && (h.y + h.h/2 - h.vy * (1/60)) < top){
+          h.y = top - h.h/2;
+          h.vy = 0;
+          h.onGround = true;
+          h.onWall = false;
+          h.wallSide = null;
+        }
+      }
+    }
+  }
+
+  // Resolve wall penetration (prevent horse from sinking into wall)
+  function pushOutWalls(h){
+    const hBox = {x: h.x - h.w*0.5, y: h.y - h.h*0.5, w: h.w, h: h.h};
+    for (const wrect of walls){
+      if (rectOverlap(hBox.x,hBox.y,hBox.w,hBox.h, wrect.x, wrect.y, wrect.w, wrect.h)){
+        // determine penetration on x
+        const overlapLeft = (hBox.x + hBox.w) - wrect.x;
+        const overlapRight = (wrect.x + wrect.w) - hBox.x;
+        if (overlapLeft < overlapRight){
+          // push left
+          h.x -= overlapLeft + 0.5;
+          h.vx = Math.min(h.vx, 0);
+        } else {
+          h.x += overlapRight + 0.5;
+          h.vx = Math.max(h.vx, 0);
+        }
+      }
+    }
+  }
+
+  // Update
+  function update(dt){
+    // horizontal input
+    let move = 0;
+    if (keys['ArrowLeft'] || keys['a'] || keys['A']) move -= 1;
+    if (keys['ArrowRight'] || keys['d'] || keys['D']) move += 1;
+
+    // detect wall-stick possibility
+    detectWallStick(horse);
+
+    // If on wall and pressing into it, wall-run behavior
+    if (horse.onWall){
+      // when wall running, gravity reduced; allow vertical movement with up/down
+      // set small horizontal hugging velocity toward wall to keep horse from separating
+      const wref = horse.wallRef;
+      const hugSpeed = 30;
+      if (horse.wallSide === 'left'){
+        // place horse flush to left side
+        horse.x = wref.x - horse.w*0.5 - 6;
+        horse.vx = Math.min(horse.vx, -hugSpeed);
+      } else {
+        horse.x = wref.x + wref.w + horse.w*0.5 + 6;
+        horse.vx = Math.max(horse.vx, hugSpeed);
+      }
+
+      // vertical movement along wall
+      if (keys['ArrowUp'] || keys['w'] || keys['W']){
+        horse.vy = -160;
+      } else if (keys['ArrowDown'] || keys['s'] || keys['S']){
+        horse.vy = 180;
+      } else {
+        // slow slide down
+        horse.vy = 60;
+      }
+
+      // Jump off wall if jump pressed: propel away from wall
+      if ((keys['ArrowUp'] || keys['w'] || keys['W'] || keys[' ']) && !horse.onGround){
+        // jump direction away from wall
+        const away = (horse.wallSide === 'left') ? -1 : 1;
+        horse.vx = away * 520;
+        horse.vy = -jumpSpeed*0.75;
+        horse.onWall = false;
+        horse.wallSide = null;
+      }
+    } else {
+      // normal horizontal acceleration
+      if (move !== 0){
+        horse.vx += move * accel * dt;
+        horse.facing = move > 0 ? 1 : -1;
+      } else {
+        // apply ground friction if on ground else air drag
+        if (horse.onGround) horse.vx *= Math.pow(groundFriction, dt*60);
+        else horse.vx *= Math.pow(airDrag, dt*60);
+      }
+      // jumping
+      if ((keys['ArrowUp'] || keys['w'] || keys['W'] || keys[' ']) && horse.onGround){
+        horse.vy = -jumpSpeed;
+        horse.onGround = false;
+      }
+      // gravity
+      horse.vy += gravity * dt;
+    }
+
+    // clamp speed
+    horse.vx = clamp(horse.vx, -maxSpeed, maxSpeed);
+
+    // integrate
+    horse.x += horse.vx * dt;
+    horse.y += horse.vy * dt;
+
+    // resolve platform collisions (landing)
+    resolvePlatforms(horse);
+
+    // keep within level bounds
+    horse.x = clamp(horse.x, 20, levelWidth - 20);
+
+    // avoid sinking into walls
+    pushOutWalls(horse);
+
+    // collect berries
+    for (const b of berries){
+      if (b.collected) continue;
+      const dx = b.x - horse.x;
+      const dy = b.y - horse.y;
+      if (dx*dx + dy*dy < (b.r + horse.h*0.5)*(b.r + horse.h*0.5)){
+        b.collected = true;
+        blueberriesCollected++;
+        updateUI();
+        if (!horse.blue && blueberriesCollected >= target){
+          horse.blue = true;
+          horse.color = '#2b7dd8';
+          statusEl.textContent = 'Your horse turned blue! You are a horse with no name.';
+        }
+      }
+    }
+
+    // camera follow
+    const camTarget = clamp(horse.x - W * 0.35, 0, levelWidth - W);
+    cameraX += (camTarget - cameraX) * clamp(dt * 6, 0, 1);
+
+    // small sanity: if horse below bottom, reset to ground
+    if (horse.y > H + 200){
+      // respawn on nearest platform
+      horse.x = Math.max(120, horse.x - 200);
+      horse.y = groundY - 48;
+      horse.vx = 0; horse.vy = 0;
+    }
+  }
+
+  function updateUI(){
+    countEl.textContent = Math.min(blueberriesCollected, target);
+    const pct = clamp(blueberriesCollected / target * 100, 0, 100);
+    progEl.style.width = pct + '%';
+  }
+
+  // Drawing helpers
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+
+    drawSky();
+    drawSun();
+    drawHills();
+
+    // world transform
+    ctx.save();
+    ctx.translate(-cameraX, 0);
+
+    // draw walls and platforms
+    drawPlatforms();
+    drawWalls();
+
+    // draw berries
+    for (const b of berries){
+      if (!b.collected) drawBerry(b);
+    }
+
+    // draw horse
+    drawHorse(horse);
+
+    // foreground bits
+    drawForeground();
+
+    ctx.restore();
+  }
+
+  function drawSky(){
+    // sky gradient already in CSS, but add subtle
+    // nothing else
+  }
+
+  function drawSun(){
+    ctx.save();
+    ctx.fillStyle = 'rgba(255,235,130,0.95)';
+    ctx.beginPath(); ctx.arc(120 - cameraX*0.12, 72, 36, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawHills(){
+    ctx.save();
+    ctx.fillStyle = '#3e7d66';
+    ctx.beginPath();
+    ctx.moveTo(-300, groundY + 140);
+    for (let x = -300; x <= levelWidth + 300; x += 140){
+      const y = groundY - 60 + Math.sin((x + cameraX*0.3)/200)*40;
+      ctx.quadraticCurveTo(x+60, y-80, x+120, groundY + 140);
+    }
+    ctx.lineTo(levelWidth+400, H); ctx.lineTo(-400, H); ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawPlatforms(){
+    for (const p of platforms){
+      ctx.fillStyle = '#6b4a2a';
+      ctx.fillRect(p.x, p.y, p.w, p.h);
+      ctx.fillStyle = '#8b6a49';
+      ctx.fillRect(p.x, p.y - 6, p.w, 6);
+    }
+  }
+
+  function drawWalls(){
+    for (const w of walls){
+      // body
+      ctx.fillStyle = '#3d3a3a';
+      ctx.fillRect(w.x, w.y, w.w, w.h);
+      // highlight
+      ctx.fillStyle = '#6b6b6b';
+      ctx.fillRect(w.x - 4, w.y, 4, w.h);
+      ctx.fillStyle = '#2f2f2f';
+      ctx.fillRect(w.x + w.w, w.y, 4, w.h);
+    }
+  }
+
+  function drawBerry(b){
+    ctx.save();
+    ctx.beginPath();
+    ctx.fillStyle = 'rgba(0,0,0,0.14)';
+    ctx.ellipse(b.x + 6, b.y + 14, b.r*0.9, b.r*0.44, 0,0,Math.PI*2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.fillStyle = `hsl(${b.hue} 70% 45%)`;
+    ctx.arc(b.x, b.y, b.r, 0, Math.PI*2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.arc(b.x - b.r*0.3, b.y - b.r*0.4, b.r*0.35, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawHorse(h){
+    ctx.save();
+    const x = h.x, y = h.y;
+    // shadow
+    ctx.beginPath(); ctx.fillStyle = 'rgba(0,0,0,0.18)'; ctx.ellipse(x+10, y + h.h*0.72, h.w*0.5, h.h*0.28, 0,0,Math.PI*2); ctx.fill();
+
+    ctx.translate(x, y);
+    // body
+    ctx.fillStyle = h.color;
+    roundRect(ctx, -h.w*0.5, -h.h*0.5, h.w, h.h*0.8, 10);
+    ctx.fill();
+
+    // neck & head
+    ctx.save();
+    ctx.translate(h.w*0.24 * h.facing, -h.h*0.18);
+    ctx.rotate(-0.05 * h.facing);
+    ctx.fillStyle = h.color;
+    roundRect(ctx, 0, -h.h*0.18, h.w*0.46, h.h*0.36, 8);
+    ctx.fill();
+
+    // eye
+    ctx.beginPath(); ctx.fillStyle = '#0b0b0b'; ctx.arc(h.w*0.40, -h.h*0.08, 3.2, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+
+    // mane
+    ctx.save();
+    ctx.translate(-h.w*0.18, -h.h*0.42);
+    ctx.strokeStyle = '#2b1e12';
+    ctx.lineWidth = 6;
+    ctx.lineCap = 'round';
+    for (let i=0;i<6;i++){
+      ctx.beginPath();
+      ctx.moveTo(i*6, 0);
+      ctx.lineTo(i*6 + 8, -8 - (i%2)*6);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // legs
+    ctx.fillStyle = '#2b1e12';
+    ctx.fillRect(-h.w*0.18, h.h*0.15, h.w*0.12, h.h*0.45);
+    ctx.fillRect(h.w*0.08, h.h*0.15, h.w*0.12, h.h*0.45);
+
+    ctx.restore();
+  }
+
+  function drawForeground(){
+    // small tufts
+    ctx.save();
+    const start = Math.floor(cameraX/160)*160 - 200;
+    for (let x = start; x < cameraX + W + 200; x += 140){
+      const y = groundY - 8 + Math.sin((x)/120)*8;
+      ctx.fillStyle = '#274b36';
+      ctx.beginPath(); ctx.moveTo(x+30,y); ctx.quadraticCurveTo(x+24,y-18,x+16,y-26); ctx.quadraticCurveTo(x+28,y-22,x+38,y-30); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function roundRect(ctx,x,y,w,h,r){
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);
+    ctx.arcTo(x+w,y,x+w,y+h,r);
+    ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r);
+    ctx.arcTo(x,y,x+w,y,r);
+    ctx.closePath();
+  }
+
+  // init / reset
+  function init(){
+    horse.x = 140; horse.y = groundY - 48; horse.vx = 0; horse.vy = 0; horse.onGround = false; horse.onWall = false; horse.wallSide = null; horse.blue = false; horse.color = '#6b4a2a';
+    blueberriesCollected = 0;
+    placeBerries(14);
+    cameraX = 0;
+    updateUI();
+    statusEl.textContent = '';
+    running = true;
+    pauseBtn.textContent = 'Pause';
+  }
+  init();
+
+  // main loop
+  function loop(now){
+    const dt = Math.min(0.033, (now - lastTime) / 1000);
+    lastTime = now;
+    if (running){
+      update(dt);
+    }
+    draw();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // helpers: expose spawn in console
+  window.spawnBerries = placeBerries;
+
+})();
+</script>
+</body>
+</html>
