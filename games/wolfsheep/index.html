@@ -1,0 +1,422 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Wolf-Sheep Simulation (10-second years)</title>
+  <style>
+    html,body { height:100%; margin:0; font-family:Arial, Helvetica, sans-serif; background:#222; color:#eee; }
+    #container { display:flex; height:100%; align-items:flex-start; padding:12px; box-sizing:border-box; gap:12px; }
+    #left { flex:1 1 auto; background:#111; padding:8px; border-radius:8px; box-shadow:0 3px 10px rgba(0,0,0,0.7); }
+    canvas { display:block; background:linear-gradient(#1b3,#0b2714); border-radius:6px; width:100%; height:100%; }
+    #right { width:280px; background:#151515; padding:12px; border-radius:8px; box-shadow:0 3px 10px rgba(0,0,0,0.7); }
+    h1 { font-size:18px; margin:0 0 8px 0; color:#fff; }
+    .stat { margin:8px 0; font-size:14px; }
+    .controls { display:flex; gap:8px; margin-top:12px; }
+    button { background:#2b2b2b; color:#fff; border:1px solid #333; padding:8px 10px; border-radius:6px; cursor:pointer; }
+    button:hover { background:#3a3a3a; }
+    .small { font-size:12px; color:#bbb; }
+    .legend { margin-top:12px; font-size:13px; }
+    .legend div { display:flex; align-items:center; gap:8px; margin:6px 0; }
+    .swatch { width:18px; height:12px; border-radius:3px; display:inline-block; border:1px solid rgba(0,0,0,0.4); }
+    footer { margin-top:18px; font-size:12px; color:#999; }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <div id="left">
+      <canvas id="world" width="900" height="600"></canvas>
+    </div>
+    <div id="right">
+      <h1>Wolf-Sheep Simulation</h1>
+      <div class="stat">Year: <span id="year">0</span> / 10</div>
+      <div class="stat">Time left: <span id="timeleft">10</span>s</div>
+      <div class="stat">Sheep: <span id="sheepCount">0</span></div>
+      <div class="stat">Wolves: <span id="wolfCount">0</span></div>
+      <div class="stat">Grass patches: <span id="grassCount">0</span></div>
+      <div class="controls">
+        <button id="restartBtn">Restart Now</button>
+        <button id="pauseBtn">Pause</button>
+      </div>
+      <div class="legend">
+        <div><span class="swatch" style="background:#9EE39E"></span> Grass</div>
+        <div><span class="swatch" style="background:#ffffff"></span> Sheep</div>
+        <div><span class="swatch" style="background:#ff6b6b"></span> Wolves</div>
+      </div>
+      <footer class="small">10 second simulation = 10 years; resets automatically with new random initial variables.</footer>
+    </div>
+  </div>
+
+  <script>
+  // Single-file Wolf-Sheep simulation
+  (function(){
+    const canvas = document.getElementById('world');
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height;
+
+    const yearLabel = document.getElementById('year');
+    const timeLeftLabel = document.getElementById('timeleft');
+    const sheepLabel = document.getElementById('sheepCount');
+    const wolfLabel = document.getElementById('wolfCount');
+    const grassLabel = document.getElementById('grassCount');
+    const restartBtn = document.getElementById('restartBtn');
+    const pauseBtn = document.getElementById('pauseBtn');
+
+    let sheep = [], wolves = [], grass = [];
+    let running = true;
+
+    // Timing: 10 seconds = 10 years, 1 second per year
+    const totalYears = 10;
+    let currentYear = 0;
+    let timeLeft = totalYears;
+    let yearTimer = null;
+    let lastResetTime = Date.now();
+
+    // Agents parameters (tunable)
+    const sheepParams = {
+      speed: 40, // px per second
+      maxEnergy: 20,
+      energyLossPerSec: 1.2,
+      eatGain: 6,
+      reproduceEnergy: 16,
+      perception: 50
+    };
+
+    const wolfParams = {
+      speed: 80,
+      maxEnergy: 40,
+      energyLossPerSec: 1.8,
+      eatGain: 18,
+      reproduceEnergy: 28,
+      perception: 140
+    };
+
+    const grassParams = {
+      countMin: 40,
+      countMax: 120
+    };
+
+    // Initialize with random populations and grass
+    function resetSimulation() {
+      cancelYearTimer();
+      sheep = [];
+      wolves = [];
+      grass = [];
+
+      // Random initial populations
+      const sheepCount = randInt(20, 50);
+      const wolfCount = randInt(4, 15);
+      const grassCount = randInt(grassParams.countMin, grassParams.countMax);
+
+      for (let i=0;i<sheepCount;i++){
+        sheep.push(makeSheep(randomPos(), randFloat(6, sheepParams.maxEnergy)));
+      }
+      for (let i=0;i<wolfCount;i++){
+        wolves.push(makeWolf(randomPos(), randFloat(12, wolfParams.maxEnergy)));
+      }
+      for (let i=0;i<grassCount;i++){
+        grass.push(makeGrass(randomPos()));
+      }
+
+      currentYear = 0;
+      timeLeft = totalYears;
+      updateLabels();
+      lastResetTime = Date.now();
+
+      startYearTimer();
+    }
+
+    // Agents factories
+    function makeSheep(pos, energy){
+      return {
+        x: pos.x, y: pos.y,
+        vx: randFloat(-1,1), vy: randFloat(-1,1),
+        energy: energy,
+        color: '#fff'
+      };
+    }
+    function makeWolf(pos, energy){
+      return {
+        x: pos.x, y: pos.y,
+        vx: randFloat(-1,1), vy: randFloat(-1,1),
+        energy: energy,
+        color: '#ff6b6b'
+      };
+    }
+    function makeGrass(pos){
+      return { x: pos.x, y: pos.y, eaten:false };
+    }
+
+    // Utilities
+    function randomPos(){
+      return { x: randFloat(10, W-10), y: randFloat(10, H-10) };
+    }
+    function randFloat(a,b){ return a + Math.random()*(b-a); }
+    function randInt(a,b){ return Math.floor(a + Math.random()*(b-a+1)); }
+    function distance(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return Math.sqrt(dx*dx+dy*dy); }
+
+    // Year timer handlers
+    function startYearTimer(){
+      yearTimer = setInterval(() => {
+        if (!running) return;
+        currentYear++;
+        timeLeft = totalYears - currentYear;
+        if (currentYear >= totalYears){
+          // reset: new initial variables
+          resetSimulation();
+        } else {
+          // Optional: apply year-based events (season, reproduction impulses, etc.)
+          // For simplicity, we will just update labels and allow ecosystem to continue.
+          updateLabels();
+        }
+      }, 1000);
+      updateLabels();
+    }
+    function cancelYearTimer(){
+      if (yearTimer) { clearInterval(yearTimer); yearTimer = null; }
+    }
+
+    // Main animation loop
+    let lastTime = performance.now();
+    function tick(now){
+      requestAnimationFrame(tick);
+      if (!running) { lastTime = now; return; }
+      const dt = Math.min(0.05, (now - lastTime) / 1000); // seconds, clamp to avoid big jumps
+      lastTime = now;
+
+      // Update agents
+      updateSheep(dt);
+      updateWolves(dt);
+      // draw
+      drawScene();
+      updateLabels();
+    }
+
+    function updateSheep(dt){
+      // Sheep move, lose energy, eat grass, reproduce, die
+      for (let i=sheep.length-1;i>=0;i--){
+        const s = sheep[i];
+        // Movement: random walk with slight bias away from nearest wolf
+        let avoid = findNearest(s, wolves, 160);
+        if (avoid){
+          // move away
+          const dx = s.x - avoid.x, dy = s.y - avoid.y;
+          const d = Math.max(0.0001, Math.sqrt(dx*dx+dy*dy));
+          s.vx += (dx/d)*0.6;
+          s.vy += (dy/d)*0.6;
+        } else {
+          s.vx += randFloat(-0.4,0.4);
+          s.vy += randFloat(-0.4,0.4);
+        }
+        // Normalize speed
+        let vmag = Math.sqrt(s.vx*s.vx + s.vy*s.vy);
+        if (vmag > 0){
+          s.vx = (s.vx/vmag) * sheepParams.speed;
+          s.vy = (s.vy/vmag) * sheepParams.speed;
+        }
+        s.x += s.vx * dt;
+        s.y += s.vy * dt;
+        // bounds
+        if (s.x < 4) { s.x = 4; s.vx *= -0.5; }
+        if (s.x > W-4) { s.x = W-4; s.vx *= -0.5; }
+        if (s.y < 4) { s.y = 4; s.vy *= -0.5; }
+        if (s.y > H-4) { s.y = H-4; s.vy *= -0.5; }
+
+        // energy loss
+        s.energy -= sheepParams.energyLossPerSec * dt;
+        // eat grass if near
+        const g = findNearest(s, grass, 10);
+        if (g){
+          // remove grass patch and gain energy
+          const gi = grass.indexOf(g);
+          if (gi >= 0) grass.splice(gi,1);
+          s.energy = Math.min(sheepParams.maxEnergy, s.energy + sheepParams.eatGain);
+        }
+        // Reproduce if enough energy (random chance)
+        if (s.energy >= sheepParams.reproduceEnergy && Math.random() < 0.18*dt*10){
+          s.energy *= 0.5;
+          const baby = makeSheep({x: s.x + randFloat(-8,8), y: s.y + randFloat(-8,8)}, s.energy*0.6);
+          sheep.push(baby);
+        }
+        // Death
+        if (s.energy <= 0 || !isFinite(s.energy)){
+          sheep.splice(i,1);
+        }
+      }
+    }
+
+    function updateWolves(dt){
+      // Wolves hunt, move towards nearest sheep if any, otherwise random wander
+      for (let i=wolves.length-1;i>=0;i--){
+        const w = wolves[i];
+        // Hunt nearest sheep in perception
+        const prey = findNearest(w, sheep, wolfParams.perception);
+        if (prey){
+          // move toward prey
+          const dx = prey.x - w.x, dy = prey.y - w.y;
+          const d = Math.max(0.0001, Math.sqrt(dx*dx+dy*dy));
+          w.vx += (dx/d) * 1.8;
+          w.vy += (dy/d) * 1.8;
+        } else {
+          // wander
+          w.vx += randFloat(-0.6,0.6);
+          w.vy += randFloat(-0.6,0.6);
+        }
+        // normalize speed
+        let vmag = Math.sqrt(w.vx*w.vx + w.vy*w.vy);
+        if (vmag > 0){
+          w.vx = (w.vx/vmag) * wolfParams.speed;
+          w.vy = (w.vy/vmag) * wolfParams.speed;
+        }
+        w.x += w.vx * dt;
+        w.y += w.vy * dt;
+        // bounds
+        if (w.x < 6) { w.x = 6; w.vx *= -0.5; }
+        if (w.x > W-6) { w.x = W-6; w.vx *= -0.5; }
+        if (w.y < 6) { w.y = 6; w.vy *= -0.5; }
+        if (w.y > H-6) { w.y = H-6; w.vy *= -0.5; }
+
+        // lose energy
+        w.energy -= wolfParams.energyLossPerSec * dt;
+
+        // Eat sheep if close
+        const preyClose = findNearest(w, sheep, 10);
+        if (preyClose){
+          const idx = sheep.indexOf(preyClose);
+          if (idx >= 0){
+            // Eat and remove sheep
+            sheep.splice(idx,1);
+            w.energy = Math.min(wolfParams.maxEnergy, w.energy + wolfParams.eatGain);
+          }
+        }
+
+        // Reproduce
+        if (w.energy >= wolfParams.reproduceEnergy && Math.random() < 0.12*dt*10){
+          w.energy *= 0.5;
+          const baby = makeWolf({x: w.x + randFloat(-12,12), y: w.y + randFloat(-12,12)}, w.energy*0.6);
+          wolves.push(baby);
+        }
+
+        // Death
+        if (w.energy <= 0 || !isFinite(w.energy)){
+          wolves.splice(i,1);
+        }
+      }
+    }
+
+    // Find nearest object within maxDist from list (list can be grass, sheep, wolves)
+    function findNearest(obj, list, maxDist){
+      if (!list || list.length===0) return null;
+      let best = null, bestD = maxDist;
+      for (let i=0;i<list.length;i++){
+        const it = list[i];
+        const dx = obj.x - it.x, dy = obj.y - it.y;
+        const d = Math.sqrt(dx*dx + dy*dy);
+        if (d < bestD){
+          bestD = d; best = it;
+        }
+      }
+      return best;
+    }
+
+    // Draw everything
+    function drawScene(){
+      ctx.clearRect(0,0,W,H);
+      // background gradient repeated by CSS; draw slight overlay
+      ctx.fillStyle = 'rgba(0,0,0,0.08)';
+      ctx.fillRect(0,0,W,H);
+
+      // Draw grass as small green circles
+      for (let g of grass){
+        ctx.beginPath();
+        ctx.fillStyle = '#9EE39E';
+        ctx.arc(g.x, g.y, 3.5, 0, Math.PI*2);
+        ctx.fill();
+      }
+
+      // Draw sheep (white with small eye)
+      for (let s of sheep){
+        ctx.save();
+        ctx.translate(s.x, s.y);
+        const speed = Math.sqrt(s.vx*s.vx + s.vy*s.vy);
+        const angle = Math.atan2(s.vy, s.vx);
+        ctx.rotate(angle);
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.ellipse(0,0,7,5,0,0,Math.PI*2);
+        ctx.fill();
+        // eye
+        ctx.fillStyle = '#333';
+        ctx.beginPath();
+        ctx.arc(3, -1, 1.2, 0, Math.PI*2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // Draw wolves (red)
+      for (let w of wolves){
+        ctx.save();
+        ctx.translate(w.x, w.y);
+        const angle = Math.atan2(w.vy, w.vx);
+        ctx.rotate(angle);
+        ctx.fillStyle = '#ff6b6b';
+        ctx.beginPath();
+        ctx.moveTo(8,0);
+        ctx.lineTo(-7,6);
+        ctx.lineTo(-7,-6);
+        ctx.closePath();
+        ctx.fill();
+        // eye
+        ctx.fillStyle = '#550000';
+        ctx.beginPath();
+        ctx.arc(3, -1.2, 1.2, 0, Math.PI*2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // HUD overlay: faint energy bars over first few agents (optional)
+      // (Disabled to keep canvas simple)
+    }
+
+    // Labels & UI
+    function updateLabels(){
+      yearLabel.textContent = Math.min(currentYear, totalYears);
+      // compute remaining seconds until next reset
+      const elapsedSinceReset = Math.floor((Date.now() - lastResetTime)/1000);
+      const secLeft = Math.max(0, totalYears - elapsedSinceReset);
+      timeLeftLabel.textContent = secLeft;
+      sheepLabel.textContent = sheep.length;
+      wolfLabel.textContent = wolves.length;
+      grassLabel.textContent = grass.length;
+    }
+
+    // UI buttons
+    restartBtn.addEventListener('click', () => { resetSimulation(); });
+    pauseBtn.addEventListener('click', () => {
+      running = !running;
+      pauseBtn.textContent = running ? 'Pause' : 'Resume';
+    });
+
+    // Init & start
+    resetSimulation();
+    requestAnimationFrame(tick);
+
+    // Random helpers for initial seeding
+    function seedRandomEnvironment(){
+      // not needed; everything random each reset
+    }
+
+    // Utility: provide some occasional grass regrowth each frame
+    setInterval(() => {
+      if (!running) return;
+      // small chance to regrow a grass patch each 300ms
+      if (Math.random() < 0.28){
+        grass.push(makeGrass(randomPos()));
+      }
+      // Keep grass count bounded
+      if (grass.length > 220) grass.splice(0, grass.length - 220);
+    }, 300);
+
+  })();
+  </script>
+</body>
+</html>
