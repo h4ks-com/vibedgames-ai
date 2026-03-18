@@ -1,0 +1,281 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Wang Road Tiles - 8x8 Random Tiling</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    html,body { height:100%; margin:0; display:flex; align-items:center; justify-content:center; background:#222; color:#eee; font-family:Arial,Helvetica,sans-serif; }
+    #app { width:760px; background:#111; padding:14px; border-radius:10px; box-shadow:0 8px 30px rgba(0,0,0,0.7); }
+    canvas { display:block; background:linear-gradient(#1b3,#0b2714); border-radius:6px; }
+    .controls { display:flex; gap:8px; margin-top:10px; }
+    button { background:#2b2b2b; color:#fff; padding:8px 12px; border:none; border-radius:6px; cursor:pointer; }
+    button:hover { background:#3a3a3a; }
+    .legend { margin-top:8px; font-size:13px; color:#ccc; display:flex; gap:12px; align-items:center; }
+    .sw { width:18px; height:12px; border-radius:3px; display:inline-block; border:1px solid rgba(0,0,0,0.3); }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <canvas id="board"></canvas>
+    <div class="controls">
+      <button id="regen">Randomize Tiling</button>
+      <button id="regenTiles">Regenerate Tile Art</button>
+    </div>
+    <div class="legend">
+      <div><span class="sw" style="background:#2d8b38"></span> Terrain</div>
+      <div><span class="sw" style="background:#6b6b6b"></span> Road</div>
+      <div><span class="sw" style="background:#fff"></span> Lane Marking</div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  // Configuration
+  const GRID_N = 8;
+  const TILE_PX = 80; // base tile pixel size
+  const BOARD_PX = TILE_PX * GRID_N;
+
+  // Canvas setup with DPR
+  const board = document.getElementById('board');
+  const ctx = board.getContext('2d');
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  board.width = BOARD_PX * dpr;
+  board.height = BOARD_PX * dpr;
+  board.style.width = BOARD_PX + 'px';
+  board.style.height = BOARD_PX + 'px';
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+
+  // Create 16 wang tiles (binary edges: top,right,bottom,left)
+  let tileCanvases = []; // index 0..15
+  function makeAllTiles(seedColors){
+    tileCanvases = [];
+    for (let id=0; id<16; id++){
+      tileCanvases.push(drawTile(id, TILE_PX, seedColors));
+    }
+  }
+
+  // draw a single tile to an offscreen canvas
+  function drawTile(id, size, seedColors){
+    const c = document.createElement('canvas');
+    c.width = size; c.height = size;
+    const g = c.getContext('2d');
+
+    // Bits
+    const top = (id>>0)&1;
+    const right = (id>>1)&1;
+    const bottom = (id>>2)&1;
+    const left = (id>>3)&1;
+
+    // random-ish styling using seedColors or random palette
+    const terrainHue = seedColors ? seedColors.terrainHue : (120 + Math.floor(Math.random()*60));
+    const terrainSat = seedColors ? seedColors.terrainSat : (30 + Math.random()*30);
+    const terrainLight = seedColors ? seedColors.terrainLight : (12 + Math.random()*8);
+
+    const roadColor = '#6b6b6b';
+    const roadEdge = '#4e4e4e';
+    const lineColor = 'rgba(255,255,255,0.95)';
+
+    // background terrain
+    g.fillStyle = `hsl(${terrainHue} ${terrainSat}% ${terrainLight}%)`;
+    g.fillRect(0,0,size,size);
+
+    // add slight texture
+    if (Math.random() < 0.6){
+      const tex = g.createLinearGradient(0,0,size,size);
+      tex.addColorStop(0, `rgba(0,0,0,${0.02 + Math.random()*0.04})`);
+      tex.addColorStop(1, `rgba(255,255,255,${0.01 + Math.random()*0.02})`);
+      g.fillStyle = tex;
+      g.fillRect(0,0,size,size);
+    }
+
+    const cx = size/2, cy = size/2;
+    const roadW = Math.max(10, Math.floor(size*0.18));
+    const halfW = roadW/2;
+
+    g.lineJoin = 'round';
+    g.lineCap = 'round';
+
+    // draw road arms (centered rectangles)
+    g.fillStyle = roadEdge;
+    if (top){
+      g.fillRect(cx-halfW-2, 0, roadW+4, cy);
+    }
+    if (bottom){
+      g.fillRect(cx-halfW-2, cy, roadW+4, cy);
+    }
+    if (left){
+      g.fillRect(0, cy-halfW-2, cx, roadW+4);
+    }
+    if (right){
+      g.fillRect(cx, cy-halfW-2, cx, roadW+4);
+    }
+
+    // inner road main (slightly smaller to create border)
+    g.fillStyle = roadColor;
+    if (top){
+      g.fillRect(cx-halfW, 0, roadW, cy-2);
+    }
+    if (bottom){
+      g.fillRect(cx-halfW, cy+2, roadW, cy-2);
+    }
+    if (left){
+      g.fillRect(0, cy-halfW, cx-2, roadW);
+    }
+    if (right){
+      g.fillRect(cx+2, cy-halfW, cx-2, roadW);
+    }
+
+    // central round joint if any arms exist
+    if (top||right||bottom||left){
+      g.beginPath();
+      g.fillStyle = roadColor;
+      g.arc(cx, cy, roadW*0.9, 0, Math.PI*2);
+      g.fill();
+      // edge ring
+      g.beginPath();
+      g.strokeStyle = roadEdge;
+      g.lineWidth = 2;
+      g.arc(cx, cy, roadW*0.9, 0, Math.PI*2);
+      g.stroke();
+    }
+
+    // add dashed centerline(s) for arms
+    g.strokeStyle = lineColor;
+    g.lineWidth = Math.max(1, Math.floor(size*0.045));
+    g.setLineDash([Math.max(4, size*0.03), Math.max(4, size*0.02)]);
+    // vertical lines for top/bottom
+    if (top){
+      g.beginPath();
+      g.moveTo(cx, cy - 2);
+      g.lineTo(cx, 2);
+      g.stroke();
+    }
+    if (bottom){
+      g.beginPath();
+      g.moveTo(cx, cy + 2);
+      g.lineTo(cx, size-2);
+      g.stroke();
+    }
+    // horizontal lines for left/right
+    if (left){
+      g.beginPath();
+      g.moveTo(2, cy);
+      g.lineTo(cx - 2, cy);
+      g.stroke();
+    }
+    if (right){
+      g.beginPath();
+      g.moveTo(cx + 2, cy);
+      g.lineTo(size-2, cy);
+      g.stroke();
+    }
+    g.setLineDash([]);
+
+    // small decorative rumble near ends (optional)
+    g.fillStyle = 'rgba(255,255,255,0.06)';
+    if (top && !bottom){
+      g.fillRect(cx - halfW - 6, 6, roadW + 12, 6);
+    }
+    if (left && !right){
+      g.fillRect(6, cy - halfW - 6, 6, roadW + 12);
+    }
+
+    // subtle border
+    g.strokeStyle = 'rgba(0,0,0,0.15)';
+    g.lineWidth = 1;
+    g.strokeRect(0.5,0.5,size-1,size-1);
+
+    return c;
+  }
+
+  // Generate an 8x8 tiling using Wang rules (match adjacent edges)
+  // Bits order: bit0=top, bit1=right, bit2=bottom, bit3=left
+  function randomTiling(){
+    const grid = new Array(GRID_N);
+    for (let y=0;y<GRID_N;y++){
+      grid[y] = new Array(GRID_N).fill(0);
+    }
+    for (let y=0;y<GRID_N;y++){
+      for (let x=0;x<GRID_N;x++){
+        const topConstraint = (y>0) ? ((grid[y-1][x]>>2)&1) : null;   // need top bit equal to above.bottom
+        const leftConstraint = (x>0) ? ((grid[y][x-1]>>1)&1) : null; // left bit must equal left neighbor.right
+        const candidates = [];
+        for (let id=0; id<16; id++){
+          const top = (id>>0)&1;
+          const left = (id>>3)&1;
+          if ((topConstraint === null || top === topConstraint) &&
+              (leftConstraint === null || left === leftConstraint)){
+            candidates.push(id);
+          }
+        }
+        // pick uniformly random among candidates
+        const pick = candidates[Math.floor(Math.random()*candidates.length)];
+        grid[y][x] = pick;
+      }
+    }
+    return grid;
+  }
+
+  // Render the grid to main canvas
+  function renderGrid(grid){
+    ctx.clearRect(0,0, BOARD_PX, BOARD_PX);
+    for (let y=0;y<GRID_N;y++){
+      for (let x=0;x<GRID_N;x++){
+        const id = grid[y][x];
+        const tile = tileCanvases[id];
+        ctx.drawImage(tile, x * TILE_PX, y * TILE_PX, TILE_PX, TILE_PX);
+      }
+    }
+    // overlay grid lines
+    ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+    ctx.lineWidth = 1;
+    for (let i=0;i<=GRID_N;i++){
+      const pos = i * TILE_PX + 0.5;
+      ctx.beginPath();
+      ctx.moveTo(0, pos);
+      ctx.lineTo(BOARD_PX, pos);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(pos, 0);
+      ctx.lineTo(pos, BOARD_PX);
+      ctx.stroke();
+    }
+  }
+
+  // Initial tile generation and tiling
+  function regenTiles(){
+    // Pick a subtle terrain color seed for consistent tile set
+    const terrainHue = 100 + Math.floor(Math.random()*120);
+    const seedColors = {
+      terrainHue,
+      terrainSat: 28 + Math.floor(Math.random()*30),
+      terrainLight: 10 + Math.floor(Math.random()*10)
+    };
+    makeAllTiles(seedColors);
+  }
+
+  function regenTilingAndRender(){
+    const g = randomTiling();
+    renderGrid(g);
+    currentGrid = g;
+  }
+
+  // hook up UI
+  const regenBtn = document.getElementById('regen');
+  const regenTilesBtn = document.getElementById('regenTiles');
+  regenBtn.addEventListener('click', () => { regenTilingAndRender(); });
+  regenTilesBtn.addEventListener('click', () => { regenTiles(); regenTilingAndRender(); });
+
+  // initial
+  let currentGrid = null;
+  regenTiles();
+  regenTilingAndRender();
+
+  // allow click on canvas to regenerate too
+  board.addEventListener('click', () => { regenTilingAndRender(); });
+
+})();
+</script>
+</body>
+</html>
