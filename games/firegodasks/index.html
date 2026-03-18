@@ -1,0 +1,801 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Fire God Asks for Fire - Side Scroller</title>
+<style>
+  html,body { height:100%; margin:0; background:#000; overflow:hidden; }
+  canvas { display:block; margin:0 auto; background:#071018; image-rendering:pixelated; }
+  #ui {
+    position: absolute; left: 10px; top: 10px; color: #ffc; font-family: "Segoe UI", Roboto, Arial; 
+    text-shadow:0 1px 0 #000; user-select:none;
+  }
+  .big { font-size:18px; }
+  .small { font-size:13px; color:#ddd; }
+  #shop {
+    position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); 
+    background: rgba(0,0,0,0.75); color:#fff; padding:16px; border-radius:8px; display:none;
+    width:520px; max-width:92%;
+  }
+  #shop h2 { margin:0 0 8px 0; }
+  .shop-item { display:flex; justify-content:space-between; padding:8px; border-top:1px solid rgba(255,255,255,0.06); }
+  .btn { background:#ff6a00; color:#111; padding:6px 10px; border-radius:6px; cursor:pointer; font-weight:700; }
+  .btn:active { transform:translateY(1px); }
+  #centerMsg { position:absolute; left:50%; top:50%; transform:translate(-50%,-10%); color:#fff; font-family:monospace; display:none; text-align:center; }
+  #controls { position:absolute; right:10px; top:10px; color:#ccc; font-family:sans-serif; font-size:12px; }
+</style>
+</head>
+<body>
+<canvas id="c" width="960" height="540"></canvas>
+<div id="ui" class="big">
+  <div id="level">Path: -</div>
+  <div class="small" id="timer">Time: 60.0</div>
+  <div class="small" id="stats">HP: 3 | Flames: 0/10 | Coins: 0 | Speed+: 0 | Armor: 0 | Bombs: 0</div>
+</div>
+<div id="controls">
+  Controls: WASD = move/jump, B = fire, C = bomb (if purchased), avoid spiders, collect red flames & coins.
+</div>
+<div id="centerMsg"></div>
+<div id="shop">
+  <h2>Shop - Spend Coins</h2>
+  <div class="small" id="shopCoins">Coins: 0</div>
+  <div class="shop-item">
+    <div>Speed + (permanent)</div>
+    <div><div class="btn" id="buySpeed">Cost: 30</div></div>
+  </div>
+  <div class="shop-item">
+    <div>Armor + (reduces damage)</div>
+    <div><div class="btn" id="buyArmor">Cost: 40</div></div>
+  </div>
+  <div class="shop-item">
+    <div>Bomb (usable on-run, clears enemies)</div>
+    <div><div class="btn" id="buyBomb">Cost: 50</div></div>
+  </div>
+  <div style="margin-top:12px; text-align:right;">
+    <div class="btn" id="resume">Resume / Next Path</div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+
+  // UI elements
+  const levelEl = document.getElementById('level');
+  const timerEl = document.getElementById('timer');
+  const statsEl = document.getElementById('stats');
+  const shopEl = document.getElementById('shop');
+  const shopCoinsEl = document.getElementById('shopCoins');
+  const centerMsg = document.getElementById('centerMsg');
+  const buySpeed = document.getElementById('buySpeed');
+  const buyArmor = document.getElementById('buyArmor');
+  const buyBomb = document.getElementById('buyBomb');
+  const resumeBtn = document.getElementById('resume');
+
+  // Game state
+  let seed = Math.floor(Math.random()*1e9);
+  function rand() { seed = (seed * 1664525 + 1013904223) | 0; return (seed >>> 0) / 4294967295; }
+  function randRange(a,b){ return a + rand()*(b-a); }
+  function choice(arr){ return arr[Math.floor(rand()*arr.length)]; }
+
+  const pathNames = [
+    "Emberwood", "Cinder Trail", "Scarlet Verge", "Flamegrove", "Ashen Way",
+    "Singe Ridge", "Pyre Road", "Saffron Hollow", "Blaze Track", "Crimson Pass",
+    "Kindle Lane", "Infernal Walk", "Torchpath", "Smolder Bend", "Emberline"
+  ];
+
+  // Player persistent upgrades
+  const PlayerMeta = {
+    speedUpgrades: 0,
+    armorUpgrades: 0,
+    bombsOwned: 0,
+    coins: 0
+  };
+
+  // Level-run variables
+  let level = 0;
+  const RUN_DURATION = 60.0; // seconds
+  let runTime = 0;
+  let running = true;
+  let onShop = false;
+  let gameOver = false;
+
+  // World
+  let world = {
+    offset: 0,
+    baseSpeed: 120, // px/sec
+    path: null,
+    colors: {},
+    clouds: [],
+    mountains: [],
+    trees: []
+  };
+
+  // Entities
+  let player;
+  let bullets = [];
+  let enemies = [];
+  let pickups = []; // coins & flames
+  let particles = [];
+
+  function resetRun() {
+    runTime = RUN_DURATION;
+    bullets = [];
+    enemies = [];
+    pickups = [];
+    particles = [];
+    world.offset = 0;
+    player = createPlayer();
+    generatePath();
+    spawnInitial();
+    running = true;
+    onShop = false;
+    gameOver = false;
+    centerMsg.style.display = 'none';
+  }
+
+  function nextLevel() {
+    level++;
+    // change seed to produce different visuals
+    seed = Math.floor(Math.random()*1e9);
+    resetRun();
+  }
+
+  function createPlayer() {
+    return {
+      x: W*0.25,
+      y: H - 110,
+      w: 40,
+      h: 40,
+      vy: 0,
+      onGround: true,
+      hp: 3 + PlayerMeta.armorUpgrades,
+      flames: 0,
+      mega: false,
+      megaTimer: 0,
+      speedBoost: PlayerMeta.speedUpgrades, // extra base multiplier
+      bombs: PlayerMeta.bombsOwned,
+      armor: PlayerMeta.armorUpgrades
+    };
+  }
+
+  function generatePath() {
+    // create a palette: horizon, clouds, mountains, trees, edge, path
+    function hueShift() { return Math.floor(rand()*360); }
+    const baseHue = hueShift();
+    function color(h,s,l){ return `hsl(${(h)%360},${s}%,${l}%)`; }
+    const horizonHue = baseHue;
+    const cloudsHue = baseHue + 20;
+    const mountainsHue = baseHue + 40;
+    const treesHue = baseHue + 80;
+    const edgeHue = baseHue + 120;
+    const pathHue = baseHue + 160;
+    world.colors = {
+      horizon: color(horizonHue, 40, 14),
+      cloud: color(cloudsHue, 60, 75),
+      mountain: color(mountainsHue, 40, 30),
+      tree: color(treesHue, 50, 24),
+      edge: color(edgeHue, 60, 18),
+      path: color(pathHue, 50, 10)
+    };
+    world.path = {
+      name: choice(pathNames) + " #" + (level+1),
+      cloudSpeed: randRange(5,20),
+      mountainSpeed: randRange(20,45),
+      treeSpeed: randRange(60,120),
+      edgeSpeed: randRange(120,240)
+    };
+    // generate some cloud positions
+    world.clouds = Array.from({length:10}, () => ({
+      x: randRange(0, 4000),
+      y: randRange(40, 160),
+      scale: randRange(0.6,1.4)
+    }));
+    world.mountains = Array.from({length:6}, (_,i) => ({
+      x: i*800 + randRange(-200,200),
+      y: H - 260 + randRange(-40,40),
+      w: randRange(420,720),
+      h: randRange(120,220)
+    }));
+    world.trees = Array.from({length:20}, () => ({
+      x: randRange(0, 6000),
+      y: H - 170 + randRange(-30,20),
+      h: randRange(60,130)
+    }));
+  }
+
+  function spawnInitial() {
+    // populate pickups and enemies ahead
+    for (let i=1;i<8;i++){
+      if (rand() < 0.6) spawnCoin(W + randRange(200*i, 200*i + 200));
+      if (rand() < 0.4) spawnFlame(W + randRange(220*i, 220*i + 220));
+      if (rand() < 0.5) spawnSpider(W + randRange(250*i, 250*i + 300));
+    }
+  }
+
+  // Entities helpers
+  function spawnCoin(x){
+    pickups.push({type:'coin', x: x, y: H-100 - randRange(0,40), w:18, h:18});
+  }
+  function spawnFlame(x){
+    pickups.push({type:'flame', x: x, y: H-100 - randRange(0,60), w:22, h:28});
+  }
+  function spawnSpider(x){
+    enemies.push({
+      type:'spider', x:x, baseY:H-98, y:H-98, w:34, h:22,
+      vx:-20 + randRange(-40,60),
+      jumpTimer: randRange(0.2,1.4),
+      jumpPhase:0
+    });
+  }
+
+  // Controls
+  const keys = {};
+  window.addEventListener('keydown', (e) => {
+    keys[e.key.toLowerCase()] = true;
+    // prevent scrolling
+    if (['w','a','s','d','b','c'].includes(e.key.toLowerCase())) e.preventDefault();
+    if (e.key === 'r' && gameOver) nextLevel();
+  });
+  window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+
+  // Game loop
+  let last = performance.now();
+  function loop(now){
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    if (!onShop && !gameOver) update(dt);
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  function update(dt){
+    // timer
+    runTime -= dt;
+    if (runTime <= 0) {
+      // show shop
+      openShop();
+      return;
+    }
+
+    // spawn occasionally
+    if (rand() < dt*0.8) {
+      // spawn ahead
+      if (rand() < 0.5) spawnCoin(W + randRange(200,900));
+      if (rand() < 0.35) spawnFlame(W + randRange(200,900));
+      if (rand() < 0.4) spawnSpider(W + randRange(200,900));
+    }
+
+    // determine world scroll speed
+    let base = world.baseSpeed + player.speedBoost*30;
+    if (player.mega) base *= 2;
+    // Allow player to influence speed with A/D
+    if (keys['d']) base += 80;
+    if (keys['a']) base -= 80;
+    if (keys['s']) base -= 30;
+    // world offset increases to the right
+    world.offset += base * dt;
+
+    // player vertical physics
+    // jump with W / space
+    if ((keys['w'] || keys[' ']) && player.onGround) {
+      player.vy = -420;
+      player.onGround = false;
+    }
+    // gravity
+    player.vy += 1300 * dt;
+    player.y += player.vy * dt;
+    if (player.y >= H - 110) {
+      player.y = H - 110;
+      player.vy = 0;
+      player.onGround = true;
+    }
+
+    // Shooting with 'b'
+    if (keys['b']) {
+      if (!player._fireCooldown) player._fireCooldown = 0;
+      if (player._fireCooldown <= 0) {
+        fireBullet(player.x + player.w/2 + 12, player.y + 6);
+        player._fireCooldown = 0.16;
+      }
+    }
+    if (player._fireCooldown > 0) player._fireCooldown -= dt;
+
+    // Bomb activation 'c'
+    if (keys['c']) {
+      if (!player._cDown) {
+        player._cDown = true;
+        if (player.bombs > 0) {
+          useBomb();
+          player.bombs--;
+        }
+      }
+    } else {
+      player._cDown = false;
+    }
+
+    // bullets update
+    for (let i=bullets.length-1;i>=0;i--){
+      const b = bullets[i];
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      b.life -= dt;
+      // check collisions with enemies
+      for (let j=enemies.length-1;j>=0;j--){
+        const e = enemies[j];
+        if (rectIntersect(b, e)) {
+          enemies.splice(j,1);
+          bullets.splice(i,1);
+          spawnParticles(e.x + e.w/2, e.y, 12, '#ff8a00');
+          PlayerMeta.coins += 1; // small drop on kill
+          break;
+        }
+      }
+      if (b.life <= 0) bullets.splice(i,1);
+    }
+
+    // enemies update
+    for (let i=enemies.length-1;i>=0;i--){
+      const e = enemies[i];
+      // jumping spider: bounce up and down and move left with slight oscillation
+      e.jumpPhase += dt*2;
+      e.y = e.baseY + Math.sin(e.jumpPhase*3 + e.x*0.002)*14;
+      // move toward player (relative to world)
+      // but enemies are in world coords, so convert to screen
+      const exScreen = e.x - world.offset;
+      // basic horizontal movement relative to world scroll
+      e.x += e.vx * dt;
+      // collisions with player
+      if (rectIntersect(e, player, world)) {
+        // damage
+        const now = performance.now()/1000;
+        if (!player._hitCooldown || now - player._hitCooldown > 0.6) {
+          player._hitCooldown = now;
+          const dmg = Math.max(1, 1 - player.armor);
+          player.hp -= dmg;
+          spawnParticles(player.x + player.w/2, player.y + player.h/2, 12, '#ff0000');
+          if (player.hp <= 0) {
+            // dead
+            gameOver = true;
+            running = false;
+            centerMsg.innerHTML = "You were extinguished.<br>Press any key to continue (R to restart)";
+            centerMsg.style.display = 'block';
+          }
+        }
+      }
+      // if offscreen far left remove
+      if (e.x < world.offset - 400) enemies.splice(i,1);
+    }
+
+    // pickups update and collection
+    for (let i=pickups.length-1;i>=0;i--){
+      const p = pickups[i];
+      // move with world (their x is world coord)
+      if (rectIntersect(p, player, world)) {
+        if (p.type === 'coin') {
+          PlayerMeta.coins += 1;
+          spawnParticles(player.x + player.w/2, player.y, 8, '#ffd700');
+        } else if (p.type === 'flame') {
+          player.flames++;
+          spawnParticles(player.x + player.w/2, player.y, 14, '#ff4a00');
+          if (player.flames >= 10) {
+            player.flames = 0;
+            player.mega = true;
+            player.megaTimer = 8.0;
+          }
+        }
+        pickups.splice(i,1);
+      } else {
+        // remove if way behind
+        if (p.x < world.offset - 400) pickups.splice(i,1);
+      }
+    }
+
+    // mega timer
+    if (player.mega) {
+      player.megaTimer -= dt;
+      if (player.megaTimer <= 0) player.mega = false;
+    }
+
+    // particles
+    for (let i=particles.length-1;i>=0;i--){
+      const pt = particles[i];
+      pt.x += pt.vx * dt;
+      pt.y += pt.vy * dt;
+      pt.life -= dt;
+      pt.vy += 800 * dt;
+      if (pt.life <= 0) particles.splice(i,1);
+    }
+
+    // Update UI every frame
+    updateUI();
+  }
+
+  function updateUI(){
+    levelEl.textContent = "Path: " + world.path.name;
+    timerEl.textContent = "Time: " + runTime.toFixed(1);
+    statsEl.textContent = `HP: ${player.hp} | Flames: ${player.flames}/10${player.mega ? " (MEGA!)" : ""} | Coins: ${PlayerMeta.coins} | Speed+: ${PlayerMeta.speedUpgrades} | Armor: ${PlayerMeta.armorUpgrades} | Bombs: ${PlayerMeta.bombsOwned}`;
+  }
+
+  function rectIntersect(a,b,worldContext){
+    // If worldContext provided then a/b coordinates (a) are world coords and (b) is player screen coords?
+    // We'll treat both as world coords except player is screen relative so convert.
+    let ax = a.x, ay = a.y, aw = a.w, ah = a.h;
+    let bx = b.x, by = b.y, bw = b.w, bh = b.h;
+    if (worldContext) {
+      // a is in world coords (enemy/pickup), b is player screen coords -> convert player to world coords
+      bx = b.x + world.offset;
+    } else {
+      // both in screen coords or both in world coords, assume direct
+    }
+    return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+  }
+
+  function fireBullet(x,y){
+    bullets.push({x:x + world.offset, y:y + 8, vx: 500, vy: 0, life: 1.8}); // store in world coords
+    spawnParticles(x + world.offset, y, 5, '#ffb350');
+  }
+
+  function useBomb(){
+    // clear enemies on screen
+    let cleared = 0;
+    for (let i=enemies.length-1;i>=0;i--){
+      const e = enemies[i];
+      const ex = e.x - world.offset;
+      if (ex > -100 && ex < W + 100) {
+        enemies.splice(i,1);
+        cleared++;
+      }
+    }
+    spawnParticles(player.x + world.offset, player.y, 40, '#ff6622');
+    // grant coins for each
+    PlayerMeta.coins += cleared * 2;
+  }
+
+  function spawnParticles(x,y,count,color){
+    for (let i=0;i<count;i++){
+      particles.push({
+        x:x + randRange(-8,8),
+        y:y + randRange(-8,8),
+        vx: randRange(-220,220),
+        vy: randRange(-240, -40),
+        life: randRange(0.4,1.2),
+        color: color
+      });
+    }
+  }
+
+  // Rendering
+  function render(){
+    ctx.clearRect(0,0,W,H);
+    drawSky();
+    drawParallax();
+    drawPath();
+    drawPickups();
+    drawEnemies();
+    drawPlayer();
+    drawBullets();
+    drawParticles();
+
+    // HUD overlay minimal (some text is DOM)
+    if (onShop) {
+      // dark overlay
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.fillRect(0,0,W,H);
+    }
+
+    if (gameOver) {
+      ctx.fillStyle = 'rgba(0,0,0,0.65)';
+      ctx.fillRect(0,0,W,H);
+      ctx.fillStyle = '#fff';
+      ctx.font = '28px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('You were extinguished - Press R to restart', W/2, H/2 - 10);
+    }
+  }
+
+  function drawSky(){
+    // horizon
+    ctx.fillStyle = world.colors.horizon;
+    ctx.fillRect(0,0,W,H);
+    // sun glow
+    const g = ctx.createRadialGradient(W*0.85 - (world.offset*0.02)%W, 80, 10, W*0.85, 80, 240);
+    g.addColorStop(0, 'rgba(255,140,60,0.8)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,W,H);
+  }
+
+  function drawParallax(){
+    // clouds - slowest
+    for (const c of world.clouds) {
+      const x = c.x - (world.offset * (world.path.cloudSpeed/1000));
+      const y = c.y;
+      drawCloud(x % (W + 1200) - 600, y, c.scale, world.colors.cloud);
+    }
+    // mountains
+    for (const m of world.mountains) {
+      const x = m.x - (world.offset * (world.path.mountainSpeed/1000));
+      drawMountain(x, m.y, m.w, m.h, world.colors.mountain);
+    }
+    // trees
+    for (const t of world.trees) {
+      const x = t.x - (world.offset * (world.path.treeSpeed/1000));
+      drawTree(x, t.y, t.h, world.colors.tree);
+    }
+    // edge (closer bushes)
+    // draw many small shapes
+    const edgeSpeed = world.path.edgeSpeed/1000;
+    for (let ex = -200; ex < W + 400; ex += 60) {
+      const x = ex + ((world.offset)*edgeSpeed % 220);
+      const y = H - 90;
+      ctx.fillStyle = world.colors.edge;
+      ctx.beginPath();
+      ctx.ellipse(x, y, 28, 12, 0, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+
+  function drawCloud(x,y,scale,color){
+    // fluffy cloud
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.9;
+    ctx.beginPath();
+    ctx.ellipse(x, y, 38*scale, 22*scale, 0, 0, Math.PI*2);
+    ctx.ellipse(x+36*scale, y+6*scale, 38*scale, 22*scale, 0, 0, Math.PI*2);
+    ctx.ellipse(x+72*scale, y, 32*scale, 18*scale, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  function drawMountain(x,y,w,h,color){
+    const sx = (x - world.offset*(world.path.mountainSpeed/1000)) % 3000;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(x, y+h);
+    ctx.lineTo(x + w*0.5, y - h);
+    ctx.lineTo(x + w, y + h);
+    ctx.closePath();
+    ctx.fill();
+    // highlight
+    ctx.fillStyle = 'rgba(255,120,40,0.06)';
+    ctx.beginPath();
+    ctx.moveTo(x + w*0.5, y - h);
+    ctx.lineTo(x + w*0.58, y + h*0.12);
+    ctx.lineTo(x + w*0.28, y + h*0.22);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawTree(x,y,h,color){
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x+12, y - h*0.4);
+    ctx.lineTo(x+28, y - h*0.1);
+    ctx.lineTo(x+14, y - h);
+    ctx.lineTo(x-8, y - h*0.12);
+    ctx.closePath();
+    ctx.fill();
+    // trunk
+    ctx.fillStyle = 'rgba(80,40,20,0.9)';
+    ctx.fillRect(x+6, y, 6, 20);
+  }
+
+  function drawPath(){
+    // foreground path
+    ctx.fillStyle = world.colors.path;
+    ctx.fillRect(0, H - 90, W, 90);
+    // stones / texture
+    ctx.fillStyle = 'rgba(0,0,0,0.08)';
+    for (let i=0;i<20;i++){
+      ctx.beginPath();
+      ctx.ellipse((i*120 + (world.offset*0.6)%120), H - 50, 28, 8, 0, 0, Math.PI*2);
+      ctx.fill();
+    }
+    // line for edge
+    ctx.strokeStyle = 'rgba(255,150,60,0.06)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, H - 100);
+    ctx.lineTo(W, H - 100);
+    ctx.stroke();
+  }
+
+  function drawPickups(){
+    for (const p of pickups) {
+      const sx = p.x - world.offset;
+      if (p.type === 'coin') {
+        // coin as golden circle
+        ctx.fillStyle = '#ffd700';
+        ctx.beginPath();
+        ctx.ellipse(sx, p.y, 8, 8, 0, 0, Math.PI*2);
+        ctx.fill();
+        ctx.fillStyle = '#c88b00';
+        ctx.fillRect(sx-2, p.y-2, 4, 4);
+      } else if (p.type === 'flame') {
+        // little flame sprite
+        drawFlame(sx, p.y, 16, '#ff2d00');
+      }
+    }
+  }
+
+  function drawFlame(x,y,size,color){
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(1,1);
+    const grad = ctx.createRadialGradient(0, -4, 1, 0, -6, 24);
+    grad.addColorStop(0, '#fff7d6');
+    grad.addColorStop(0.2, '#ffb04a');
+    grad.addColorStop(0.6, color);
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(0, 10);
+    ctx.bezierCurveTo(12, 2, 8, -14, 0, -20);
+    ctx.bezierCurveTo(-12, -6, -6, 2, 0, 10);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawEnemies(){
+    for (const e of enemies) {
+      const sx = e.x - world.offset;
+      if (sx < -80 || sx > W + 80) continue;
+      // spider body
+      ctx.fillStyle = '#222';
+      ctx.beginPath();
+      ctx.ellipse(sx, e.y, e.w/2, e.h/2, 0, 0, Math.PI*2);
+      ctx.fill();
+      // legs
+      ctx.strokeStyle = '#111';
+      ctx.lineWidth = 3;
+      for (let i=0;i<4;i++){
+        ctx.beginPath();
+        const lx = sx + (i-1.5)*10;
+        ctx.moveTo(lx, e.y);
+        ctx.lineTo(lx + (i%2? -14:14), e.y + 14);
+        ctx.stroke();
+      }
+      // eyes
+      ctx.fillStyle = '#ff8a00';
+      ctx.beginPath();
+      ctx.ellipse(sx-6, e.y-2, 3, 3, 0, 0, Math.PI*2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(sx+6, e.y-2, 3, 3, 0, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+
+  function drawBullets(){
+    ctx.fillStyle = '#ffcc66';
+    for (const b of bullets) {
+      const sx = b.x - world.offset;
+      ctx.beginPath();
+      ctx.ellipse(sx, b.y, 6, 6, 0, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+
+  function drawParticles(){
+    for (const p of particles) {
+      ctx.fillStyle = p.color;
+      ctx.globalAlpha = Math.max(0, Math.min(1, p.life));
+      ctx.fillRect(p.x - world.offset, p.y, 3, 3);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function drawPlayer(){
+    // flame ball - draw with glow
+    const sx = player.x;
+    const sy = player.y;
+    // glow
+    const grad = ctx.createRadialGradient(sx+20, sy+16, 6, sx+20, sy+16, 70);
+    grad.addColorStop(0, 'rgba(255,190,100,0.88)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.ellipse(sx+20, sy+16, 64, 32, 0, 0, Math.PI*2);
+    ctx.fill();
+    // core flame
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.fillStyle = player.mega ? '#ffec7a' : '#ffd48a';
+    ctx.beginPath();
+    ctx.moveTo(20, 36);
+    ctx.bezierCurveTo(36, 22, 36, 4, 20, 0);
+    ctx.bezierCurveTo(8, 6, 12, 24, 20, 36);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#ff4a00';
+    ctx.beginPath();
+    ctx.moveTo(20, 28);
+    ctx.quadraticCurveTo(26, 20, 20, 8);
+    ctx.quadraticCurveTo(16, 18, 20, 28);
+    ctx.fill();
+    ctx.restore();
+
+    // little trail when mega
+    if (player.mega) {
+      for (let i=0;i<6;i++){
+        ctx.fillStyle = `rgba(255,120,30,${0.12+i*0.03})`;
+        ctx.beginPath();
+        ctx.ellipse(sx - 18 - i*12, sy + 6 + i*2, 8 - i, 4 - i*0.5, 0, 0, Math.PI*2);
+        ctx.fill();
+      }
+    }
+  }
+
+  // Shop UI handlers
+  function openShop(){
+    onShop = true;
+    shopEl.style.display = 'block';
+    shopCoinsEl.textContent = "Coins: " + PlayerMeta.coins;
+    centerMsg.style.display = 'none';
+  }
+  function closeShop(){
+    onShop = false;
+    shopEl.style.display = 'none';
+    // commit upgrades to PlayerMeta persistent for next run
+    PlayerMeta.bombsOwned = player.bombs;
+    PlayerMeta.speedUpgrades = player.speedBoost;
+    PlayerMeta.armorUpgrades = player.armor;
+    nextLevel();
+  }
+
+  buySpeed.addEventListener('click', ()=>{
+    if (PlayerMeta.coins >= 30) {
+      PlayerMeta.coins -= 30;
+      PlayerMeta.speedUpgrades++;
+      shopCoinsEl.textContent = "Coins: " + PlayerMeta.coins;
+    }
+  });
+  buyArmor.addEventListener('click', ()=>{
+    if (PlayerMeta.coins >= 40) {
+      PlayerMeta.coins -= 40;
+      PlayerMeta.armorUpgrades++;
+      shopCoinsEl.textContent = "Coins: " + PlayerMeta.coins;
+    }
+  });
+  buyBomb.addEventListener('click', ()=>{
+    if (PlayerMeta.coins >= 50) {
+      PlayerMeta.coins -= 50;
+      PlayerMeta.bombsOwned++;
+      shopCoinsEl.textContent = "Coins: " + PlayerMeta.coins;
+    }
+  });
+  resumeBtn.addEventListener('click', ()=> {
+    shopEl.style.display = 'none';
+    // apply shops to player
+    player.bombs = PlayerMeta.bombsOwned;
+    player.speedBoost = PlayerMeta.speedUpgrades;
+    player.armor = PlayerMeta.armorUpgrades;
+    // proceed to next path
+    nextLevel();
+  });
+
+  // initial start
+  nextLevel();
+  // start loop
+  requestAnimationFrame(loop);
+
+  // helpful extra: allow keypress to close game over and continue to shop or restart
+  window.addEventListener('keydown', (e) => {
+    if (gameOver) {
+      // Press any key to go to shop / restart in nextLevel
+      gameOver = false;
+      openShop();
+    }
+  });
+
+  // For safety, handle window blur to reset pressed keys
+  window.addEventListener('blur', ()=> { for (let k in keys) keys[k]=false; });
+
+})();
+</script>
+</body>
+</html>
