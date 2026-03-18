@@ -1,0 +1,677 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Wang Road Tiles - Drive on Roads</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    html,body{height:100%;margin:0;font-family:Segoe UI,Arial,Helvetica,sans-serif;background:#111;color:#eee;display:flex;align-items:stretch}
+    #app{display:flex;gap:12px;padding:12px;flex:1}
+    #left{flex:1;background:#0f0f0f;border-radius:10px;padding:12px;box-shadow:0 8px 24px rgba(0,0,0,0.6);display:flex;flex-direction:column;align-items:center}
+    canvas{background:#142a1a;border-radius:6px;box-shadow:inset 0 0 40px rgba(0,0,0,0.4)}
+    #right{width:380px;background:#141414;border-radius:10px;padding:12px;box-shadow:0 8px 24px rgba(0,0,0,0.6);overflow:auto}
+    h2{margin:6px 0 12px 0;font-size:16px}
+    .row{display:flex;gap:8px;margin-bottom:8px}
+    button{background:#222;border:1px solid #333;color:#fff;padding:8px;border-radius:6px;cursor:pointer}
+    button:hover{background:#2f2f2f}
+    .small{font-size:12px;color:#bbb}
+    .loc-list{margin-top:8px}
+    .loc-item{display:flex;align-items:center;gap:8px;padding:6px;border-radius:6px;background:rgba(255,255,255,0.02);margin-bottom:6px}
+    .loc-item input.name{flex:1;background:transparent;border:none;color:#fff;padding:6px}
+    .loc-item select{background:#111;color:#fff;border:1px solid #333;padding:5px;border-radius:4px}
+    .cars-list{margin-top:8px}
+    .car-item{display:flex;align-items:center;gap:8px;padding:6px;border-radius:6px;background:rgba(255,255,255,0.02);margin-bottom:6px}
+    .color-swatch{width:26px;height:16px;border-radius:4px;border:1px solid rgba(0,0,0,0.6)}
+    .control-note{margin-top:10px;color:#bdbdbd;font-size:13px}
+    label{font-size:13px;color:#ddd}
+    input[type="number"]{width:64px;padding:6px;border-radius:6px;border:1px solid #333;background:#0f0f0f;color:#fff}
+    .footer{margin-top:12px;font-size:12px;color:#999}
+    .muted{color:#888;font-size:12px}
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="left">
+      <canvas id="world" width="512" height="512"></canvas>
+      <div style="margin-top:10px;display:flex;gap:8px">
+        <button id="regenTiles">New Tiles</button>
+        <button id="regenMap">New Map</button>
+        <button id="respawnCars">Respawn Cars</button>
+        <button id="centerPlayer">Center Player</button>
+      </div>
+      <div class="control-note">Controls: W/A/S/D or Arrow keys. Click a location item to teleport player car there. Click map while a location is in "Edit Pos" to set its tile.</div>
+    </div>
+
+    <div id="right">
+      <h2>Locations (editable)</h2>
+      <div class="row">
+        <select id="newType">
+          <option value="post">Post Office</option>
+          <option value="theater">Movie Theater</option>
+          <option value="restaurant">Restaurant</option>
+          <option value="custom">Custom</option>
+        </select>
+        <input id="newName" placeholder="Name (optional)" style="flex:1;padding:6px;border-radius:6px;border:1px solid #333;background:#0f0f0f;color:#fff" />
+        <button id="addLoc">Add</button>
+      </div>
+
+      <div class="loc-list" id="locList"></div>
+
+      <h2 style="margin-top:12px">Cars</h2>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <button id="addCar">Add Car</button>
+        <button id="removeCar">Remove Last</button>
+      </div>
+      <div class="cars-list" id="carsList"></div>
+
+      <div style="margin-top:10px">
+        <button id="pickNext">Switch Player Car</button>
+        <button id="removePlayer">Remove Player Control</button>
+      </div>
+
+      <div class="muted" style="margin-top:12px">Cars only drive on road network. When at a junction, the player can choose turns with left/right inputs.</div>
+      <div class="footer">Click a location's "Edit Pos" then click map to set its tile. Rename types, delete items.</div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  // Config
+  const GRID_N = 8;
+  const TILE_PX = 64;
+  const CANVAS_PX = GRID_N * TILE_PX;
+  const canvas = document.getElementById('world');
+  const ctx = canvas.getContext('2d');
+  canvas.width = CANVAS_PX; canvas.height = CANVAS_PX;
+  canvas.style.width = CANVAS_PX + 'px'; canvas.style.height = CANVAS_PX + 'px';
+
+  // Input handling
+  const input = { up:false,down:false,left:false,right:false };
+  window.addEventListener('keydown', (e)=> {
+    if (e.key==='ArrowUp'||e.key==='w'||e.key==='W') input.up=true;
+    if (e.key==='ArrowDown'||e.key==='s'||e.key==='S') input.down=true;
+    if (e.key==='ArrowLeft'||e.key==='a'||e.key==='A') input.left=true;
+    if (e.key==='ArrowRight'||e.key==='d'||e.key==='D') input.right=true;
+  });
+  window.addEventListener('keyup', (e)=> {
+    if (e.key==='ArrowUp'||e.key==='w'||e.key==='W') input.up=false;
+    if (e.key==='ArrowDown'||e.key==='s'||e.key==='S') input.down=false;
+    if (e.key==='ArrowLeft'||e.key==='a'||e.key==='A') input.left=false;
+    if (e.key==='ArrowRight'||e.key==='d'||e.key==='D') input.right=false;
+  });
+
+  // Wang tile generation
+  let tiles = [];
+  function genTiles(seedHue=110){
+    tiles = [];
+    for (let id=0; id<16; id++){
+      tiles.push(drawTile(id, TILE_PX, seedHue + (Math.random()*20-10)));
+    }
+  }
+
+  function drawTile(id, size, hue){
+    const c = document.createElement('canvas'); c.width=size; c.height=size;
+    const g = c.getContext('2d');
+    const top = (id>>0)&1, right=(id>>1)&1, bottom=(id>>2)&1, left=(id>>3)&1;
+    g.fillStyle = `hsl(${hue} 28% 16%)`; g.fillRect(0,0,size,size);
+    if (Math.random() < 0.6){
+      const gr = g.createLinearGradient(0,0,size,size);
+      gr.addColorStop(0,'rgba(255,255,255,0.02)');
+      gr.addColorStop(1,'rgba(0,0,0,0.06)');
+      g.fillStyle = gr; g.fillRect(0,0,size,size);
+    }
+    const cx=size/2, cy=size/2, rw=Math.max(10, Math.floor(size*0.18));
+    g.lineJoin='round'; g.lineCap='round';
+    const edgeDark='#444', edgeMid='#777';
+    g.fillStyle=edgeDark;
+    if (top) g.fillRect(cx-rw/2-3, 0, rw+6, cy);
+    if (bottom) g.fillRect(cx-rw/2-3, cy, rw+6, cy);
+    if (left) g.fillRect(0, cy-rw/2-3, cx, rw+6);
+    if (right) g.fillRect(cx, cy-rw/2-3, cx, rw+6);
+    g.fillStyle=edgeMid;
+    if (top) g.fillRect(cx-rw/2, 0, rw, cy-2);
+    if (bottom) g.fillRect(cx-rw/2, cy+2, rw, cy-2);
+    if (left) g.fillRect(0, cy-rw/2, cx-2, rw);
+    if (right) g.fillRect(cx+2, cy-rw/2, cx-2, rw);
+    if (top||right||bottom||left){
+      g.beginPath(); g.fillStyle=edgeMid; g.arc(cx,cy,rw*0.9,0,Math.PI*2); g.fill();
+      g.beginPath(); g.strokeStyle=edgeDark; g.lineWidth=2; g.arc(cx,cy,rw*0.9,0,Math.PI*2); g.stroke();
+    }
+    g.lineWidth = Math.max(1, Math.floor(size*0.04));
+    g.strokeStyle = 'rgba(255,255,255,0.9)'; g.setLineDash([Math.max(4,size*0.03), Math.max(4,size*0.02)]);
+    if (top){ g.beginPath(); g.moveTo(cx,cy-2); g.lineTo(cx,2); g.stroke(); }
+    if (bottom){ g.beginPath(); g.moveTo(cx,cy+2); g.lineTo(cx,size-2); g.stroke(); }
+    if (left){ g.beginPath(); g.moveTo(2,cy); g.lineTo(cx-2,cy); g.stroke(); }
+    if (right){ g.beginPath(); g.moveTo(cx+2,cy); g.lineTo(size-2,cy); g.stroke(); }
+    g.setLineDash([]);
+    g.strokeStyle = 'rgba(0,0,0,0.18)'; g.lineWidth=1; g.strokeRect(0.5,0.5,size-1,size-1);
+    return c;
+  }
+
+  // Grid generation (Wang matching)
+  let grid = [];
+  function genGrid(){
+    grid = Array.from({length:GRID_N}, ()=> new Array(GRID_N).fill(0));
+    for (let y=0;y<GRID_N;y++){
+      for (let x=0;x<GRID_N;x++){
+        const topNeed = (y>0) ? ((grid[y-1][x]>>2)&1) : null;
+        const leftNeed = (x>0) ? ((grid[y][x-1]>>1)&1) : null;
+        const candidates = [];
+        for (let id=0; id<16; id++){
+          const top = (id>>0)&1;
+          const left = (id>>3)&1;
+          if ((topNeed===null || top===topNeed) && (leftNeed===null || left===leftNeed)) candidates.push(id);
+        }
+        grid[y][x] = candidates[Math.floor(Math.random()*candidates.length)];
+      }
+    }
+  }
+
+  // Build road graph: center nodes + shared edge midpoint nodes
+  let nodes = {}; // key -> {key,x,y,edges:[]}
+  let edges = []; // {key,u,v,ux,uy,vx,vy,len}
+  function buildGraph(){
+    nodes = {}; edges = [];
+    function centerKey(x,y){ return `C_${x}_${y}`; }
+    function edgeKey(x,y,side){
+      // side: 'T','R','B','L'
+      // share across tiles: top of (x,y) shares with bottom of (x,y-1) -> key E_x_{y-1}_B if y>0
+      if (side==='T'){
+        return (y>0) ? `E_${x}_${y-1}_B` : `E_${x}_${y}_T`;
+      }
+      if (side==='L'){
+        return (x>0) ? `E_${x-1}_${y}_R` : `E_${x}_${y}_L`;
+      }
+      // R and B always canonical on this tile
+      if (side==='R') return `E_${x}_${y}_R`;
+      if (side==='B') return `E_${x}_${y}_B`;
+    }
+    // create center nodes
+    for (let y=0;y<GRID_N;y++){
+      for (let x=0;x<GRID_N;x++){
+        const k = centerKey(x,y);
+        nodes[k] = { key:k, x: x*TILE_PX + TILE_PX/2, y: y*TILE_PX + TILE_PX/2, edges: [] };
+      }
+    }
+    // create edge nodes when road exists and track edges connecting center<->edge
+    const addEdgeNodeIf = (tileX,tileY,side,exists)=>{
+      if (!exists) return;
+      const ek = edgeKey(tileX,tileY,side);
+      if (!nodes[ek]){
+        // compute position
+        let ex, ey;
+        if (side==='T') { ex = tileX*TILE_PX + TILE_PX/2; ey = tileY*TILE_PX; }
+        if (side==='B') { ex = tileX*TILE_PX + TILE_PX/2; ey = tileY*TILE_PX + TILE_PX; }
+        if (side==='L') { ex = tileX*TILE_PX; ey = tileY*TILE_PX + TILE_PX/2; }
+        if (side==='R') { ex = tileX*TILE_PX + TILE_PX; ey = tileY*TILE_PX + TILE_PX/2; }
+        nodes[ek] = { key:ek, x:ex, y:ey, edges: [] };
+      }
+      // add edge between center and edge node
+      const centerK = centerKey(tileX,tileY);
+      const a = centerK, b = ek;
+      const aNode = nodes[a], bNode = nodes[b];
+      const len = Math.hypot(aNode.x - bNode.x, aNode.y - bNode.y);
+      const ekey = `${a}__${b}`;
+      // avoid duplicates
+      if (!edges.some(e=>e.key===ekey || e.key===`${b}__${a}`)){
+        const e = { key:ekey, u:a, v:b, ux:aNode.x, uy:aNode.y, vx:bNode.x, vy:bNode.y, len };
+        edges.push(e);
+        aNode.edges.push(e);
+        bNode.edges.push(e);
+      }
+    };
+
+    for (let y=0;y<GRID_N;y++){
+      for (let x=0;x<GRID_N;x++){
+        const id = grid[y][x];
+        const hasTop = ((id>>0)&1), hasRight = ((id>>1)&1), hasBottom = ((id>>2)&1), hasLeft = ((id>>3)&1);
+        addEdgeNodeIf(x,y,'T', hasTop);
+        addEdgeNodeIf(x,y,'R', hasRight);
+        addEdgeNodeIf(x,y,'B', hasBottom);
+        addEdgeNodeIf(x,y,'L', hasLeft);
+      }
+    }
+    // At this point edges list contains unique center-edge segments. But multiple tile centers might share an edge node, connecting through that node.
+    // edges list already populated and nodes have edges arrays. Done.
+  }
+
+  // Cars: positioned on an edge, with t and dir (dir=1 means u->v as stored)
+  let cars = [];
+  let playerIndex = null;
+
+  function spawnCars(count){
+    cars = [];
+    if (edges.length === 0) return;
+    const n = Math.max(1, Math.min(16, count));
+    for (let i=0;i<n;i++){
+      const e = edges[Math.floor(Math.random()*edges.length)];
+      const dir = Math.random() < 0.5 ? 1 : -1;
+      const t = Math.random();
+      const car = {
+        id: i, edge: e, dir, t,
+        speed: 60 + Math.random()*120, maxSpeed: 220+Math.random()*80, accel: 200,
+        color: randomColor(), isPlayer:false, wait:0
+      };
+      cars.push(car);
+    }
+    if (cars.length>0){
+      playerIndex = Math.floor(Math.random()*cars.length);
+      cars[playerIndex].isPlayer = true;
+    } else playerIndex = null;
+    refreshCarsUI();
+  }
+
+  function addCar(){
+    if (cars.length >= 16) return;
+    const e = edges[Math.floor(Math.random()*edges.length)];
+    const dir = Math.random() < 0.5 ? 1 : -1;
+    const t = Math.random();
+    const car = {
+      id: cars.length, edge: e, dir, t,
+      speed: 60 + Math.random()*120, maxSpeed: 220+Math.random()*80, accel: 200,
+      color: randomColor(), isPlayer:false, wait:0
+    };
+    cars.push(car);
+    refreshCarsUI();
+  }
+
+  function removeLastCar(){
+    if (cars.length === 0) return;
+    const last = cars.pop();
+    if (last.isPlayer) playerIndex = null;
+    refreshCarsUI();
+  }
+
+  function randomColor(){
+    const h = Math.floor(Math.random()*360), s = 70 + Math.floor(Math.random()*20), l = 45 + Math.floor(Math.random()*8);
+    return `hsl(${h} ${s}% ${l}%)`;
+  }
+
+  // Update cars: move along edges, at nodes pick next edge
+  function updateCars(dt){
+    for (let i=0;i<cars.length;i++){
+      const c = cars[i];
+      // compute directed endpoints
+      const uNode = nodes[c.edge.u], vNode = nodes[c.edge.v];
+      let ux = uNode.x, uy = uNode.y, vx = vNode.x, vy = vNode.y;
+      if (c.dir === -1){ ux = vNode.x; uy = vNode.y; vx = uNode.x; vy = uNode.y; }
+      const segLen = Math.max(1e-6, Math.hypot(vx-ux, vy-uy));
+
+      // Player control: acceleration/brake only when at node or anywhere? we'll adjust speed smoothly
+      if (c.isPlayer && playerIndex !== null && cars[playerIndex] === c){
+        if (input.up) c.speed = Math.min(c.maxSpeed, c.speed + c.accel * dt);
+        if (input.down) c.speed = Math.max(0, c.speed - c.accel * dt);
+      } else {
+        // AI cruise behavior
+        if (c.speed < 90) c.speed += 50*dt;
+        if (c.speed > 140 && Math.random() < 0.3*dt) c.speed -= 30*dt;
+      }
+
+      // progress
+      const deltaT = (c.speed * dt) / segLen;
+      c.t += deltaT;
+
+      if (c.t >= 1.0 - 1e-6){
+        // arrived at node (at v in directed sense)
+        // identify nodeKey at arrival
+        const nodeKey = (c.dir === 1) ? c.edge.v : c.edge.u;
+        const node = nodes[nodeKey];
+        // gather outgoing options (edges attached to node)
+        const options = node.edges.map(e => {
+          // determine neighbor key: other end
+          const neighbor = (e.u === nodeKey) ? e.v : e.u;
+          return { e, neighbor };
+        });
+        // if no outgoing, reverse
+        if (options.length === 0){
+          c.dir *= -1;
+          c.t = 1 - (c.t - 1);
+          continue;
+        }
+        // compute previous node to detect back edge
+        const prevNodeKey = (c.dir === 1) ? c.edge.u : c.edge.v;
+        // scoring: avoid immediate back if others exist
+        let candidates = options;
+        if (options.length > 1) candidates = options.filter(o => o.neighbor !== prevNodeKey);
+        if (candidates.length === 0) candidates = options;
+
+        // choose based on player input if player
+        let chosen = null;
+        if (c.isPlayer && (input.left || input.right)){
+          // angle approach: compute incoming angle and choose option with angle sign matching left/right
+          const prev = nodes[prevNodeKey];
+          const angIn = Math.atan2(node.y - prev.y, node.x - prev.x);
+          // compute best match
+          let bestScore = Infinity;
+          for (const opt of candidates){
+            const neigh = nodes[opt.neighbor];
+            const angOut = Math.atan2(neigh.y - node.y, neigh.x - node.x);
+            let diff = angDiff(angIn, angOut); // signed
+            // left -> positive diff preferred; right -> negative diff preferred
+            let score;
+            if (input.left) score = Math.abs(diff - Math.PI/2); else score = Math.abs(diff + Math.PI/2);
+            // also penalize straight/back depending
+            if (Math.abs(diff) < 0.4) score += 0.6;
+            if (Math.abs(diff) > Math.PI*0.9) score += 2.0;
+            if (score < bestScore){ bestScore = score; chosen = opt; }
+          }
+        } else {
+          // AI: random among candidates with small chance to choose back
+          chosen = candidates[Math.floor(Math.random()*candidates.length)];
+        }
+        if (!chosen){
+          // fallback: reverse
+          c.dir *= -1;
+          c.t = 1 - (c.t - 1);
+          continue;
+        }
+        // set new edge and direction so we travel away from node
+        const newEdge = chosen.e;
+        if (nodeKey === newEdge.u){
+          c.edge = newEdge; c.dir = 1; c.t = 0 + (c.t - 1);
+        } else {
+          c.edge = newEdge; c.dir = -1; c.t = 0 + (c.t - 1);
+        }
+        // occasionally pause
+        if (!c.isPlayer && Math.random() < 0.08) c.wait = 0.2 + Math.random()*0.8;
+      }
+
+      // wait reduction (if waiting, reduce t so car doesn't move)
+      if (c.wait > 0){
+        c.wait -= dt;
+        if (c.wait > 0) c.t = Math.max(0, c.t - deltaT);
+      }
+
+      // clamp t
+      c.t = Math.max(0, Math.min(1, c.t));
+    }
+  }
+
+  function angDiff(a,b){
+    let d = b - a;
+    while (d <= -Math.PI) d += Math.PI*2;
+    while (d > Math.PI) d -= Math.PI*2;
+    return d;
+  }
+
+  // Locations - editable list
+  let locations = []; // {id,type,name,tx,ty,x,y,editing}
+  function addLocation(type, name, tx, ty){
+    const txx = (tx !== undefined) ? tx : Math.floor(Math.random()*GRID_N);
+    const tyy = (ty !== undefined) ? ty : Math.floor(Math.random()*GRID_N);
+    const cent = tileCenter(txx,tyy);
+    const loc = { id: 'loc_'+Math.random().toString(36).slice(2,9), type, name: name || defaultName(type), tx: txx, ty:tyy, x: cent.x, y:cent.y, editing:false };
+    locations.push(loc);
+    refreshLocationsUI();
+    return loc;
+  }
+  function defaultName(type){ return type==='post' ? 'Post Office' : type==='theater' ? 'Movie Theater' : type==='restaurant' ? 'Restaurant' : 'Place'; }
+  function tileCenter(tx,ty){ return { x: tx*TILE_PX + TILE_PX/2, y: ty*TILE_PX + TILE_PX/2 }; }
+
+  // Canvas click: set location pos if editing, else teleport player if clicking on a location
+  canvas.addEventListener('click', (ev) => {
+    const rect = canvas.getBoundingClientRect();
+    const cx = (ev.clientX - rect.left);
+    const cy = (ev.clientY - rect.top);
+    const tx = Math.floor(cx / TILE_PX), ty = Math.floor(cy / TILE_PX);
+    if (tx>=0 && tx<GRID_N && ty>=0 && ty<GRID_N){
+      const editing = locations.find(l=>l.editing);
+      if (editing){
+        editing.tx = tx; editing.ty = ty;
+        const cent = tileCenter(tx,ty);
+        editing.x = cent.x; editing.y = cent.y; editing.editing = false;
+        refreshLocationsUI();
+        return;
+      }
+      // click on location? if within radius teleport player
+      for (const loc of locations){
+        const d = Math.hypot(loc.x - cx, loc.y - cy);
+        if (d < TILE_PX*0.4){
+          teleportPlayerTo(loc);
+          return;
+        }
+      }
+    }
+  });
+
+  // teleport player car to tile location by picking nearest edge
+  function teleportPlayerTo(loc){
+    if (playerIndex === null || !cars[playerIndex]) return;
+    const center = tileCenter(loc.tx, loc.ty);
+    // choose nearest edge point along entire graph
+    let best = null; let bd = Infinity;
+    for (const e of edges){
+      // project center onto segment (e.ux,uy)->(e.vx,vy)
+      const px = e.ux, py = e.uy, qx = e.vx, qy = e.vy;
+      const dx = qx - px, dy = qy - py;
+      const denom = dx*dx + dy*dy;
+      let t = 0;
+      if (denom > 1e-6) t = ((center.x - px)*dx + (center.y - py)*dy) / denom;
+      t = Math.max(0, Math.min(1, t));
+      const ix = px + dx*t, iy = py + dy*t;
+      const d = Math.hypot(center.x - ix, center.y - iy);
+      if (d < bd){ bd = d; best = { e, t }; }
+    }
+    if (best){
+      const c = cars[playerIndex];
+      c.edge = best.e;
+      // set dir such that movement proceeds away from nearest node? We'll pick nearest orientation minimizing distance to next node
+      const distToU = Math.hypot(best.e.ux - (best.e.ux + (best.e.vx-best.e.ux)*best.t), best.e.uy - (best.e.uy + (best.e.vy-best.e.uy)*best.t));
+      const distToV = Math.hypot(best.e.vx - (best.e.ux + (best.e.vx-best.e.ux)*best.t), best.e.vy - (best.e.uy + (best.e.vy-best.e.uy)*best.t));
+      // choose direction randomly or based on closer node
+      c.dir = (distToV < distToU) ? 1 : -1;
+      c.t = best.t;
+      c.speed = 0;
+    }
+  }
+
+  // UI DOM wiring for locations and cars
+  const locListDiv = document.getElementById('locList');
+  const carsListDiv = document.getElementById('carsList');
+
+  function refreshLocationsUI(){
+    locListDiv.innerHTML = '';
+    for (const loc of locations){
+      const div = document.createElement('div'); div.className = 'loc-item';
+      const inpt = document.createElement('input'); inpt.className='name'; inpt.value = loc.name;
+      inpt.addEventListener('change', ()=>{ loc.name = inpt.value; });
+      const sel = document.createElement('select');
+      sel.innerHTML = '<option value="post">Post</option><option value="theater">Theater</option><option value="restaurant">Restaurant</option><option value="custom">Custom</option>';
+      sel.value = loc.type;
+      sel.addEventListener('change', ()=>{ loc.type = sel.value; refreshLocationsUI(); });
+      const editBtn = document.createElement('button'); editBtn.textContent = loc.editing ? 'Editing' : 'Edit Pos';
+      editBtn.addEventListener('click', ()=>{ loc.editing = !loc.editing; refreshLocationsUI(); });
+      const gotoBtn = document.createElement('button'); gotoBtn.textContent = 'Go';
+      gotoBtn.addEventListener('click', ()=>{ teleportPlayerTo(loc); });
+      const delBtn = document.createElement('button'); delBtn.textContent = 'Delete';
+      delBtn.addEventListener('click', ()=>{ locations = locations.filter(l=>l.id!==loc.id); refreshLocationsUI(); });
+      div.appendChild(inpt); div.appendChild(sel); div.appendChild(editBtn); div.appendChild(gotoBtn); div.appendChild(delBtn);
+      locListDiv.appendChild(div);
+    }
+  }
+
+  function refreshCarsUI(){
+    carsListDiv.innerHTML = '';
+    for (let i=0;i<cars.length;i++){
+      const c = cars[i];
+      const div = document.createElement('div'); div.className='car-item';
+      const sw = document.createElement('div'); sw.className='color-swatch'; sw.style.background = c.color;
+      const name = document.createElement('div'); name.style.flex='1'; name.textContent = 'Car ' + c.id + (c.isPlayer ? ' (player)' : '');
+      const setBtn = document.createElement('button'); setBtn.textContent = 'Set Player';
+      setBtn.addEventListener('click', ()=>{ setPlayer(i); });
+      const tpBtn = document.createElement('button'); tpBtn.textContent = 'Teleport';
+      tpBtn.addEventListener('click', ()=>{ if (playerIndex !== null && cars[playerIndex]){ cars[playerIndex].edge = c.edge; cars[playerIndex].dir = c.dir; cars[playerIndex].t = c.t; cars[playerIndex].speed = 0; } });
+      div.appendChild(sw); div.appendChild(name); div.appendChild(setBtn); div.appendChild(tpBtn);
+      carsListDiv.appendChild(div);
+    }
+  }
+
+  function setPlayer(idx){
+    if (playerIndex !== null && cars[playerIndex]) cars[playerIndex].isPlayer = false;
+    playerIndex = idx;
+    if (cars[playerIndex]) cars[playerIndex].isPlayer = true;
+    refreshCarsUI();
+  }
+
+  // UI button hookups
+  document.getElementById('addLoc').addEventListener('click', ()=>{
+    const type = document.getElementById('newType').value;
+    const name = document.getElementById('newName').value.trim();
+    addLocation(type, name || defaultName(type));
+  });
+
+  document.getElementById('addCar').addEventListener('click', ()=> addCar());
+  document.getElementById('removeCar').addEventListener('click', ()=> removeLastCar());
+  document.getElementById('pickNext').addEventListener('click', ()=>{
+    if (cars.length === 0) return;
+    const next = (playerIndex === null) ? 0 : (playerIndex + 1) % cars.length;
+    setPlayer(next);
+  });
+  document.getElementById('removePlayer').addEventListener('click', ()=>{
+    if (playerIndex !== null && cars[playerIndex]) cars[playerIndex].isPlayer = false;
+    playerIndex = null; refreshCarsUI();
+  });
+  document.getElementById('regenTiles').addEventListener('click', ()=>{
+    genTiles(80 + Math.floor(Math.random()*160));
+    render();
+  });
+  document.getElementById('regenMap').addEventListener('click', ()=>{
+    genTiles(80 + Math.floor(Math.random()*160));
+    genGrid();
+    buildGraph();
+    // place default locations randomly on new grid
+    locations.forEach(l => {
+      l.tx = Math.floor(Math.random()*GRID_N);
+      l.ty = Math.floor(Math.random()*GRID_N);
+      const c = tileCenter(l.tx, l.ty); l.x = c.x; l.y = c.y;
+    });
+    spawnCars(3 + Math.floor(Math.random()*6));
+    refreshAllUI();
+  });
+  document.getElementById('respawnCars').addEventListener('click', ()=> spawnCars(1 + Math.floor(Math.random()*16)));
+  document.getElementById('centerPlayer').addEventListener('click', ()=> { if (playerIndex!==null && cars[playerIndex]) cars[playerIndex].speed = 0; });
+
+  // initial setup
+  genTiles();
+  genGrid();
+  buildGraph();
+  locations = [];
+  addLocation('post','Post Office');
+  addLocation('theater','Movie Theater');
+  addLocation('restaurant','Restaurant');
+  spawnCars(3 + Math.floor(Math.random()*6));
+  refreshAllUI();
+
+  function refreshAllUI(){ refreshLocationsUI(); refreshCarsUI(); }
+
+  // render loop
+  function render(){
+    ctx.clearRect(0,0,CANVAS_PX,CANVAS_PX);
+    // draw tiles
+    for (let y=0;y<GRID_N;y++){
+      for (let x=0;x<GRID_N;x++){
+        const id = grid[y][x];
+        const img = tiles[id];
+        ctx.drawImage(img, x*TILE_PX, y*TILE_PX, TILE_PX, TILE_PX);
+      }
+    }
+    // draw edges (faint)
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 3; ctx.lineCap='round';
+    for (const e of edges){
+      ctx.beginPath(); ctx.moveTo(e.ux, e.uy); ctx.lineTo(e.vx, e.vy); ctx.stroke();
+    }
+    // draw locations
+    for (const loc of locations){
+      drawLocation(loc);
+    }
+    // draw cars (non-player below)
+    for (let i=0;i<cars.length;i++){
+      if (playerIndex === i) continue;
+      drawCar(cars[i], false);
+    }
+    if (playerIndex !== null && cars[playerIndex]) drawCar(cars[playerIndex], true);
+    // grid lines
+    ctx.strokeStyle = 'rgba(0,0,0,0.18)'; ctx.lineWidth = 1;
+    for (let i=0;i<=GRID_N;i++){
+      ctx.beginPath(); ctx.moveTo(0, i*TILE_PX + 0.5); ctx.lineTo(CANVAS_PX, i*TILE_PX + 0.5); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(i*TILE_PX + 0.5, 0); ctx.lineTo(i*TILE_PX + 0.5, CANVAS_PX); ctx.stroke();
+    }
+  }
+
+  function drawCar(c, highlight){
+    // compute pos
+    const u = nodes[c.edge.u], v = nodes[c.edge.v];
+    let ux = u.x, uy = u.y, vx = v.x, vy = v.y;
+    if (c.dir === -1){ ux = v.x; uy = v.y; vx = u.x; vy = u.y; }
+    const x = ux + (vx-ux)*c.t, y = uy + (vy-uy)*c.t;
+    const ang = Math.atan2(vy-uy, vx-ux);
+    const w = TILE_PX*0.5, h = TILE_PX*0.26;
+    ctx.save(); ctx.translate(x,y); ctx.rotate(ang);
+    roundRect(ctx, -w/2, -h/2, w, h, 6);
+    ctx.fillStyle = c.color; ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.18)';
+    ctx.fillRect(-w*0.12, -h*0.28, w*0.4, h*0.28);
+    ctx.fillRect(w*0.02, -h*0.28, w*0.28, h*0.28);
+    ctx.fillStyle = '#111'; ctx.fillRect(-w*0.42, h*0.28, w*0.11, h*0.24); ctx.fillRect(w*0.32, h*0.28, w*0.11, h*0.24);
+    if (highlight){ ctx.strokeStyle = 'rgba(255,255,0,0.95)'; ctx.lineWidth=2; ctx.strokeRect(-w/2-3, -h/2-3, w+6, h+6); }
+    ctx.restore();
+  }
+
+  function drawLocation(loc){
+    const x = loc.x, y = loc.y, r = TILE_PX*0.28;
+    ctx.save(); ctx.translate(x,y);
+    ctx.beginPath();
+    ctx.fillStyle = loc.type==='post' ? 'rgba(30,120,200,0.95)' : loc.type==='theater' ? 'rgba(200,60,60,0.95)' : loc.type==='restaurant' ? 'rgba(220,150,40,0.95)' : 'rgba(120,120,160,0.95)';
+    ctx.arc(0,0,r,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='white';
+    ctx.font=`${Math.max(10,Math.floor(r*0.6))}px sans-serif`; ctx.textAlign='center'; ctx.textBaseline='middle';
+    const glyph = loc.type==='post' ? '✉' : loc.type==='theater' ? '🎬' : loc.type==='restaurant' ? '🍴' : '★';
+    ctx.fillText(glyph,0,0);
+    ctx.font='12px sans-serif'; ctx.fillText(loc.name,0,r+12);
+    ctx.restore();
+  }
+
+  function roundRect(ctx,x,y,w,h,r){
+    ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
+  }
+
+  // main loop
+  let last = performance.now();
+  function loop(now){
+    const dt = Math.min(0.05, (now - last)/1000);
+    last = now;
+    updateCars(dt);
+    // update dynamic location coords based on tile
+    for (const loc of locations){ const c = tileCenter(loc.tx, loc.ty); loc.x = c.x; loc.y = c.y; }
+    render();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // Utilities & UI wiring
+  document.getElementById('addLoc').addEventListener('click', ()=>{
+    const type = document.getElementById('newType').value;
+    const name = document.getElementById('newName').value.trim();
+    addLocation(type, name || defaultName(type));
+  });
+  document.getElementById('addCar').addEventListener('click', ()=> addCar());
+  document.getElementById('removeCar').addEventListener('click', ()=> removeLastCar());
+  document.getElementById('pickNext').addEventListener('click', ()=>{
+    if (cars.length===0) return;
+    const next = (playerIndex === null) ? 0 : (playerIndex + 1) % cars.length;
+    setPlayer(next);
+  });
+  document.getElementById('removePlayer').addEventListener('click', ()=>{ if (playerIndex!==null && cars[playerIndex]) cars[playerIndex].isPlayer=false; playerIndex=null; refreshCarsUI(); });
+  document.getElementById('regenTiles').addEventListener('click', ()=>{ genTiles(80 + Math.floor(Math.random()*160)); render(); });
+  document.getElementById('regenMap').addEventListener('click', ()=>{ genTiles(80 + Math.floor(Math.random()*160)); genGrid(); buildGraph(); // randomize locations on map
+    locations.forEach(l=>{ l.tx = Math.floor(Math.random()*GRID_N); l.ty = Math.floor(Math.random()*GRID_N); const c = tileCenter(l.tx,l.ty); l.x=c.x; l.y=c.y; });
+    spawnCars(3 + Math.floor(Math.random()*6)); refreshAllUI(); });
+  document.getElementById('respawnCars').addEventListener('click', ()=> spawnCars(1 + Math.floor(Math.random()*16)));
+  document.getElementById('centerPlayer').addEventListener('click', ()=> { if (playerIndex !== null && cars[playerIndex]) cars[playerIndex].speed = 0; });
+
+  function refreshAllUI(){ refreshLocationsUI(); refreshCarsUI(); }
+
+})();
+</script>
+</body>
+</html>
