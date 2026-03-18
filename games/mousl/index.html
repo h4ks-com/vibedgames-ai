@@ -1,0 +1,668 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Tubes Wang Tiles - Mice & Cheeses</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    html,body{height:100%;margin:0;font-family:Segoe UI,Arial,Helvetica,sans-serif;background:#121212;color:#f0f4f8;display:flex;align-items:stretch}
+    #app{display:flex;gap:12px;padding:12px;flex:1}
+    #left{flex:1;background:#0e1112;border-radius:10px;padding:12px;box-shadow:0 8px 30px rgba(0,0,0,0.6);display:flex;flex-direction:column;align-items:center}
+    canvas{border-radius:6px;background:#0b0f10;box-shadow:inset 0 0 40px rgba(0,0,0,0.5)}
+    #right{width:380px;background:#0f1415;border-radius:10px;padding:12px;box-shadow:0 8px 30px rgba(0,0,0,0.6);overflow:auto}
+    h2{margin:8px 0 12px 0;font-size:16px;color:#dff1f5}
+    .row{display:flex;gap:8px;margin-bottom:8px}
+    button{background:#153033;border:1px solid #184d49;color:#dff6f4;padding:8px;border-radius:6px;cursor:pointer}
+    button:hover{background:#1b5d5a}
+    .small{font-size:12px;color:#9fbfc3}
+    .loc-list{margin-top:8px}
+    .loc-item{display:flex;align-items:center;gap:8px;padding:6px;border-radius:6px;background:rgba(255,255,255,0.02);margin-bottom:6px}
+    .loc-item input.name{flex:1;background:transparent;border:none;color:#e8fdfd;padding:6px}
+    .loc-item select{background:#082a2f;color:#dff6fb;border:1px solid #13333a;padding:5px;border-radius:4px}
+    .list{margin-top:8px}
+    .item{display:flex;align-items:center;gap:8px;padding:6px;border-radius:6px;background:rgba(255,255,255,0.02);margin-bottom:6px}
+    .swatch{width:26px;height:16px;border-radius:4px;border:1px solid rgba(0,0,0,0.6)}
+    .control-note{margin-top:8px;color:#9fbfc3;font-size:13px}
+    input[type="text"]{padding:6px;border-radius:6px;border:1px solid #13333a;background:#071111;color:#dff6f4}
+    input[type="number"]{padding:6px;border-radius:6px;border:1px solid #13333a;background:#071111;color:#dff6f4;width:68px}
+    .footer{margin-top:12px;font-size:12px;color:#6a9aa0}
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="left">
+      <canvas id="world" width="512" height="512"></canvas>
+      <div style="margin-top:10px;display:flex;gap:8px">
+        <button id="regenTiles">New Tube Art</button>
+        <button id="regenMap">New Map</button>
+        <button id="spawnMiceBtn">Respawn Mice</button>
+        <button id="spawnCheeseBtn">Respawn Cheeses</button>
+      </div>
+      <div class="control-note">Controls: W/A/S/D or Arrow keys drive the player mouse. Click "Edit Pos" on a location and then click map to set its tile.</div>
+    </div>
+
+    <div id="right">
+      <h2>Locations (editable)</h2>
+      <div class="row">
+        <select id="locType">
+          <option value="nest">Nest</option>
+          <option value="stash">Stash</option>
+          <option value="wheel">Wheel</option>
+          <option value="custom">Custom</option>
+        </select>
+        <input id="locName" placeholder="Name (optional)" />
+        <button id="addLoc">Add</button>
+      </div>
+
+      <div class="loc-list" id="locList"></div>
+
+      <h2 style="margin-top:12px">Mice</h2>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <label style="display:flex;align-items:center;gap:6px"><input id="mouseCount" type="number" value="6" min="1" max="16" /> count</label>
+        <button id="spawnMice">Spawn</button>
+      </div>
+      <div class="list" id="miceList"></div>
+
+      <h2 style="margin-top:12px">Cheeses</h2>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <label style="display:flex;align-items:center;gap:6px"><input id="cheeseCount" type="number" value="6" min="1" max="32" /> count</label>
+        <button id="spawnCheeses">Spawn</button>
+      </div>
+      <div class="list" id="cheeseList"></div>
+
+      <div style="margin-top:10px;display:flex;gap:8px">
+        <button id="pickNext">Switch Player Mouse</button>
+        <button id="removePlayer">Remove Player Control</button>
+      </div>
+
+      <div class="footer">Mice traverse the tube graph. Locations can be teleported to with "Go". Edit location pos by toggling "Edit Pos".</div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  // Configuration
+  const GRID_N = 8;
+  const TILE_PX = 64;
+  const CANVAS_PX = GRID_N * TILE_PX;
+  const canvas = document.getElementById('world');
+  const ctx = canvas.getContext('2d');
+  canvas.width = CANVAS_PX; canvas.height = CANVAS_PX;
+  canvas.style.width = CANVAS_PX + 'px'; canvas.style.height = CANVAS_PX + 'px';
+
+  // Input
+  const input = { up:false,down:false,left:false,right:false };
+  window.addEventListener('keydown', (e)=>{
+    if (e.key==='ArrowUp'||e.key==='w'||e.key==='W') input.up=true;
+    if (e.key==='ArrowDown'||e.key==='s'||e.key==='S') input.down=true;
+    if (e.key==='ArrowLeft'||e.key==='a'||e.key==='A') input.left=true;
+    if (e.key==='ArrowRight'||e.key==='d'||e.key==='D') input.right=true;
+  });
+  window.addEventListener('keyup', (e)=>{
+    if (e.key==='ArrowUp'||e.key==='w'||e.key==='W') input.up=false;
+    if (e.key==='ArrowDown'||e.key==='s'||e.key==='S') input.down=false;
+    if (e.key==='ArrowLeft'||e.key==='a'||e.key==='A') input.left=false;
+    if (e.key==='ArrowRight'||e.key==='d'||e.key==='D') input.right=false;
+  });
+
+  // Tiles (tube segments)
+  let tiles = [];
+  let bgHue = 180;
+  function genTiles(seedHue=180){
+    tiles = [];
+    bgHue = seedHue + Math.floor(Math.random()*30 - 15);
+    for (let id=0; id<16; id++){
+      tiles.push(drawTile(id, TILE_PX, bgHue));
+    }
+  }
+
+  function drawTile(id, size, hue){
+    const c = document.createElement('canvas'); c.width=size; c.height=size;
+    const g = c.getContext('2d');
+    const top = (id>>0)&1, right=(id>>1)&1, bottom=(id>>2)&1, left=(id>>3)&1;
+    // background color random-ish
+    const light = 18 + Math.floor(Math.random()*10);
+    const sat = 22 + Math.floor(Math.random()*18);
+    g.fillStyle = `hsl(${hue} ${sat}% ${light}%)`;
+    g.fillRect(0,0,size,size);
+    // texture
+    if (Math.random() < 0.6){
+      const grad = g.createLinearGradient(0,0,size,size);
+      grad.addColorStop(0,'rgba(255,255,255,0.02)');
+      grad.addColorStop(1,'rgba(0,0,0,0.06)');
+      g.fillStyle = grad; g.fillRect(0,0,size,size);
+    }
+    const cx=size/2, cy=size/2, tubeW = Math.max(12, Math.floor(size*0.20));
+    // outer rim
+    g.fillStyle = '#9da7b1';
+    if (top) g.fillRect(cx-tubeW/2-4, 0, tubeW+8, cy);
+    if (bottom) g.fillRect(cx-tubeW/2-4, cy, tubeW+8, cy);
+    if (left) g.fillRect(0, cy-tubeW/2-4, cx, tubeW+8);
+    if (right) g.fillRect(cx, cy-tubeW/2-4, cx, tubeW+8);
+    // inner clear tube
+    g.fillStyle = 'rgba(250,250,250,0.95)';
+    if (top) g.fillRect(cx-tubeW/2, 0, tubeW, cy-2);
+    if (bottom) g.fillRect(cx-tubeW/2, cy+2, tubeW, cy-2);
+    if (left) g.fillRect(0, cy-tubeW/2, cx-2, tubeW);
+    if (right) g.fillRect(cx+2, cy-tubeW/2, cx-2, tubeW);
+    // center pocket
+    if (top||right||bottom||left){
+      g.beginPath(); g.fillStyle = 'rgba(255,255,255,0.98)'; g.arc(cx,cy,tubeW*0.92,0,Math.PI*2); g.fill();
+      g.beginPath(); g.strokeStyle = '#9da7b1'; g.lineWidth=2; g.arc(cx,cy,tubeW*0.92,0,Math.PI*2); g.stroke();
+    }
+    // inner shine arcs
+    g.strokeStyle = 'rgba(255,255,255,0.6)'; g.lineWidth = Math.max(1, Math.floor(size*0.02));
+    if (top){ g.beginPath(); g.moveTo(cx-6,cy*0.16); g.quadraticCurveTo(cx+6,cy*0.28,cx,cy*0.44); g.stroke(); }
+    if (bottom){ g.beginPath(); g.moveTo(cx+6,cy+size*0.08); g.quadraticCurveTo(cx-6,cy+cy*0.28,cx,cy+cy*0.44); g.stroke(); }
+    if (left){ g.beginPath(); g.moveTo(size*0.08,cy-6); g.quadraticCurveTo(cx*0.28,cy+6,cx*0.44,cy); g.stroke(); }
+    if (right){ g.beginPath(); g.moveTo(cx+size*0.08,cy+6); g.quadraticCurveTo(cx+cx*0.28,cy-6,cx+cx*0.44,cy); g.stroke(); }
+    // small border
+    g.strokeStyle = 'rgba(0,0,0,0.18)'; g.lineWidth = 1; g.strokeRect(0.5,0.5,size-1,size-1);
+    return c;
+  }
+
+  // Grid generation (Wang)
+  let grid = [];
+  function genGrid(){
+    grid = Array.from({length:GRID_N}, ()=> new Array(GRID_N).fill(0));
+    for (let y=0;y<GRID_N;y++){
+      for (let x=0;x<GRID_N;x++){
+        const topNeed = (y>0) ? ((grid[y-1][x]>>2)&1) : null;
+        const leftNeed = (x>0) ? ((grid[y][x-1]>>1)&1) : null;
+        const candidates = [];
+        for (let id=0; id<16; id++){
+          const top = (id>>0)&1;
+          const left = (id>>3)&1;
+          if ((topNeed===null || top===topNeed) && (leftNeed===null || left===leftNeed)) candidates.push(id);
+        }
+        grid[y][x] = candidates[Math.floor(Math.random()*candidates.length)];
+      }
+    }
+    // ensure at least some tubes exist
+    let any = false;
+    for (let y=0;y<GRID_N;y++) for (let x=0;x<GRID_N;x++) if (grid[y][x] !== 0) any = true;
+    if (!any){
+      const rx = Math.floor(Math.random()*GRID_N), ry = Math.floor(Math.random()*GRID_N);
+      grid[ry][rx] = 1|2|4|8;
+    }
+  }
+
+  // Build navigation graph for tubes
+  let nodes = {};
+  let edges = []; // segments between center nodes and edge midpoints
+  function buildGraph(){
+    nodes = {}; edges = [];
+    function centerKey(x,y){ return `C_${x}_${y}`; }
+    function edgeKey(x,y,side){
+      if (side==='T') return (y>0) ? `E_${x}_${y-1}_B` : `E_${x}_${y}_T`;
+      if (side==='L') return (x>0) ? `E_${x-1}_${y}_R` : `E_${x}_${y}_L`;
+      if (side==='R') return `E_${x}_${y}_R`;
+      if (side==='B') return `E_${x}_${y}_B`;
+    }
+    // create center nodes
+    for (let y=0;y<GRID_N;y++){
+      for (let x=0;x<GRID_N;x++){
+        const k = centerKey(x,y);
+        nodes[k] = { key:k, x: x*TILE_PX + TILE_PX/2, y: y*TILE_PX + TILE_PX/2, edges: [] };
+      }
+    }
+    // add edge nodes and center-edge segments
+    const addEdgeNodeIf = (tx,ty,side,exists) => {
+      if (!exists) return;
+      const ek = edgeKey(tx,ty,side);
+      if (!nodes[ek]){
+        let ex, ey;
+        if (side==='T'){ ex = tx*TILE_PX + TILE_PX/2; ey = ty*TILE_PX; }
+        if (side==='B'){ ex = tx*TILE_PX + TILE_PX/2; ey = ty*TILE_PX + TILE_PX; }
+        if (side==='L'){ ex = tx*TILE_PX; ey = ty*TILE_PX + TILE_PX/2; }
+        if (side==='R'){ ex = tx*TILE_PX + TILE_PX; ey = ty*TILE_PX + TILE_PX/2; }
+        nodes[ek] = { key:ek, x:ex, y:ey, edges: [] };
+      }
+      const centerK = centerKey(tx,ty);
+      const a = nodes[centerK], b = nodes[ek];
+      const len = Math.hypot(a.x - b.x, a.y - b.y);
+      const k = `${centerK}__${ek}`;
+      if (!edges.some(e=>e.key===k || e.key===`${ek}__${centerK}`)){
+        const e = { key:k, u:centerK, v:ek, ux:a.x, uy:a.y, vx:b.x, vy:b.y, len };
+        edges.push(e);
+        nodes[centerK].edges.push(e);
+        nodes[ek].edges.push(e);
+      }
+    };
+    for (let y=0;y<GRID_N;y++){
+      for (let x=0;x<GRID_N;x++){
+        const id = grid[y][x];
+        const hasTop = ((id>>0)&1), hasRight = ((id>>1)&1), hasBottom = ((id>>2)&1), hasLeft = ((id>>3)&1);
+        addEdgeNodeIf(x,y,'T',hasTop);
+        addEdgeNodeIf(x,y,'R',hasRight);
+        addEdgeNodeIf(x,y,'B',hasBottom);
+        addEdgeNodeIf(x,y,'L',hasLeft);
+      }
+    }
+  }
+
+  // Mice (move along edges), cheeses (placed at tile centers)
+  let mice = []; // {id,edge,dir,t,speed,maxSpeed,color,isPlayer,wait}
+  let cheeses = []; // {id,tx,ty,x,y}
+  let playerIndex = null;
+
+  function spawnMice(count){
+    mice = [];
+    if (edges.length === 0) return;
+    const n = Math.max(1, Math.min(16, count));
+    for (let i=0;i<n;i++){
+      const e = edges[Math.floor(Math.random()*edges.length)];
+      const dir = Math.random() < 0.5 ? 1 : -1;
+      const t = Math.random();
+      mice.push({
+        id:i, edge:e, dir, t,
+        speed: 30 + Math.random()*70, maxSpeed:150, accel:120,
+        color: randomColor(), isPlayer:false, wait:0
+      });
+    }
+    if (mice.length>0){
+      playerIndex = Math.floor(Math.random()*mice.length);
+      mice[playerIndex].isPlayer = true;
+    } else playerIndex = null;
+    refreshMiceUI();
+  }
+
+  function spawnCheeses(count){
+    cheeses = [];
+    const n = Math.max(1, Math.min(32, count));
+    for (let i=0;i<n;i++){
+      const tx = Math.floor(Math.random()*GRID_N), ty = Math.floor(Math.random()*GRID_N);
+      const c = tileCenter(tx,ty);
+      cheeses.push({ id:i, tx, ty, x:c.x, y:c.y });
+    }
+    refreshCheeseUI();
+  }
+
+  function randomColor(){
+    const h = Math.floor(Math.random()*360), s = 70 + Math.floor(Math.random()*10), l = 45 + Math.floor(Math.random()*8);
+    return `hsl(${h} ${s}% ${l}%)`;
+  }
+  function tileCenter(tx,ty){ return { x: tx*TILE_PX + TILE_PX/2, y: ty*TILE_PX + TILE_PX/2 }; }
+
+  // Update mice movement
+  function updateMice(dt){
+    for (let i=0;i<mice.length;i++){
+      const m = mice[i];
+      const u = nodes[m.edge.u], v = nodes[m.edge.v];
+      let ux = u.x, uy = u.y, vx = v.x, vy = v.y;
+      if (m.dir === -1){ ux = v.x; uy = v.y; vx = u.x; vy = u.y; }
+      const segLen = Math.max(1e-6, Math.hypot(vx-ux, vy-uy));
+      // player control
+      if (m.isPlayer && playerIndex !== null && mice[playerIndex] === m){
+        if (input.up) m.speed = Math.min(m.maxSpeed, m.speed + m.accel*dt);
+        if (input.down) m.speed = Math.max(0, m.speed - m.accel*dt);
+      } else {
+        if (m.speed < 30) m.speed += 20*dt;
+        if (m.speed > 80 && Math.random() < 0.2*dt) m.speed -= 20*dt;
+      }
+      const deltaT = (m.speed * dt) / segLen;
+      m.t += deltaT;
+      if (m.t >= 1 - 1e-6){
+        const nodeKey = (m.dir === 1) ? m.edge.v : m.edge.u;
+        const node = nodes[nodeKey];
+        const options = node.edges.map(e => ({e, neighbor:(e.u===nodeKey)?e.v:e.u}));
+        if (options.length === 0){
+          m.dir *= -1; m.t = 1 - (m.t - 1); continue;
+        }
+        // avoid immediate back if possible
+        const prevNodeKey = (m.dir===1) ? m.edge.u : m.edge.v;
+        let candidates = options;
+        if (options.length > 1) candidates = options.filter(o => o.neighbor !== prevNodeKey);
+        if (candidates.length === 0) candidates = options;
+        let chosen = null;
+        if (m.isPlayer && (input.left || input.right)){
+          const prev = nodes[prevNodeKey];
+          const angIn = Math.atan2(node.y - prev.y, node.x - prev.x);
+          let best = null, bestScore = Infinity;
+          for (const opt of candidates){
+            const neigh = nodes[opt.neighbor];
+            const angOut = Math.atan2(neigh.y - node.y, neigh.x - node.x);
+            let diff = angBetweenDiff(angIn, angOut);
+            let score;
+            if (input.left) score = Math.abs(diff - Math.PI/2); else score = Math.abs(diff + Math.PI/2);
+            if (Math.abs(diff) < 0.4) score += 0.6;
+            if (Math.abs(diff) > Math.PI*0.9) score += 2.0;
+            if (score < bestScore){ bestScore = score; best = opt; }
+          }
+          chosen = best;
+        } else {
+          chosen = candidates[Math.floor(Math.random()*candidates.length)];
+        }
+        if (!chosen){
+          m.dir *= -1; m.t = 1 - (m.t - 1); continue;
+        }
+        const newEdge = chosen.e;
+        if (nodeKey === newEdge.u){ m.edge = newEdge; m.dir = 1; m.t = 0 + (m.t - 1); }
+        else { m.edge = newEdge; m.dir = -1; m.t = 0 + (m.t - 1); }
+        if (!m.isPlayer && Math.random() < 0.06) m.wait = 0.2 + Math.random()*0.8;
+      }
+      if (m.wait > 0){
+        m.wait -= dt;
+        if (m.wait > 0) m.t = Math.max(0, m.t - deltaT);
+      }
+      m.t = Math.max(0, Math.min(1, m.t));
+    }
+    // update cached positions
+    for (const m of mice){
+      const p = posOnEdge(m.edge, m.dir, m.t);
+      m.x = p.x; m.y = p.y;
+    }
+  }
+
+  function posOnEdge(edge, dir, t){
+    const u = nodes[edge.u], v = nodes[edge.v];
+    let ux = u.x, uy = u.y, vx = v.x, vy = v.y;
+    if (dir === -1){ ux = v.x; uy = v.y; vx = u.x; vy = u.y; }
+    return { x: ux + (vx-ux)*t, y: uy + (vy-uy)*t };
+  }
+
+  function angBetweenDiff(a,b){
+    let d = b - a;
+    while (d <= -Math.PI) d += Math.PI*2;
+    while (d > Math.PI) d -= Math.PI*2;
+    return d;
+  }
+
+  // Locations UI (editable)
+  let locations = []; // {id,type,name,tx,ty,x,y,editing}
+  function addLocation(type, name, tx, ty){
+    const txx = (tx!==undefined) ? tx : Math.floor(Math.random()*GRID_N);
+    const tyy = (ty!==undefined) ? ty : Math.floor(Math.random()*GRID_N);
+    const cent = tileCenter(txx,tyy);
+    const loc = { id:'L_'+Math.random().toString(36).slice(2,9), type, name: name || defaultName(type), tx:txx, ty:tyy, x:cent.x, y:cent.y, editing:false };
+    locations.push(loc);
+    refreshLocationsUI();
+    return loc;
+  }
+  function defaultName(type){ return type==='nest' ? 'Nest' : type==='stash' ? 'Stash' : type==='wheel' ? 'Wheel' : 'Place'; }
+
+  // Canvas click handling: if location editing active, set tile; else if click near location, teleport player; else nothing
+  canvas.addEventListener('click', (ev)=>{
+    const rect = canvas.getBoundingClientRect();
+    const cx = ev.clientX - rect.left, cy = ev.clientY - rect.top;
+    const tx = Math.floor(cx / TILE_PX), ty = Math.floor(cy / TILE_PX);
+    if (tx<0||tx>=GRID_N||ty<0||ty>=GRID_N) return;
+    const editing = locations.find(l=>l.editing);
+    if (editing){
+      editing.tx = tx; editing.ty = ty;
+      const c = tileCenter(tx,ty); editing.x = c.x; editing.y = c.y; editing.editing = false;
+      refreshLocationsUI();
+      return;
+    }
+    for (const loc of locations){
+      const d = Math.hypot(loc.x - cx, loc.y - cy);
+      if (d < TILE_PX*0.4){
+        teleportPlayerTo(loc);
+        return;
+      }
+    }
+  });
+
+  function teleportPlayerTo(loc){
+    if (playerIndex === null || !mice[playerIndex]) return;
+    const center = tileCenter(loc.tx,loc.ty);
+    let best = null, bd = Infinity;
+    for (const e of edges){
+      const px = e.ux, py = e.uy, qx = e.vx, qy = e.vy;
+      const dx = qx - px, dy = qy - py;
+      const denom = dx*dx + dy*dy;
+      let t = 0;
+      if (denom > 1e-6) t = ((center.x - px)*dx + (center.y - py)*dy) / denom;
+      t = Math.max(0, Math.min(1, t));
+      const ix = px + dx*t, iy = py + dy*t;
+      const d = Math.hypot(center.x - ix, center.y - iy);
+      if (d < bd){ bd = d; best = {e,t}; }
+    }
+    if (best){
+      const m = mice[playerIndex];
+      m.edge = best.e;
+      m.dir = (Math.random() < 0.5) ? 1 : -1;
+      m.t = best.t;
+      m.speed = 0;
+    }
+  }
+
+  // UI DOM elements
+  const locListDiv = document.getElementById('locList');
+  const miceListDiv = document.getElementById('miceList');
+  const cheeseListDiv = document.getElementById('cheeseList');
+
+  function refreshLocationsUI(){
+    locListDiv.innerHTML = '';
+    for (const loc of locations){
+      const div = document.createElement('div'); div.className='loc-item';
+      const inpt = document.createElement('input'); inpt.className='name'; inpt.value = loc.name;
+      inpt.addEventListener('change', ()=> { loc.name = inpt.value; });
+      const sel = document.createElement('select');
+      sel.innerHTML = '<option value="nest">Nest</option><option value="stash">Stash</option><option value="wheel">Wheel</option><option value="custom">Custom</option>';
+      sel.value = loc.type; sel.addEventListener('change', ()=>{ loc.type = sel.value; refreshLocationsUI(); });
+      const editBtn = document.createElement('button'); editBtn.textContent = loc.editing ? 'Editing' : 'Edit Pos';
+      editBtn.addEventListener('click', ()=>{ loc.editing = !loc.editing; refreshLocationsUI(); });
+      const goBtn = document.createElement('button'); goBtn.textContent = 'Go';
+      goBtn.addEventListener('click', ()=> teleportPlayerTo(loc));
+      const delBtn = document.createElement('button'); delBtn.textContent = 'Delete';
+      delBtn.addEventListener('click', ()=> { locations = locations.filter(l=>l.id!==loc.id); refreshLocationsUI(); });
+      div.appendChild(inpt); div.appendChild(sel); div.appendChild(editBtn); div.appendChild(goBtn); div.appendChild(delBtn);
+      locListDiv.appendChild(div);
+    }
+  }
+
+  function refreshMiceUI(){
+    miceListDiv.innerHTML = '';
+    for (let i=0;i<mice.length;i++){
+      const m = mice[i];
+      const div = document.createElement('div'); div.className='item';
+      const sw = document.createElement('div'); sw.className='swatch'; sw.style.background = m.color;
+      const name = document.createElement('div'); name.style.flex='1'; name.textContent = 'Mouse ' + m.id + (m.isPlayer ? ' (player)' : '');
+      const setBtn = document.createElement('button'); setBtn.textContent = 'Set Player';
+      setBtn.addEventListener('click', ()=> setPlayerMouse(i));
+      const tpBtn = document.createElement('button'); tpBtn.textContent = 'Teleport';
+      tpBtn.addEventListener('click', ()=> { if (playerIndex !== null && mice[playerIndex]){ mice[playerIndex].edge = m.edge; mice[playerIndex].dir = m.dir; mice[playerIndex].t = m.t; mice[playerIndex].speed = 0; }});
+      div.appendChild(sw); div.appendChild(name); div.appendChild(setBtn); div.appendChild(tpBtn);
+      miceListDiv.appendChild(div);
+    }
+  }
+
+  function refreshCheeseUI(){
+    cheeseListDiv.innerHTML = '';
+    for (let i=0;i<cheeses.length;i++){
+      const ch = cheeses[i];
+      const div = document.createElement('div'); div.className='item';
+      const sw = document.createElement('div'); sw.className='swatch'; sw.style.background = 'linear-gradient(90deg,#f6e07a,#f0bb3a)';
+      const name = document.createElement('div'); name.style.flex='1'; name.textContent = 'Cheese ' + ch.id + ` (t:${ch.tx},${ch.ty})`;
+      const tpBtn = document.createElement('button'); tpBtn.textContent = 'Teleport';
+      tpBtn.addEventListener('click', ()=> { if (playerIndex !== null && mice[playerIndex]) teleportPlayerToTile(ch.tx,ch.ty); });
+      div.appendChild(sw); div.appendChild(name); div.appendChild(tpBtn);
+      cheeseListDiv.appendChild(div);
+    }
+  }
+
+  function teleportPlayerToTile(tx,ty){
+    if (playerIndex === null || !mice[playerIndex]) return;
+    const center = tileCenter(tx,ty);
+    let best = null, bd = Infinity;
+    for (const e of edges){
+      const px = e.ux, py = e.uy, qx = e.vx, qy = e.vy;
+      const dx = qx - px, dy = qy - py;
+      const denom = dx*dx + dy*dy;
+      let t = 0;
+      if (denom > 1e-6) t = ((center.x - px)*dx + (center.y - py)*dy) / denom;
+      t = Math.max(0, Math.min(1, t));
+      const ix = px + dx*t, iy = py + dy*t;
+      const d = Math.hypot(center.x - ix, center.y - iy);
+      if (d < bd){ bd = d; best = {e,t}; }
+    }
+    if (best){
+      const m = mice[playerIndex];
+      m.edge = best.e;
+      m.dir = (Math.random() < 0.5) ? 1 : -1;
+      m.t = best.t;
+      m.speed = 0;
+    }
+  }
+
+  function setPlayerMouse(idx){
+    if (playerIndex !== null && mice[playerIndex]) mice[playerIndex].isPlayer = false;
+    playerIndex = idx;
+    if (mice[playerIndex]) mice[playerIndex].isPlayer = true;
+    refreshMiceUI();
+  }
+
+  // Canvas click handled above
+
+  // Rendering
+  function render(){
+    ctx.clearRect(0,0,CANVAS_PX,CANVAS_PX);
+    // draw tiles
+    for (let y=0;y<GRID_N;y++){
+      for (let x=0;x<GRID_N;x++){
+        const id = grid[y][x];
+        const img = tiles[id];
+        ctx.drawImage(img, x*TILE_PX, y*TILE_PX, TILE_PX, TILE_PX);
+      }
+    }
+    // faint edges
+    ctx.strokeStyle = 'rgba(0,0,0,0.25)'; ctx.lineWidth = 3; ctx.lineCap='round';
+    for (const e of edges){
+      ctx.beginPath(); ctx.moveTo(e.ux, e.uy); ctx.lineTo(e.vx, e.vy); ctx.stroke();
+    }
+    // cheeses
+    for (const ch of cheeses) drawCheese(ch);
+    // locations
+    for (const loc of locations) drawLocation(loc);
+    // mice (non-player first)
+    for (let i=0;i<mice.length;i++){
+      if (playerIndex === i) continue;
+      drawMouse(mice[i], false);
+    }
+    if (playerIndex !== null && mice[playerIndex]) drawMouse(mice[playerIndex], true);
+    // gridlines
+    ctx.strokeStyle = 'rgba(0,0,0,0.18)'; ctx.lineWidth = 1;
+    for (let i=0;i<=GRID_N;i++){
+      ctx.beginPath(); ctx.moveTo(0, i*TILE_PX + 0.5); ctx.lineTo(CANVAS_PX, i*TILE_PX + 0.5); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(i*TILE_PX + 0.5, 0); ctx.lineTo(i*TILE_PX + 0.5, CANVAS_PX); ctx.stroke();
+    }
+  }
+
+  function drawMouse(m, highlight){
+    const p = posOnEdge(m.edge, m.dir, m.t);
+    const ang = Math.atan2((m.dir===1 ? (nodes[m.edge.v].y - nodes[m.edge.u].y) : (nodes[m.edge.u].y - nodes[m.edge.v].y)),
+                           (m.dir===1 ? (nodes[m.edge.v].x - nodes[m.edge.u].x) : (nodes[m.edge.u].x - nodes[m.edge.v].x)));
+    const r = TILE_PX*0.14;
+    ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(ang);
+    // body
+    ctx.beginPath(); ctx.fillStyle = m.color; ctx.ellipse(0,0,r*1.1,r,0,0,Math.PI*2); ctx.fill();
+    // ear
+    ctx.beginPath(); ctx.fillStyle = '#fefefe'; ctx.arc(-r*0.2, -r*0.7, r*0.35, 0, Math.PI*2); ctx.fill();
+    // eye
+    ctx.beginPath(); ctx.fillStyle = '#111'; ctx.arc(r*0.35, -r*0.15, Math.max(1, r*0.25), 0, Math.PI*2); ctx.fill();
+    if (highlight){
+      ctx.strokeStyle = 'rgba(255,230,120,0.95)'; ctx.lineWidth = 2; ctx.strokeRect(-r*1.4, -r*1.2, r*2.8, r*2.4);
+    }
+    ctx.restore();
+  }
+
+  function drawCheese(ch){
+    ctx.save(); ctx.translate(ch.x, ch.y);
+    const s = TILE_PX*0.22;
+    ctx.beginPath(); ctx.fillStyle = 'orange'; ctx.moveTo(-s, s); ctx.lineTo(s, s); ctx.lineTo(0, -s); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#f2d36b'; ctx.beginPath(); ctx.arc(-s*0.25, 0, s*0.15, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(s*0.1, -s*0.1, s*0.12, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawLocation(loc){
+    const x = loc.x, y = loc.y, r = TILE_PX*0.26;
+    ctx.save(); ctx.translate(x,y);
+    ctx.beginPath(); ctx.fillStyle = loc.type==='nest' ? '#bde7c3' : loc.type==='stash' ? '#ffd3a5' : loc.type==='wheel' ? '#c9dbff' : '#cfc';
+    ctx.arc(0,0,r,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='black';
+    ctx.font=`${Math.max(10,Math.floor(r*0.6))}px sans-serif`; ctx.textAlign='center'; ctx.textBaseline='middle';
+    const glyph = loc.type==='nest' ? '⌂' : loc.type==='stash' ? '⚱' : loc.type==='wheel' ? '◐' : '★';
+    ctx.fillText(glyph,0,0);
+    ctx.font='12px sans-serif'; ctx.fillText(loc.name,0,r+12);
+    ctx.restore();
+  }
+
+  // main loop
+  let last = performance.now();
+  function loop(now){
+    const dt = Math.min(0.06, (now - last)/1000);
+    last = now;
+    updateMice(dt);
+    // update cheeses and locations positions from tile indices
+    for (const ch of cheeses){
+      const c = tileCenter(ch.tx, ch.ty); ch.x = c.x; ch.y = c.y;
+    }
+    for (const l of locations){ const c = tileCenter(l.tx, l.ty); l.x = c.x; l.y = c.y; }
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  // UI wiring
+  document.getElementById('addLoc').addEventListener('click', ()=>{
+    const type = document.getElementById('locType').value;
+    const name = document.getElementById('locName').value.trim();
+    addLocation(type, name || defaultName(type));
+  });
+  document.getElementById('spawnMice').addEventListener('click', ()=>{
+    const n = Math.max(1, Math.min(16, parseInt(document.getElementById('mouseCount').value || 6)));
+    spawnMice(n);
+  });
+  document.getElementById('spawnCheeses').addEventListener('click', ()=>{
+    const n = Math.max(1, Math.min(32, parseInt(document.getElementById('cheeseCount').value || 6)));
+    spawnCheeses(n);
+  });
+  document.getElementById('spawnMiceBtn').addEventListener('click', ()=> spawnMice(1 + Math.floor(Math.random()*16)));
+  document.getElementById('spawnCheeseBtn').addEventListener('click', ()=> spawnCheeses(1 + Math.floor(Math.random()*12)));
+  document.getElementById('pickNext').addEventListener('click', ()=>{
+    if (mice.length === 0) return;
+    const next = (playerIndex === null) ? 0 : (playerIndex + 1) % mice.length;
+    setPlayerMouse(next);
+  });
+  document.getElementById('removePlayer').addEventListener('click', ()=> { if (playerIndex !== null && mice[playerIndex]) mice[playerIndex].isPlayer=false; playerIndex=null; refreshMiceUI(); });
+
+  document.getElementById('regenTiles').addEventListener('click', ()=>{
+    genTiles(60 + Math.floor(Math.random()*240)); render();
+  });
+  document.getElementById('regenMap').addEventListener('click', ()=>{
+    genTiles(60 + Math.floor(Math.random()*240));
+    genGrid(); buildGraph();
+    // randomize locations and cheeses slightly
+    locations.forEach(l => { l.tx = Math.floor(Math.random()*GRID_N); l.ty = Math.floor(Math.random()*GRID_N); const c = tileCenter(l.tx,l.ty); l.x=c.x; l.y=c.y; });
+    spawnMice(3 + Math.floor(Math.random()*6)); spawnCheeses(4 + Math.floor(Math.random()*8));
+    refreshAllUI();
+  });
+
+  function refreshAllUI(){ refreshLocationsUI(); refreshMiceUI(); refreshCheeseUI(); }
+
+  // helpers
+  function setPlayerMouse(idx){
+    if (playerIndex !== null && mice[playerIndex]) mice[playerIndex].isPlayer = false;
+    playerIndex = idx;
+    if (mice[playerIndex]) mice[playerIndex].isPlayer = true;
+    refreshMiceUI();
+  }
+
+  // initialize
+  genTiles();
+  genGrid();
+  buildGraph();
+  locations = [];
+  addLocation('nest','Nest');
+  addLocation('stash','Stash');
+  addLocation('wheel','Wheel');
+  spawnMice(6);
+  spawnCheeses(6);
+  refreshAllUI();
+  requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>
