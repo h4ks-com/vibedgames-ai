@@ -1,0 +1,701 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Parallax Horse Runner — Hello everyone!</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  html,body{height:100%;margin:0;font-family:Segoe UI,Roboto,Arial;background:#7ec0ff;overflow:hidden;user-select:none}
+  canvas{display:block;background:linear-gradient(#87ceeb,#cfefff);width:100vw;height:100vh}
+  #ui{position:fixed;left:12px;top:12px;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,0.5);z-index:30}
+  #ui div{background:rgba(0,0,0,0.22);padding:6px 10px;border-radius:6px;margin-bottom:6px;font-weight:600}
+  #controls{position:fixed;right:12px;top:12px;color:#fff;background:rgba(0,0,0,0.18);padding:8px 10px;border-radius:6px;z-index:30}
+  #startOverlay,#shopOverlay{position:fixed;left:0;top:0;right:0;bottom:0;background:linear-gradient(rgba(0,0,0,0.55),rgba(0,0,0,0.7));display:flex;align-items:center;justify-content:center;z-index:40}
+  .card{background:#fff;color:#222;padding:18px;border-radius:12px;width:720px;max-width:94%;box-shadow:0 12px 40px rgba(0,0,0,0.6)}
+  .btn{display:inline-block;padding:8px 12px;background:#2b90ff;color:#fff;border-radius:8px;margin-right:8px;cursor:pointer}
+  .small{padding:6px 10px;font-size:13px}
+  #shopOverlay{display:none}
+  #footer{position:fixed;left:50%;transform:translateX(-50%);bottom:10px;color:#fff;font-size:13px;text-shadow:0 1px 2px rgba(0,0,0,0.5);z-index:30}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="ui">
+  <div id="level">Level: 1</div>
+  <div id="distance">Distance: 0 / 100 screens</div>
+  <div id="resources">Beans: 0 | Fruits: 0 | Armor: 0 | Speed: 1.00x</div>
+</div>
+
+<div id="controls">
+  WASD = move • Space = jump • B = boost • M = music
+</div>
+
+<div id="startOverlay">
+  <div class="card">
+    <h2>Parallax Side Scroller — Horse Runner</h2>
+    <p>Sky giant text: <b>"Hello everyone!"</b></p>
+    <p>Controls: WASD or Arrow keys to move, Space/W to jump, B to boost. Collect purple beans — 10 unlock "Speedhorse" (5x speed). Collect fruits to spend at the end of each level to buy Speed or Armor.</p>
+    <p>Paths are long: 1 path = 10 screen widths, 1 level = 100 screen widths (10 paths). Infinite levels — each is uniquely generated.</p>
+    <div style="margin-top:12px">
+      <span class="btn" id="startBtn">Start Game</span>
+      <span class="btn small" id="muteBtn">Mute Music</span>
+    </div>
+  </div>
+</div>
+
+<div id="shopOverlay">
+  <div class="card" style="max-width:680px">
+    <h3>Level Complete — Shop</h3>
+    <div id="shopInfo" style="margin-bottom:8px"></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <div style="flex:1;padding:10px;border-radius:8px;border:1px solid #eee">
+        <div style="font-weight:700">Buy +0.2 Speed</div>
+        <div>Cost: 3 fruits</div>
+        <div style="margin-top:8px"><span class="btn small" id="buySpeed">Buy</span></div>
+      </div>
+      <div style="flex:1;padding:10px;border-radius:8px;border:1px solid #eee">
+        <div style="font-weight:700">Buy +1 Armor</div>
+        <div>Cost: 2 fruits</div>
+        <div style="margin-top:8px"><span class="btn small" id="buyArmor">Buy</span></div>
+      </div>
+      <div style="flex:1;padding:10px;border-radius:8px;border:1px solid #eee">
+        <div style="font-weight:700">Continue</div>
+        <div>Proceed to next level</div>
+        <div style="margin-top:8px"><span class="btn small" id="continueBtn">Next Level</span></div>
+      </div>
+    </div>
+    <div style="margin-top:10px" id="shopStatus"></div>
+  </div>
+</div>
+
+<div id="footer">Collect 10 purple beans to unlock Speedhorse (5x). Beans also give a small temporary speed-per-bean.</div>
+
+<script>
+/* Single-file game: parallax side scroller with 8 layers, long paths and levels,
+   beans -> speedhorse after 10, shop at end, WASD, B boost, insect enemies.
+*/
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let W = window.innerWidth, H = window.innerHeight;
+function resize(){
+  W = window.innerWidth; H = Math.max(480, Math.min(900, window.innerHeight));
+  canvas.width = W; canvas.height = H;
+}
+window.addEventListener('resize', resize);
+resize();
+
+/* Audio simple toggle */
+let audioCtx = null, musicOn = true, musicLoop = null;
+function initAudio(){
+  if(audioCtx) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const out = audioCtx.createGain(); out.gain.value = 0.12; out.connect(audioCtx.destination);
+  function playTone(freq,dur,t){ const o=audioCtx.createOscillator(), g=audioCtx.createGain(); o.type='sine'; o.frequency.value=freq; g.gain.value=0.08; o.connect(g); g.connect(out); o.start(t); g.gain.exponentialRampToValueAtTime(0.0001,t+dur); o.stop(t+dur+0.02); }
+  const chords = [['G3','B3','D4'],['A3','C#4','E4'],['B3','D#4','F#4'],['C4','E4','G4']];
+  function noteToFreq(s){
+    const map={'C':0,'C#':1,'D':2,'D#':3,'E':4,'F':5,'F#':6,'G':7,'G#':8,'A':9,'A#':10,'B':11};
+    const m=s.match(/([A-G]#?)(\d)/); if(!m) return 440;
+    let idx=map[m[1]]; let oct=Number(m[2]); return 440*Math.pow(2,(idx-9+(oct-4)*12)/12);
+  }
+  function playChordAt(chordIdx, t0){
+    const chord = chords[chordIdx%chords.length];
+    chord.forEach((n,i)=>playTone(noteToFreq(n)*Math.pow(2,i===2?1:0.5),0.7,t0));
+    // lead pluck
+    playTone(noteToFreq(chord[2])*2,0.14,t0+0.12);
+  }
+  function loop(){
+    if(!musicOn) return;
+    let t = audioCtx.currentTime + 0.02;
+    for(let i=0;i<4;i++) playChordAt(i, t + i*0.8);
+    musicLoop = setTimeout(loop, 4*0.8*1000);
+  }
+  loop();
+  window._playNote = (f,d) => { if(!audioCtx) return; playTone(f,d,audioCtx.currentTime); };
+}
+document.getElementById('muteBtn').addEventListener('click', ()=>{
+  musicOn = !musicOn;
+  if(musicOn){ initAudio(); document.getElementById('muteBtn').innerText='Mute Music'; }
+  else { if(musicLoop) clearTimeout(musicLoop); document.getElementById('muteBtn').innerText='Unmute Music'; }
+});
+
+/* Game constants */
+let screenW = () => W, screenH = () => H;
+let PATH_SCREENS = 10; // screens per path
+let PATH_WIDTH = () => screenW() * PATH_SCREENS; // 10 * screen width
+let PATHS_PER_LEVEL = 10; // per level
+let LEVEL_WIDTH = () => PATH_WIDTH() * PATHS_PER_LEVEL; // 100 screens
+const GRAV = 2200; // px/s^2
+const BASE_SPEED = 220; // px/s base
+const FRAME_MS = 1000/60;
+
+/* Layers (octuple): sky, cloud, mountain, far-tree, plant, edge, path, foreground */
+const LAYERS = [
+  {name:'sky', speed:0.02},
+  {name:'clouds', speed:0.08},
+  {name:'distantMounts', speed:0.16},
+  {name:'mountains', speed:0.26},
+  {name:'farTree', speed:0.36},
+  {name:'plant', speed:0.56},
+  {name:'edge', speed:0.78},
+  {name:'path', speed:1.0}
+];
+
+/* Path presets providing unique attributes */
+const PATH_TEMPLATES = [
+  {name:'Sunridge', horizon:0.46, clouds:4, mountains:'#6b8cff', trees:'#2f6e3d', plant:'#3cb371', edge:'#cba87a', path:'#cfa56e', fruit:'apple', fruitColor:'#ff5050'},
+  {name:'Lavender Vale', horizon:0.5, clouds:5, mountains:'#b19cd9', trees:'#4b6d4a', plant:'#8ae7c1', edge:'#d0b3d9', path:'#e0c6ff', fruit:'plum', fruitColor:'#b36bee'},
+  {name:'Amber Flats', horizon:0.48, clouds:3, mountains:'#ffb86b', trees:'#6b4a2e', plant:'#e0b57a', edge:'#e6c79a', path:'#ffd9b3', fruit:'orange', fruitColor:'#ff9a2e'},
+  {name:'Emerald Hollow', horizon:0.44, clouds:3, mountains:'#3b8b64', trees:'#1a6a3a', plant:'#2fd08c', edge:'#9edab2', path:'#a6e6c7', fruit:'pear', fruitColor:'#bff28a'},
+  {name:'Crimson Pass', horizon:0.47, clouds:5, mountains:'#cc6666', trees:'#5b2b2b', plant:'#e98b8b', edge:'#f1c8c8', path:'#ffc7c7', fruit:'cherry', fruitColor:'#ff2b60'},
+  {name:'Skyward Flats', horizon:0.42, clouds:6, mountains:'#9fb8ff', trees:'#4b7c9a', plant:'#8fcfff', edge:'#cfe8ff', path:'#cfe8ff', fruit:'blueberry', fruitColor:'#4b6bff'},
+  {name:'Mossglen', horizon:0.46, clouds:2, mountains:'#6aa66a', trees:'#2d4f2d', plant:'#7edb6a', edge:'#b7d7b0', path:'#dff0d9', fruit:'berry', fruitColor:'#6bffab'},
+  {name:'Golden Dunes', horizon:0.5, clouds:1, mountains:'#d6a55b', trees:'#a86d2c', plant:'#f2dd8a', edge:'#f6e0b3', path:'#fff0d1', fruit:'date', fruitColor:'#c37b2f'},
+  {name:'Moonlit Ridge', horizon:0.43, clouds:4, mountains:'#a3a3ff', trees:'#35406b', plant:'#88a1ff', edge:'#dfe8ff', path:'#e6ecff', fruit:'grape', fruitColor:'#9a6eff'},
+  {name:'Ivy Crescent', horizon:0.49, clouds:3, mountains:'#5aa37d', trees:'#246b3e', plant:'#57f28a', edge:'#bfe8d0', path:'#e6fff0', fruit:'mango', fruitColor:'#ffd27a'}
+];
+
+/* Persistent player stats across levels */
+let persistent = {
+  level: 1,
+  fruitsBank: 0,
+  speedStat: 1.0,
+  armor: 0,
+  beansTotal: 0,
+  speedhorseUnlocked: false
+};
+
+/* Runtime state for current level */
+let segments = []; // PATHS_PER_LEVEL segments
+let fruits = []; // collectible fruits in current level
+let beans = []; // purple beans positions in current level
+let insects = []; // enemies
+let localPlants = []; // decorative
+let cameraX = 0;
+
+/* Player object */
+let player = {
+  x: 120, y: 0, w: 96, h: 56,
+  vx:0, vy:0,
+  onGround:false,
+  baseSpeed: BASE_SPEED,
+  boostAvailable:true,
+  boosting:false,
+  boostTimer:0,
+  boostCooldown:0
+};
+
+/* Input */
+let keys = {};
+window.addEventListener('keydown', e=>{ keys[e.key.toLowerCase()] = true; if(state==='start') startGame(); if(e.key.toLowerCase()==='m') toggleMusic(); });
+window.addEventListener('keyup', e=>{ keys[e.key.toLowerCase()] = false; });
+
+/* Game state */
+let state = 'start'; // 'start', 'playing', 'shop'
+let lastTime = performance.now();
+
+/* Initialize level segments and content */
+function generateSegments(levelNum){
+  segments = [];
+  // choose PATHS_PER_LEVEL unique templates (allow repeats if templates < needed)
+  let pool = PATH_TEMPLATES.slice();
+  for(let i=0;i<PATHS_PER_LEVEL;i++){
+    if(pool.length===0) pool = PATH_TEMPLATES.slice();
+    let idx = Math.floor(Math.random()*pool.length);
+    let tpl = pool.splice(idx,1)[0];
+    segments.push({
+      template: tpl,
+      xStart: i*PATH_WIDTH(),
+      xEnd: (i+1)*PATH_WIDTH()
+    });
+  }
+  // populate fruits, beans, insects, plants
+  fruits = []; beans = []; insects = []; localPlants = [];
+  for(let i=0;i<segments.length;i++){
+    let seg = segments[i];
+    // fruits: 6-12 per segment
+    let fc = 6 + Math.floor(Math.random()*7);
+    for(let j=0;j<fc;j++){
+      let fx = seg.xStart + 80 + Math.random()*(PATH_WIDTH()-160);
+      let fy = (seg.template.horizon * screenH()) + 40 + Math.random()*120;
+      fruits.push({x:fx,y:fy,color:seg.template.fruitColor, kind: seg.template.fruit, taken:false});
+    }
+    // beans: 1-4 per segment
+    let bc = 1 + Math.floor(Math.random()*4);
+    for(let j=0;j<bc;j++){
+      let bx = seg.xStart + 120 + Math.random()*(PATH_WIDTH()-240);
+      let by = (seg.template.horizon * screenH()) - 10 - Math.random()*80;
+      beans.push({x:bx,y:by, taken:false});
+    }
+    // insects: 2-5
+    let ic = 2 + Math.floor(Math.random()*4);
+    for(let j=0;j<ic;j++){
+      let ix = seg.xStart + 200 + Math.random()*(PATH_WIDTH()-400);
+      let iy = (seg.template.horizon * screenH()) + 30 + Math.random()*90;
+      insects.push({x:ix,y:iy,vx:(Math.random()<0.5?-1:1)*(30+Math.random()*80), wob:Math.random()*0.04, size:10+Math.random()*12, alive:true, hp:1, cooldown:0});
+    }
+    // local plants decorative
+    let pc = 6 + Math.floor(Math.random()*8);
+    for(let j=0;j<pc;j++){
+      localPlants.push({x: seg.xStart + Math.random()*PATH_WIDTH(), y: (seg.template.horizon*screenH()) + 60 + Math.random()*80, scale:0.6+Math.random()*1.2});
+    }
+  }
+}
+
+/* Utility */
+function clamp(a,b,c){ return Math.max(b, Math.min(c, a)); }
+function dist(a,b,c,d){ let dx=a-c, dy=b-d; return Math.sqrt(dx*dx+dy*dy); }
+
+/* Draw helpers */
+function drawCloud(x,y,w,h,alpha=1){
+  ctx.beginPath();
+  ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+  ctx.ellipse(x,y,w,h,0,0,Math.PI*2);
+  ctx.ellipse(x+w*0.45,y+h*0.05,w*0.7,h*0.65,0,0,Math.PI*2);
+  ctx.ellipse(x-w*0.45,y+h*0.05,w*0.65,h*0.6,0,0,Math.PI*2);
+  ctx.fill();
+}
+function drawMountain(x,y,scale,color,alpha=1){
+  ctx.save(); ctx.translate(x,y); ctx.globalAlpha = alpha;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(-360*scale, 360*scale);
+  ctx.lineTo(-60*scale, -120*scale);
+  ctx.lineTo(80*scale, -60*scale);
+  ctx.lineTo(220*scale, 260*scale);
+  ctx.closePath();
+  ctx.fill();
+  ctx.globalAlpha = 1; ctx.restore();
+}
+function drawTree(x,y,scale,color){
+  ctx.save(); ctx.translate(x,y);
+  ctx.fillStyle = '#6b3f2f';
+  ctx.fillRect(-6*scale,0,12*scale,28*scale);
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.ellipse(0,-12*scale, 36*scale, 22*scale, 0,0,Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+}
+function drawPlant(x,y,s){
+  ctx.save(); ctx.translate(x,y);
+  ctx.fillStyle = '#2db36a';
+  ctx.beginPath();
+  ctx.ellipse(0,0, 14*s, 10*s, 0,0,Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+}
+
+/* Draw horse */
+function drawHorse(px,py,dir,runFrame,boosting){
+  ctx.save();
+  ctx.translate(px,py);
+  if(dir<0) ctx.scale(-1,1);
+  // body
+  ctx.fillStyle = boosting ? '#ffd96b' : '#7a3f1a';
+  ctx.beginPath(); ctx.ellipse(0,0, 64,34,0,0,Math.PI*2); ctx.fill();
+  // neck
+  ctx.beginPath(); ctx.ellipse(48,-30,28,18, -0.4,0,Math.PI*2); ctx.fillStyle = '#6a3214'; ctx.fill();
+  // head
+  ctx.beginPath(); ctx.ellipse(76,-34,20,14,0,0,Math.PI*2); ctx.fill();
+  // legs animated
+  const t = runFrame;
+  ctx.strokeStyle = '#3a1f10'; ctx.lineWidth = 8; ctx.lineCap='round';
+  ctx.beginPath();
+  ctx.moveTo(-22,28); ctx.lineTo(-22,28 + 32 + Math.sin(t)*10);
+  ctx.moveTo(0,28); ctx.lineTo(0,28 + 32 - Math.sin(t)*10);
+  ctx.moveTo(22,28); ctx.lineTo(22,28 + 34 + Math.sin(t)*8);
+  ctx.moveTo(44,28); ctx.lineTo(44,28 + 34 - Math.sin(t)*8);
+  ctx.stroke();
+  // eye
+  ctx.fillStyle='#fff'; ctx.beginPath(); ctx.ellipse(76,-40,4,4,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#000'; ctx.beginPath(); ctx.ellipse(76,-40,1.8,1.8,0,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
+/* Initialize first level */
+function setupNewLevel(){
+  cameraX = 0;
+  generateSegments(persistent.level);
+  // player reset to start
+  player.x = 120;
+  player.y = getGroundYAt(0) - player.h/2;
+  player.vx = 0; player.vy = 0;
+  player.onGround = true;
+  player.boosting = false; player.boostTimer = 0; player.boostCooldown = 0;
+  // keep persistent stats as-is
+  updateUI();
+}
+
+/* get ground y at absolute x */
+function getGroundYAt(absX){
+  // find segment
+  let idx = clamp(Math.floor(absX / PATH_WIDTH()), 0, segments.length-1);
+  let seg = segments[idx];
+  if(!seg) return H - 120;
+  return seg.template.horizon * H + 120;
+}
+
+/* UI update */
+function updateUI(){
+  document.getElementById('level').innerText = `Level: ${persistent.level}`;
+  const screensDone = (cameraX / screenW()) | 0;
+  document.getElementById('distance').innerText = `Distance: ${(cameraX/screenW()).toFixed(2)} / 100 screens`;
+  document.getElementById('resources').innerText = `Beans: ${persistent.beansTotal} | Fruits: ${persistent.fruitsBank} | Armor: ${persistent.armor} | Speed: ${persistent.speedStat.toFixed(2)}x${persistent.speedhorseUnlocked?' (Speedhorse!)':''}`;
+}
+
+/* Game loop */
+let runFrame = 0;
+function update(dt){
+  if(state !== 'playing') return;
+  // controls
+  const left = keys['a'] || keys['arrowleft'];
+  const right = keys['d'] || keys['arrowright'];
+  const up = keys['w'] || keys['arrowup'] || keys[' '];
+  const down = keys['s'] || keys['arrowdown'];
+  // speed base
+  let speedMult = persistent.speedStat;
+  if(persistent.speedhorseUnlocked) speedMult *= 5;
+  // bean-speed: each bean (recent) gives tiny multiplicative boost — implement as temporary buff tracked by beanBoostTimer accumulative
+  // We'll track beanSpeedBoost from collected beans in last few seconds: simpler: player.boostFromBeans property decays.
+  if(!player.beanBoost) player.beanBoost = 0;
+  // horizontal input
+  let targetV = 0;
+  if(right) targetV = player.baseSpeed * speedMult;
+  if(left) targetV = -player.baseSpeed * speedMult;
+  // boosting 'b' key
+  if((keys['b']) && player.boostCooldown <= 0 && !player.boosting){
+    player.boosting = true; player.boostTimer = 0.9; player.boostCooldown = 3.0;
+    if(audioCtx) { let o=audioCtx.createOscillator(), g=audioCtx.createGain(); o.type='square'; o.frequency.value=880; g.gain.value=0.08; o.connect(g); g.connect(audioCtx.destination); o.start(); g.gain.exponentialRampToValueAtTime(0.0001,audioCtx.currentTime+0.12); o.stop(audioCtx.currentTime+0.13); }
+  }
+  if(player.boostCooldown > 0) player.boostCooldown = Math.max(0, player.boostCooldown - dt);
+  if(player.boosting){
+    player.boostTimer -= dt;
+    if(player.boostTimer <= 0){ player.boosting = false; player.boostTimer = 0; }
+  }
+  let boostFactor = player.boosting ? 2.0 : 1.0;
+  // apply vx smoothly
+  player.vx += (targetV - player.vx) * clamp(dt*12, 0, 1);
+  // apply movement influenced by boost and bean boost
+  let beanFactor = 1 + (player.beanBoost || 0);
+  player.x += player.vx * dt * boostFactor * beanFactor;
+  // jump & gravity
+  if(up && player.onGround){ player.vy = -900; player.onGround = false; }
+  player.vy += GRAV * dt;
+  player.y += player.vy * dt;
+  // ground snap
+  let groundY = getGroundYAt(player.x);
+  if(player.y + player.h/2 >= groundY){
+    player.y = groundY - player.h/2;
+    player.vy = 0;
+    player.onGround = true;
+  } else player.onGround = false;
+  // camera follows player but limited to level
+  const maxCam = Math.max(0, LEVEL_WIDTH() - screenW());
+  cameraX += ((player.x - screenW()*0.32) - cameraX) * clamp(dt*6,0,1);
+  cameraX = clamp(cameraX, 0, maxCam);
+  runFrame += Math.abs(player.vx)/80 + (player.boosting?0.4:0.0);
+  // update insects
+  for(let ins of insects){
+    if(!ins.alive) continue;
+    ins.x += ins.vx * dt;
+    ins.y += Math.sin(ins.x*0.01 + ins.wob) * 0.6;
+    // bounds within segment
+    if(ins.x < 10) ins.vx = Math.abs(ins.vx);
+    if(ins.x > LEVEL_WIDTH()-10) ins.vx = -Math.abs(ins.vx);
+    // collision with player
+    if(dist(ins.x,ins.y, player.x, player.y) < 40 && ins.alive){
+      if(ins.cooldown <= 0){
+        ins.cooldown = 0.6;
+        // take damage: armor reduces damage count
+        if(persistent.armor > 0){
+          persistent.armor = Math.max(0, persistent.armor - 1);
+        } else {
+          // knockback
+          player.vx = -Math.sign(player.vx || 1) * 160;
+          player.vy = -300;
+        }
+        // small sound
+        if(audioCtx) { let o=audioCtx.createOscillator(), g=audioCtx.createGain(); o.type='sine'; o.frequency.value=220; g.gain.value=0.06; o.connect(g); g.connect(audioCtx.destination); o.start(); g.gain.exponentialRampToValueAtTime(0.0001,audioCtx.currentTime+0.12); o.stop(audioCtx.currentTime+0.13); }
+      }
+    }
+    if(ins.cooldown > 0) ins.cooldown = Math.max(0, ins.cooldown - dt);
+  }
+  // collect fruits and beans near player
+  for(let f of fruits){
+    if(f.taken) continue;
+    if(dist(f.x, f.y, player.x, player.y) < 36){
+      f.taken = true;
+      persistent.fruitsBank += 1;
+      if(audioCtx) { let o=audioCtx.createOscillator(), g=audioCtx.createGain(); o.type='triangle'; o.frequency.value=520; g.gain.value=0.06; o.connect(g); g.connect(audioCtx.destination); o.start(); g.gain.exponentialRampToValueAtTime(0.0001,audioCtx.currentTime+0.12); o.stop(audioCtx.currentTime+0.13); }
+    }
+  }
+  for(let b of beans){
+    if(b.taken) continue;
+    if(dist(b.x, b.y, player.x, player.y) < 36){
+      b.taken = true;
+      persistent.beansTotal += 1;
+      // each bean grants small instant speed buff stacked briefly
+      player.beanBoost = clamp((player.beanBoost || 0) + 0.05, 0, 0.6);
+      // decay beanBoost over time via timer
+      if(!player.beanBoostTimer) player.beanBoostTimer = 2.4;
+      else player.beanBoostTimer = clamp(player.beanBoostTimer + 1.2, 0, 6.0);
+      // check unlock speedhorse
+      if(persistent.beansTotal >= 10 && !persistent.speedhorseUnlocked){
+        persistent.speedhorseUnlocked = true;
+        // fanfare
+        if(audioCtx){ let o=audioCtx.createOscillator(), g=audioCtx.createGain(); o.type='square'; o.frequency.value=880; g.gain.value=0.12; o.connect(g); g.connect(audioCtx.destination); o.start(); g.gain.exponentialRampToValueAtTime(0.0001,audioCtx.currentTime+0.6); o.stop(audioCtx.currentTime+0.62); }
+      }
+      if(audioCtx){ let o=audioCtx.createOscillator(), g=audioCtx.createGain(); o.type='sawtooth'; o.frequency.value=760; g.gain.value=0.07; o.connect(g); g.connect(audioCtx.destination); o.start(); g.gain.exponentialRampToValueAtTime(0.0001,audioCtx.currentTime+0.08); o.stop(audioCtx.currentTime+0.09); }
+    }
+  }
+  // decay beanBoost
+  if(player.beanBoostTimer && player.beanBoostTimer > 0){
+    player.beanBoostTimer -= dt;
+    if(player.beanBoostTimer <= 0) { player.beanBoostTimer = 0; player.beanBoost = 0; }
+    else {
+      // slowly decay
+      player.beanBoost *= 0.997;
+    }
+  } else {
+    player.beanBoost = Math.max(0, (player.beanBoost || 0) * 0.98);
+  }
+  // check level end
+  if(player.x >= LEVEL_WIDTH() - 80){
+    // enter shop
+    enterShop();
+  }
+  updateUI();
+}
+
+/* Render */
+function render(){
+  // clear sky gradient
+  // sky layer uses current segment's template for subtle color
+  let currentSeg = segments[ clamp(Math.floor((cameraX + screenW()*0.5) / PATH_WIDTH()), 0, segments.length-1) ];
+  let skyTop = currentSeg ? shadeColor(currentSeg.template.path, 20) : '#87ceeb';
+  let skyBot = '#dff6ff';
+  const g = ctx.createLinearGradient(0,0,W,H);
+  g.addColorStop(0, skyTop);
+  g.addColorStop(1, skyBot);
+  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+
+  // giant sky text
+  ctx.save();
+  ctx.globalAlpha = 0.12;
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'center';
+  ctx.font = `${Math.max(36, W*0.09)}px serif`;
+  ctx.fillText('Hello everyone!', W/2 - (cameraX*0.02 % (W)), H*0.18);
+  ctx.restore();
+
+  // draw parallax layers in order
+  // clouds
+  for(let i=0;i<segments.length;i++){
+    let seg = segments[i];
+    for(let c=0;c<seg.template.clouds;c++){
+      let baseX = seg.xStart + (c*280) + (i*50);
+      let x = (baseX - cameraX) * LAYERS[1].speed + W/8;
+      let y = seg.template.horizon*H*0.5 - (c*8) + Math.sin((baseX + runFrame)*0.004)*12;
+      drawCloud(x,y,80+Math.sin(c)*40,30+Math.abs(Math.sin(c))*14, 0.95);
+    }
+  }
+  // distant mountains
+  for(let i=0;i<segments.length;i++){
+    let seg = segments[i];
+    let x = (seg.xStart - cameraX) * LAYERS[2].speed;
+    drawMountain(x + 120, H*seg.template.horizon + 30, 1.2, seg.template.mountains, 0.6);
+  }
+  // mountains mid
+  for(let i=0;i<segments.length;i++){
+    let seg = segments[i];
+    let x = (seg.xStart - cameraX) * LAYERS[3].speed;
+    drawMountain(x + 40, H*seg.template.horizon + 70, 0.9, seg.template.mountains, 0.95);
+  }
+  // far trees
+  for(let i=0;i<segments.length;i++){
+    let seg = segments[i];
+    let base = H*seg.template.horizon + 80;
+    for(let t=0;t<6;t++){
+      let tx = (seg.xStart + t*(seg.template.name.length*37) + 40 - cameraX*LAYERS[4].speed);
+      let ty = base + Math.sin((i+t)*0.7)*10;
+      drawTree(tx, ty, 0.9, seg.template.trees);
+    }
+  }
+  // plant layer
+  for(let p of localPlants){
+    let px = p.x - cameraX*LAYERS[5].speed;
+    let py = p.y;
+    drawPlant(px, py, p.scale);
+  }
+  // edge and path
+  for(let i=0;i<segments.length;i++){
+    let seg = segments[i];
+    let relX = seg.xStart - cameraX;
+    // edge (closer ground)
+    ctx.fillStyle = seg.template.edge;
+    ctx.fillRect(relX, H*seg.template.horizon + 120, PATH_WIDTH(), H - (H*seg.template.horizon + 120));
+    // path overlay
+    ctx.fillStyle = seg.template.path;
+    ctx.fillRect(relX, H - 120, PATH_WIDTH(), 120);
+    // small stones
+    ctx.fillStyle = 'rgba(0,0,0,0.06)';
+    for(let s=0;s<10;s++){
+      let sx = relX + s*(PATH_WIDTH()/10) + 20;
+      ctx.beginPath(); ctx.ellipse(sx, H - 60 + Math.sin(s*0.7+i)*6, 12,6,0,0,Math.PI*2); ctx.fill();
+    }
+  }
+
+  // fruits
+  for(let f of fruits){
+    if(f.taken) continue;
+    let fx = f.x - cameraX;
+    let fy = f.y + Math.sin((f.x+runFrame)*0.01)*6;
+    if(fx > -40 && fx < W+40) drawFruit(fx, fy, f.color);
+  }
+  // beans
+  for(let b of beans){
+    if(b.taken) continue;
+    let bx = b.x - cameraX;
+    let by = b.y + Math.sin((b.x+runFrame)*0.01)*3;
+    if(bx > -40 && bx < W+40) drawBean(bx, by);
+  }
+  // insects
+  for(let ins of insects){
+    if(!ins.alive) continue;
+    let ix = ins.x - cameraX;
+    let iy = ins.y + Math.sin(ins.x*0.01 + ins.wob) * 6;
+    if(ix < -60 || ix > W+60) continue;
+    drawInsect(ix, iy, ins.size);
+  }
+
+  // draw player (horse) about foreground
+  let px = player.x - cameraX;
+  let py = player.y;
+  drawHorse(px, py, Math.sign(player.vx||1), runFrame, (player.boosting || persistent.speedhorseUnlocked));
+
+  // HUD level/segment box
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.18)';
+  ctx.fillRect(8, H-74, 260, 62);
+  ctx.fillStyle = '#fff'; ctx.font='14px sans-serif';
+  ctx.fillText(`Level ${persistent.level}  •  ${Math.floor(cameraX/screenW())} / 100 screens`, 18, H-52);
+  let segIdx = clamp(Math.floor((cameraX + W*0.5)/PATH_WIDTH()), 0, segments.length-1);
+  let segName = segments[segIdx] ? segments[segIdx].template.name : '-';
+  ctx.fillText(`${segName}`, 18, H-30);
+  ctx.restore();
+}
+
+/* Small drawings */
+function drawFruit(x,y,color){
+  ctx.save(); ctx.translate(x,y);
+  ctx.fillStyle = color; ctx.beginPath(); ctx.ellipse(0,0,9,11,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#2b1b12'; ctx.fillRect(-1, -14, 2,6);
+  ctx.restore();
+}
+function drawBean(x,y){
+  ctx.save(); ctx.translate(x,y);
+  ctx.fillStyle = '#7f3fb3'; ctx.beginPath(); ctx.ellipse(0,0,9,12,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,0.16)'; ctx.beginPath(); ctx.ellipse(-3,-2,3,5,0,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+function drawInsect(x,y,size){
+  ctx.save(); ctx.translate(x,y);
+  ctx.fillStyle = '#222'; ctx.beginPath(); ctx.ellipse(0,0,size,size*0.6,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#ffcc00'; ctx.beginPath(); ctx.ellipse(-size*0.2,-size*0.2, size*0.14,size*0.14,0,0,Math.PI*2); ctx.fill();
+  ctx.globalAlpha = 0.5; ctx.fillStyle='#fff'; ctx.beginPath(); ctx.ellipse(-6,-10,10,6, -0.5,0,Math.PI*2); ctx.fill(); ctx.globalAlpha =1;
+  ctx.restore();
+}
+
+/* Shade hex color by amount */
+function shadeColor(hex, percent) {
+  if(!hex) return '#ccc';
+  let c = hex.replace('#','');
+  if(c.length === 3) c = c.split('').map(ch=>ch+ch).join('');
+  const num = parseInt(c,16);
+  let r = (num >> 16) + percent, g = ((num >> 8) & 0x00FF) + percent, b = (num & 0x0000FF) + percent;
+  r = clamp(r,0,255); g = clamp(g,0,255); b = clamp(b,0,255);
+  return '#' + ( (1<<24) + (r<<16) + (g<<8) + b ).toString(16).slice(1);
+}
+
+/* Start and Shop handling */
+document.getElementById('startBtn').addEventListener('click', ()=>{
+  if(!audioCtx && musicOn) initAudio();
+  document.getElementById('startOverlay').style.display = 'none';
+  state = 'playing';
+  persistent.level = 1;
+  setupNewLevel();
+});
+function enterShop(){
+  state = 'shop';
+  document.getElementById('shopOverlay').style.display = 'flex';
+  document.getElementById('shopInfo').innerText = `Level ${persistent.level} complete. Fruits available: ${persistent.fruitsBank}`;
+  document.getElementById('shopStatus').innerText = `Current: Speed ${persistent.speedStat.toFixed(2)}x  •  Armor ${persistent.armor}  •  Beans total ${persistent.beansTotal} ${persistent.speedhorseUnlocked? '• Speedhorse unlocked!' : ''}`;
+}
+document.getElementById('buySpeed').addEventListener('click', ()=>{
+  if(persistent.fruitsBank >= 3){
+    persistent.fruitsBank -= 3;
+    persistent.speedStat = +(persistent.speedStat + 0.2).toFixed(2);
+    document.getElementById('shopInfo').innerText = `Bought +0.2 Speed. Fruits left: ${persistent.fruitsBank}`;
+    document.getElementById('shopStatus').innerText = `Current: Speed ${persistent.speedStat.toFixed(2)}x  •  Armor ${persistent.armor}`;
+  } else alert('Not enough fruits');
+  updateUI();
+});
+document.getElementById('buyArmor').addEventListener('click', ()=>{
+  if(persistent.fruitsBank >= 2){
+    persistent.fruitsBank -= 2;
+    persistent.armor += 1;
+    document.getElementById('shopInfo').innerText = `Bought +1 Armor. Fruits left: ${persistent.fruitsBank}`;
+    document.getElementById('shopStatus').innerText = `Current: Speed ${persistent.speedStat.toFixed(2)}x  •  Armor ${persistent.armor}`;
+  } else alert('Not enough fruits');
+  updateUI();
+});
+document.getElementById('continueBtn').addEventListener('click', ()=>{
+  // advance to next level, but keep persistent stats and fruitsBank
+  persistent.level += 1;
+  // regenerate level
+  generateSegments(persistent.level);
+  // reposition player and camera
+  player.x = 120; player.y = getGroundYAt(0) - player.h/2; player.vx=0; player.vy=0;
+  cameraX = 0;
+  state = 'playing';
+  document.getElementById('shopOverlay').style.display = 'none';
+  updateUI();
+});
+
+/* Music toggle */
+function toggleMusic(){
+  musicOn = !musicOn;
+  if(musicOn){ initAudio(); document.getElementById('muteBtn').innerText='Mute Music'; }
+  else { if(window && window.audioCtx && audioCtx) { try{ audioCtx.close(); }catch(e){} audioCtx=null; } document.getElementById('muteBtn').innerText='Unmute Music'; }
+}
+
+/* Main loop */
+function loop(now){
+  const dt = Math.min(0.03, (now - lastTime)/1000);
+  lastTime = now;
+  update(dt);
+  render();
+  requestAnimationFrame(loop);
+}
+lastTime = performance.now();
+requestAnimationFrame(loop);
+
+/* On load generate first level data but show start overlay */
+generateSegments(persistent.level);
+player.y = getGroundYAt(0) - player.h/2;
+updateUI();
+
+/* Small utility: clicking or touch to jump on mobile */
+canvas.addEventListener('touchstart', e=>{ keys[' '] = true; if(state==='start') { document.getElementById('startBtn').click(); } e.preventDefault(); });
+canvas.addEventListener('touchend', e=>{ keys[' '] = false; e.preventDefault(); });
+
+/* Helpers: randomize small functions above rely on global segments, etc. */
+
+/* Quick shading utilities exist above. */
+
+/* End of file */
+</script>
+</body>
+</html>
