@@ -1,0 +1,994 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>Core War — Redcode Simulator (Browser)</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root{--bg:#0b1220;--card:#0f1724;--muted:#9aa7bf;--accent:#58a6ff;--good:#5ee6a5;--bad:#ff6b6b}
+  html,body{height:100%;margin:0;background:var(--bg);color:#e6eef8;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial;}
+  .app{display:flex;flex-direction:column;height:100vh;gap:8px;padding:12px}
+  header{display:flex;align-items:center;gap:12px}
+  h1{font-size:16px;margin:0}
+  .top-controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .card{background:linear-gradient(180deg,#0e1624,#0a1119);border-radius:10px;padding:10px;box-shadow:0 4px 20px rgba(0,0,0,0.6);border:1px solid rgba(255,255,255,0.02)}
+  .layout{display:flex;gap:8px;flex:1;overflow:hidden}
+  .left, .right{display:flex;flex-direction:column;gap:8px}
+  .left{width:540px;min-width:320px}
+  .editor{height:280px;resize:none;width:100%;background:#071021;color:#dff1ff;border-radius:6px;padding:8px;font-family:monospace;font-size:13px;border:1px solid rgba(255,255,255,0.03);box-shadow:inset 0 1px 0 rgba(255,255,255,0.02)}
+  label{font-size:12px;color:var(--muted);margin-bottom:6px;display:block}
+  .small{font-size:13px}
+  .controls{display:flex;gap:8px;align-items:center}
+  button{background:var(--accent);border:none;color:#fff;padding:8px 10px;border-radius:8px;cursor:pointer;font-weight:600}
+  button.secondary{background:#2b3a4a}
+  button.ghost{background:transparent;border:1px solid rgba(255,255,255,0.06)}
+  button.danger{background:var(--bad)}
+  .core-view{flex:1;display:flex;flex-direction:column;gap:8px;min-width:420px;max-width:1200px}
+  .core-grid{background:#071826;padding:8px;border-radius:8px;overflow:auto;flex:1;min-height:360px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(48px,1fr));gap:4px}
+  .cell{background:#06121a;border-radius:6px;padding:6px;font-family:monospace;font-size:11px;color:#9fb6d6;border:1px solid rgba(255,255,255,0.02);min-height:40px;display:flex;flex-direction:column;justify-content:center;align-items:flex-start}
+  .cell .addr{font-size:10px;color:#3fb1ff}
+  .cell .inst{font-weight:700}
+  .status{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .log{height:140px;overflow:auto;background:#071826;padding:8px;border-radius:8px;font-family:monospace;font-size:12px;color:#dfeeff}
+  .panel{background:#071826;padding:8px;border-radius:8px;min-width:220px}
+  .row{display:flex;gap:8px;align-items:center}
+  .slim{padding:6px 8px;border-radius:6px;background:rgba(255,255,255,0.02)}
+  select,input[type=number]{background:#071826;border:1px solid rgba(255,255,255,0.04);color:#dff1ff;padding:6px;border-radius:6px}
+  .muted-text{color:var(--muted);font-size:12px}
+  footer{display:flex;justify-content:space-between;align-items:center;padding-top:6px}
+  a{color:var(--accent)}
+  /* responsive */
+  @media (max-width:980px){
+    .layout{flex-direction:column}
+    .left{width:100%}
+    .core-view{width:100%}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>Core War — Redcode Simulator (Browser)</h1>
+    <div style="flex:1"></div>
+    <div class="top-controls">
+      <div class="card small muted-text">Memory: <b id="memSize">800</b> cells</div>
+      <div class="card small muted-text">Max cycles: <b id="maxCycles">20000</b></div>
+      <div class="card small muted-text">Warriors: <b id="numWarriors">2</b></div>
+    </div>
+  </header>
+
+  <div class="layout">
+    <div class="left">
+      <div class="card">
+        <div style="display:flex;gap:8px;align-items:center;justify-content:space-between">
+          <div style="display:flex;gap:8px;align-items:center">
+            <label style="margin:0"><strong>Warrior A (Red)</strong></label>
+            <select id="sampleA" style="margin-left:6px">
+              <option value="">-- sample --</option>
+              <option value="imp">Imp (simple)</option>
+              <option value="dwarf">Dwarf (classic)</option>
+              <option value="stone">Paper (stone)</option>
+            </select>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button id="assembleBtn">Assemble</button>
+            <button id="loadBtn" class="secondary">Load into core</button>
+          </div>
+        </div>
+        <label>Redcode Editor A</label>
+        <textarea id="editorA" class="editor" spellcheck="false">; IMP - simple replicator
+MOV 0, 1
+JMP -1
+</textarea>
+      </div>
+
+      <div class="card">
+        <div style="display:flex;gap:8px;align-items:center;justify-content:space-between">
+          <div style="display:flex;gap:8px;align-items:center">
+            <label style="margin:0"><strong>Warrior B (Blue)</strong></label>
+            <select id="sampleB" style="margin-left:6px">
+              <option value="">-- sample --</option>
+              <option value="dwarf">Dwarf (classic)</option>
+              <option value="rabbit">Rabbit</option>
+              <option value="paper">Paper</option>
+            </select>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button id="assembleBtnB">Assemble B</button>
+            <button id="loadBtnB" class="secondary">Load into core</button>
+          </div>
+        </div>
+        <label>Redcode Editor B</label>
+        <textarea id="editorB" class="editor" spellcheck="false">; DWARF - classic bomb
+ADD #4, 3
+MOV 0,  @0
+JMP -2
+DAT 0, 0
+</textarea>
+      </div>
+
+      <div class="card status" style="justify-content:space-between">
+        <div style="display:flex;gap:8px;align-items:center">
+          <button id="resetBtn" class="ghost">Reset</button>
+          <button id="stepBtn" class="ghost">Step</button>
+          <button id="runBtn">Run</button>
+          <button id="pauseBtn" class="ghost">Pause</button>
+          <button id="fastBtn" class="ghost">Fast</button>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <label class="muted-text">Speed</label>
+          <input id="speedRange" type="range" min="10" max="1200" value="200">
+          <label class="muted-text">Seed</label>
+          <input id="seedInput" type="number" value="0" style="width:80px">
+        </div>
+      </div>
+
+      <div class="card">
+        <label>Log / Console</label>
+        <div id="log" class="log"></div>
+      </div>
+    </div>
+
+    <div class="core-view">
+      <div class="card" style="display:flex;gap:8px;align-items:center;justify-content:space-between">
+        <div>
+          <label style="margin:0"><strong>Core</strong></label>
+          <div class="muted-text">Visualized memory (click a cell to inspect)</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <div class="slim">Cycle: <b id="cycle">0</b></div>
+          <div class="slim">Processes: <b id="procCount">0</b></div>
+          <div class="slim">Winner: <b id="winner">-</b></div>
+        </div>
+      </div>
+
+      <div class="core-grid card" id="coreGridWrap">
+        <div id="coreGrid" class="grid"></div>
+      </div>
+
+      <div style="display:flex;gap:8px">
+        <div class="panel" style="flex:1">
+          <label>Cell Inspector</label>
+          <div id="inspector">
+            <div class="muted-text">Click a cell to view details</div>
+          </div>
+        </div>
+
+        <div class="panel" style="width:320px">
+          <label>Warrior Status</label>
+          <div id="warriorStatus" style="font-family:monospace"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <div class="muted-text">Simple browser Core War simulator — basic Redcode assembler & virtual machine. Not affiliated with any project.</div>
+    <div><a href="#" id="aboutLink">About</a></div>
+  </footer>
+</div>
+
+<script>
+/*
+  Browser Core War Simulator (single-file).
+  Simplified but functional Redcode-like assembler and VM.
+  -- memory model: array of cells, each is {op, aMode, aVal, bMode, bVal, raw}
+  -- addressing modes: immediate '#' (read-only), direct (no prefix), indirect '@', predecrement '<'
+  -- instructions: DAT, MOV, ADD, SUB, MUL, DIV, MOD, JMP, JMZ, JMN, DJN, SPL, SEQ (CMP), NOP
+  -- MOV copies full instruction
+  -- Execution: round-robin among processes of each warrior in order of loading
+*/
+
+(() => {
+  // UI elements
+  const editorA = document.getElementById('editorA');
+  const editorB = document.getElementById('editorB');
+  const assembleBtn = document.getElementById('assembleBtn');
+  const assembleBtnB = document.getElementById('assembleBtnB');
+  const loadBtn = document.getElementById('loadBtn');
+  const loadBtnB = document.getElementById('loadBtnB');
+  const resetBtn = document.getElementById('resetBtn');
+  const runBtn = document.getElementById('runBtn');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const stepBtn = document.getElementById('stepBtn');
+  const fastBtn = document.getElementById('fastBtn');
+  const logEl = document.getElementById('log');
+  const coreGrid = document.getElementById('coreGrid');
+  const coreGridWrap = document.getElementById('coreGridWrap');
+  const memSizeEl = document.getElementById('memSize');
+  const maxCyclesEl = document.getElementById('maxCycles');
+  const cycleEl = document.getElementById('cycle');
+  const procCountEl = document.getElementById('procCount');
+  const winnerEl = document.getElementById('winner');
+  const inspector = document.getElementById('inspector');
+  const warriorStatus = document.getElementById('warriorStatus');
+  const speedRange = document.getElementById('speedRange');
+  const seedInput = document.getElementById('seedInput');
+  const sampleA = document.getElementById('sampleA');
+  const sampleB = document.getElementById('sampleB');
+
+  // configuration
+  let CORE_SIZE = 800; // default; less than pMARS 8000 for browser performance
+  let MAX_CYCLES = 20000;
+
+  memSizeEl.textContent = CORE_SIZE;
+  maxCyclesEl.textContent = MAX_CYCLES;
+
+  // VM state
+  let core = []; // array of cells
+  let warriors = []; // loaded warrior objects {name, program:[cells], processes:[ip,...], color, id}
+  let cycle = 0;
+  let running = false;
+  let timer = null;
+  let stepMode = false;
+  let speedMs = 200;
+  let rngSeed = Number(seedInput.value) || 0;
+  let random = mulberry32(rngSeed);
+  let selectedCell = null;
+
+  // instruction set and helpers
+  const OPS = {
+    'DAT': {args:2},
+    'MOV': {args:2},
+    'ADD': {args:2},
+    'SUB': {args:2},
+    'MUL': {args:2},
+    'DIV': {args:2},
+    'MOD': {args:2},
+    'JMP': {args:1},
+    'JMZ': {args:2},
+    'JMN': {args:2},
+    'DJN': {args:2},
+    'SPL': {args:1},
+    'SEQ': {args:2},
+    'CMP': {args:2},
+    'NOP': {args:0},
+    'SLT': {args:2} // skip if A < B
+  };
+  const validOps = Object.keys(OPS);
+
+  // assemble caches
+  let assembledA = null;
+  let assembledB = null;
+
+  // UI init
+  function initGrid(){
+    coreGrid.innerHTML = '';
+    // aim for 40 columns if width allows
+    let colCount = Math.floor((coreGridWrap.clientWidth - 16) / 52);
+    colCount = Math.max(8, Math.min(80, colCount));
+    coreGrid.style.gridTemplateColumns = `repeat(${colCount}, minmax(48px,1fr))`;
+    for(let i=0;i<CORE_SIZE;i++){
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      cell.dataset.i = i;
+      cell.innerHTML = `<div class="addr">${i}</div><div class="inst">DAT</div><div class="fields muted-text"></div>`;
+      cell.addEventListener('click', ()=>selectCell(i));
+      coreGrid.appendChild(cell);
+    }
+  }
+  function updateGridCell(i){
+    const el = coreGrid.children[i];
+    const c = core[i];
+    if(!c) return;
+    const op = c.op;
+    const aMode = modeToSymbol(c.aMode);
+    const bMode = modeToSymbol(c.bMode);
+    const aVal = c.aVal;
+    const bVal = c.bVal;
+    el.querySelector('.inst').textContent = `${op} ${aMode}${aVal}${c.comma?',':''}${bMode}${bVal}`;
+    // color by owner annotation if present
+    const owner = c.owner;
+    el.style.borderColor = owner ? (owner.color+'66') : 'rgba(255,255,255,0.02)';
+    el.style.background = owner ? shade(owner.color, 0.08) : '#06121a';
+    if(selectedCell === i) el.style.outline = '2px solid #fff';
+    else el.style.outline = 'none';
+  }
+
+  function selectCell(i){
+    selectedCell = i;
+    updateInspector(i);
+    // highlight selection
+    for(let k=0;k<core.length;k++){
+      const el = coreGrid.children[k];
+      el.style.outline = (k===i) ? '2px solid #fff' : 'none';
+    }
+  }
+
+  function updateInspector(i){
+    const c = core[i];
+    if(!c) return;
+    inspector.innerHTML = `<div style="font-family:monospace">
+      <div><b>Addr:</b> ${i}</div>
+      <div><b>Op:</b> ${c.op}</div>
+      <div><b>A mode:</b> ${modeToSymbol(c.aMode)} &nbsp; <b>A val:</b> ${c.aVal}</div>
+      <div><b>B mode:</b> ${modeToSymbol(c.bMode)} &nbsp; <b>B val:</b> ${c.bVal}</div>
+      <div><b>Owner:</b> ${c.owner ? c.owner.name : 'none'}</div>
+    </div>`;
+  }
+
+  // setup core with default DATs
+  function resetCore(){
+    core = [];
+    for(let i=0;i<CORE_SIZE;i++){
+      core.push(makeCell('DAT', 0, 0, 0, 0, null));
+    }
+    initGrid();
+    renderAll();
+  }
+
+  function makeCell(op, aMode, aVal, bMode, bVal, owner){
+    return {op:op.toUpperCase(), aMode, aVal, bMode, bVal, owner, comma: true};
+  }
+
+  function modeToSymbol(m){
+    if(m === 'immediate') return '#';
+    if(m === 'direct') return '';
+    if(m === 'indirect') return '@';
+    if(m === 'predec') return '<';
+    return '';
+  }
+
+  // Assembler (rudimentary)
+  function assemble(text){
+    // returns array of cells or throws
+    const lines = text.split(/\r?\n/);
+    const labels = {};
+    const instructions = [];
+    // first pass: parse tokens, record labels, create placeholder instructions
+    for(let ln=0;ln<lines.length;ln++){
+      let line = lines[ln].trim();
+      if(!line) continue;
+      // remove comments ; or //
+      line = line.replace(/;.*$/,'').replace(/\/\/.*$/,'').trim();
+      if(!line) continue;
+      // label?
+      const labelMatch = line.match(/^([A-Za-z_][\w\-]*):\s*(.*)$/);
+      if(labelMatch){
+        const lab = labelMatch[1];
+        line = labelMatch[2];
+        labels[lab] = instructions.length;
+        if(!line) continue;
+      }
+      // tokens: op arg1, arg2
+      const m = line.match(/^([A-Za-z]+)\s*(.*)$/);
+      if(!m) throw new Error(`Syntax error line ${ln+1}: ${line}`);
+      const op = m[1].toUpperCase();
+      if(!OPS[op]) throw new Error(`Unknown op '${op}' at line ${ln+1}`);
+      const argsRaw = m[2].trim();
+      let args = [];
+      if(argsRaw.length){
+        // split by comma but allow spaces
+        args = argsRaw.split(',').map(s=>s.trim()).filter(s=>s.length>0);
+      }
+      // build tokens
+      instructions.push({op, args, raw:line, ln});
+    }
+    // second pass: convert args, resolve labels
+    const cells = [];
+    for(let i=0;i<instructions.length;i++){
+      const inst = instructions[i];
+      const op = inst.op;
+      const args = inst.args;
+      // normalize args to two positions
+      let aMode='direct', bMode='direct';
+      let aVal=0, bVal=0;
+      if(args.length >= 1){
+        const A = args[0];
+        const parsed = parseOperand(A, labels, i);
+        aMode = parsed.mode; aVal = parsed.val;
+      }
+      if(args.length >= 2){
+        const B = args[1];
+        const parsed = parseOperand(B, labels, i);
+        bMode = parsed.mode; bVal = parsed.val;
+      } else {
+        // For single-arg ops, treat B as missing -> default 0
+      }
+      // create cell
+      cells.push(makeCell(op, aMode, aVal, bMode, bVal, null));
+    }
+    return cells;
+  }
+
+  function parseOperand(tok, labels, currentIndex){
+    tok = tok.trim();
+    if(!tok.length) return {mode:'direct', val:0};
+    let mode='direct';
+    if(tok.startsWith('#')){ mode='immediate'; tok = tok.slice(1).trim(); }
+    else if(tok.startsWith('@')){ mode='indirect'; tok = tok.slice(1).trim(); }
+    else if(tok.startsWith('<')){ mode='predec'; tok = tok.slice(1).trim(); }
+    // numeric or label or relative
+    let val = 0;
+    // relative numbers like -1 or +3
+    if(/^[-+]?\d+$/.test(tok)){
+      val = parseInt(tok,10);
+    } else {
+      // label resolution: use label index minus current index
+      if(labels.hasOwnProperty(tok)){
+        val = labels[tok] - currentIndex;
+      } else {
+        throw new Error(`Unknown label or token '${tok}'`);
+      }
+    }
+    return {mode, val};
+  }
+
+  // loader: place program into core at random free location or specific
+  function loadProgram(cells, color, name, placeAddr=null){
+    // create warrior object
+    const w = {
+      id: warriors.length+1,
+      name: name || ('W'+(warriors.length+1)),
+      program: cells,
+      processes: [],
+      color,
+      startAddr: 0,
+      alive: true,
+      killedAt: null
+    };
+    // pick place address if not provided randomly within core such that whole program fits
+    const progLen = cells.length;
+    let pos;
+    if(typeof placeAddr === 'number'){
+      pos = placeAddr % CORE_SIZE;
+    } else {
+      pos = Math.floor(random() * CORE_SIZE);
+    }
+    w.startAddr = pos;
+    // write program into core; mark owner
+    for(let i=0;i<progLen;i++){
+      const addr = (pos + i) % CORE_SIZE;
+      const inst = Object.assign({}, cells[i]); // shallow copy
+      inst.owner = {name: w.name, color: w.color, id:w.id};
+      core[addr] = inst;
+    }
+    // initial process list: one process at start
+    w.processes = [pos];
+    warriors.push(w);
+    return w;
+  }
+
+  // execution engine
+  function stepCycle(){
+    if(warriors.length === 0) return;
+    cycle++;
+    // pick warriors in order and run one instruction for each in round-robin style by cycling a global process queue
+    // We'll implement simple fair scheduling: build process list as [ {warrior, ipIndex} ... ] using current processes snapshot
+    const processQueue = [];
+    for(const w of warriors){
+      if(!w.alive) continue;
+      for(const ip of w.processes){
+        processQueue.push({w, ip});
+      }
+    }
+    // shuffle by deterministic order: preserve current order — executing each process once per cycle
+    const newProcessesByWarrior = new Map();
+    for(const w of warriors) newProcessesByWarrior.set(w, []);
+    for(const entry of processQueue){
+      const w = entry.w;
+      let ip = entry.ip;
+      if(!w.alive) continue;
+      // if warrior has no processes (should be skipped)
+      if(w.processes.length === 0) continue;
+      // execute instruction at ip
+      executeInstruction(w, ip, newProcessesByWarrior);
+      if(!w.alive) continue;
+    }
+    // after cycle, replace processes with updated lists (we built newProcessesByWarrior during execution)
+    for(const w of warriors){
+      if(newProcessesByWarrior.has(w)) w.processes = newProcessesByWarrior.get(w);
+    }
+    // remove dead warriors
+    for(const w of warriors){
+      if(w.processes.length === 0 && w.alive){
+        w.alive = false;
+        w.killedAt = cycle;
+        log(`${w.name} eliminated at cycle ${cycle}`);
+      }
+    }
+    // detect winner
+    const alive = warriors.filter(w=>w.alive);
+    if(alive.length <= 1){
+      running = false;
+      clearInterval(timer);
+      const winner = alive[0];
+      if(winner) {
+        winnerEl.textContent = `${winner.name} (id ${winner.id})`;
+        log(`Winner: ${winner.name}`);
+      } else {
+        winnerEl.textContent = 'Draw / all killed';
+        log('Draw: all warriors killed');
+      }
+    }
+    renderAll();
+  }
+
+  function executeInstruction(w, ip, newProcessesByWarrior){
+    // if warrior already dead skip
+    if(!w.alive) return;
+    ip = ((ip % CORE_SIZE) + CORE_SIZE) % CORE_SIZE;
+    const instr = core[ip];
+    if(!instr){ // treat as DAT if empty
+      // no instruction => kill process
+      return;
+    }
+    const op = instr.op;
+    // helper to resolve operand: returns {addr, val, canWrite} - will compute effective target addresses for destination (b) and immediate values for source (a)
+    function resolveOperand(mode, val, refAddr, forWrite=false){
+      // refAddr is the instruction address relative reference: final = (refAddr + offset) % CORE_SIZE
+      if(mode === 'immediate'){
+        return {addr:null, val: val, canWrite:false};
+      }
+      if(mode === 'direct'){
+        const target = ((refAddr + val) % CORE_SIZE + CORE_SIZE) % CORE_SIZE;
+        const cell = core[target];
+        return {addr: target, val: cell ? cell.aVal : 0, cell};
+      }
+      if(mode === 'indirect'){
+        // follow pointer once via B-field of target instruction
+        const t = ((refAddr + val) % CORE_SIZE + CORE_SIZE) % CORE_SIZE;
+        const pcell = core[t];
+        const offset = pcell ? pcell.bVal : 0;
+        const target = ((t + offset) % CORE_SIZE + CORE_SIZE) % CORE_SIZE;
+        const cell = core[target];
+        return {addr: target, val: cell ? cell.aVal : 0, cell};
+      }
+      if(mode === 'predec'){
+        // decrement B field of target then use it
+        const t = ((refAddr + val) % CORE_SIZE + CORE_SIZE) % CORE_SIZE;
+        const cell = core[t];
+        if(cell){
+          cell.bVal = (cell.bVal - 1);
+        }
+        const offset = cell ? cell.bVal : 0;
+        const target = ((t + offset) % CORE_SIZE + CORE_SIZE) % CORE_SIZE;
+        const cell2 = core[target];
+        return {addr: target, val: cell2 ? cell2.aVal : 0, cell:cell2};
+      }
+      // default
+      const target = ((refAddr + val) % CORE_SIZE + CORE_SIZE) % CORE_SIZE;
+      const cell = core[target];
+      return {addr: target, val: cell ? cell.aVal : 0, cell};
+    }
+
+    // For many ops we need to compute source value (A) and target address (B)
+    // We'll implement semantics approximating ICWS:
+    // MOV source => dest (copy full instruction)
+    // ADD A, B => add A.aVal to B.bVal (we choose A.aVal to B.bVal)
+    // SUB similar
+    // MUL, DIV, MOD operate on B.bVal
+    // JMP A => set ip to target
+    // JMZ A, B => if B.bVal == 0 then ip = A.addr else ip++ (here B may be immediate)
+    // JMN A, B => if B.bVal != 0 then ip = A.addr
+    // DJN A, B => decrement B.bVal then if B.bVal != 0 jump to A.addr
+    // SPL A => spawn new process at A.addr (for this warrior)
+    // SEQ A, B => if instructions equal then skip next (i.e., ip += 2 else ip++)
+    // SLT A, B => if A.aVal < B.bVal skip next
+    // DAT => kill process
+    // NOP => do nothing
+    // We'll treat immediate for destination as invalid for writes (attempt to write immediate - we ignore)
+    // Many details simplified.
+
+    // A operand resolved using instr.aMode and instr.aVal relative to ip
+    let aRes = resolveOperand(instr.aMode, instr.aVal, ip, false);
+    // B operand resolved similarly
+    let bRes = resolveOperand(instr.bMode, instr.bVal, ip, true);
+
+    // helper to advance ip (returned next ip)
+    let nextIp = (ip + 1) % CORE_SIZE;
+
+    // Execute
+    switch(op){
+      case 'DAT':
+        // kill this process (do not add to newProcesses)
+        // nothing to push
+        return;
+      case 'NOP':
+        // do nothing, advance
+        newProcessesByWarrior.get(w).push(nextIp);
+        break;
+      case 'MOV':
+        // copy entire instruction from source address to target address.
+        // Source could be immediate: then produce DAT imm? For simplicity, if source immediate, create DAT with immediate aVal
+        if(instr.aMode === 'immediate'){
+          // write a simple DAT with aVal to destination if writable
+          if(bRes.addr !== null){
+            core[bRes.addr] = makeCell('DAT','direct', aRes.val, 'direct', 0, {name:w.name,color:w.color,id:w.id});
+          }
+        } else {
+          // copy instruction at aRes.addr to bRes.addr
+          if(aRes.addr === null || bRes.addr === null){ /* cannot write */ }
+          else {
+            const src = cloneCell(core[aRes.addr]);
+            src.owner = {name: w.name, color: w.color, id: w.id};
+            core[bRes.addr] = src;
+          }
+        }
+        newProcessesByWarrior.get(w).push(nextIp);
+        break;
+      case 'ADD':
+        if(bRes.addr !== null){
+          // add A.aVal to B.bVal
+          const valA = (instr.aMode === 'immediate') ? aRes.val : (core[aRes.addr] ? core[aRes.addr].aVal : 0);
+          core[bRes.addr].bVal = (core[bRes.addr].bVal || 0) + valA;
+        }
+        newProcessesByWarrior.get(w).push(nextIp);
+        break;
+      case 'SUB':
+        if(bRes.addr !== null){
+          const valA = (instr.aMode === 'immediate') ? aRes.val : (core[aRes.addr] ? core[aRes.addr].aVal : 0);
+          core[bRes.addr].bVal = (core[bRes.addr].bVal || 0) - valA;
+        }
+        newProcessesByWarrior.get(w).push(nextIp);
+        break;
+      case 'MUL':
+        if(bRes.addr !== null){
+          const valA = (instr.aMode === 'immediate') ? aRes.val : (core[aRes.addr] ? core[aRes.addr].aVal : 0);
+          core[bRes.addr].bVal = (core[bRes.addr].bVal || 0) * valA;
+        }
+        newProcessesByWarrior.get(w).push(nextIp);
+        break;
+      case 'DIV':
+        if(bRes.addr !== null){
+          const valA = (instr.aMode === 'immediate') ? aRes.val : (core[aRes.addr] ? core[aRes.addr].aVal : 0);
+          if(valA === 0){
+            // division by zero kills process
+            return;
+          }
+          core[bRes.addr].bVal = Math.floor((core[bRes.addr].bVal || 0) / valA);
+        }
+        newProcessesByWarrior.get(w).push(nextIp);
+        break;
+      case 'MOD':
+        if(bRes.addr !== null){
+          const valA = (instr.aMode === 'immediate') ? aRes.val : (core[aRes.addr] ? core[aRes.addr].aVal : 0);
+          if(valA === 0) return;
+          core[bRes.addr].bVal = (core[bRes.addr].bVal || 0) % valA;
+        }
+        newProcessesByWarrior.get(w).push(nextIp);
+        break;
+      case 'JMP':
+        // jump to A.addr (or compute if immediate resolves to address)
+        if(aRes.addr !== null) nextIp = aRes.addr;
+        else nextIp = (ip + aRes.val) % CORE_SIZE;
+        newProcessesByWarrior.get(w).push(nextIp);
+        break;
+      case 'JMZ':
+        // if B.bVal == 0 then jump A else next
+        let bValJMZ = 0;
+        if(instr.bMode === 'immediate') bValJMZ = bRes.val;
+        else bValJMZ = core[bRes.addr] ? core[bRes.addr].bVal : 0;
+        if(bValJMZ === 0){
+          nextIp = aRes.addr !== null ? aRes.addr : ((ip + aRes.val) % CORE_SIZE);
+        }
+        newProcessesByWarrior.get(w).push(nextIp);
+        break;
+      case 'JMN':
+        // if B.bVal != 0 then jump A else next
+        let bValJMN = 0;
+        if(instr.bMode === 'immediate') bValJMN = bRes.val;
+        else bValJMN = core[bRes.addr] ? core[bRes.addr].bVal : 0;
+        if(bValJMN !== 0){
+          nextIp = aRes.addr !== null ? aRes.addr : ((ip + aRes.val) % CORE_SIZE);
+        }
+        newProcessesByWarrior.get(w).push(nextIp);
+        break;
+      case 'DJN':
+        // decrement B then if B != 0 jump A
+        if(bRes.addr !== null){
+          core[bRes.addr].bVal = (core[bRes.addr].bVal || 0) - 1;
+          if(core[bRes.addr].bVal !== 0){
+            nextIp = aRes.addr !== null ? aRes.addr : ((ip + aRes.val) % CORE_SIZE);
+          }
+        }
+        newProcessesByWarrior.get(w).push(nextIp);
+        break;
+      case 'SPL':
+        // spawn new process at A.addr (or computed)
+        const spawnAddr = aRes.addr !== null ? aRes.addr : ((ip + aRes.val) % CORE_SIZE);
+        // push new process into this warrior's new process list (spawned first)
+        const arr = newProcessesByWarrior.get(w);
+        arr.push(spawnAddr);
+        // original process continues to next instruction
+        newProcessesByWarrior.get(w).push(nextIp);
+        break;
+      case 'SEQ':
+      case 'CMP':
+        // compare full instructions at A and B; if equal skip next
+        let equal = false;
+        if(instr.aMode === 'immediate' || instr.bMode === 'immediate'){
+          // compare values
+          const av = instr.aMode === 'immediate' ? aRes.val : (core[aRes.addr]?core[aRes.addr].aVal:0);
+          const bv = instr.bMode === 'immediate' ? bRes.val : (core[bRes.addr]?core[bRes.addr].aVal:0);
+          equal = (av === bv);
+        } else {
+          // compare op and fields
+          const ca = core[aRes.addr] || null;
+          const cb = core[bRes.addr] || null;
+          equal = ca && cb && ca.op === cb.op && ca.aMode === cb.aMode && ca.aVal === cb.aVal && ca.bMode === cb.bMode && ca.bVal === cb.bVal;
+        }
+        if(equal) nextIp = (ip + 2) % CORE_SIZE;
+        newProcessesByWarrior.get(w).push(nextIp);
+        break;
+      case 'SLT':
+        // skip next if A < B (compare numeric)
+        let aval = (instr.aMode === 'immediate') ? aRes.val : (core[aRes.addr] ? core[aRes.addr].aVal : 0);
+        let bval = (instr.bMode === 'immediate') ? bRes.val : (core[bRes.addr] ? core[bRes.addr].bVal : 0);
+        if(aval < bval) nextIp = (ip + 2) % CORE_SIZE;
+        newProcessesByWarrior.get(w).push(nextIp);
+        break;
+      default:
+        // unknown op: treat as DAT
+        return;
+    }
+  }
+
+  function cloneCell(c){
+    if(!c) return makeCell('DAT',0,0,0,0,null);
+    return makeCell(c.op, c.aMode, c.aVal, c.bMode, c.bVal, c.owner ? {...c.owner} : null);
+  }
+
+  // UI actions: assemble + load
+  assembleBtn.addEventListener('click', ()=>{
+    try {
+      assembledA = assemble(editorA.value);
+      log('Assembled Warrior A: ' + assembledA.length + ' instruction(s)');
+    } catch(e){
+      alert('Assemble error A: ' + e.message);
+    }
+  });
+  assembleBtnB.addEventListener('click', ()=>{
+    try {
+      assembledB = assemble(editorB.value);
+      log('Assembled Warrior B: ' + assembledB.length + ' instruction(s)');
+    } catch(e){
+      alert('Assemble error B: ' + e.message);
+    }
+  });
+
+  loadBtn.addEventListener('click', ()=>{
+    if(!assembledA){
+      try { assembledA = assemble(editorA.value); } catch(e){ alert('A assemble error: '+e.message); return; }
+    }
+    // color red
+    const color = '#ff6b6b';
+    const name = 'Warrior A';
+    loadProgramIntoCore(assembledA, color, name);
+    renderAll();
+  });
+  loadBtnB.addEventListener('click', ()=>{
+    if(!assembledB){
+      try { assembledB = assemble(editorB.value); } catch(e){ alert('B assemble error: '+e.message); return; }
+    }
+    const color = '#58a6ff';
+    const name = 'Warrior B';
+    loadProgramIntoCore(assembledB, color, name);
+    renderAll();
+  });
+
+  function loadProgramIntoCore(cells, color, name){
+    // place at a random free location that does not overlap existing program if possible
+    let pos = Math.floor(random() * CORE_SIZE);
+    // try to find a place that has DATs (empty) for the needed length
+    const len = cells.length;
+    let found = false;
+    for(let trial=0; trial<CORE_SIZE; trial++){
+      const start = (pos + trial) % CORE_SIZE;
+      let ok = true;
+      for(let j=0;j<len;j++){
+        const idx = (start + j) % CORE_SIZE;
+        // consider free if cell.op === 'DAT' and owner null
+        if(core[idx].op !== 'DAT' || core[idx].owner) { ok = false; break; }
+      }
+      if(ok){ pos = start; found = true; break; }
+    }
+    // if not found just use random pos
+    const w = loadProgram(cells, color, name, pos);
+    log(`Loaded ${name} at ${pos}`);
+    updateWarriorStatus();
+    renderAll();
+  }
+
+  // reset
+  resetBtn.addEventListener('click', ()=>{
+    running = false;
+    clearInterval(timer);
+    warriors = [];
+    cycle = 0;
+    winnerEl.textContent = '-';
+    resetCore();
+    assembledA = assembledB = null;
+    log('Reset simulator');
+    updateWarriorStatus();
+  });
+
+  // step/run controls
+  stepBtn.addEventListener('click', ()=>{
+    if(!running){
+      stepCycle();
+    }
+  });
+  runBtn.addEventListener('click', ()=>{
+    if(running) return;
+    running = true;
+    stepMode = false;
+    speedMs = Math.max(10, 1000 - Number(speedRange.value));
+    timer = setInterval(()=>{ for(let i=0;i<Math.max(1, Math.floor(1200/speedMs)); i++) stepCycle(); }, Math.max(1, speedMs));
+    log('Run started');
+  });
+  pauseBtn.addEventListener('click', ()=>{
+    running = false;
+    clearInterval(timer);
+    log('Paused');
+  });
+  fastBtn.addEventListener('click', ()=>{
+    // run at faster speed temporarily
+    if(running) return;
+    running = true;
+    timer = setInterval(()=>{ for(let i=0;i<8;i++) stepCycle(); }, 30);
+    setTimeout(()=>{ running=false; clearInterval(timer); log('Fast burst complete'); }, 1500);
+    log('Fast burst');
+  });
+
+  // samples
+  sampleA.addEventListener('change', ()=>{
+    const v = sampleA.value;
+    if(v==='imp') editorA.value = `; IMP (replicator)\nMOV 0, 1\nJMP -1`;
+    if(v==='dwarf') editorA.value = `; DWARF\nADD #4, 3\nMOV 0, @0\nJMP -2\nDAT #0, #0`;
+    if(v==='stone') editorA.value = `; PAPER (stone)\nMOV 0, 2\nMOV 0, 3\nDAT #0, #0`;
+  });
+  sampleB.addEventListener('change', ()=>{
+    const v = sampleB.value;
+    if(v==='dwarf') editorB.value = `; DWARF\nADD #4, 3\nMOV 0, @0\nJMP -2\nDAT #0, #0`;
+    if(v==='rabbit') editorB.value = `; RABBIT\nMOV #5, @3\nJMP -2\nDAT #0, #0\nDAT #0, #0\nDAT #0, #0`;
+    if(v==='paper') editorB.value = `; PAPER\nMOV 0, 2\nDAT #0, #0`;
+  });
+
+  // logging
+  function log(s){
+    const t = new Date().toLocaleTimeString();
+    logEl.innerHTML = `[${t}] ${s}\n` + logEl.innerHTML;
+  }
+
+  // supporting functions
+  function renderAll(){
+    cycleEl.textContent = cycle;
+    procCountEl.textContent = warriors.reduce((s,w)=>s + (w.processes ? w.processes.length : 0), 0);
+    // update grid cells
+    for(let i=0;i<CORE_SIZE;i++){
+      updateGridCell(i);
+    }
+    updateWarriorStatus();
+    updateUI();
+  }
+
+  function updateWarriorStatus(){
+    let html = '';
+    for(const w of warriors){
+      html += `<div style="padding:6px;border-bottom:1px dashed rgba(255,255,255,0.02);"><b style="color:${w.color}">${w.name}</b> (id ${w.id}) - ${w.processes.length} proc(s) - ${w.alive ? 'alive':'dead'} - start ${w.startAddr}</div>`;
+    }
+    warriorStatus.innerHTML = html || '<div class="muted-text">No warriors loaded</div>';
+  }
+
+  // small helpers: deterministic RNG for initial placement
+  function mulberry32(a) {
+    return function() {
+      var t = a += 0x6D2B79F5;
+      t = Math.imul(t ^ t >>> 15, t | 1);
+      t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    }
+  }
+
+  // audio beep
+  function playBeep(freq, dur=0.08){
+    if(!soundOn()) return;
+    const actx = (window._audioCtx = window._audioCtx || new (window.AudioContext || window.webkitAudioContext)());
+    const o = actx.createOscillator();
+    const g = actx.createGain();
+    o.type = 'sine'; o.frequency.value = freq;
+    o.connect(g); g.connect(actx.destination);
+    g.gain.value = 0.0001;
+    const now = actx.currentTime;
+    g.gain.exponentialRampToValueAtTime(0.06, now + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    o.start(now); o.stop(now + dur + 0.02);
+  }
+  function playSeries(arr, dur=0.07){
+    arr.forEach((f,i)=> setTimeout(()=>playBeep(f,dur), i*dur*380));
+  }
+
+  function soundOn(){ return soundOnFlag; }
+  let soundOnFlag = true;
+  function toggleSound(){ soundOnFlag = !soundOnFlag; muteBtn.textContent = soundOnFlag ? 'Mute' : 'Unmute'; if(soundOnFlag) playBeep(880,0.07); }
+
+  // utility: shade a hex color
+  function shade(hex, amt){
+    try{
+      hex = hex.replace('#','');
+      if(hex.length===3) hex = hex.split('').map(c=>c+c).join('');
+      const num = parseInt(hex,16);
+      let r = ((num >> 16) & 0xff) + Math.floor(255*amt);
+      let g = ((num >> 8) & 0xff) + Math.floor(255*amt);
+      let b = (num & 0xff) + Math.floor(255*amt);
+      r = clamp(r,0,255); g = clamp(g,0,255); b = clamp(b,0,255);
+      return '#' + (1<<24 | (r<<16) | (g<<8) | b).toString(16).slice(1);
+    } catch(e){ return hex; }
+  }
+
+  // assemble/load defaults
+  assembledA = assemble(editorA.value);
+  assembledB = assemble(editorB.value);
+
+  // create default core and render
+  resetCore();
+
+  // expose some functions for console debugging
+  window.CoreSim = {
+    assemble, resetCore, core, loadProgram, warriors, generateSegments
+  };
+
+  // simple helper to load a program (used earlier)
+  function loadProgram(cells, color, name, placeAddr=null){
+    return loadProgramInternal(cells, color, name, placeAddr);
+  }
+  function loadProgramInternal(cells, color, name, placeAddr=null){
+    return loadProgramToCore(cells, color, name, placeAddr);
+  }
+  // forward to internal loader defined above
+  function loadProgramToCore(cells, color, name, placeAddr=null){
+    const w = loadProgram(cells, color, name, placeAddr);
+    return w;
+  }
+
+  // resize handling for grid columns
+  window.addEventListener('resize', ()=>{ initGrid(); renderAll(); });
+
+  // small polyfill of missing exports in earlier functions (keeping minimal)
+  function loadProgram(cells, color, name, placeAddr){
+    // call external defined loader above
+    const prog = cells.map(cloneCell);
+    const w = {
+      id: warriors.length+1,
+      name: name || ('W'+(warriors.length+1)),
+      program: prog,
+      processes: [],
+      color,
+      startAddr: 0,
+      alive:true,
+      killedAt:null
+    };
+    // pick pos
+    const len = prog.length;
+    let pos = Math.floor(Math.random() * CORE_SIZE);
+    // try find free area (DATs)
+    for(let trial=0; trial<CORE_SIZE; trial++){
+      const s = (pos+trial)%CORE_SIZE;
+      let ok = true;
+      for(let j=0;j<len;j++){
+        const idx = (s + j) % CORE_SIZE;
+        if(core[idx].op !== 'DAT' || core[idx].owner) { ok=false; break; }
+      }
+      if(ok){ pos = s; break; }
+    }
+    w.startAddr = pos;
+    for(let i=0;i<len;i++){
+      const addr = (pos + i) % CORE_SIZE;
+      const inst = cloneCell(prog[i]);
+      inst.owner = {name: w.name, color: w.color, id:w.id};
+      core[addr] = inst;
+    }
+    w.processes = [pos];
+    warriors.push(w);
+    log(`Loaded ${w.name} at ${pos}`);
+    updateWarriorStatus();
+    renderAll();
+    return w;
+  }
+
+})();
+</script>
+</body>
+</html>
