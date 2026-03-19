@@ -1,0 +1,724 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Parallax Horse Runner - "Hello everyone!"</title>
+<style>
+  html,body{height:100%;margin:0;background:#111;overflow:hidden;font-family:Arial,Segoe UI,Roboto;}
+  #gameCanvas{display:block;background:#87CEEB;width:100vw;height:100vh;}
+  #ui{
+    position:fixed;left:10px;top:10px;color:#fff;text-shadow:0 1px 0 #000;
+    z-index:10;
+  }
+  #ui div{margin:2px 0;padding:4px 8px;background:rgba(0,0,0,0.25);border-radius:4px;}
+  #shopOverlay{
+    position:fixed;left:0;top:0;width:100%;height:100%;display:none;
+    background:linear-gradient(rgba(0,0,0,0.6),rgba(0,0,0,0.9));align-items:center;justify-content:center;z-index:20;
+  }
+  #shop{
+    width:640px;max-width:90%;background:#fff;padding:20px;border-radius:10px;color:#111;
+  }
+  .btn{
+    display:inline-block;padding:8px 12px;margin:6px;background:#007bff;color:#fff;border-radius:6px;cursor:pointer;
+  }
+  .btn:active{transform:translateY(1px);}
+  #help{position:fixed;right:10px;top:10px;color:#fff;background:rgba(0,0,0,0.25);padding:6px;border-radius:6px;}
+</style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+
+<div id="ui">
+  <div id="levelInfo">Level: 1</div>
+  <div id="segmentInfo">Path: -</div>
+  <div id="beans">Purple Beans: 0 / 10</div>
+  <div id="fruits">Fruit Currency: 0</div>
+  <div id="stats">Speed: 1.0x • Armor: 0</div>
+</div>
+
+<div id="help">
+  Controls: WASD to move (W jump). B = speed boost. Collect 10 purple beans -> Speedhorse (5x). Reach end to open shop.
+</div>
+
+<div id="shopOverlay">
+  <div id="shop">
+    <h2>End of Level Shop</h2>
+    <p id="shopText"></p>
+    <div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <div style="flex:1;padding:10px;border:1px solid #ddd;border-radius:8px;">
+          <strong>Buy +0.2 Speed</strong><br>Cost: 3 fruits<br>
+          <div class="btn" id="buySpeed">Buy</div>
+        </div>
+        <div style="flex:1;padding:10px;border:1px solid #ddd;border-radius:8px;">
+          <strong>Buy +1 Armor</strong><br>Cost: 4 fruits<br>
+          <div class="btn" id="buyArmor">Buy</div>
+        </div>
+        <div style="flex:1;padding:10px;border:1px solid #ddd;border-radius:8px;">
+          <strong>Keep going</strong><br>Skip shop and continue to next level.<br>
+          <div class="btn" id="skipShop">Continue</div>
+        </div>
+      </div>
+    </div>
+    <p style="margin-top:12px;">Stats: <span id="shopStats"></span></p>
+  </div>
+</div>
+
+<script>
+(function(){
+  // Canvas setup
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  function resize(){
+    canvas.width = window.innerWidth;
+    canvas.height = Math.max(480, Math.min(900, window.innerHeight));
+  }
+  window.addEventListener('resize',resize);
+  resize();
+
+  // UI elements
+  const levelInfo = document.getElementById('levelInfo');
+  const segmentInfo = document.getElementById('segmentInfo');
+  const beansUI = document.getElementById('beans');
+  const fruitsUI = document.getElementById('fruits');
+  const statsUI = document.getElementById('stats');
+  const shopOverlay = document.getElementById('shopOverlay');
+  const shopText = document.getElementById('shopText');
+  const shopStats = document.getElementById('shopStats');
+  const buySpeedBtn = document.getElementById('buySpeed');
+  const buyArmorBtn = document.getElementById('buyArmor');
+  const skipShopBtn = document.getElementById('skipShop');
+
+  // Game constants
+  const viewW = () => canvas.width;
+  const viewH = () => canvas.height;
+  const SCREEN_WIDTH = () => viewW();
+  const LEVEL_SCREEN_COUNT = 10;
+  const PATH_WIDTH = () => SCREEN_WIDTH() * 2; // 2 screen widths per path
+  const LEVEL_WIDTH = () => SCREEN_WIDTH() * LEVEL_SCREEN_COUNT;
+  const G = 1600; // gravity for jump
+  const BASE_SPEED = 220; // px/s
+  const FRAME_MS = 1000/60;
+
+  // Game state
+  let levelNumber = 1;
+  let player = null;
+  let cameraX = 0;
+  let keys = {};
+  let lastTime = performance.now();
+  let beansCollected = 0; // purple beans
+  let fruitsCurrency = 0;
+  let speedMultiplier = 1.0; // increases via shop or speedhorse
+  let armor = 0;
+  let speedhorse = false;
+  let boostActive = false;
+  let boostTimer = 0;
+  let inShop = false;
+
+  // Path presets (unique paths)
+  const PATH_PRESETS = [
+    {name:"Sunset Ridge", horizon:"#FFD59A", clouds:"#fffaf0", mountains:"#d08a6b", trees:"#2f7d46", plants:"#6bbf59", edge:"#4e3b2c", path:"#cfa26a", fruit:"apple", fruitColor:"#ff4b4b"},
+    {name:"Blue Vale", horizon:"#bfe9ff", clouds:"#ffffff", mountains:"#93c5ff", trees:"#1f6d89", plants:"#6fc3a8", edge:"#2f2f2f", path:"#6ba5ff", fruit:"berry", fruitColor:"#ff69b4"},
+    {name:"Lavender Plains", horizon:"#eecffe", clouds:"#ffffff", mountains:"#caa3ff", trees:"#5b3a6b", plants:"#b98ccf", edge:"#2b1a2e", path:"#d6b3ff", fruit:"grape", fruitColor:"#7b2ab3"},
+    {name:"Emerald Wood", horizon:"#dfffe1", clouds:"#f0fff0", mountains:"#94e0b8", trees:"#0b5c2e", plants:"#1aa36c", edge:"#1b312a", path:"#6ddc86", fruit:"pear", fruitColor:"#c3ff88"},
+    {name:"Crimson Peaks", horizon:"#ffe3df", clouds:"#fff6f6", mountains:"#ff9b9b", trees:"#7a2b2b", plants:"#ffb07c", edge:"#3a211e", path:"#ff9376", fruit:"orange", fruitColor:"#ffb347"},
+    {name:"Silver Dunes", horizon:"#f5f7fb", clouds:"#ffffff", mountains:"#d6dbe0", trees:"#a0a0a0", plants:"#d0dfff", edge:"#3f3f3f", path:"#d0dbe8", fruit:"blueberry", fruitColor:"#5f4cff"}
+  ];
+
+  // Layers for parallax: sky, clouds, mountains, far-tree, plant, edge, path, foreground
+  const LAYERS = [
+    {name:'sky', speed:0.05},
+    {name:'clouds', speed:0.12},
+    {name:'mountains', speed:0.2},
+    {name:'farTree', speed:0.32},
+    {name:'plant', speed:0.45},
+    {name:'edge', speed:0.6},
+    {name:'path', speed:1.0},
+    {name:'foreground', speed:1.2}
+  ];
+
+  // Entities for current level
+  let segments = []; // list of path segments across the level
+  let beans = []; // purple bean collectibles
+  let fruits = []; // fruit collectibles (currency)
+  let enemies = []; // insect enemies
+
+  // Utility
+  function rand(min,max){ return Math.random()*(max-min)+min; }
+  function rint(min,max){ return Math.floor(rand(min,max+1)); }
+  function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
+
+  // Initialize or generate level
+  function generateLevel(){
+    cameraX = 0;
+    beans = [];
+    fruits = [];
+    enemies = [];
+    beansCollected = 0; // keep beans? The spec suggests beans collected to trigger speedhorse - likely across level only; we'll keep them reset per level but also progress to speedhorse persistent? We'll treat beans as persistent counter for speedhorse trigger.
+    // But the user expected 10 purple beans -> speedhorse; interpret as collected cumulative across play. We'll not reset beansCollected across levels.
+    // However earlier we reset; correct: do not reset beansCollected when generating new level.
+    // So revert above:
+  }
+  function buildSegmentsForLevel(){
+    segments = [];
+    const neededSegments = LEVEL_SCREEN_COUNT/2; // each segment is 2 screens wide
+    for(let i=0;i<neededSegments;i++){
+      const preset = PATH_PRESETS[Math.floor(Math.random()*PATH_PRESETS.length)];
+      segments.push({
+        preset: preset,
+        x: i * PATH_WIDTH(),
+        w: PATH_WIDTH()
+      });
+    }
+    // Spawn collectibles and enemies across level using segments
+    for(let si=0; si<segments.length; si++){
+      const seg = segments[si];
+      // fruits spawn 3-6 per segment
+      const fcount = rint(2,5);
+      for(let i=0;i<fcount;i++){
+        const fx = seg.x + rand(80, seg.w-80);
+        const fy = viewH() - rand(60,170);
+        fruits.push({x:fx,y:fy,color:seg.preset.fruitColor, type:seg.preset.fruit});
+      }
+      // beans spawn 0-3 per segment
+      const bcount = rint(0,2);
+      for(let i=0;i<bcount;i++){
+        const bx = seg.x + rand(120, seg.w-120);
+        const by = viewH() - rand(80,160);
+        beans.push({x:bx,y:by, r:8});
+      }
+      // enemies spawn
+      const ecount = rint(1,3);
+      for(let i=0;i<ecount;i++){
+        const ex = seg.x + rand(200, seg.w-200);
+        const ey = viewH() - 40; // ground level
+        const dir = Math.random()<0.5 ? -1 : 1;
+        enemies.push({x:ex,y:ey,w:24,h:18,dir:dir,speed:rand(30,80),hp:1});
+      }
+    }
+  }
+
+  // Player init
+  function createPlayer(){
+    player = {
+      x:100,
+      y:viewH()-70,
+      vx:0, vy:0,
+      w:60, h:40,
+      onGround:false,
+      facing:1,
+      runAnim:0,
+      baseSpeed:BASE_SPEED,
+      armor: armor,
+      speedMult: speedMultiplier,
+      collectedBeans:0 // per session? We'll maintain global beansCollected instead.
+    };
+  }
+
+  // Initialize main
+  function initGame(){
+    buildSegmentsForLevel();
+    createPlayer();
+    lastTime = performance.now();
+    inShop = false;
+    shopOverlay.style.display = 'none';
+  }
+
+  // Draw helpers
+  function skyGradient(horizonColor){
+    const g = ctx.createLinearGradient(0,0,0,viewH());
+    g.addColorStop(0, horizonColor);
+    g.addColorStop(1, '#87CEEB');
+    return g;
+  }
+
+  function drawScene(dt){
+    // background sky layer combined with giant text
+    // Determine current segment index based on camera center
+    const centerX = cameraX + SCREEN_WIDTH()/2;
+    const segIndex = Math.floor(centerX / PATH_WIDTH());
+    const seg = segments[segIndex] || segments[0];
+    // Sky backdrop
+    ctx.fillStyle = seg ? seg.preset.horizon : '#87CEEB';
+    ctx.fillRect(0,0,viewW(),viewH());
+    // Giant sky text
+    ctx.save();
+    ctx.globalAlpha = 0.12;
+    ctx.fillStyle = "#ffffff";
+    ctx.font = Math.max(40, viewW()/8) + "px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("Hello everyone!", viewW()/2, viewH()/4);
+    ctx.restore();
+
+    // Layers parallax draw earlier->later
+    for(let li=0; li<LAYERS.length; li++){
+      const layer = LAYERS[li];
+      drawLayer(layer, seg);
+    }
+
+    // Draw fruits and beans and enemies relative to camera
+    // Fruits
+    for(const f of fruits){
+      const fx = f.x - cameraX;
+      const fy = f.y;
+      if(fx < -50 || fx > viewW()+50) continue;
+      // simple fruit circle
+      ctx.beginPath();
+      ctx.fillStyle = f.color;
+      ctx.ellipse(fx, fy, 10, 12, 0, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.globalAlpha = 0.3;
+      ctx.fillRect(fx-2,fy-9,4,6);
+      ctx.globalAlpha = 1;
+    }
+
+    // Beans (purple)
+    for(const b of beans){
+      const bx = b.x - cameraX;
+      const by = b.y;
+      if(bx < -30 || bx > viewW()+30) continue;
+      ctx.beginPath();
+      ctx.fillStyle = "#8a2be2";
+      ctx.ellipse(bx,by,b.r*1.2,b.r,0,0,Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.globalAlpha = 0.15;
+      ctx.fillRect(bx-1,by-6,2,6);
+      ctx.globalAlpha = 1;
+    }
+
+    // Enemies (insects)
+    for(const e of enemies){
+      const ex = e.x - cameraX;
+      const ey = e.y;
+      if(ex < -100 || ex > viewW()+100) continue;
+      // body
+      ctx.beginPath();
+      ctx.fillStyle = "#333";
+      ctx.ellipse(ex, ey-6, e.w*0.5, e.h*0.7, 0, 0, Math.PI*2);
+      ctx.fill();
+      // head
+      ctx.beginPath();
+      ctx.fillStyle = "#111";
+      ctx.ellipse(ex+e.dir*10, ey-8, 6,5,0,0,Math.PI*2);
+      ctx.fill();
+      // wings
+      ctx.globalAlpha = 0.6;
+      ctx.fillStyle = "#dbe8ff";
+      ctx.beginPath();
+      ctx.ellipse(ex-6, ey-14, 8,6, -0.5, 0, Math.PI*2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(ex+6, ey-14, 8,6, 0.5, 0, Math.PI*2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    // Ground edge little details
+    // path highlight line
+    ctx.fillStyle = "rgba(0,0,0,0.05)";
+    ctx.fillRect(0, viewH()-40, viewW(), 40);
+
+    // Draw player (horse)
+    const px = player.x - cameraX;
+    const py = player.y;
+    // shadow
+    ctx.beginPath();
+    ctx.fillStyle = "rgba(0,0,0,0.18)";
+    ctx.ellipse(px, py+player.h*0.7, player.w*0.6, player.h*0.25, 0, 0, Math.PI*2);
+    ctx.fill();
+    // body
+    ctx.save();
+    ctx.translate(px,py);
+    // simple horse made of rectangles/circles
+    ctx.fillStyle = "#7a4b00";
+    if(speedhorse) ctx.fillStyle = "#ffd400";
+    ctx.fillRect(-player.w*0.35, -player.h*0.6, player.w*0.7, player.h*0.5);
+    // head
+    ctx.beginPath();
+    ctx.fillStyle = "#623700";
+    ctx.ellipse(player.w*0.26, -player.h*0.6, player.h*0.28, player.h*0.22, 0, 0, Math.PI*2);
+    ctx.fill();
+    // legs animated
+    const swing = Math.sin(player.runAnim*12) * 8;
+    ctx.fillStyle = "#432900";
+    ctx.fillRect(-player.w*0.32, -player.h*0.1, 8, player.h*0.8 + swing/2);
+    ctx.fillRect(-player.w*0.05, -player.h*0.1, 8, player.h*0.8 - swing/2);
+    ctx.fillRect(player.w*0.08, -player.h*0.1, 8, player.h*0.8 - swing/2);
+    ctx.fillRect(player.w*0.26, -player.h*0.1, 8, player.h*0.8 + swing/2);
+    // eye
+    ctx.fillStyle="#fff";
+    ctx.beginPath(); ctx.ellipse(player.w*0.30, -player.h*0.66, 3,3,0,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle="#000";
+    ctx.beginPath(); ctx.ellipse(player.w*0.30, -player.h*0.66, 1.4,1.4,0,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+
+    // HUD: level and segment name drawn on canvas too
+    ctx.fillStyle = "rgba(0,0,0,0.25)";
+    ctx.fillRect(10, viewH()-60, 220, 48);
+    ctx.fillStyle = "#fff";
+    ctx.font = "14px sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillText("Level "+levelNumber+"   X: "+Math.floor(player.x), 18, viewH()-42);
+    ctx.fillText((seg ? seg.preset.name : "Unknown") + "  Segment: "+(segIndex+1), 18, viewH()-22);
+  }
+
+  function drawLayer(layer, seg){
+    const speed = layer.speed;
+    // We'll tile small shapes for each segment region
+    if(layer.name === 'clouds'){
+      // draw clouds across level
+      ctx.fillStyle = seg ? seg.preset.clouds : "#fff";
+      const spacing = 300;
+      for(let i=0;i<Math.ceil(viewW()/spacing)+4;i++){
+        const globalX = i*spacing - ((cameraX*speed)%spacing);
+        const y = 60 + Math.sin((i+levelNumber)*0.7)*20;
+        drawCloud(globalX, y, 1.2 + (i%3)*0.1);
+      }
+    } else if(layer.name === 'mountains'){
+      // big mountains sequence mapped to segments
+      for(const s of segments){
+        const relX = (s.x - cameraX) * speed;
+        const baseY = viewH()*0.5;
+        ctx.beginPath();
+        ctx.fillStyle = s.preset.mountains;
+        ctx.moveTo(relX - 200, viewH());
+        ctx.lineTo(relX + s.w*0.2, baseY + 20);
+        ctx.lineTo(relX + s.w*0.6, baseY - 40);
+        ctx.lineTo(relX + s.w*1.1, baseY + 10);
+        ctx.lineTo(relX + s.w + 200, viewH());
+        ctx.closePath();
+        ctx.fill();
+      }
+    } else if(layer.name === 'farTree'){
+      for(const s of segments){
+        const base = viewH() - 160;
+        ctx.fillStyle = s.preset.trees;
+        for(let i=0;i<6;i++){
+          const x = (s.x + i * (s.w/6) + 40) - cameraX * speed;
+          const h = 50 + (i%2)*20;
+          ctx.fillRect(x-6, base-h, 12, h);
+          ctx.beginPath();
+          ctx.fillStyle = shadeColor(s.preset.trees, -20);
+          ctx.ellipse(x, base-h-8, 22, 18, 0, 0, Math.PI*2);
+          ctx.fill();
+          ctx.fillStyle = s.preset.trees;
+        }
+      }
+    } else if(layer.name === 'plant'){
+      for(const s of segments){
+        const base = viewH() - 80;
+        ctx.fillStyle = s.preset.plants;
+        for(let i=0;i<12;i++){
+          const x = (s.x + i * (s.w/12) + 20) - cameraX * speed;
+          const h = 12 + Math.abs(Math.sin((i+levelNumber)*0.7))*14;
+          ctx.beginPath();
+          ctx.moveTo(x, base);
+          ctx.quadraticCurveTo(x-6, base-h, x, base-h-6);
+          ctx.quadraticCurveTo(x+6, base-h, x, base);
+          ctx.fill();
+        }
+      }
+    } else if(layer.name === 'edge'){
+      for(const s of segments){
+        const base = viewH() - 40;
+        ctx.fillStyle = s.preset.edge;
+        const relX = (s.x - cameraX)*speed;
+        ctx.fillRect(relX, base, s.w*1.02, 40);
+      }
+    } else if(layer.name === 'path'){
+      for(const s of segments){
+        const relX = (s.x - cameraX) * speed;
+        ctx.fillStyle = s.preset.path;
+        ctx.fillRect(relX, viewH()-80, s.w*1.02, 80);
+        // small stones
+        ctx.fillStyle = shadeColor(s.preset.path, -10);
+        for(let i=0;i<12;i++){
+          const x = relX + (i/12)*s.w + ((i%3)*10);
+          ctx.fillRect(x, viewH()-30 + Math.sin(i+levelNumber)*3, 6,2);
+        }
+      }
+    } else if(layer.name === 'foreground'){
+      // small foreground bushes
+      for(const s of segments){
+        const relX = (s.x - cameraX)*speed;
+        const count = 12;
+        for(let i=0;i<count;i++){
+          const x = relX + i*(s.w/count) + 20;
+          const base = viewH()-80;
+          ctx.fillStyle = shadeColor(s.preset.plants, -10);
+          ctx.beginPath();
+          ctx.ellipse(x, base+8, 12,8,0,0,Math.PI*2);
+          ctx.fill();
+        }
+      }
+    } else if(layer.name === 'sky'){
+      // already drawn background; maybe some gradient overlay
+    }
+  }
+
+  function drawCloud(x,y,scale=1){
+    ctx.beginPath();
+    ctx.fillStyle = '#ffffff';
+    ctx.globalAlpha = 0.9;
+    ctx.ellipse(x,y,36*scale,24*scale,0,0,Math.PI*2);
+    ctx.ellipse(x+30*scale,y+2,28*scale,18*scale,0,0,Math.PI*2);
+    ctx.ellipse(x-28*scale,y+2,26*scale,16*scale,0,0,Math.PI*2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  function shadeColor(col, amt) {
+    // simple hex shade
+    let usePound = false;
+    if (col[0] == "#") { col = col.slice(1); usePound = true; }
+    const num = parseInt(col,16);
+    const r = clamp((num >> 16) + amt, 0, 255);
+    const g = clamp(((num >> 8) & 0x00FF) + amt, 0, 255);
+    const b = clamp((num & 0x0000FF) + amt, 0, 255);
+    return (usePound?"#":"") + ( (1<<24) + (r<<16) + (g<<8) + b ).toString(16).slice(1);
+  }
+
+  // Game update
+  function update(dt){
+    if(inShop) return;
+    // input
+    const left = keys['a'] || keys['ArrowLeft'];
+    const right = keys['d'] || keys['ArrowRight'];
+    const up = keys['w'] || keys['ArrowUp'];
+    const down = keys['s'] || keys['ArrowDown'];
+    // movement speed calculation
+    let spd = player.baseSpeed * player.speedMult * speedMultiplier;
+    if(speedhorse) spd *= 5;
+    if(boostActive) spd *= 2.0;
+    // horizontal
+    if(left) { player.vx = -spd; player.facing = -1; player.runAnim += dt*6; }
+    else if(right){ player.vx = spd; player.facing = 1; player.runAnim += dt*6; }
+    else { player.vx = 0; player.runAnim = 0; }
+    // jump
+    if(up && player.onGround){
+      player.vy = -700;
+      player.onGround = false;
+    }
+    // physics
+    player.vy += G * dt;
+    player.x += player.vx * dt;
+    player.y += player.vy * dt;
+    // ground collision
+    const groundY = viewH()-80; // top of ground
+    if(player.y > groundY - player.h/2){
+      player.y = groundY - player.h/2;
+      player.vy = 0;
+      player.onGround = true;
+    }
+    // camera follow
+    const camTarget = player.x - SCREEN_WIDTH()/3;
+    cameraX += (camTarget - cameraX) * clamp(dt * 6, 0, 1);
+
+    // clamp player x within level bounds
+    player.x = clamp(player.x, 20, LEVEL_WIDTH()-40);
+
+    // beans collision
+    for(let i=beans.length-1;i>=0;i--){
+      const b = beans[i];
+      if(dist(player.x,player.y,b.x,b.y) < 40){
+        beans.splice(i,1);
+        beansCollected++;
+        // global beans allows permanent speedhorse
+        if(beansCollected >= 10 && !speedhorse){
+          speedhorse = true;
+          // keep beansConsumed maybe set to 0? We'll just mark speedhorse on.
+        }
+        updateUI();
+      }
+    }
+    // fruits collision
+    for(let i=fruits.length-1;i>=0;i--){
+      const f = fruits[i];
+      if(dist(player.x,player.y,f.x,f.y) < 40){
+        fruits.splice(i,1);
+        fruitsCurrency++;
+        updateUI();
+      }
+    }
+    // enemy interactions
+    for(const e of enemies){
+      // simple patrol
+      e.x += e.speed * e.dir * dt;
+      // flip on edges of segment
+      if(Math.random() < 0.002) e.dir *= -1;
+      // bounds: keep inside level
+      e.x = clamp(e.x, 10, LEVEL_WIDTH()-10);
+      // collision with player
+      if(rectOverlap(player.x-player.w*0.5, player.y-player.h*0.5, player.w, player.h, e.x-12, e.y-18, e.w, e.h)){
+        // apply damage
+        if(!e.hitCooldown) {
+          e.hitCooldown = 0.8;
+          // armor reduces damage chance
+          if(armor > 0){
+            armor = Math.max(0, armor-1);
+          } else {
+            // knockback
+            player.vx = -player.facing*200;
+            player.vy = -240;
+          }
+          updateUI();
+        }
+      }
+      if(e.hitCooldown) e.hitCooldown -= dt;
+    }
+
+    // check level end
+    if(player.x >= LEVEL_WIDTH() - 60){
+      openShop();
+    }
+
+    // boost handling
+    if(boostActive){
+      boostTimer -= dt;
+      if(boostTimer <= 0){
+        boostActive = false;
+      }
+    }
+  }
+
+  function openShop(){
+    inShop = true;
+    shopOverlay.style.display = 'flex';
+    shopText.innerText = `Level ${levelNumber} complete! You collected ${fruitsCurrency} fruits this run. Spend fruits to buy boosts before continuing.`;
+    shopStats.innerText = `Speed: ${speedMultiplier.toFixed(2)}x  •  Armor: ${armor}`;
+  }
+
+  buySpeedBtn.addEventListener('click',()=>{
+    if(fruitsCurrency >= 3){
+      fruitsCurrency -= 3;
+      speedMultiplier += 0.2;
+      shopStats.innerText = `Speed: ${speedMultiplier.toFixed(2)}x  •  Armor: ${armor}`;
+      updateUI();
+    } else {
+      alert("Not enough fruits.");
+    }
+  });
+  buyArmorBtn.addEventListener('click',()=>{
+    if(fruitsCurrency >= 4){
+      fruitsCurrency -= 4;
+      armor += 1;
+      shopStats.innerText = `Speed: ${speedMultiplier.toFixed(2)}x  •  Armor: ${armor}`;
+      updateUI();
+    } else {
+      alert("Not enough fruits.");
+    }
+  });
+  skipShopBtn.addEventListener('click',()=>{
+    // continue to next level
+    nextLevel();
+  });
+
+  function nextLevel(){
+    levelNumber++;
+    levelInfo.innerText = "Level: "+levelNumber;
+    // Build new segments and items; keep player stats and fruitsCurrency persists? The spec: "Fruits buy stat boosts at end level [speed, armor]" -> fruits are consumed in shop. We'll keep fruitsCurrency persisted into next level (after purchase).
+    // For balance, keep fruitsCurrency as it is.
+    segments = [];
+    beans = [];
+    fruits = [];
+    enemies = [];
+    buildSegmentsForLevel();
+    createPlayer();
+    inShop = false;
+    shopOverlay.style.display = 'none';
+    updateUI();
+  }
+
+  function updateUI(){
+    levelInfo.innerText = "Level: "+levelNumber;
+    const segIndex = Math.floor((cameraX + SCREEN_WIDTH()/2) / PATH_WIDTH());
+    segmentInfo.innerText = "Path: "+(segments[segIndex] ? segments[segIndex].preset.name : "-");
+    beansUI.innerText = "Purple Beans: "+beansCollected+" / 10";
+    fruitsUI.innerText = "Fruit Currency: "+fruitsCurrency;
+    statsUI.innerText = "Speed: "+(speedMultiplier.toFixed(2))+"x • Armor: "+armor + (speedhorse ? " • Speedhorse!" : "");
+  }
+
+  function dist(x1,y1,x2,y2){ const dx = x1-x2, dy = y1-y2; return Math.sqrt(dx*dx+dy*dy); }
+  function rectOverlap(x1,y1,w1,h1,x2,y2,w2,h2){
+    return x1 < x2+w2 && x1+w1 > x2 && y1 < y2+h2 && y1+h1 > y2;
+  }
+
+  // Input
+  window.addEventListener('keydown', (e)=> {
+    const k = e.key.toLowerCase();
+    keys[k] = true;
+    // speed boost key 'b'
+    if(k === 'b'){
+      if(!boostActive){
+        boostActive = true;
+        boostTimer = 1.8;
+      }
+    }
+  });
+  window.addEventListener('keyup', (e)=> {
+    const k = e.key.toLowerCase();
+    keys[k] = false;
+  });
+
+  // Main loop
+  function loop(now){
+    const dt = Math.min(0.03, (now - lastTime)/1000);
+    lastTime = now;
+    update(dt);
+    // clear
+    ctx.clearRect(0,0,viewW(),viewH());
+    drawScene(dt);
+    updateUI();
+    requestAnimationFrame(loop);
+  }
+
+  // start
+  generateLevel();
+  buildSegmentsForLevel();
+  createPlayer();
+  updateUI();
+  requestAnimationFrame(loop);
+
+  // Misc: clicking on canvas jump
+  canvas.addEventListener('mousedown', (e)=>{
+    if(inShop) return;
+    player.vy = -520;
+    player.onGround = false;
+  });
+
+  // Keep UI responsive upon resize
+  window.addEventListener('resize', ()=> {
+    // regenerate segments widths to match new screen size while keeping current level flavor
+    // Rebuild segments positions scaled to new screen width
+    const oldSEGWIDTH = PATH_WIDTH();
+    const oldLevelWidth = LEVEL_WIDTH();
+    const oldPlayerXRatio = player ? player.x / oldLevelWidth : 0;
+    // Recompute segments widths and positions
+    const lsegCount = segments.length || (LEVEL_SCREEN_COUNT/2);
+    const chosenPresets = segments.map(s=>s.preset);
+    segments = [];
+    for(let i=0;i<lsegCount;i++){
+      const preset = chosenPresets[i] || PATH_PRESETS[Math.floor(Math.random()*PATH_PRESETS.length)];
+      segments.push({preset:preset, x: i * PATH_WIDTH(), w: PATH_WIDTH()});
+    }
+    // reposition objects roughly proportional across new level width
+    for(const f of fruits) {
+      f.x = clamp(f.x, 0, LEVEL_WIDTH()-10);
+    }
+    for(const b of beans) {
+      b.x = clamp(b.x, 0, LEVEL_WIDTH()-10);
+    }
+    for(const e of enemies){
+      e.x = clamp(e.x, 0, LEVEL_WIDTH()-10);
+    }
+    if(player){
+      player.x = clamp(oldPlayerXRatio * LEVEL_WIDTH(), 20, LEVEL_WIDTH()-40);
+    }
+  });
+
+})();
+</script>
+</body>
+</html>
