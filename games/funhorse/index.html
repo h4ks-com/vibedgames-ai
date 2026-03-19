@@ -1,0 +1,816 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Parallax Runner — Hello everyone!</title>
+<style>
+  html,body{height:100%;margin:0;background:#000;overflow:hidden;font-family:Segoe UI,Arial;}
+  canvas{display:block;background:#87CEEB; width:100vw; height:100vh;}
+  #ui{position:fixed;left:12px;top:12px;color:#fff;z-index:50;text-shadow:0 1px 2px rgba(0,0,0,0.6);}
+  #ui div{background:rgba(0,0,0,0.25);padding:6px 10px;border-radius:6px;margin-bottom:6px;}
+  #shopOverlay{
+    position:fixed;left:0;top:0;right:0;bottom:0;display:none;align-items:center;justify-content:center;
+    background:rgba(0,0,0,0.6);z-index:100;
+  }
+  #shop{width:720px;max-width:94%;background:#fff;color:#111;padding:16px;border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,0.6);}
+  .btn{display:inline-block;padding:8px 12px;background:#2979ff;color:#fff;border-radius:8px;cursor:pointer;margin-right:8px;}
+  .muted{background:#aaa}
+  #startOverlay{
+    position:fixed;left:0;top:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;
+    background:linear-gradient(rgba(0,0,0,0.5),rgba(0,0,0,0.7));z-index:200;color:#fff;
+  }
+  #startCard{background:#fff;color:#111;padding:18px;border-radius:12px;width:720px;max-width:94%;}
+  #startCard h1{margin:0 0 8px 0}
+  #startCard p{margin:6px 0;color:#333}
+  small{color:#666}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="ui">
+  <div id="lvl">Level: 1</div>
+  <div id="info">Beans: 0 • Fruits: 0 • Armor: 0 • Speed: 1.00x</div>
+  <div id="progress">Distance: 0 / 100 screens</div>
+  <div style="font-size:12px;margin-top:4px;">Controls: WASD or Arrows. B = boost. Space/W = jump. M toggles sound.</div>
+</div>
+
+<div id="shopOverlay">
+  <div id="shop">
+    <h2>Level Complete — Shop</h2>
+    <p id="shopMsg"></p>
+    <div style="display:flex;gap:12px;flex-wrap:wrap">
+      <div style="flex:1;min-width:200px;padding:10px;border:1px solid #eee;border-radius:8px;">
+        <strong>+0.2 Speed</strong><br><small>Cost: 3 fruits</small><br><br>
+        <div class="btn" id="buySpeed">Buy</div>
+      </div>
+      <div style="flex:1;min-width:200px;padding:10px;border:1px solid #eee;border-radius:8px;">
+        <strong>+1 Armor</strong><br><small>Cost: 2 fruits</small><br><br>
+        <div class="btn" id="buyArmor">Buy</div>
+      </div>
+      <div style="flex:1;min-width:200px;padding:10px;border:1px solid #eee;border-radius:8px;">
+        <strong>Continue</strong><br><small>Proceed to next level</small><br><br>
+        <div class="btn" id="continueBtn">Continue</div>
+      </div>
+    </div>
+    <p style="margin-top:10px"><small>Collect 10 purple beans cumulatively to unlock the Speedhorse (5x). Beans persist across levels. Fruits are spent here.</small></p>
+    <p id="shopStats" style="margin-top:8px;font-weight:600"></p>
+  </div>
+</div>
+
+<div id="startOverlay">
+  <div id="startCard">
+    <h1>Parallax Side Scroller — Horse Runner</h1>
+    <p>Sky giant text: <b>"Hello everyone!"</b></p>
+    <p>Octuple background layers: sky, clouds, mountains, far-tree, plant, edge, path, foreground. Each path = 10 screen widths. Each level = 100 screen widths (10 paths). Unique paths per level. Collect fruits and purple beans. 10 beans -> Speedhorse (5x speed). Use B for a temporary boost.</p>
+    <p><small>Controls: WASD or Arrow keys. Space or W to jump. B to boost. M toggles music/sound.</small></p>
+    <div style="margin-top:8px;">
+      <div class="btn" id="startBtn">Start Game</div>
+      <div class="btn muted" id="muteBtn">Mute</div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* Parallax Side Scroller Game - single file
+   - Octuple background (sky-cloud-mountain-far-tree-plant-edge-path)
+   - pathWidth = 10 * screenWidth; levelWidth = 100 * screenWidth
+   - 10 paths per level, unique chosen templates
+   - WASD/arrow controls, B boost, Space/W jump
+   - purple beans are cumulative across play; every 10 beans unlock Speedhorse (5x) cumulative (stacks per 10)
+   - fruits are currency spent at shop between levels for speed/armor
+   - insect enemies
+*/
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+function resize(){
+  canvas.width = window.innerWidth;
+  canvas.height = Math.max(480, Math.min(900, window.innerHeight));
+}
+window.addEventListener('resize', resize);
+resize();
+
+// UI
+const lvlEl = document.getElementById('lvl');
+const infoEl = document.getElementById('info');
+const progressEl = document.getElementById('progress');
+const shopOverlay = document.getElementById('shopOverlay');
+const shopMsg = document.getElementById('shopMsg');
+const shopStatsEl = document.getElementById('shopStats');
+const startOverlay = document.getElementById('startOverlay');
+const muteBtn = document.getElementById('muteBtn');
+
+// Game settings
+const SCREENS_PER_PATH = 10;
+const PATHS_PER_LEVEL = 10;
+const SCREENS_PER_LEVEL = SCREENS_PER_PATH * PATHS_PER_LEVEL; // 100
+const gravity = 1800; // px/s^2
+const baseHorseSpeed = 260; // px/s base
+const beanUnlockAmount = 10; // beans per unlock
+let soundOn = true;
+
+// templates for paths (unique)
+const PATH_TEMPLATES = [
+  {name:'Sunridge', horizon:0.5, clouds:3, mountains:'#9fb1ff', trees:'#2f6d38', plant:'#3fc37b', edge:'#8c6b4a', path:'#e7c59a', fruitColor:'#ff5a5a'},
+  {name:'Lavender Vale', horizon:0.52, clouds:4, mountains:'#c8b3ff', trees:'#44604f', plant:'#9be7d0', edge:'#6a4b6b', path:'#e9d6ff', fruitColor:'#b36bee'},
+  {name:'Amber Plains', horizon:0.48, clouds:2, mountains:'#f2bd6a', trees:'#6f4a2a', plant:'#e0b16a', edge:'#cf9b6b', path:'#f5e0c6', fruitColor:'#ff9a2e'},
+  {name:'Emerald Hollow', horizon:0.46, clouds:3, mountains:'#62b084', trees:'#185c32', plant:'#42d08c', edge:'#4d7b59', path:'#bfe8d0', fruitColor:'#bff28a'},
+  {name:'Crimson Pass', horizon:0.49, clouds:5, mountains:'#cc6666', trees:'#5b2b2b', plant:'#c34b4b', edge:'#7b3b3b', path:'#f5c0c0', fruitColor:'#ff2b60'},
+  {name:'Mossglen', horizon:0.47, clouds:2, mountains:'#7bbf8a', trees:'#234d2d', plant:'#7edb6a', edge:'#5b7a5b', path:'#cfe6d0', fruitColor:'#6bffab'},
+  {name:'Skyward Flats', horizon:0.44, clouds:6, mountains:'#9fb8ff', trees:'#4b7c9a', plant:'#8fcfff', edge:'#4b5566', path:'#dfeeff', fruitColor:'#4b6bff'},
+  {name:'Golden Dunes', horizon:0.50, clouds:1, mountains:'#e3b06a', trees:'#a86d2c', plant:'#f2dd8a', edge:'#b07a3b', path:'#f7e6c8', fruitColor:'#ffb347'},
+  {name:'Moonlit Ridge', horizon:0.43, clouds:4, mountains:'#a3a3ff', trees:'#35406b', plant:'#88a1ff', edge:'#404060', path:'#d6e0ff', fruitColor:'#9a6eff'},
+  {name:'Ivy Crescent', horizon:0.49, clouds:3, mountains:'#5aa37d', trees:'#246b3e', plant:'#57f28a', edge:'#2e5a3d', path:'#bfe8d0', fruitColor:'#ffd27a'}
+];
+
+// persistent player progression
+let persistent = {
+  fruitsTotal: 0, // cumulative? We'll track fruits available for spending per level only; persistent speed/armor from purchases stored here too.
+  speedBuy: 0, // increments of +0.2
+  armorBuy: 0, // increments
+  beansTotal: 0, // cumulative purple beans
+  speedhorseUnlocks: 0 // number of times unlocked (every beanUnlockAmount)
+};
+
+// runtime level state
+let state = {
+  level: 1,
+  screenW: () => canvas.width,
+  screenH: () => canvas.height,
+  pathWidth: () => canvas.width * SCREENS_PER_PATH,
+  levelWidth: () => canvas.width * SCREENS_PER_LEVEL,
+  segments: [], // 10 segments per level
+  player: null,
+  cameraX: 0,
+  fruitsThisLevel: 0,
+  inShop: false,
+  paused: false,
+  musicCtx: null
+};
+
+// input
+const keys = {};
+window.addEventListener('keydown', e=>{ keys[e.key.toLowerCase()] = true; if(e.key.toLowerCase()==='m'){ toggleSound(); }});
+window.addEventListener('keyup', e=>{ keys[e.key.toLowerCase()] = false; });
+
+// utilities
+function rand(min,max){ return Math.random()*(max-min)+min; }
+function rint(min,max){ return Math.floor(rand(min,max+1)); }
+function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
+
+// generate level segments: choose unique templates for the 10 segments
+function generateSegments(){
+  const pool = PATH_TEMPLATES.slice();
+  const chosen = [];
+  for(let i=0;i<PATHS_PER_LEVEL;i++){
+    const idx = Math.floor(Math.random()*pool.length);
+    chosen.push(pool.splice(idx,1)[0]);
+  }
+  const segs = [];
+  for(let i=0;i<chosen.length;i++){
+    segs.push({
+      preset: chosen[i],
+      xStart: i * state.pathWidth(),
+      xEnd: (i+1) * state.pathWidth()
+    });
+  }
+  return segs;
+}
+
+// populate items: fruits, beans, insects
+function populateLevel(){
+  state.fruits = [];
+  state.beans = [];
+  state.insects = [];
+  // per segment spawn some items
+  state.segments.forEach(seg=>{
+    const t = seg.preset;
+    // fruits count 6-12
+    const fcount = rint(6,12);
+    for(let i=0;i<fcount;i++){
+      const fx = seg.xStart + rand(80, state.pathWidth()-160);
+      const fy = state.screenH() * (t.horizon + 0.15) + rand(-80,80);
+      state.fruits.push({x:fx,y:fy,color:t.fruitColor, collected:false});
+    }
+    // beans 0-3
+    const bcount = rint(0,3);
+    for(let i=0;i<bcount;i++){
+      const bx = seg.xStart + rand(120, state.pathWidth()-180);
+      const by = state.screenH() * (t.horizon + 0.08) + rand(-60,60);
+      state.beans.push({x:bx,y:by,collected:false});
+    }
+    // insects 2-5
+    const icount = rint(2,5);
+    for(let i=0;i<icount;i++){
+      const ix = seg.xStart + rand(150, state.pathWidth()-210);
+      const iy = state.screenH() * (t.horizon + 0.2) + rand(-10,40);
+      state.insects.push({x:ix,y:iy,vx: (Math.random()<0.5? -1:1) * rand(40,110), size: 12 + rand(0,12), alive:true});
+    }
+  });
+}
+
+// create player
+function createPlayer(){
+  state.player = {
+    x: 120,
+    y: state.screenH() - 140,
+    vx: 0,
+    vy: 0,
+    w: 120,
+    h: 64,
+    onGround: false,
+    baseSpeed: baseHorseSpeed,
+    boostReady: 0,
+    boosting: false
+  };
+}
+
+// initial level setup
+function setupLevel(){
+  state.segments = generateSegments();
+  populateLevel();
+  createPlayer();
+  state.cameraX = 0;
+  state.fruitsThisLevel = 0;
+  state.inShop = false;
+  updateUI();
+}
+
+// UI update
+function updateUI(){
+  const speedTotal = (1 + persistent.speedBuy*0.2) * (1 + persistent.speedhorseUnlocks*4); // speedhorse adds 5x each unlock => multiply by 5 = 1+4
+  const armorTotal = persistent.armorBuy;
+  const beansTotal = persistent.beansTotal;
+  lvlEl.innerText = `Level: ${state.level}`;
+  infoEl.innerText = `Beans: ${beansTotal} • Fruits: ${state.fruitsThisLevel} • Armor: ${armorTotal} • Speed: ${speedTotal.toFixed(2)}x`;
+  const screensDone = Math.floor(state.cameraX / state.screenW());
+  progressEl.innerText = `Distance: ${Math.min(100, Math.floor((state.cameraX / state.screenW())*1))/1} / 100 screens`;
+}
+
+// drawing helpers
+function drawBackground(camX){
+  // sky base
+  const H = state.screenH();
+  const W = state.screenW();
+  // sky gradient
+  const g = ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0, '#87CEEB');
+  g.addColorStop(1, '#bfefff');
+  ctx.fillStyle = g;
+  ctx.fillRect(0,0,W,H);
+
+  // giant sky text
+  ctx.save();
+  ctx.globalAlpha = 0.12;
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.font = `${Math.max(28, Math.floor(W*0.08))}px serif`;
+  // small horizontal parallax shift for movement
+  ctx.fillText("Hello everyone!", W/2 - (camX*0.03)% (W*2), H*0.18);
+  ctx.restore();
+
+  // layers in order: clouds, mountains, far-tree, plant, edge, path (foreground path), foreground elements
+  // Clouds (layer 2)
+  state.segments.forEach((seg,i)=>{
+    const t = seg.preset;
+    const cloudCount = t.clouds || 3;
+    for(let c=0;c<cloudCount;c++){
+      const cx = ((seg.xStart - camX) * 0.12) + (c*220) + 50;
+      const cy = Math.max(40, H * t.horizon * 0.4 - c*8) + Math.sin((seg.xStart+c)*0.0008)*18 + (i%2)*8;
+      drawCloud(cx % (W+600) + 100, cy, 60 + c*12);
+    }
+  });
+
+  // Distant mountains (layer 3)
+  for(let i= -1;i< state.segments.length+1;i++){
+    const baseX = (i*state.pathWidth()*0.7) - (camX*0.25);
+    drawMountain(baseX, H * 0.5, 1.5, '#90a4ff', 0.4);
+  }
+  // Mid mountains from segments (layer 4)
+  state.segments.forEach((seg,idx)=>{
+    const col = seg.preset.mountains;
+    const ox = (seg.xStart - camX)*0.45;
+    drawMountain(ox, H * seg.preset.horizon, 1.0, col, 0.9);
+  });
+
+  // Far trees (layer 5)
+  for(let i=0;i<Math.ceil(state.levelWidth()/220);i++){
+    const tx = i*220 - camX*0.35;
+    const ty = H*0.62 + Math.sin(i*0.7)*8;
+    drawTree(tx, ty, '#2f6d38', 0.9);
+  }
+
+  // Plants (layer 6)
+  for(let s=0;s<state.segments.length;s++){
+    const seg = state.segments[s];
+    for(let p=0;p<8;p++){
+      const px = seg.xStart + p*(state.pathWidth()/8) + (s*13) - camX*0.55;
+      const py = H*seg.preset.horizon + 90 + Math.sin(p+s)*8;
+      drawPlant(px, py, 0.9);
+    }
+  }
+
+  // Edge (layer 7) - path ground background
+  state.segments.forEach(seg=>{
+    const gx = seg.xStart - camX;
+    const groundY = H * seg.preset.horizon + 110;
+    ctx.fillStyle = seg.preset.edge;
+    ctx.fillRect(gx, groundY, state.pathWidth(), H-groundY);
+  });
+
+  // Path (layer 8) - closest, includes stones etc.
+  state.segments.forEach(seg=>{
+    const gx = seg.xStart - camX;
+    const groundY = H * seg.preset.horizon + 110;
+    ctx.fillStyle = seg.preset.path;
+    ctx.fillRect(gx, groundY, state.pathWidth(), H-groundY);
+    // small details
+    ctx.fillStyle = 'rgba(0,0,0,0.06)';
+    for(let s=0;s<10;s++){
+      const sx = gx + s*(state.pathWidth()/10) + (s%3)*8;
+      ctx.beginPath();
+      ctx.ellipse(sx, groundY+10 + Math.sin(s+seg.xStart)*6, 14,6,0,0,Math.PI*2);
+      ctx.fill();
+    }
+  });
+
+  // Foreground decorative trees
+  for(let i=0;i<Math.ceil(state.levelWidth()/300);i++){
+    const tx = i*300 - camX*0.92;
+    drawEdgeTree(tx, H*0.72);
+  }
+}
+
+// small draw helpers
+function drawCloud(x,y,size){
+  ctx.save();
+  ctx.fillStyle = '#ffffff';
+  ctx.globalAlpha = 0.95;
+  ctx.beginPath();
+  ctx.ellipse(x,y,size*0.9,size*0.6,0,0,Math.PI*2);
+  ctx.ellipse(x+size*0.5,y+4,size*0.7,size*0.5,0,0,Math.PI*2);
+  ctx.ellipse(x-size*0.5,y+4,size*0.7,size*0.5,0,0,Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+}
+function drawMountain(x,y,scale,color,alpha){
+  ctx.save();
+  ctx.translate(x,y);
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(-400*scale, 300);
+  ctx.lineTo(-40*scale, -160*scale);
+  ctx.lineTo(60*scale, -80*scale);
+  ctx.lineTo(300*scale, 240*scale);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+function drawTree(x,y,color,scale=1){
+  ctx.save();
+  ctx.translate(x,y);
+  ctx.fillStyle = '#6b3f2f';
+  ctx.fillRect(-6,0,12,30*scale);
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.ellipse(0,-12, 36*scale, 22*scale, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+}
+function drawPlant(x,y,scale){
+  ctx.save();
+  ctx.translate(x,y);
+  ctx.fillStyle = '#2fa36b';
+  ctx.beginPath();
+  ctx.ellipse(0,0, 18*scale, 12*scale, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+}
+function drawEdgeTree(x,y){
+  ctx.save();
+  ctx.translate(x,y);
+  ctx.fillStyle = '#4b3b2b';
+  ctx.fillRect(-8,0,16,64);
+  ctx.fillStyle = '#2b6b3a';
+  ctx.beginPath();
+  ctx.ellipse(0,-24, 40, 32, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+}
+
+// draw fruits, beans, insects, player
+function drawEntities(camX){
+  const H = state.screenH();
+  // fruits
+  state.fruits.forEach(f=>{
+    if(f.collected) return;
+    const fx = f.x - camX;
+    if(fx < -40 || fx > state.screenW()+40) return;
+    ctx.save();
+    ctx.translate(fx,f.y);
+    ctx.fillStyle = f.color;
+    ctx.beginPath();
+    ctx.ellipse(0,0,10,12,0,0,Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = '#3b2b2b';
+    ctx.fillRect(-1,-14,2,7);
+    ctx.restore();
+  });
+  // beans purple
+  state.beans.forEach(b=>{
+    if(b.collected) return;
+    const bx = b.x - camX;
+    if(bx < -40 || bx > state.screenW()+40) return;
+    ctx.save();
+    ctx.translate(bx,b.y);
+    ctx.fillStyle = '#8a2be2';
+    ctx.beginPath();
+    ctx.ellipse(0,0,9,12,0,0,Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  });
+  // insects
+  state.insects.forEach(ins=>{
+    if(!ins.alive) return;
+    const ix = ins.x - camX;
+    if(ix < -60 || ix > state.screenW()+60) return;
+    ctx.save();
+    ctx.translate(ix,ins.y);
+    ctx.fillStyle = '#222';
+    ctx.beginPath();
+    ctx.ellipse(0,0,ins.size,ins.size*0.6,0,0,Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = '#ffcc00';
+    ctx.beginPath();
+    ctx.ellipse(-ins.size*0.2,-ins.size*0.2, ins.size*0.18,ins.size*0.18,0,0,Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  });
+
+  // player horse
+  const p = state.player;
+  const px = p.x - camX;
+  const py = p.y;
+  // shadow
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.16)';
+  ctx.beginPath();
+  ctx.ellipse(px, py + p.h*0.5, p.w*0.5, p.h*0.2, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+
+  // body
+  ctx.save();
+  ctx.translate(px,py);
+  const bodyColor = (persistent.speedhorseUnlocks>0) ? '#ffd54f' : '#7a3f1a';
+  ctx.fillStyle = bodyColor;
+  ctx.beginPath();
+  ctx.ellipse(0,0, p.w*0.45, p.h*0.42, 0, 0, Math.PI*2);
+  ctx.fill();
+  // head
+  ctx.fillStyle = '#5b2f10';
+  ctx.beginPath();
+  ctx.ellipse(p.w*0.32, -p.h*0.24, p.w*0.18, p.h*0.22, 0, 0, Math.PI*2);
+  ctx.fill();
+  // legs simple
+  ctx.strokeStyle = '#3a1f10';
+  ctx.lineWidth = Math.max(4, p.w*0.03);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  const t = performance.now()*0.01;
+  const swing = Math.sin(t*3)*12;
+  ctx.moveTo(-p.w*0.18, p.h*0.38); ctx.lineTo(-p.w*0.18, p.h*0.38 + 28 + swing);
+  ctx.moveTo(p.w*0.05, p.h*0.38); ctx.lineTo(p.w*0.05, p.h*0.38 + 30 - swing);
+  ctx.moveTo(p.w*0.28, p.h*0.38); ctx.lineTo(p.w*0.28, p.h*0.38 + 26 + swing);
+  ctx.moveTo(p.w*0.46, p.h*0.38); ctx.lineTo(p.w*0.46, p.h*0.38 + 30 - swing);
+  ctx.stroke();
+  // eye
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(p.w*0.34, -p.h*0.28, 5,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#000';
+  ctx.beginPath(); ctx.arc(p.w*0.34, -p.h*0.28, 2.2,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
+// physics & collisions & updates
+let lastTime = performance.now();
+function gameLoop(now){
+  const dt = Math.min(0.04, (now - lastTime)/1000);
+  lastTime = now;
+  if(!state.inShop && !state.paused){
+    update(dt);
+  }
+  render();
+  requestAnimationFrame(gameLoop);
+}
+
+function update(dt){
+  const p = state.player;
+  // input
+  const left = keys['a'] || keys['arrowleft'];
+  const right = keys['d'] || keys['arrowright'];
+  const up = keys['w'] || keys['arrowup'] || keys[' '];
+  // compute speed multiplier
+  const boughtSpeed = 1 + (persistent.speedBuy * 0.2);
+  const speedhorseMult = Math.pow(5, persistent.speedhorseUnlocks); // cumulative per 10 beans unlock
+  let targetSpeed = p.baseSpeed * boughtSpeed * speedhorseMult;
+  // Boost (B)
+  if(keys['b'] && p.boostReady <= 0){
+    p.boosting = true;
+    p.boostReady = 1.8; // cooldown seconds after starting
+    p.boostDuration = 0.9;
+    if(soundOn) playBeep(880, 0.12);
+  }
+  // apply boosting
+  if(p.boosting){
+    targetSpeed *= 2.2;
+    p.boostDuration -= dt;
+    if(p.boostDuration <= 0) p.boosting = false;
+  } else {
+    p.boostReady = Math.max(0, p.boostReady - dt);
+  }
+  // horizontal control
+  if(right){ p.vx = targetSpeed; }
+  else if(left){ p.vx = -targetSpeed * 0.8; }
+  else{ p.vx = 0; }
+  // jump
+  if(up && p.onGround){
+    p.vy = -720;
+    p.onGround = false;
+  }
+  // physics
+  p.vy += gravity * dt;
+  p.x += p.vx * dt;
+  p.y += p.vy * dt;
+  // ground detection based on current segment horizon
+  const groundY = getGroundYAt(p.x);
+  if(p.y + p.h*0.5 >= groundY){
+    p.y = groundY - p.h*0.5;
+    p.vy = 0;
+    p.onGround = true;
+  }
+  // camera follow - aim for player to be about 1/3 across screen
+  const camTarget = Math.max(0, p.x - state.screenW()*0.34);
+  state.cameraX += (camTarget - state.cameraX) * clamp(dt*6, 0, 1);
+  // clamp camera to level bounds
+  state.cameraX = clamp(state.cameraX, 0, state.levelWidth() - state.screenW());
+  // clamp player position within level
+  p.x = clamp(p.x, 20, state.levelWidth() - 40);
+  // insects update & collisions
+  state.insects.forEach(ins=>{
+    if(!ins.alive) return;
+    ins.x += ins.vx * dt;
+    // simple wiggle
+    ins.y += Math.sin(ins.x*0.02) * 0.6;
+    // bounds
+    if(ins.x < 10) ins.vx = Math.abs(ins.vx);
+    if(ins.x > state.levelWidth()-10) ins.vx = -Math.abs(ins.vx);
+    // collision with player
+    if(rectOverlap(p.x - p.w*0.5, p.y - p.h*0.5, p.w, p.h, ins.x - ins.size, ins.y - ins.size, ins.size*2, ins.size*2)){
+      // damage: subtract from persistent armor if any, else knockback
+      if(persistent.armorBuy > 0){
+        persistent.armorBuy = Math.max(0, persistent.armorBuy - 1);
+      } else {
+        p.vx = -Math.sign(p.vx || 1) * 250;
+        p.vy = -340;
+      }
+      ins.alive = false;
+      if(soundOn) playBeep(160, 0.15);
+    }
+  });
+  // fruit collection
+  state.fruits.forEach(f=>{
+    if(f.collected) return;
+    if(Math.hypot(f.x - p.x, f.y - p.y) < 48){
+      f.collected = true;
+      state.fruitsThisLevel += 1;
+      if(soundOn) playBeep(520, 0.08);
+    }
+  });
+  // bean collection (cumulative)
+  state.beans.forEach(b=>{
+    if(b.collected) return;
+    if(Math.hypot(b.x - p.x, b.y - p.y) < 48){
+      b.collected = true;
+      persistent.beansTotal += 1;
+      if(soundOn) playBeep(760, 0.09);
+      // check unlock multiples
+      const newUnlocks = Math.floor(persistent.beansTotal / beanUnlockAmount);
+      if(newUnlocks > persistent.speedhorseUnlocks){
+        persistent.speedhorseUnlocks = newUnlocks;
+        // fanfare
+        if(soundOn) {
+          playSeries([880,660,990], 0.06);
+        }
+      }
+    }
+  });
+
+  // check level end (player reaches the last screen of level)
+  if(p.x >= state.levelWidth() - 60){
+    openShop();
+  }
+  // UI update
+  updateUI();
+}
+
+function getGroundYAt(absX){
+  // determine segment by x
+  const idx = Math.min(state.segments.length-1, Math.max(0, Math.floor(absX / state.pathWidth())));
+  const seg = state.segments[idx];
+  if(!seg) return state.screenH() - 80;
+  return state.screenH() * seg.preset.horizon + 110;
+}
+
+// collisions
+function rectOverlap(x1,y1,w1,h1,x2,y2,w2,h2){
+  return x1 < x2+w2 && x1+w1 > x2 && y1 < y2+h2 && y1+h1 > y2;
+}
+
+// rendering
+function render(){
+  const camX = state.cameraX;
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  drawBackground(camX);
+  drawEntities(camX);
+  // top-left HUD drawn on canvas optional
+}
+
+// shop handling
+function openShop(){
+  state.inShop = true;
+  shopOverlay.style.display = 'flex';
+  shopMsg.innerText = `You reached the end of Level ${state.level}. Fruits collected this level: ${state.fruitsThisLevel}. Spend fruits to buy permanent Speed or Armor.`;
+  shopStatsEl.innerText = `Current: Speed-buy count = ${persistent.speedBuy}, Armor = ${persistent.armorBuy}, Beans total = ${persistent.beansTotal}`;
+  updateUI();
+}
+
+// shop buttons
+document.getElementById('buySpeed').addEventListener('click', ()=>{
+  if(state.fruitsThisLevel >= 3){
+    state.fruitsThisLevel -= 3;
+    persistent.speedBuy += 1;
+    shopStatsEl.innerText = `Current: Speed-buy count = ${persistent.speedBuy}, Armor = ${persistent.armorBuy}, Beans total = ${persistent.beansTotal}`;
+    updateUI();
+  } else alert('Not enough fruits (cost 3).');
+});
+document.getElementById('buyArmor').addEventListener('click', ()=>{
+  if(state.fruitsThisLevel >= 2){
+    state.fruitsThisLevel -= 2;
+    persistent.armorBuy += 1;
+    shopStatsEl.innerText = `Current: Speed-buy count = ${persistent.speedBuy}, Armor = ${persistent.armorBuy}, Beans total = ${persistent.beansTotal}`;
+    updateUI();
+  } else alert('Not enough fruits (cost 2).');
+});
+document.getElementById('continueBtn').addEventListener('click', ()=>{
+  // continue to next level
+  state.level += 1;
+  // fruitsThisLevel leftover are not carried to next level (spent only here). We'll reset to 0.
+  state.fruitsThisLevel = 0;
+  shopOverlay.style.display = 'none';
+  state.inShop = false;
+  // generate new level but persist persistent stats
+  state.segments = generateSegments();
+  populateLevel();
+  createPlayer();
+  state.cameraX = 0;
+  updateUI();
+});
+
+// start and mute
+document.getElementById('startBtn').addEventListener('click', ()=>{
+  startOverlay.style.display = 'none';
+  setupLevel();
+  lastTime = performance.now();
+  requestAnimationFrame(gameLoop);
+  if(soundOn) initAudio();
+});
+muteBtn.addEventListener('click', ()=>{
+  toggleSound();
+});
+function toggleSound(){
+  soundOn = !soundOn;
+  muteBtn.innerText = soundOn ? 'Mute' : 'Unmute';
+  muteBtn.classList.toggle('muted', !soundOn);
+  if(soundOn) initAudio(); else if(state.musicCtx) { try{ state.musicCtx.close(); }catch(e){} state.musicCtx = null; }
+}
+
+// simple web audio for beeps & loop
+let audioCtx = null;
+function initAudio(){
+  if(audioCtx) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  state.musicCtx = audioCtx;
+  // simple ambient loop (chord progression) - light
+  const gain = audioCtx.createGain(); gain.gain.value = 0.06; gain.connect(audioCtx.destination);
+  const chordFreqs = [
+    [getFreq('G3'), getFreq('B3'), getFreq('D4')],
+    [getFreq('A3'), getFreq('C#4'), getFreq('E4')],
+    [getFreq('B3'), getFreq('D#4'), getFreq('F#4')],
+    [getFreq('C4'), getFreq('E4'), getFreq('G4')]
+  ];
+  let pos = 0;
+  function playChordSet(){
+    const now = audioCtx.currentTime;
+    const chord = chordFreqs[pos%chordFreqs.length];
+    chord.forEach((f,i)=>{
+      const o = audioCtx.createOscillator();
+      const g2 = audioCtx.createGain();
+      o.type = i===1 ? 'triangle' : 'sine';
+      o.frequency.value = f;
+      g2.gain.value = 0.001;
+      o.connect(g2); g2.connect(gain);
+      g2.gain.setValueAtTime(0.001, now);
+      g2.gain.exponentialRampToValueAtTime(0.05, now + 0.06);
+      g2.gain.exponentialRampToValueAtTime(0.0001, now + 0.7);
+      o.start(now); o.stop(now + 0.75);
+    });
+    pos++;
+    setTimeout(()=>{ if(audioCtx) playChordSet(); }, 750);
+  }
+  playChordSet();
+}
+function getFreq(note){
+  const names = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  const m = note.match(/^([A-G]#?)(\d)$/);
+  if(!m) return 440;
+  const idx = names.indexOf(m[1]);
+  const oct = parseInt(m[2],10);
+  return 440 * Math.pow(2, (idx - 9 + (oct-4)*12)/12);
+}
+function playBeep(freq, dur){
+  if(!audioCtx) initAudio();
+  if(!audioCtx) return;
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = 'sine';
+  o.frequency.value = freq;
+  g.gain.value = 0.0001;
+  o.connect(g); g.connect(audioCtx.destination);
+  const now = audioCtx.currentTime;
+  g.gain.setValueAtTime(0.0001, now);
+  g.gain.exponentialRampToValueAtTime(0.08, now + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+  o.start(now); o.stop(now + dur + 0.05);
+}
+function playSeries(freqs, dur){
+  if(!audioCtx) initAudio();
+  let t = audioCtx.currentTime;
+  freqs.forEach(f=>{
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type='square'; o.frequency.value=f;
+    o.connect(g); g.connect(audioCtx.destination);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.08, t+0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t+dur);
+    o.start(t); o.stop(t+dur+0.02);
+    t += dur*1.4;
+  });
+}
+
+// helpers
+function dist(ax,ay,bx,by){ return Math.hypot(ax-bx, ay-by); }
+
+// loop & start
+function gameLoop(ts){
+  const now = performance.now();
+  const dt = Math.min(0.04, (now - lastTime)/1000);
+  lastTime = now;
+  if(!state.inShop && !state.paused){
+    update(dt);
+  }
+  render();
+  requestAnimationFrame(gameLoop);
+}
+
+// initial start overlay awaits Start click
+// Start click handled earlier; ensure start overlay visible until start
+
+// Kick off with a generated world ready but not running until Start
+state.segments = generateSegments();
+populateLevel();
+createPlayer();
+updateUI();
+
+// Mouse/touch to jump
+canvas.addEventListener('mousedown', e=>{
+  if(!state.inShop){
+    state.player.vy = -640;
+    state.player.onGround = false;
+  }
+});
+canvas.addEventListener('touchstart', e=>{
+  if(!state.inShop){
+    state.player.vy = -640;
+    state.player.onGround = false;
+  }
+  e.preventDefault();
+}, {passive:false});
+
+</script>
+</body>
+</html>
