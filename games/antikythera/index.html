@@ -1,0 +1,631 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Antikythera Mechanism — Interactive Simulation</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  :root{
+    --bg:#0b1220; --panel:#071428; --accent:#f6c85f; --muted:#9fb2c8;
+  }
+  html,body{height:100%;margin:0;background:linear-gradient(#071428,#04101a);color:#dbeaf8;font-family:Inter,system-ui,Helvetica,Arial;}
+  .app{display:flex;flex-direction:column;gap:12px;padding:14px;height:100vh;box-sizing:border-box}
+  header{display:flex;align-items:center;gap:12px}
+  h1{margin:0;font-size:18px}
+  .main{display:flex;gap:12px;flex:1;align-items:stretch}
+  .left{flex:1;display:flex;flex-direction:column;gap:12px}
+  .right{width:360px;min-width:260px;display:flex;flex-direction:column;gap:12px}
+  .card{background:linear-gradient(180deg,var(--panel),#08121b);border-radius:12px;padding:12px;box-shadow:0 6px 30px rgba(0,0,0,0.6);border:1px solid rgba(255,255,255,0.03)}
+  #svgWrap{width:100%;height:calc(100vh - 220px);display:flex;align-items:center;justify-content:center}
+  svg{width:100%;height:100%}
+  .controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .btn{background:linear-gradient(180deg,#2b6cff,#174fc1);color:white;border:none;padding:8px 12px;border-radius:8px;cursor:pointer;font-weight:600}
+  .btn.secondary{background:transparent;border:1px solid rgba(255,255,255,0.06)}
+  .small{font-size:13px;color:var(--muted)}
+  label{display:block;color:var(--muted);font-size:13px;margin-bottom:6px}
+  input[type=range]{width:140px}
+  .stat{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+  .stat div{background:rgba(255,255,255,0.02);padding:6px 8px;border-radius:8px;font-family:monospace}
+  .legend{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  .legend .item{display:flex;gap:8px;align-items:center}
+  .colorBox{width:18px;height:12px;border-radius:3px}
+  footer{color:var(--muted);font-size:12px;text-align:center;margin-top:6px}
+  .pointerVal{font-family:monospace;font-weight:700}
+  .gear-label{font-family:monospace;font-size:12px;fill:#dbeaf8}
+  @media (max-width:880px){
+    .main{flex-direction:column}
+    .right{width:100%}
+    #svgWrap{height:400px}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>Antikythera Mechanism — Interactive Simulation</h1>
+    <div style="flex:1"></div>
+    <div class="small">Interactive educational model — single page</div>
+  </header>
+
+  <div class="main">
+    <div class="left">
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="font-weight:700">Mechanical Simulation</div>
+            <div class="small">Gears are meshed with integer teeth ratios; a driving year wheel advances the mechanism.</div>
+          </div>
+          <div class="controls">
+            <button class="btn" id="playBtn">Play</button>
+            <button class="btn secondary" id="pauseBtn">Pause</button>
+            <button class="btn secondary" id="stepBtn">Step</button>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:12px;margin-top:10px;align-items:center;flex-wrap:wrap">
+          <div>
+            <label>Simulation speed (days/sec)</label>
+            <input id="speed" type="range" min="1" max="200" value="25" />
+          </div>
+          <div>
+            <label>Set date (UTC)</label>
+            <input id="dateInput" type="date" />
+            <input id="timeInput" type="time" value="00:00"/>
+          </div>
+        </div>
+
+        <div style="margin-top:10px" class="small">Click any gear to inspect. Drag horizontally in canvas to scrub time.</div>
+      </div>
+
+      <div class="card" id="svgWrap">
+        <svg id="svg" viewBox="0 0 1200 700" preserveAspectRatio="xMidYMid meet">
+          <defs>
+            <filter id="emboss" x="-50%" y="-50%" width="200%" height="200%">
+              <feGaussianBlur in="SourceAlpha" stdDeviation="2" result="blur"/>
+              <feOffset in="blur" dx="1" dy="1" result="offsetBlur"/>
+              <feSpecularLighting in="blur" surfaceScale="1" specularConstant="0.8" specularExponent="10" lighting-color="#ffffff" result="specOut">
+                <fePointLight x="-5000" y="-10000" z="20000"/>
+              </feSpecularLighting>
+              <feComposite in="specOut" in2="SourceAlpha" operator="in" result="specOut2"/>
+              <feComposite in="SourceGraphic" in2="specOut2" operator="arithmetic" k1="0" k2="1" k3="1" k4="0"/>
+            </filter>
+          </defs>
+
+          <g id="gearsGroup"></g>
+
+          <!-- pointers: sun and moon on front -->
+          <g id="pointers">
+            <g id="sunPointer"></g>
+            <g id="moonPointer"></g>
+          </g>
+
+          <!-- overlay text -->
+          <g id="overlay" font-family="monospace" font-size="14" fill="#dbeaf8"></g>
+        </svg>
+      </div>
+
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div style="font-weight:700">Readouts</div>
+          <div class="small">Epoch: <span id="epoch">2000-01-01</span> (J2000)</div>
+        </div>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px" class="stat">
+          <div>Sim days: <div class="pointerVal" id="daysVal">0.00</div></div>
+          <div>Solar angle: <div class="pointerVal" id="sunAngle">0°</div></div>
+          <div>Lunar angle: <div class="pointerVal" id="moonAngle">0°</div></div>
+          <div>Moon phase: <div class="pointerVal" id="moonPhase">New</div></div>
+        </div>
+
+        <div style="margin-top:10px" class="legend">
+          <div class="item"><div class="colorBox" style="background:#ffd27a"></div> Sun pointer</div>
+          <div class="item"><div class="colorBox" style="background:#9ad1ff"></div> Moon pointer</div>
+          <div class="item"><div class="colorBox" style="background:#7a7a7a"></div> Gears</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="right">
+      <div class="card">
+        <div style="font-weight:700">Gears & Train</div>
+        <div class="small" style="margin-top:8px">This simplified model places a driving Year wheel and derives other gear rotations by teeth ratios. You can edit teeth counts and positions to experiment.</div>
+
+        <div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">
+          <label>Days per year wheel revolution
+            <input id="yearDays" type="number" min="1" value="365" style="width:120px"/>
+          </label>
+
+          <label class="small">Select gear to edit</label>
+          <select id="gearSelect"></select>
+
+          <label>Teeth count
+            <input id="teethInput" type="number" min="6" max="200" value="40" style="width:120px"/>
+          </label>
+
+          <div style="display:flex;gap:8px">
+            <button class="btn" id="updateGear">Update Gear</button>
+            <button class="btn secondary" id="resetGears">Reset Defaults</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="font-weight:700">Astronomical Outputs</div>
+        <div class="small" style="margin-top:8px">Calculated from relative sun and moon pointers</div>
+
+        <div style="margin-top:10px" class="small">
+          <div>Phase angle: <span id="phaseDeg">0°</span></div>
+          <div>Illumination: <span id="illum">0%</span></div>
+          <div>Approx date/time: <span id="dateOutput">—</span></div>
+          <div style="margin-top:8px">Notes: gear model is illustrative, not a full historical reconstruction.</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="font-weight:700">Help & Interaction</div>
+        <div class="small" style="margin-top:8px">
+          Drag horizontally across the mechanism to scrub time. Click gears to examine. Use speed slider to accelerate simulation.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer>Antikythera mechanism simulation — simplified educational model</footer>
+</div>
+
+<script>
+/* Antikythera Mechanism — simplified interactive simulation
+   - Gears modeled as polygonal shapes with teeth count
+   - Drive "year wheel" advances based on days variable
+   - Other gears' angles computed by teeth ratio meshing (angleChild = -angleParent * (parent.teeth/child.teeth) + offset)
+   - Sun and Moon pointers attached to gears; moon phase derived from difference
+*/
+
+const svgNS = "http://www.w3.org/2000/svg";
+const gearsGroup = document.getElementById('gearsGroup');
+const svg = document.getElementById('svg');
+const playBtn = document.getElementById('playBtn'), pauseBtn = document.getElementById('pauseBtn'), stepBtn = document.getElementById('stepBtn');
+const speedInput = document.getElementById('speed');
+const dateInput = document.getElementById('dateInput');
+const timeInput = document.getElementById('timeInput');
+const daysVal = document.getElementById('daysVal');
+const sunAngleEl = document.getElementById('sunAngle');
+const moonAngleEl = document.getElementById('moonAngle');
+const moonPhaseEl = document.getElementById('moonPhase');
+const phaseDeg = document.getElementById('phaseDeg');
+const illumEl = document.getElementById('illum');
+const dateOutput = document.getElementById('dateOutput');
+const epochEl = document.getElementById('epoch');
+const yearDaysInput = document.getElementById('yearDays');
+const gearSelect = document.getElementById('gearSelect');
+const teethInput = document.getElementById('teethInput');
+const updateGearBtn = document.getElementById('updateGear');
+const resetGearsBtn = document.getElementById('resetGears');
+const overlay = document.getElementById('overlay');
+const sunPointerGroup = document.getElementById('sunPointer');
+const moonPointerGroup = document.getElementById('moonPointer');
+
+let playing = false;
+let lastTime = performance.now();
+let simDays = 0.0; // days since epoch
+const epoch = new Date(Date.UTC(2000,0,1,12,0,0)); // J2000 default noon
+epochEl.textContent = epoch.toISOString().slice(0,10);
+
+// default gear definitions (positions chosen to look pleasing)
+let defaultGears = [
+  // id, x, y, teeth, color, label
+  {id:'drive', x:420, y:350, teeth:60, color:'#7a7a7a', label:'Year Wheel', periodDays:365.2422},
+  {id:'sun', x:640, y:350, teeth:40, color:'#ffd27a', label:'Sun Drive'},
+  {id:'moon', x:840, y:350, teeth:32, color:'#9ad1ff', label:'Moon Drive'},
+  {id:'metonic', x:640, y:150, teeth:53, color:'#9abf8a', label:'Metonic'},
+  {id:'calendar', x:420, y:150, teeth:80, color:'#c7b494', label:'Calendar Dial'}
+];
+
+let gears = [];
+let gearMap = {};
+let selectedGearId = null;
+
+// create gear geometry
+function makeGearPath(cx, cy, radius, teeth, toothDepth=6){
+  const toothAngle = (Math.PI*2) / teeth;
+  const innerR = radius - toothDepth;
+  let d = '';
+  for(let i=0;i<teeth;i++){
+    const a1 = i*toothAngle;
+    const a2 = a1 + toothAngle*0.5;
+    const a3 = a1 + toothAngle;
+    const x1 = cx + innerR * Math.cos(a1);
+    const y1 = cy + innerR * Math.sin(a1);
+    const x2 = cx + radius * Math.cos(a2);
+    const y2 = cy + radius * Math.sin(a2);
+    const x3 = cx + innerR * Math.cos(a3);
+    const y3 = cy + innerR * Math.sin(a3);
+    d += (i===0?`M ${x1} ${y1}`:` L ${x1} ${y1}`) + ` L ${x2} ${y2} L ${x3} ${y3}`;
+  }
+  d += ' Z';
+  return d;
+}
+
+// create SVG gear element
+function createGear(g){
+  const group = document.createElementNS(svgNS,'g');
+  group.setAttribute('transform',`translate(0,0)`);
+  group.classList.add('gear');
+  const radius = gearRadiusFromTeeth(g.teeth);
+  const path = document.createElementNS(svgNS,'path');
+  path.setAttribute('d', makeGearPath(0,0, radius, g.teeth, Math.max(6, radius*0.12)));
+  path.setAttribute('fill', shade(g.color, -0.04));
+  path.setAttribute('stroke', '#0b2530');
+  path.setAttribute('stroke-width', '1');
+  path.setAttribute('filter','url(#emboss)');
+  group.appendChild(path);
+  const ring = document.createElementNS(svgNS,'circle');
+  ring.setAttribute('cx',0); ring.setAttribute('cy',0); ring.setAttribute('r', Math.max(12, radius*0.22));
+  ring.setAttribute('fill', shade(g.color, -0.18));
+  group.appendChild(ring);
+  const label = document.createElementNS(svgNS,'text');
+  label.setAttribute('x',0); label.setAttribute('y', radius + 18);
+  label.setAttribute('text-anchor','middle');
+  label.classList.add('gear-label');
+  label.textContent = g.label + ` (${g.teeth})`;
+  group.appendChild(label);
+  group.addEventListener('click', (ev)=>{ ev.stopPropagation(); selectGear(g.id); });
+  // store elements
+  return {group, path, ring, label};
+}
+
+function gearRadiusFromTeeth(teeth){
+  const pitch = 3.8; // pixel per tooth
+  return teeth * pitch / 2; // scale down a bit
+}
+
+// initialize gears
+function resetToDefaults(){
+  gears = [];
+  gearMap = {};
+  for(const d of defaultGears){
+    const item = {
+      id: d.id,
+      x: d.x,
+      y: d.y,
+      teeth: d.teeth,
+      color: d.color,
+      label: d.label,
+      periodDays: d.periodDays || null, // used for drive
+      angleOffset: 0,
+      element: null,
+      angle: 0
+    };
+    gears.push(item);
+    gearMap[item.id] = item;
+  }
+  // create elements
+  gearsGroup.innerHTML = '';
+  for(const g of gears){
+    const el = createGear(g);
+    g.element = el;
+    const container = el.group;
+    container.setAttribute('transform', `translate(${g.x},${g.y}) rotate(0)`);
+    gearsGroup.appendChild(container);
+  }
+  buildMeshRelationships();
+  populateGearSelect();
+}
+resetToDefaults();
+
+// define simple mesh relationships (linear chain) - drive -> sun -> moon; drive -> calendar -> metonic (example)
+let meshPairs = [];
+function buildMeshRelationships(){
+  // define pairs by ids, placed so they visually mesh (distance = r1 + r2)
+  meshPairs = [
+    ['drive','sun'],
+    ['sun','moon'],
+    ['drive','calendar'],
+    ['calendar','metonic']
+  ];
+  // position gears so they exactly touch by radii for those pairs
+  for(const [aId,bId] of meshPairs){
+    const a = gearMap[aId], b = gearMap[bId];
+    if(!a || !b) continue;
+    const ra = gearRadiusFromTeeth(a.teeth), rb = gearRadiusFromTeeth(b.teeth);
+    // place b to the right of a at distance ra+rb (unless positions already)
+    if(Math.abs(a.x - b.x) < 10 && Math.abs(a.y - b.y) < 10){
+      b.x = a.x + ra + rb + 2;
+      b.y = a.y;
+    }
+  }
+  // update transforms
+  for(const g of gears){
+    if(g.element){
+      g.element.group.setAttribute('transform', `translate(${g.x},${g.y}) rotate(${(g.angle*180/Math.PI)%360})`);
+      g.element.label.textContent = g.label + ` (${g.teeth})`;
+      g.element.path.setAttribute('d', makeGearPath(0,0, gearRadiusFromTeeth(g.teeth), g.teeth, Math.max(6, gearRadiusFromTeeth(g.teeth)*0.12)));
+    }
+  }
+}
+
+// populate gear select
+function populateGearSelect(){
+  gearSelect.innerHTML = '';
+  for(const g of gears){
+    const opt = document.createElement('option');
+    opt.value = g.id; opt.textContent = g.label;
+    gearSelect.appendChild(opt);
+  }
+  gearSelect.addEventListener('change', ()=>{
+    selectedGearId = gearSelect.value;
+    const g = gearMap[selectedGearId];
+    teethInput.value = g.teeth;
+  });
+  selectedGearId = gears[0].id;
+  gearSelect.value = selectedGearId;
+  teethInput.value = gearMap[selectedGearId].teeth;
+}
+
+// selection
+function selectGear(id){
+  selectedGearId = id;
+  gearSelect.value = id;
+  const g = gearMap[id];
+  teethInput.value = g.teeth;
+  // flash outline
+  for(const gg of gears){
+    if(gg.element) gg.element.group.querySelector('path').setAttribute('stroke-width', gg.id===id ? 2.6 : 1);
+  }
+}
+
+// update gear teeth
+updateGearBtn.addEventListener('click', ()=>{
+  const id = selectedGearId;
+  const val = Math.max(6, Math.min(200, parseInt(teethInput.value)||6));
+  if(!id) return;
+  gearMap[id].teeth = val;
+  buildMeshRelationships();
+  renderGears();
+});
+
+// reset gears
+resetGearsBtn.addEventListener('click', ()=>{
+  defaultGears = [
+    {id:'drive', x:420, y:350, teeth:60, color:'#7a7a7a', label:'Year Wheel', periodDays:365.2422},
+    {id:'sun', x:640, y:350, teeth:40, color:'#ffd27a', label:'Sun Drive'},
+    {id:'moon', x:840, y:350, teeth:32, color:'#9ad1ff', label:'Moon Drive'},
+    {id:'metonic', x:640, y:150, teeth:53, color:'#9abf8a', label:'Metonic'},
+    {id:'calendar', x:420, y:150, teeth:80, color:'#c7b494', label:'Calendar Dial'}
+  ];
+  resetToDefaults();
+  renderGears();
+});
+
+// simulation control
+playBtn.addEventListener('click', ()=>{ playing = true; lastTime = performance.now(); });
+pauseBtn.addEventListener('click', ()=>{ playing = false; });
+stepBtn.addEventListener('click', ()=>{ stepSimulation(1/60); renderGears(); });
+
+speedInput.addEventListener('input', ()=>{ /* speed adjusted in main loop */ });
+
+// date inputs: set simDays from selected date/time
+function setSimFromInputs(){
+  const d = dateInput.value;
+  const t = timeInput.value;
+  if(!d) return;
+  const iso = `${d}T${t || '00:00'}:00Z`;
+  const dt = new Date(iso);
+  const days = (dt - epoch) / (1000*60*60*24);
+  simDays = days;
+  renderGears();
+}
+dateInput.addEventListener('change', setSimFromInputs);
+timeInput.addEventListener('change', setSimFromInputs);
+
+// click-drag to scrub time
+let dragging = false;
+let dragStartX = 0, dragStartDays = 0;
+svg.addEventListener('mousedown', (e)=>{
+  dragging = true;
+  dragStartX = e.clientX;
+  dragStartDays = simDays;
+  playing = false;
+});
+window.addEventListener('mousemove', (e)=>{
+  if(!dragging) return;
+  const dx = e.clientX - dragStartX;
+  // horizontal pixels -> days mapping
+  simDays = dragStartDays + dx * (parseFloat(speedInput.value) * 0.12);
+  renderGears();
+});
+window.addEventListener('mouseup', ()=>{ dragging = false; });
+
+// compute gear angles from drive
+function computeAngles(){
+  // set drive angle based on simDays and user yearDays value
+  const yearDays = parseFloat(yearDaysInput.value) || 365.2422;
+  const drive = gearMap['drive'];
+  const driveAngle = (simDays / yearDays) * 2 * Math.PI; // one revolution per yearDays
+  drive.angle = driveAngle;
+  // propagate via meshPairs (simple tree propagation)
+  const visited = new Set();
+  function propagate(id, parentId){
+    visited.add(id);
+    const node = gearMap[id];
+    // find children pairs where either side equals id
+    for(const [a,b] of meshPairs){
+      let child = null, parent = null;
+      if(a===id && b!==parentId){ parent = a; child = b; }
+      else if(b===id && a!==parentId){ parent = b; child = a; }
+      else continue;
+      if(visited.has(child)) continue;
+      const pa = gearMap[parent], ch = gearMap[child];
+      // angleChild = - angleParent * (parent.teeth / child.teeth) + offset
+      ch.angle = - node.angle * (node.teeth / ch.teeth) + ch.angleOffset;
+      propagate(child, id);
+    }
+  }
+  propagate('drive', null);
+  // ensure any unvisited gears default to drive-based if isolated
+  for(const g of gears){
+    if(!visited.has(g.id)){
+      // no connectivity, leave angle as-is
+    }
+  }
+}
+
+// render gears and pointers
+function renderGears(){
+  // compute angles
+  computeAngles();
+  // update gear transforms and labels
+  for(const g of gears){
+    const deg = (g.angle * 180 / Math.PI) % 360;
+    if(g.element){
+      g.element.group.setAttribute('transform', `translate(${g.x},${g.y}) rotate(${deg})`);
+      g.element.label.textContent = `${g.label} (${g.teeth})`;
+    }
+  }
+  // pointers:
+  // Sun pointer attached to sun gear: angle equal to sun.angle (zero at top)
+  const sunG = gearMap['sun'];
+  const moonG = gearMap['moon'];
+  const cx = sunG.x, cy = sunG.y;
+  drawSunPointer(sunG);
+  drawMoonPointer(moonG);
+  // overlays: show date/time and readouts
+  const dt = new Date(epoch.getTime() + simDays * 24*60*60*1000);
+  dateOutput.textContent = dt.toISOString().replace('T',' ').slice(0,19)+' UTC';
+  daysVal.textContent = simDays.toFixed(3);
+  const sunDeg = ((sunG.angle * 180/Math.PI) % 360 + 360) % 360;
+  const moonDeg = ((moonG.angle * 180/Math.PI) % 360 + 360) % 360;
+  sunAngleEl.textContent = `${sunDeg.toFixed(2)}°`;
+  moonAngleEl.textContent = `${moonDeg.toFixed(2)}°`;
+  // phase based on relative angle (moon - sun)
+  let phaseAngle = ((moonG.angle - sunG.angle) % (2*Math.PI) + 2*Math.PI) % (2*Math.PI);
+  const phaseDegVal = (phaseAngle * 180/Math.PI);
+  phaseDeg.textContent = `${phaseDegVal.toFixed(1)}°`;
+  const illum = ((1 - Math.cos(phaseAngle))/2) * 100; // approximate illumination
+  illumEl.textContent = `${illum.toFixed(1)}%`;
+  // map to phase name
+  const phaseName = phaseNameFromAngle(phaseAngle);
+  moonPhaseEl.textContent = phaseName;
+  phaseDeg.textContent = `${phaseDegVal.toFixed(1)}°`;
+  // update inspector if a gear is selected
+  if(selectedGearId){
+    const g = gearMap[selectedGearId];
+    document.querySelectorAll('.gear-label').forEach(l=>{ /* noop to keep label visual */ });
+  }
+}
+
+// draw sun pointer
+function drawSunPointer(g){
+  sunPointerGroup.innerHTML = '';
+  const group = document.createElementNS(svgNS,'g');
+  const len = gearRadiusFromTeeth(g.teeth) * 0.88;
+  const angle = g.angle;
+  // line
+  const x1 = g.x, y1 = g.y;
+  const x2 = g.x + Math.sin(angle) * len;
+  const y2 = g.y - Math.cos(angle) * len;
+  const line = document.createElementNS(svgNS,'line');
+  line.setAttribute('x1',x1); line.setAttribute('y1',y1); line.setAttribute('x2',x2); line.setAttribute('y2',y2);
+  line.setAttribute('stroke','#ffd27a'); line.setAttribute('stroke-width','4'); line.setAttribute('stroke-linecap','round');
+  sunPointerGroup.appendChild(line);
+  const circle = document.createElementNS(svgNS,'circle');
+  circle.setAttribute('cx',x2); circle.setAttribute('cy',y2); circle.setAttribute('r',8); circle.setAttribute('fill','#ffd27a');
+  sunPointerGroup.appendChild(circle);
+}
+
+// draw moon pointer
+function drawMoonPointer(g){
+  moonPointerGroup.innerHTML = '';
+  const len = gearRadiusFromTeeth(g.teeth) * 0.88;
+  const angle = g.angle;
+  const x1 = g.x, y1 = g.y;
+  const x2 = g.x + Math.sin(angle) * len;
+  const y2 = g.y - Math.cos(angle) * len;
+  const line = document.createElementNS(svgNS,'line');
+  line.setAttribute('x1',x1); line.setAttribute('y1',y1); line.setAttribute('x2',x2); line.setAttribute('y2',y2);
+  line.setAttribute('stroke','#9ad1ff'); line.setAttribute('stroke-width','4'); line.setAttribute('stroke-linecap','round');
+  moonPointerGroup.appendChild(line);
+  const circle = document.createElementNS(svgNS,'circle');
+  circle.setAttribute('cx',x2); circle.setAttribute('cy',y2); circle.setAttribute('r',10); circle.setAttribute('fill','#cfeeff');
+  moonPointerGroup.appendChild(circle);
+  // render small shadow on moon based on sun angle difference (phase)
+  const sunG = gearMap['sun'];
+  let phaseAngle = ((g.angle - sunG.angle) % (2*Math.PI) + 2*Math.PI) % (2*Math.PI);
+  const illum = ((1 - Math.cos(phaseAngle))/2);
+  const clip = document.createElementNS(svgNS,'path');
+  // draw crescent shape overlay by arc approximation (visual only)
+  const cx2 = x2, cy2 = y2, r = 10;
+  // compute crescent offset
+  const offset = (1 - 2*illum) * r * 0.9;
+  const d = `M ${cx2 - r} ${cy2} A ${r} ${r} 0 1 0 ${cx2 + r} ${cy2} A ${r*0.6} ${r*0.6} 0 1 1 ${cx2 - r + offset} ${cy2} Z`;
+  const crescent = document.createElementNS(svgNS,'path');
+  crescent.setAttribute('d', d);
+  crescent.setAttribute('fill', 'rgba(5,12,20,0.85)');
+  moonPointerGroup.appendChild(crescent);
+}
+
+// compute phase name
+function phaseNameFromAngle(angle){
+  const deg = angle * 180/Math.PI;
+  if(deg < 10 || deg > 350) return 'New';
+  if(deg < 90) return 'Waxing Crescent';
+  if(deg < 110) return 'First Quarter';
+  if(deg < 170) return 'Waxing Gibbous';
+  if(deg < 190) return 'Full';
+  if(deg < 250) return 'Waning Gibbous';
+  if(deg < 270) return 'Last Quarter';
+  if(deg < 350) return 'Waning Crescent';
+  return 'New';
+}
+
+// main simulation step
+function stepSimulation(dt){
+  // dt seconds scaled into days
+  const daysPerSec = parseFloat(speedInput.value) || 25;
+  simDays += daysPerSec * dt;
+  // clamp simDays to reasonable range? Let it run freely
+}
+
+// animation loop
+function animate(){
+  const now = performance.now();
+  let dt = (now - lastTime) / 1000;
+  lastTime = now;
+  if(playing){
+    stepSimulation(dt);
+    renderGears();
+  }
+  requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+
+// initial render
+renderGears();
+
+// utilities
+function shade(hex, amt){
+  hex = (hex||'#888').replace('#','');
+  if(hex.length===3) hex = hex.split('').map(c=>c+c).join('');
+  let num = parseInt(hex,16);
+  let r = (num >> 16) + Math.round(255*amt);
+  let g = ((num >> 8) & 0xff) + Math.round(255*amt);
+  let b = (num & 0xff) + Math.round(255*amt);
+  r = clamp(r,0,255); g = clamp(g,0,255); b = clamp(b,0,255);
+  return '#' + (1<<24 | r<<16 | g<<8 | b).toString(16).slice(1);
+}
+function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
+
+// hook up inputs initialization
+(function initInputs(){
+  // set date input to epoch by default
+  const y = epoch.toISOString().slice(0,10);
+  dateInput.value = y;
+  timeInput.value = '12:00';
+  yearDaysInput.value = '365.2422';
+  populateGearSelect();
+  renderGears();
+})();
+
+</script>
+</body>
+</html>
