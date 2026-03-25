@@ -1,0 +1,793 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Precambrian Park — Side Scroller</title>
+<style>
+  html,body{height:100%;margin:0;background:#041018;color:#dff7ff;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  #gameWrap{display:flex;flex-direction:column;align-items:center;gap:10px;padding:12px}
+  #title{font-weight:800;font-size:20px;letter-spacing:0.6px}
+  #canvas{background:linear-gradient(#021318, #04202a);border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,0.6)}
+  #hud{display:flex;gap:12px;align-items:center}
+  .stat{background:rgba(255,255,255,0.03);padding:6px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.02)}
+  #controls{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:8px}
+  .btn{background:linear-gradient(180deg,#0b2a33,#042428);border:1px solid rgba(255,255,255,0.04);color:#dff7ff;padding:8px 12px;border-radius:8px;cursor:pointer}
+  .small{font-size:12px;color:#9fb0c6}
+  #touchControls{display:none;gap:8px;margin-top:8px}
+  .tbtn{width:56px;height:56px;border-radius:12px;background:rgba(255,255,255,0.03);display:flex;align-items:center;justify-content:center;color:#dff7ff;border:1px solid rgba(255,255,255,0.04)}
+  @media(max-width:720px){ #canvas{width:100%;height:52vh} #touchControls{display:flex} }
+</style>
+</head>
+<body>
+  <div id="gameWrap">
+    <div id="title">Precambrian Park</div>
+    <canvas id="canvas" width="960" height="540"></canvas>
+    <div id="hud">
+      <div class="stat">Score: <span id="score">0</span></div>
+      <div class="stat">Health: <span id="health">10</span></div>
+      <div class="stat small">Jump: Space / ↑ | Move: A/D or ←/→ | Attack: K</div>
+    </div>
+    <div id="controls">
+      <button class="btn" id="startBtn">Start</button>
+      <button class="btn" id="pauseBtn">Pause</button>
+      <button class="btn" id="muteBtn">Toggle Sound</button>
+      <button class="btn" id="resetBtn">Reset</button>
+    </div>
+    <div id="touchControls">
+      <div class="tbtn" id="leftBtn">◀</div>
+      <div class="tbtn" id="rightBtn">▶</div>
+      <div class="tbtn" id="jumpBtn">▲</div>
+      <div class="tbtn" id="attackBtn">○</div>
+    </div>
+  </div>
+
+<script>
+/*
+Precambrian Park
+A lightweight browser side-scroller: player runs through a stylized Precambrian landscape and avoids or combats ancient microbial/ediacaran hazards.
+Single-file implementation: canvas rendering, procedural obstacles, enemies, particles, simple audio.
+*/
+
+(() => {
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  // HUD
+  const scoreEl = document.getElementById('score');
+  const healthEl = document.getElementById('health');
+  const startBtn = document.getElementById('startBtn');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const resetBtn = document.getElementById('resetBtn');
+  const muteBtn = document.getElementById('muteBtn');
+
+  // touch
+  const leftBtn = document.getElementById('leftBtn');
+  const rightBtn = document.getElementById('rightBtn');
+  const jumpBtn = document.getElementById('jumpBtn');
+  const attackBtn = document.getElementById('attackBtn');
+
+  // game constants
+  let W = canvas.width, H = canvas.height;
+  const GRAVITY = 0.8;
+  const GROUND_Y = H - 80;
+  const SCROLL_SPEED_BASE = 2.2;
+  const MAX_HEALTH = 10;
+
+  // state
+  let running = false;
+  let paused = false;
+  let muted = false;
+  let lastTime = 0;
+  let accScore = 0;
+  let scrollSpeed = SCROLL_SPEED_BASE;
+  let difficultyTimer = 0;
+
+  // resources: none external; draw via canvas
+  // player
+  const player = {
+    x: 160,
+    y: GROUND_Y - 48,
+    w: 36,
+    h: 48,
+    vy: 0,
+    onGround: false,
+    facing: 1,
+    canAttack: true,
+    attackCooldown: 0,
+    health: MAX_HEALTH
+  };
+
+  // arrays
+  const obstacles = [];
+  const enemies = [];
+  const bullets = [];
+  const particles = [];
+  let bgObjects = [];
+
+  // input
+  const input = {
+    left:false,right:false,jump:false,attack:false
+  };
+
+  // pseudo-rng
+  function rand(n=1){ return Math.random()*n; }
+  function rint(n){ return Math.floor(Math.random()*n); }
+
+  // audio simple
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  function playTone(freq=440, duration=0.12, type='sine', vol=0.08){
+    if(muted) return;
+    try {
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.type = type;
+      o.frequency.value = freq;
+      g.gain.value = vol;
+      o.connect(g); g.connect(audioCtx.destination);
+      o.start();
+      g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
+      setTimeout(()=>o.stop(), duration*1000 + 20);
+    } catch(e){}
+  }
+
+  // utility helpers
+  function rectsCollide(a,b){
+    return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + (b.h||0) && a.y + a.h > b.y;
+  }
+
+  // spawn terrain obstacles and enemies procedurally
+  let spawnTimer = 0;
+  function spawnLogic(dt){
+    spawnTimer -= dt;
+    difficultyTimer += dt;
+    // increase scroll speed slightly over time
+    if(difficultyTimer > 0 && difficultyTimer % 15000 < dt) scrollSpeed += 0.4;
+    // spawn background flora occasionally
+    if(Math.random() < 0.02) {
+      bgObjects.push({
+        x: W + rand(200),
+        y: GROUND_Y - 10 - rand(60),
+        size: 24 + rand(40),
+        sway: rand(0.02)+0.005,
+        phase: rand(Math.PI*2),
+        hue: 130 + rand(40)
+      });
+    }
+
+    if(spawnTimer <= 0){
+      spawnTimer = 800 + rand(800); // ms
+      // choose spawn: small obstacle, gap, or enemy
+      const choice = Math.random();
+      if(choice < 0.4){
+        // obstacle (spike mats)
+        obstacles.push({
+          x: W + 40 + rand(200),
+          y: GROUND_Y - 24,
+          w: 40 + rint(30 * Math.random()),
+          h: 24,
+          type: 'spike'
+        });
+      } else if(choice < 0.7){
+        // enemy: floaters (frond), walkers (blob)
+        const et = Math.random() < 0.5 ? 'frond' : 'blob';
+        if(et === 'frond'){
+          enemies.push({
+            x: W + 40 + rand(120),
+            y: GROUND_Y - 160 - rand(80),
+            w: 42,
+            h: 42,
+            vy: 0,
+            type: 'frond',
+            hp: 1.5 + Math.random()*1.5,
+            speed: scrollSpeed * (0.6 + Math.random()*0.6),
+            bobPhase: rand(Math.PI*2),
+            sway: 0.6 + Math.random()*1.2
+          });
+        } else {
+          enemies.push({
+            x: W + 40 + rand(120),
+            y: GROUND_Y - 36,
+            w: 48,
+            h: 36,
+            vy: 0,
+            type: 'blob',
+            hp: 2 + Math.random()*2,
+            speed: scrollSpeed * (0.85 + Math.random()*0.6),
+            wobble: rand(0.3)
+          });
+        }
+      } else {
+        // gap: remove small plateau -> player must jump across
+        const gapW = 90 + rand(110);
+        // emulate gap by pushing a "hole" marker; we implement ground segments instead of continuous ground
+        obstacles.push({
+          x: W + 40 + rand(120),
+          y: GROUND_Y,
+          w: gapW,
+          h: H - GROUND_Y,
+          type: 'gap'
+        });
+      }
+    }
+  }
+
+  // particle spawn
+  function spawnParticles(x,y,count,color='rgba(255,255,255,0.12)'){
+    for(let i=0;i<count;i++){
+      particles.push({
+        x:x + (Math.random()-0.5)*10,
+        y:y + (Math.random()-0.5)*10,
+        vx:(Math.random()-0.5)*2,
+        vy:(Math.random()-1.5)*2,
+        life:400 + Math.random()*600,
+        t:0,
+        color
+      });
+    }
+  }
+
+  // update physics and positions
+  function update(dt){
+    if(paused || !running) return;
+
+    // player physics
+    player.vy += GRAVITY * (dt/16.6667);
+    player.y += player.vy * (dt/16.6667);
+    // ground handling: locate if player is standing on a ground segment (we treat entire baseline except explicit gaps)
+    // find if player's feet over a gap
+    const footX = player.x + player.w/2;
+    let overGap = false;
+    for(const o of obstacles){
+      if(o.type === 'gap'){
+        if(footX > o.x && footX < o.x + o.w) { overGap = true; break; }
+      }
+    }
+    if(player.y + player.h >= GROUND_Y && !overGap){
+      player.y = GROUND_Y - player.h;
+      player.vy = 0;
+      player.onGround = true;
+    } else {
+      player.onGround = false;
+    }
+
+    // horizontal movement within limited range; world scrolls
+    if(input.left) { player.x -= 2 * (dt/16.6667); player.facing = -1; }
+    if(input.right) { player.x += 2 * (dt/16.6667); player.facing = 1; }
+
+    // clamp player x within left quarter to half of screen
+    const minX = 48, maxX = W*0.46;
+    if(player.x < minX) player.x = minX;
+    if(player.x > maxX) player.x = maxX;
+
+    // attack cooldown
+    if(player.attackCooldown > 0) player.attackCooldown -= dt;
+    if(player.attackCooldown < 0) player.attackCooldown = 0;
+
+    // world scroll: move obstacles/enemies left by scrollSpeed
+    const px = scrollSpeed * (dt/16.6667);
+    for(let i=obstacles.length-1;i>=0;i--){
+      obstacles[i].x -= px;
+      if(obstacles[i].x + obstacles[i].w < -200) obstacles.splice(i,1);
+    }
+    for(let i=enemies.length-1;i>=0;i--){
+      const e = enemies[i];
+      e.x -= (e.speed || scrollSpeed) * (dt/16.6667);
+      // type-specific behaviour
+      if(e.type === 'frond'){
+        e.bobPhase += 0.02 * (dt/16.6667);
+        e.y += Math.sin(e.bobPhase) * 0.2 * (dt/16.6667);
+      } else if(e.type === 'blob'){
+        e.vy += 0.2 * (dt/16.6667);
+        e.y = Math.min(e.y + e.vy * (dt/16.6667), GROUND_Y - e.h);
+        // slow crawl toward player sometimes
+        if(Math.random() < 0.01) e.x -= 1;
+      }
+      if(e.x + e.w < -200) enemies.splice(i,1);
+    }
+
+    // bullets update
+    for(let i=bullets.length-1;i>=0;i--){
+      const b = bullets[i];
+      b.x += b.vx * (dt/16.6667);
+      b.y += b.vy * (dt/16.6667);
+      b.life -= dt;
+      if(b.life <= 0 || b.x > W + 200 || b.x < -200) { bullets.splice(i,1); continue; }
+      // collision with enemies
+      for(let j=enemies.length-1;j>=0;j--){
+        const e = enemies[j];
+        if(rectsCollide({x:b.x,y:b.y,w:b.r*2,h:b.r*2},{x:e.x,y:e.y,w:e.w,h:e.h})){
+          e.hp -= b.damage;
+          bullets.splice(i,1);
+          spawnParticles(e.x + e.w/2, e.y + e.h/2, 8, 'rgba(180,240,200,0.9)');
+          playTone(900, 0.06, 'triangle', 0.04);
+          if(e.hp <= 0){ enemies.splice(j,1); accScore += 35; spawnParticles(e.x + e.w/2, e.y + e.h/2, 14, 'rgba(255,220,120,0.9)'); }
+          break;
+        }
+      }
+    }
+
+    // particles update
+    for(let i=particles.length-1;i>=0;i--){
+      const p = particles[i];
+      p.t += dt;
+      p.x += p.vx * (dt/16.6667);
+      p.y += p.vy * (dt/16.6667);
+      p.vy += 0.02 * (dt/16.6667);
+      if(p.t >= p.life) particles.splice(i,1);
+    }
+
+    // collisions: player with obstacles
+    for(let i=obstacles.length-1;i>=0;i--){
+      const o = obstacles[i];
+      if(o.type === 'spike'){
+        if(rectsCollide(player, {x:o.x,y:o.y,w:o.w,h:o.h})){
+          // damage and knockback
+          hitPlayer(1);
+          obstacles.splice(i,1);
+          playTone(180,0.14,'sawtooth',0.08);
+          spawnParticles(player.x + player.w/2, player.y + player.h/2, 12, 'rgba(255,100,100,0.9)');
+        }
+      } else if(o.type === 'gap'){
+        // nothing to collide; it's absence of ground
+      }
+    }
+
+    // collisions: player with enemies
+    for(let i=enemies.length-1;i>=0;i--){
+      const e = enemies[i];
+      if(rectsCollide(player, e)){
+        // collision effect based on enemy type
+        if(e.type === 'frond'){
+          hitPlayer(1);
+          // push frond back
+          e.x += 40;
+          playTone(240,0.08,'sine',0.06);
+        } else {
+          hitPlayer(2);
+          // bigger effect
+          e.x += 80;
+          playTone(160,0.14,'sawtooth',0.08);
+        }
+      }
+    }
+
+    // scoring over time
+    accScore += dt * 0.02;
+    scoreEl.textContent = Math.max(0, Math.floor(accScore));
+    healthEl.textContent = player.health;
+
+    // check death
+    if(player.health <= 0){
+      running = false;
+      showGameOver();
+    }
+
+    // handle player jump input
+    if(input.jump && player.onGround){
+      player.vy = -12.6;
+      player.onGround = false;
+      input.jump = false; // single jump
+      playTone(520, 0.12, 'sine', 0.08);
+      spawnParticles(player.x + player.w/2, player.y + player.h, 12, 'rgba(180,250,255,0.7)');
+    }
+
+    // handle attack input
+    if(input.attack && player.attackCooldown <= 0){
+      performAttack();
+      input.attack = false;
+    }
+
+    // background objects scroll
+    for(let i=bgObjects.length-1;i>=0;i--){
+      bgObjects[i].x -= scrollSpeed * (dt/16.6667) * 0.5;
+      if(bgObjects[i].x + bgObjects[i].size < -80) bgObjects.splice(i,1);
+    }
+
+  } // update
+
+  function hitPlayer(amount){
+    if(!running) return;
+    player.health -= amount;
+    if(player.health < 0) player.health = 0;
+    // brief knockback
+    player.x = Math.max(36, player.x - 18);
+  }
+
+  function performAttack(){
+    // bubble splash forward
+    if(player.attackCooldown > 0) return;
+    player.attackCooldown = 350; // ms
+    // bullets
+    const dir = player.facing;
+    bullets.push({
+      x: player.x + player.w/2 + dir*18,
+      y: player.y + player.h/2 - 6,
+      vx: dir * 8,
+      vy: -0.6,
+      r: 8,
+      damage: 1.2,
+      life: 900
+    });
+    playTone(840, 0.08, 'triangle', 0.08);
+    spawnParticles(player.x + player.w/2 + dir*18, player.y + player.h/2, 6, 'rgba(160,220,255,0.9)');
+    accScore += 2;
+  }
+
+  // rendering
+  function draw(){
+    // clear
+    ctx.fillStyle = '#02171a';
+    ctx.fillRect(0,0,W,H);
+
+    // parallax background: distant glow / water layers
+    // sky gradient already in canvas background; draw distant microbial mats
+    for(let i=0;i<8;i++){
+      const y = 40 + i*18 + Math.sin((Date.now()/800)+i)*6;
+      ctx.fillStyle = `rgba(30,80,60,${0.02 + i*0.02})`;
+      ctx.beginPath();
+      for(let x = -80; x <= W+80; x += 24){
+        ctx.lineTo(x + Math.sin((x/120)+(Date.now()/1600)+i)*8, y + Math.cos((x/100)+(Date.now()/1200)+i)*6);
+      }
+      ctx.lineTo(W+80,H);
+      ctx.lineTo(-80,H);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // background flora
+    for(const b of bgObjects){
+      const sway = Math.sin(b.phase + (Date.now()/600)*b.sway)*6;
+      ctx.fillStyle = `hsl(${b.hue},60%,52%)`;
+      ctx.beginPath();
+      ctx.ellipse(b.x + sway, b.y, b.size*0.24, b.size*0.8, Math.PI/6, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = `rgba(0,0,0,0.08)`;
+      ctx.fillRect(b.x + sway - 8, b.y + 6, 6, 6);
+    }
+
+    // ground: draw a baseline and microbial ridges, leaving gaps
+    ctx.fillStyle = '#053236';
+    ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
+    // draw ridges
+    ctx.fillStyle = '#084c48';
+    for(let x=0;x<W;x+=6){
+      const h = 6 + Math.sin((x/40)+Date.now()/1200)*6;
+      ctx.fillRect(x, GROUND_Y - h, 4, h);
+    }
+
+    // draw "holes" for gaps (clip out)
+    ctx.save();
+    for(const o of obstacles){
+      if(o.type === 'gap'){
+        ctx.clearRect(o.x, GROUND_Y, o.w, H - GROUND_Y);
+      }
+    }
+    ctx.restore();
+
+    // draw obstacles (spikes)
+    for(const o of obstacles){
+      if(o.type === 'spike'){
+        const spikes = Math.max(2, Math.floor(o.w / 10));
+        for(let s=0;s<spikes;s++){
+          const px = o.x + s*(o.w/spikes);
+          ctx.fillStyle = '#0b2f28';
+          ctx.beginPath();
+          ctx.moveTo(px, o.y + o.h);
+          ctx.lineTo(px + (o.w/spikes)*0.5, o.y);
+          ctx.lineTo(px + (o.w/spikes), o.y + o.h);
+          ctx.closePath();
+          ctx.fill();
+          ctx.fillStyle = '#ffcc99';
+          ctx.beginPath();
+          ctx.moveTo(px + 2, o.y + o.h);
+          ctx.lineTo(px + (o.w/spikes)*0.5, o.y + 4);
+          ctx.lineTo(px + (o.w/spikes) - 2, o.y + o.h);
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
+    }
+
+    // draw enemies
+    for(const e of enemies){
+      if(e.type === 'frond'){
+        // draw a frond: stem and fronds
+        ctx.save();
+        ctx.translate(e.x + e.w/2, e.y + e.h/2);
+        const bob = Math.sin((Date.now()/400) + e.bobPhase) * e.sway;
+        ctx.translate(0, bob);
+        // stem
+        ctx.fillStyle = `hsl(160,60%,30%)`;
+        ctx.fillRect(-4, -12, 8, 36);
+        // fronds
+        ctx.fillStyle = `hsl(160,70%,50%)`;
+        for(let i=0;i<4;i++){
+          ctx.beginPath();
+          ctx.ellipse(8 - i*4, -8 + i*8, 10 + i*1.6, 16 - i*2, Math.PI/3, 0, Math.PI*2);
+          ctx.fill();
+        }
+        // central body
+        ctx.fillStyle = `hsl(160,60%,40%)`;
+        ctx.beginPath();
+        ctx.ellipse(0,2, 14, 12, 0,0,Math.PI*2);
+        ctx.fill();
+        // speckle
+        ctx.fillStyle = 'rgba(0,0,0,0.18)';
+        ctx.fillRect(-2, -2, 4,4);
+        ctx.restore();
+      } else if(e.type === 'blob'){
+        // blob: squishy shape
+        ctx.save();
+        const wobble = Math.sin(Date.now()/200 + e.x/60) * 4;
+        ctx.translate(e.x + e.w/2, e.y + e.h/2);
+        ctx.fillStyle = `hsl(190,50%,40%)`;
+        ctx.beginPath();
+        ctx.ellipse(0 + wobble, 0, e.w*0.7, e.h*0.8, Math.sin(Date.now()/800)*0.3, 0, Math.PI*2);
+        ctx.fill();
+        ctx.fillStyle = '#bff0ff';
+        ctx.beginPath();
+        ctx.ellipse(6, -4, e.w*0.18, e.h*0.14, 0,0,Math.PI*2);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    // draw bullets
+    for(const b of bullets){
+      ctx.beginPath();
+      const grad = ctx.createRadialGradient(b.x,b.y,b.r*0.1,b.x,b.y,b.r*1.3);
+      grad.addColorStop(0,'rgba(200,255,255,0.95)');
+      grad.addColorStop(1,'rgba(120,200,255,0.08)');
+      ctx.fillStyle = grad;
+      ctx.arc(b.x, b.y, b.r, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    // draw particles
+    for(const p of particles){
+      const a = 1 - p.t/p.life;
+      ctx.fillStyle = p.color.replace(/[\d\.]+\)$/,'') + `${a})`;
+      ctx.fillRect(p.x, p.y, 2,2);
+    }
+
+    // draw player (stylized explorer)
+    drawPlayer();
+
+    // HUD floating hints / title overlays
+    if(!running){
+      ctx.save();
+      ctx.globalAlpha = 0.95;
+      ctx.fillStyle = 'rgba(6,16,20,0.8)';
+      ctx.fillRect(W/2 - 240, H/2 - 64, 480, 128);
+      ctx.fillStyle = '#dff7ff';
+      ctx.font = '28px ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto';
+      ctx.textAlign = 'center';
+      ctx.fillText('Precambrian Park', W/2, H/2 - 16);
+      ctx.font = '14px ui-sans-serif, system-ui';
+      ctx.fillText('Press Start to enter the stromatolite wilds', W/2, H/2 + 14);
+      ctx.restore();
+    }
+  } // draw
+
+  function drawPlayer(){
+    // simple pixel-ish explorer with wide helmet and reef-suit
+    const p = player;
+    // shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.18)';
+    ctx.beginPath();
+    ctx.ellipse(p.x + p.w/2, p.y + p.h + 8, p.w*0.6, 6, 0,0,Math.PI*2);
+    ctx.fill();
+
+    // body
+    ctx.fillStyle = '#a3f0ff';
+    roundRect(ctx, p.x, p.y, p.w, p.h, 6);
+    ctx.fill();
+
+    // visor
+    ctx.fillStyle = '#003544';
+    ctx.fillRect(p.x + 6, p.y + 8, p.w - 12, 16);
+    ctx.fillStyle = '#78f0ff';
+    ctx.fillRect(p.x + 10, p.y + 10, p.w - 20, 8);
+
+    // pack/back fin
+    ctx.fillStyle = '#0b2b2f';
+    ctx.fillRect(p.x - 6, p.y + 8, 6, 24);
+
+    // small legs/boots
+    ctx.fillStyle = '#053233';
+    ctx.fillRect(p.x + 6, p.y + p.h - 10, 10, 8);
+    ctx.fillRect(p.x + p.w - 16, p.y + p.h - 10, 10, 8);
+  }
+
+  function roundRect(ctx, x, y, w, h, r){
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  // game over display
+  function showGameOver(){
+    // simple overlay; reveal button becomes restart
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(0,0,W,H);
+    ctx.restore();
+    // stop sound
+    playTone(120, 0.4, 'sine', 0.08);
+  }
+
+  // main loop
+  function loop(ts){
+    if(!lastTime) lastTime = ts;
+    const dt = Math.min(40, ts - lastTime);
+    lastTime = ts;
+
+    if(running && !paused){
+      spawnLogic(dt);
+      update(dt);
+    }
+    draw();
+
+    requestAnimationFrame(loop);
+  }
+
+  // Resize handler
+  function resize(){
+    const ratio = window.devicePixelRatio || 1;
+    // set canvas CSS to keep aspect ratio while fitting
+    const wrapW = Math.min(window.innerWidth - 48, 1120);
+    const desiredW = Math.max(640, wrapW);
+    const desiredH = Math.round(desiredW * 9/16);
+    canvas.style.width = desiredW + 'px';
+    canvas.style.height = desiredH + 'px';
+    // set internal resolution
+    W = Math.max(640, desiredW) * ratio;
+    H = Math.max(360, desiredH) * ratio;
+    canvas.width = W;
+    canvas.height = H;
+    // update constants
+    // GROUND_Y relative to H
+    window.requestAnimationFrame(()=>{
+      // recalc ground
+      // ensure ground is near bottom
+    });
+  }
+  window.addEventListener('resize', ()=> {
+    // simpler approach: keep fixed canvas resolution to original but scale drawing via CSS; fine for now
+  });
+
+  // controls & input handling
+  window.addEventListener('keydown', (e)=>{
+    if(e.key === 'ArrowLeft' || e.key === 'a') input.left = true;
+    if(e.key === 'ArrowRight' || e.key === 'd') input.right = true;
+    if(e.key === ' ' || e.key === 'ArrowUp' || e.key === 'w') input.jump = true;
+    if(e.key === 'k') input.attack = true;
+    if(e.key === 'p') { paused = !paused; pauseBtn.textContent = paused ? 'Resume' : 'Pause'; }
+  });
+  window.addEventListener('keyup', (e)=>{
+    if(e.key === 'ArrowLeft' || e.key === 'a') input.left = false;
+    if(e.key === 'ArrowRight' || e.key === 'd') input.right = false;
+    if(e.key === ' ' || e.key === 'ArrowUp' || e.key === 'w') input.jump = false;
+    if(e.key === 'k') input.attack = false;
+  });
+
+  // touch controls
+  leftBtn.addEventListener('touchstart', (e)=>{ e.preventDefault(); input.left = true; });
+  leftBtn.addEventListener('touchend', (e)=>{ input.left = false; });
+  rightBtn.addEventListener('touchstart', (e)=>{ e.preventDefault(); input.right = true; });
+  rightBtn.addEventListener('touchend', (e)=>{ input.right = false; });
+  jumpBtn.addEventListener('touchstart', (e)=>{ e.preventDefault(); input.jump = true; setTimeout(()=>input.jump=false, 200); });
+  attackBtn.addEventListener('touchstart', (e)=>{ e.preventDefault(); input.attack = true; setTimeout(()=>input.attack=false, 120); });
+
+  // start / pause / reset
+  startBtn.addEventListener('click', ()=>{
+    if(!running){
+      startGame();
+    } else {
+      // if running, act like resume
+      paused = false;
+      pauseBtn.textContent = 'Pause';
+    }
+  });
+  pauseBtn.addEventListener('click', ()=>{
+    paused = !paused;
+    pauseBtn.textContent = paused ? 'Resume' : 'Pause';
+  });
+  resetBtn.addEventListener('click', ()=> resetGame());
+  muteBtn.addEventListener('click', ()=> { muted = !muted; muteBtn.textContent = muted ? 'Unmute' : 'Toggle Sound'; });
+
+  function startGame(){
+    // initialize
+    running = true;
+    paused = false;
+    spawnTimer = 200;
+    difficultyTimer = 0;
+    accScore = 0;
+    scrollSpeed = SCROLL_SPEED_BASE;
+    obstacles.length = 0;
+    enemies.length = 0;
+    bullets.length = 0;
+    particles.length = 0;
+    bgObjects.length = 0;
+    player.health = MAX_HEALTH;
+    player.x = 160;
+    player.y = GROUND_Y - player.h;
+    player.vy = 0;
+    lastTime = 0;
+    playTone(320,0.12,'sine',0.06);
+  }
+
+  function resetGame(){
+    running = false;
+    paused = false;
+    accScore = 0;
+    scoreEl.textContent = '0';
+    player.health = MAX_HEALTH;
+    healthEl.textContent = player.health;
+    obstacles.length = enemies.length = bullets.length = particles.length = bgObjects.length = 0;
+  }
+
+  // spawn initial background
+  for(let i=0;i<10;i++){
+    bgObjects.push({
+      x: i*(W/10) + W*0.2 + rand(400),
+      y: GROUND_Y - 10 - rand(140),
+      size: 20 + rand(36),
+      sway: rand(0.02)+0.006,
+      phase: rand(Math.PI*2),
+      hue: 120 + rand(60)
+    });
+  }
+
+  // game over and restart UI: open simple dialog via start button change
+  function showGameOverOverlay(){
+    startBtn.textContent = 'Start';
+  }
+
+  function showGameOver(){
+    running = false;
+    // show overlay handled by draw
+    playTone(120, 0.4, 'sine', 0.08);
+    startBtn.textContent = 'Restart';
+  }
+
+  // small helper: initial resize adaptation
+  (function initResize(){
+    // try to size canvas CSS to window width up to 960
+    const cw = Math.min(window.innerWidth - 80, 960);
+    const ch = Math.round(cw * 9/16);
+    canvas.style.width = cw + 'px';
+    canvas.style.height = ch + 'px';
+  })();
+
+  // seed a bit of initial obstacles to make game interesting
+  obstacles.push({ x: 520, y: GROUND_Y - 24, w: 48, h: 24, type:'spike' });
+  enemies.push({ x: 840, y: GROUND_Y - 160, w:42, h:42, type:'frond', vy:0, hp:2, speed:scrollSpeed*0.9, bobPhase:rand(6), sway:1.0 });
+
+  // Start render loop
+  requestAnimationFrame(loop);
+
+  // make sure audio is resumed on user gesture (mobile browsers)
+  document.addEventListener('click', ()=> {
+    if(audioCtx && audioCtx.state === 'suspended'){
+      audioCtx.resume().catch(()=>{});
+    }
+  }, { once: true });
+
+  // Expose a few functions to console for debugging
+  window.PrecambrianPark = {
+    start: startGame,
+    reset: resetGame,
+    pause: ()=> { paused = true; },
+    resume: ()=> { paused = false; }
+  };
+
+})();
+</script>
+</body>
+</html>
