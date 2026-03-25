@@ -1,0 +1,603 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Cardboard Quest — FPS (Shoot Pies → Buy Sword → Slay Dragon)</title>
+<style>
+  html,body{height:100%;margin:0;background:#081017;color:#e6f7ff;font-family:system-ui,Segoe UI,Roboto,Arial}
+  #game{display:flex;flex-direction:column;height:100vh;align-items:center;justify-content:center}
+  canvas{background:#001218;display:block;border-radius:6px;box-shadow:0 18px 60px rgba(0,0,0,0.6)}
+  #hud{position:fixed;left:12px;top:12px;color:#dff7ff;background:rgba(0,0,0,0.18);padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.03)}
+  #centerHint{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);color:#aee7ff;font-size:13px;pointer-events:none}
+  #message{position:fixed;right:12px;top:12px;background:rgba(0,0,0,0.15);padding:8px;border-radius:6px;color:#cfe8ff}
+  #overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg,rgba(0,0,0,0.45),rgba(0,0,0,0.6));z-index:30}
+  #menu{background:#06222b;padding:18px;border-radius:10px;border:1px solid rgba(255,255,255,0.03);width:540px;max-width:94%}
+  h1{margin:0 0 6px 0;font-size:20px}
+  p{margin:6px 0;color:#9fb0c6}
+  .btn{display:inline-block;padding:8px 12px;border-radius:8px;background:#0b2f36;color:#e9fbff;border:0;cursor:pointer;margin-right:8px}
+  .small{font-size:13px;color:#9fb0c6}
+  #victory{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:50}
+  #victory .box{background:rgba(3,8,10,0.86);padding:22px;border-radius:12px;border:1px solid rgba(255,255,255,0.04);text-align:center;color:#dff7ff}
+</style>
+</head>
+<body>
+<div id="game">
+  <canvas id="c" width="960" height="560"></canvas>
+  <div id="hud">
+    <div>Coins: <span id="coins">0</span> ◦ Weapon: <span id="weapon">Pew-Pew</span></div>
+    <div class="small">Left click: Shoot • E: Interact/Buy • Move: WASD • Look: Mouse</div>
+  </div>
+  <div id="message">Goal: Shoot apple pies to collect coins. Buy the cardboard sword (10 coins). Use sword to slay the dragon!</div>
+  <div id="centerHint">Click to play (pointer lock)</div>
+</div>
+
+<div id="overlay">
+  <div id="menu">
+    <h1>Cardboard Quest</h1>
+    <p class="small">An in-browser first-person shooter. Shoot apple pies to collect coins, buy the cardboard sword, then slay the dragon. Controls: WASD, mouse to look, left-click to shoot, E to interact.</p>
+    <div style="margin-top:12px">
+      <button id="start" class="btn">Start Game</button>
+      <button id="rules" class="btn">How to Play</button>
+    </div>
+  </div>
+</div>
+
+<div id="victory">
+  <div class="box">
+    <h2>Dragon Slain!</h2>
+    <p>You used the cardboard sword to defeat the dragon. Victory!</p>
+    <button id="restart" class="btn">Play Again</button>
+  </div>
+</div>
+
+<script>
+/* Cardboard Quest — simple raycaster FPS in a single HTML file.
+   Mechanics:
+   - Shoot apple pies (sprites) to get coins.
+   - Walk to the shop, press E to buy the Cardboard Sword for 10 coins.
+   - Equip sword; get close to the dragon and press E to attack/slay.
+*/
+
+(function(){
+  // Canvas & rendering
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  let W = canvas.width, H = canvas.height;
+  const HALF_H = H/2;
+
+  // HUD
+  const coinsEl = document.getElementById('coins');
+  const weaponEl = document.getElementById('weapon');
+  const overlay = document.getElementById('overlay');
+  const startBtn = document.getElementById('start');
+  const rulesBtn = document.getElementById('rules');
+  const centerHint = document.getElementById('centerHint');
+  const victoryBox = document.getElementById('victory');
+  const restartBtn = document.getElementById('restart');
+
+  // game config
+  const MAP = [
+    "1111111111111111",
+    "1..............1",
+    "1..p....1..d...1",
+    "1..............1",
+    "1....11..11....1",
+    "1..pp.....p....1",
+    "1.....s........1",
+    "1......11......1",
+    "1......11......1",
+    "1..............1",
+    "1.....p....p...1",
+    "1..............1",
+    "1111111111111111"
+  ];
+  // Legend: 1 wall, . floor, p pie sprite, s shop, d dragon
+
+  const TILE = 64;
+  const MAP_W = MAP[0].length;
+  const MAP_H = MAP.length;
+
+  // player
+  const player = {
+    x: TILE*2.5, y: TILE*2.8,
+    dir: 0, fov: Math.PI/3,
+    speed: 2.4,
+    coins:0,
+    hasSword:false,
+    isAlive:true
+  };
+
+  let pointerLocked = false;
+
+  // entities: pies, shop, dragon
+  const pies = [];
+  let shop = null;
+  let dragon = null;
+
+  // sprites (we'll draw them procedurally to offscreen canvases)
+  function makePieSprite(){
+    const s = document.createElement('canvas'); s.width=64; s.height=64; const g=s.getContext('2d');
+    g.fillStyle='#6b2e2e'; g.beginPath(); g.ellipse(32,32,28,20,0,0,Math.PI*2); g.fill();
+    g.fillStyle='#ffb788'; g.beginPath(); g.ellipse(24,24,6,4,0,0,Math.PI*2); g.fill();
+    g.fillStyle='#ffb788'; g.beginPath(); g.ellipse(40,26,6,4,0,0,Math.PI*2); g.fill();
+    g.fillStyle='#c34d2a'; g.fillRect(8,40,48,6);
+    return s;
+  }
+  function makeCoinSprite(){
+    const s=document.createElement('canvas'); s.width=32; s.height=32; const g=s.getContext('2d');
+    g.fillStyle='#ffcc33'; g.beginPath(); g.arc(16,16,12,0,Math.PI*2); g.fill();
+    g.fillStyle='#fff1b8'; g.beginPath(); g.arc(12,12,4,0,Math.PI*2); g.fill();
+    return s;
+  }
+  function makeShopSprite(){
+    const s=document.createElement('canvas'); s.width=96; s.height=64; const g=s.getContext('2d');
+    g.fillStyle='#553322'; g.fillRect(6,10,84,44);
+    g.fillStyle='#ffddaa'; g.fillRect(12,14,72,8);
+    g.fillStyle='#ffd18a'; g.font='12px sans-serif'; g.fillText('CARD-HUT',18,36);
+    return s;
+  }
+  function makeDragonSprite(){
+    const s=document.createElement('canvas'); s.width=128; s.height=96; const g=s.getContext('2d');
+    // body
+    g.fillStyle='#6b8b2b'; g.beginPath(); g.ellipse(64,56,52,28,0,0,Math.PI*2); g.fill();
+    // wing
+    g.fillStyle='#4f6b20'; g.beginPath(); g.moveTo(64,36); g.quadraticCurveTo(20,10,8,36); g.fill();
+    // head
+    g.fillStyle='#5a7a23'; g.beginPath(); g.ellipse(104,48,18,14,0,0,Math.PI*2); g.fill();
+    g.fillStyle='#fff'; g.fillRect(98,42,6,6);
+    return s;
+  }
+  function makeSwordIcon(){
+    const s=document.createElement('canvas'); s.width=48; s.height=48; const g=s.getContext('2d');
+    g.fillStyle='#d9c7b8'; g.fillRect(22,6,4,30);
+    g.fillStyle='#b08a4a'; g.fillRect(14,36,20,6);
+    g.fillStyle='#ffd'; g.beginPath(); g.moveTo(22,2); g.lineTo(12,12); g.lineTo(32,12); g.closePath(); g.fill();
+    return s;
+  }
+
+  const pieSprite = makePieSprite();
+  const coinSprite = makeCoinSprite();
+  const shopSprite = makeShopSprite();
+  const dragonSprite = makeDragonSprite();
+  const swordIcon = makeSwordIcon();
+
+  // populating entities
+  for(let y=0;y<MAP_H;y++){
+    for(let x=0;x<MAP_W;x++){
+      const ch = MAP[y][x];
+      if(ch === 'p'){
+        pies.push({x:(x+0.5)*TILE, y:(y+0.5)*TILE, collected:false});
+      } else if(ch === 's'){
+        shop = {x:(x+0.5)*TILE, y:(y+0.5)*TILE};
+      } else if(ch === 'd'){
+        dragon = {x:(x+0.5)*TILE, y:(y+0.6)*TILE, hp:18, alive:true};
+      }
+    }
+  }
+
+  // raycasting parameters
+  const RAYS = 240; // number of vertical slices
+  const MAX_DEPTH = 1000;
+  const SCALE = canvas.width / RAYS;
+  const HALF_FOV = player.fov/2;
+
+  // input
+  const keys = {};
+  let mouseDX = 0;
+  let canShoot = true;
+  let lastShot = 0;
+
+  // pointer lock and mouse
+  function initPointerLock(){
+    canvas.requestPointerLock = canvas.requestPointerLock || canvas.mozRequestPointerLock;
+    document.exitPointerLock = document.exitPointerLock || document.mozExitPointerLock;
+    canvas.onclick = () => {
+      canvas.requestPointerLock && canvas.requestPointerLock();
+    };
+    document.addEventListener('pointerlockchange', lockChange, false);
+    document.addEventListener('mozpointerlockchange', lockChange, false);
+  }
+  function lockChange(){
+    const pl = document.pointerLockElement === canvas || document.mozPointerLockElement === canvas;
+    pointerLocked = pl;
+    centerHint.style.display = pl ? 'none' : 'block';
+  }
+
+  // audio utility
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const aCtx = new AudioCtx();
+  function playBeep(freq=440, dur=0.08, vol=0.08, type='sine'){
+    try {
+      const o=aCtx.createOscillator(), g=aCtx.createGain();
+      o.type=type; o.frequency.value=freq; g.gain.value=vol;
+      o.connect(g); g.connect(aCtx.destination);
+      o.start(); g.gain.exponentialRampToValueAtTime(0.0001, aCtx.currentTime + dur);
+      setTimeout(()=>o.stop(), (dur+0.02)*1000);
+    } catch(e){}
+  }
+
+  // helper: map collision and ray hitting
+  function isWall(x,y){
+    const mx = Math.floor(x / TILE);
+    const my = Math.floor(y / TILE);
+    if(mx < 0 || my < 0 || mx >= MAP_W || my >= MAP_H) return true;
+    return MAP[my][mx] === '1';
+  }
+
+  // movement & collision
+  function movePlayer(dx,dy){
+    const nx = player.x + dx;
+    const ny = player.y + dy;
+    const radius = 14;
+    if(!isWall(nx - radius, player.y) && !isWall(nx + radius, player.y)) player.x = nx;
+    if(!isWall(player.x, ny - radius) && !isWall(player.x, ny + radius)) player.y = ny;
+  }
+
+  // cast a single ray returning hit info (wall distance and hit coords)
+  function castRay(rayAngle){
+    // normalized direction
+    const sin = Math.sin(rayAngle);
+    const cos = Math.cos(rayAngle);
+
+    let dist = 0;
+    let hit = false;
+    let hitX=0, hitY=0, mapX, mapY;
+    while(!hit && dist < MAX_DEPTH){
+      dist += 4;
+      const rx = player.x + cos * dist;
+      const ry = player.y + sin * dist;
+      if(isWall(rx, ry)){
+        hit = true;
+        hitX = rx; hitY = ry;
+        mapX = Math.floor(rx/TILE);
+        mapY = Math.floor(ry/TILE);
+        break;
+      }
+    }
+    return {dist, hit, hitX, hitY, mapX, mapY};
+  }
+
+  // draw frame (raycasting walls and sprites)
+  function render(){
+    ctx.fillStyle = '#0b1b22';
+    ctx.fillRect(0,0,W,H);
+
+    // draw ceiling & floor simple
+    ctx.fillStyle = '#132a2f';
+    ctx.fillRect(0,0,W,HALF_H);
+    ctx.fillStyle = '#07201a';
+    ctx.fillRect(0,HALF_H,W,HALF_H);
+
+    // for each ray
+    const startAngle = player.dir - player.fov/2;
+    const zBuffer = new Float32Array(RAYS);
+
+    for(let r=0;r<RAYS;r++){
+      const rayAngle = startAngle + (r / RAYS) * player.fov;
+      const ray = castRay(rayAngle);
+      let dist = ray.dist;
+      // fix fish-eye
+      dist *= Math.cos(rayAngle - player.dir);
+      zBuffer[r] = dist;
+      const wallHeight = (TILE * 300) / (dist + 0.0001);
+      const colorShade = Math.max(0.15, 1 - dist / 600);
+      const columnX = Math.floor(r * SCALE);
+      // wall slice
+      ctx.fillStyle = `rgba(${60*colorShade|0},${120*colorShade|0},${100*colorShade|0},1)`;
+      ctx.fillRect(columnX, HALF_H - wallHeight/2, Math.ceil(SCALE), wallHeight);
+      // simple wall border shading
+      ctx.fillStyle = `rgba(0,0,0,0.12)`;
+      ctx.fillRect(columnX, HALF_H - wallHeight/2, Math.ceil(SCALE), 2);
+      ctx.fillRect(columnX, HALF_H + wallHeight/2 - 2, Math.ceil(SCALE), 2);
+    }
+
+    // draw sprites: pies, shop, dragon
+    const sprites = [];
+
+    pies.forEach(p=>{
+      if(p.collected) return;
+      sprites.push({type:'pie', x:p.x, y:p.y, img:pieSprite, size:48, ref:p});
+    });
+    if(shop) sprites.push({type:'shop', x:shop.x, y:shop.y, img:shopSprite, size:110, ref:shop});
+    if(dragon && dragon.alive) sprites.push({type:'dragon', x:dragon.x, y:dragon.y, img:dragonSprite, size:140, ref:dragon});
+
+    // compute sprite screen projection and draw sorted by distance (far->near)
+    const sprList = sprites.map(s=> {
+      const dx = s.x - player.x;
+      const dy = s.y - player.y;
+      const dist = Math.hypot(dx,dy);
+      // angle between player dir and sprite
+      const spriteAngle = Math.atan2(dy,dx) - player.dir;
+      // normalize angle
+      let ang = spriteAngle;
+      while(ang > Math.PI) ang -= Math.PI*2;
+      while(ang < -Math.PI) ang += Math.PI*2;
+      const inFov = Math.abs(ang) < player.fov/2 + 0.4;
+      return Object.assign({}, s, {dist, ang, inFov});
+    }).filter(s=>s.inFov).sort((a,b)=>b.dist-a.dist);
+
+    sprList.forEach(s=>{
+      const projFactor = (1 / s.dist) * 800;
+      const spriteScreenHeight = s.size * projFactor;
+      const spriteScreenWidth = spriteScreenHeight * (s.img.width / s.img.height);
+      // screen x
+      const screenX = Math.tan(s.ang) / Math.tan(player.fov/2) * (W/2) + (W/2) - spriteScreenWidth/2;
+      const screenY = HALF_H - spriteScreenHeight/2;
+      // simple occlusion via zBuffer sampling at central column
+      const centralCol = Math.floor((screenX + spriteScreenWidth/2) / SCALE);
+      if(centralCol >= 0 && centralCol < RAYS && zBuffer[centralCol] < s.dist*0.7){
+        // occluded by wall
+        return;
+      }
+      ctx.drawImage(s.img, screenX, screenY, spriteScreenWidth, spriteScreenHeight);
+      // debug: draw bounding box if needed
+    });
+
+    // Weapon HUD (simple)
+    // draw crosshair
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(W/2 - 10, H/2); ctx.lineTo(W/2 + 10, H/2);
+    ctx.moveTo(W/2, H/2 - 10); ctx.lineTo(W/2, H/2 + 10);
+    ctx.stroke();
+
+    // draw coin count icon small
+    ctx.drawImage(coinSprite, 12, 12, 24, 24);
+    // draw small sword icon if owned
+    if(player.hasSword) ctx.drawImage(swordIcon, 46, 12, 24, 24);
+  }
+
+  // shooting: when click, cast a thin ray and check sprite hits first
+  function shoot(){
+    if(!player.isAlive) return;
+    // simple fire rate limit
+    const now = performance.now();
+    if(now - lastShot < 180) return;
+    lastShot = now;
+    playShotSound();
+    // cast ray from center
+    const rayAngle = player.dir;
+    // find first sprite in small cone
+    let hitSomething = null;
+    let min = 1e9;
+    // check pies
+    pies.forEach(p=>{
+      if(p.collected) return;
+      const dx = p.x - player.x; const dy = p.y - player.y;
+      const dist = Math.hypot(dx,dy);
+      const ang = Math.atan2(dy,dx) - player.dir;
+      let a = ang;
+      while(a > Math.PI) a -= Math.PI*2;
+      while(a < -Math.PI) a += Math.PI*2;
+      if(Math.abs(a) < 0.07 && dist < 700){
+        if(dist < min){ min = dist; hitSomething = {type:'pie', target:p}; }
+      }
+    });
+    // also check dragon: bullets have no effect unless sword? We'll allow bullets to do tiny damage
+    if(dragon && dragon.alive){
+      const dx = dragon.x - player.x; const dy = dragon.y - player.y;
+      const dist = Math.hypot(dx,dy);
+      const ang = Math.atan2(dy,dx) - player.dir;
+      let a = ang; while(a>Math.PI) a-=Math.PI*2; while(a<-Math.PI) a+=Math.PI*2;
+      if(Math.abs(a) < 0.08 && dist < 900 && dist < min){
+        hitSomething = {type:'dragon', target:dragon, dist};
+      }
+    }
+    if(hitSomething){
+      if(hitSomething.type === 'pie'){
+        // destroy pie, spawn coin, increment for immediate pickup
+        hitSomething.target.collected = true;
+        player.coins += 3 + Math.floor(Math.random()*3); // pies give coins
+        coinsEl.textContent = player.coins;
+        playBeep(980,0.08,0.06,'square');
+        flashHit();
+      } else if(hitSomething.type === 'dragon'){
+        // bullets do tiny damage
+        const d = hitSomething.target;
+        if(!d.alive) return;
+        d.hp -= 0.6;
+        playBeep(160,0.06,0.08,'sawtooth');
+        flashHit();
+        if(d.hp <= 0){
+          d.alive = false;
+          youWin();
+        }
+      }
+    } else {
+      // miss sound
+      playBeep(540, 0.04, 0.03, 'sine');
+    }
+  }
+
+  // interact E: buy sword if at shop and have coins; if at dragon and hasSword, attack
+  function interact(){
+    // check proximity to shop
+    if(shop){
+      const dShop = Math.hypot(player.x - shop.x, player.y - shop.y);
+      if(dShop < 80 && !player.hasSword){
+        if(player.coins >= 10){
+          player.coins -= 10;
+          player.hasSword = true;
+          weaponEl.textContent = 'Cardboard Sword';
+          coinsEl.textContent = player.coins;
+          playBeep(880,0.14,0.09,'triangle');
+          showMessage('Purchased Cardboard Sword!');
+          return;
+        } else {
+          showMessage('Need 10 coins to buy the cardboard sword.');
+          return;
+        }
+      }
+    }
+    // attack dragon with sword if close
+    if(player.hasSword && dragon && dragon.alive){
+      const dD = Math.hypot(player.x - dragon.x, player.y - dragon.y);
+      if(dD < 110){
+        // sword hit
+        dragon.hp -= 4;
+        playBeep(280,0.12,0.12,'square');
+        spawnSlash();
+        showMessage('Sword strike! Dragon HP: ' + Math.max(0,Math.round(dragon.hp)));
+        if(dragon.hp <= 0){
+          dragon.alive = false;
+          youWin();
+        }
+        return;
+      } else {
+        showMessage('Get closer to reach the dragon with your sword.');
+      }
+    }
+  }
+
+  // UI messages
+  let msgTimeout = null;
+  function showMessage(txt, t=2000){
+    const el = document.getElementById('message');
+    el.textContent = txt;
+    clearTimeout(msgTimeout);
+    msgTimeout = setTimeout(()=>{ el.textContent = 'Goal: Shoot pies to collect coins. Buy sword (10). Slay dragon.'; }, t);
+  }
+
+  // small visual flash on hit
+  let flashAlpha = 0;
+  function flashHit(){
+    flashAlpha = 0.7;
+    setTimeout(()=>{ flashAlpha = 0; }, 120);
+  }
+
+  // spawn sword slash particles near dragon when melee
+  const meleeParticles = [];
+  function spawnSlash(){
+    for(let i=0;i<18;i++){
+      meleeParticles.push({
+        x: dragon.x + (Math.random()-0.5)*60,
+        y: dragon.y + (Math.random()-0.5)*60,
+        vx: (Math.random()-0.5)*3,
+        vy: (Math.random()-0.5)*3,
+        life: 600 + Math.random()*400,
+        t:0
+      });
+    }
+  }
+
+  // simple shot sound
+  function playShotSound(){
+    playBeep(1200, 0.06, 0.08, 'triangle');
+  }
+
+  // victory handling
+  function youWin(){
+    playBeep(520,0.6,0.14,'sine');
+    victoryBox.style.display = 'flex';
+  }
+
+  // main loop
+  let last = performance.now();
+  function frame(t){
+    const dt = t - last; last = t;
+    update(dt);
+    render();
+    // overlay flash
+    if(flashAlpha > 0){
+      ctx.fillStyle = `rgba(255,100,100,${flashAlpha})`;
+      ctx.fillRect(0,0,W,H);
+    }
+    // melee particles
+    for(let i = meleeParticles.length-1;i>=0;i--){
+      const p = meleeParticles[i];
+      p.t += dt;
+      p.x += p.vx * dt/16;
+      p.y += p.vy * dt/16;
+      const a = 1 - p.t / p.life;
+      if(a <= 0) meleeParticles.splice(i,1);
+      else {
+        ctx.fillStyle = `rgba(255,240,200,${a})`;
+        ctx.fillRect((p.x - player.x) + W/2 + Math.sin(player.dir)*(p.y-player.y)*0.05, (p.y - player.y)+ H/2 - 200, 3, 3);
+      }
+    }
+    requestAnimationFrame(frame);
+  }
+
+  function update(dt){
+    // handle rotation from mouse movement
+    if(pointerLocked){
+      const sensitivity = 0.0022;
+      player.dir += (mouseDX) * sensitivity;
+      mouseDX = 0;
+    }
+    // movement
+    const moveStep = player.speed * (dt/16);
+    let dx=0, dy=0;
+    if(keys['w']) { dx += Math.cos(player.dir)*moveStep; dy += Math.sin(player.dir)*moveStep; }
+    if(keys['s']) { dx -= Math.cos(player.dir)*moveStep; dy -= Math.sin(player.dir)*moveStep; }
+    if(keys['a']) { dx += Math.cos(player.dir - Math.PI/2)*moveStep; dy += Math.sin(player.dir - Math.PI/2)*moveStep; }
+    if(keys['d']) { dx += Math.cos(player.dir + Math.PI/2)*moveStep; dy += Math.sin(player.dir + Math.PI/2)*moveStep; }
+    movePlayer(dx,dy);
+
+    // auto pickup coins from destroyed pies? pies give immediate coins when shot.
+
+    // update HUD
+    coinsEl.textContent = player.coins;
+    weaponEl.textContent = player.hasSword ? 'Cardboard Sword' : 'Pew-Pew';
+
+    // background slight ambiance
+    // nothing heavy here
+  }
+
+  // shooting via mouse click (pointer lock required)
+  document.addEventListener('mousedown', (e)=>{
+    if(!pointerLocked) return;
+    if(e.button === 0) shoot();
+  });
+
+  // keyboard
+  document.addEventListener('keydown', (e)=>{
+    keys[e.key.toLowerCase()] = true;
+    if(e.key === 'e' || e.key === 'E') interact();
+    if(e.key === ' '){ /* maybe jump later */ }
+    if(e.key === 'Escape'){ document.exitPointerLock && document.exitPointerLock(); }
+  });
+  document.addEventListener('keyup', (e)=> { keys[e.key.toLowerCase()] = false; });
+
+  document.addEventListener('mousemove', (e)=>{
+    if(!pointerLocked) return;
+    mouseDX += e.movementX || e.mozMovementX || e.webkitMovementX || 0;
+  });
+
+  // start button -> hide overlay and lock pointer
+  startBtn.addEventListener('click', ()=>{
+    overlay.style.display = 'none';
+    canvas.requestPointerLock && canvas.requestPointerLock();
+    // resume audio on user gesture
+    aCtx.resume && aCtx.resume();
+  });
+  rulesBtn.addEventListener('click', ()=> {
+    alert('Shoot pies (left click) to get coins. Walk to shop and press E to buy sword (10 coins). With sword, get close to the dragon and press E to strike repeatedly until it falls.');
+  });
+
+  restartBtn.addEventListener('click', ()=> location.reload());
+
+  // small helper to draw minimap? skip heavy UI.
+
+  // initial render values
+  function init(){
+    W = canvas.width; H = canvas.height;
+    requestAnimationFrame(frame);
+  }
+
+  // utility: pointer lock init and resume audio after interaction
+  initPointerLock();
+  init();
+
+  // small feedback to show shop and pies on map (debug overlay) - optional, but we add instructions near shop sprite
+  // no extra code needed
+
+  // Expose for console for debugging
+  window.CardboardQuest = { player, pies, dragon, shop, shoot, interact };
+
+})();
+</script>
+</body>
+</html>
