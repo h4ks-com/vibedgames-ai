@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>8x8 Household Inventory — 8-Slot Game</title>
+<style>
+  :root{
+    --bg:#071426;
+    --panel:#0c1620;
+    --muted:#98a8bc;
+    --accent:#7bd389;
+    --tile:#0f2b35;
+    --tile-border:#173d45;
+    --slot:#08161b;
+    --glass:rgba(255,255,255,0.03);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:Inter,Segoe UI,Arial,sans-serif;background:linear-gradient(180deg,#031222,#071427);color:#e8f7ff}
+  .wrap{max-width:1120px;margin:20px auto;padding:18px}
+  h1{margin:0 0 12px 0;font-size:20px;text-align:center}
+  .layout{display:grid;grid-template-columns:720px 1fr;gap:16px}
+  .panel{background:linear-gradient(180deg,var(--panel),#061018);border-radius:12px;padding:12px;border:1px solid var(--glass)}
+  .grid8{display:grid;grid-template-columns:repeat(8,1fr);gap:8px}
+  .cell{background:linear-gradient(180deg,var(--tile),#062027);border-radius:8px;height:76px;display:flex;flex-direction:column;align-items:center;justify-content:center;border:1px solid var(--tile-border);cursor:pointer;user-select:none;color:#dff7ff;font-size:13px}
+  .cell.empty{opacity:0.28;color:var(--muted);cursor:default}
+  .cell .ic{font-size:22px;line-height:1}
+  .cell .name{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:86%}
+  .side {display:flex;flex-direction:column;gap:12px}
+  .inventory{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .slot{height:74px;background:linear-gradient(180deg,var(--slot),#051218);border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,0.03);cursor:pointer;position:relative}
+  .slot.empty{color:var(--muted)}
+  .slot .ic{font-size:22px}
+  .slot .name{font-size:12px;color:#dff7ff;max-width:86%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .controls{display:flex;gap:8px;flex-wrap:wrap}
+  button{background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--muted);padding:8px 10px;border-radius:8px;cursor:pointer}
+  button:hover{border-color:var(--accent);color:var(--accent)}
+  .big{background:linear-gradient(90deg,var(--accent),#ffd18a);color:#072018;font-weight:700}
+  .stats{padding:10px;border-radius:10px;background:linear-gradient(180deg,rgba(255,255,255,0.01),transparent);border:1px solid rgba(255,255,255,0.02)}
+  .stat-row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed rgba(255,255,255,0.02)}
+  .stat-row:last-child{border-bottom:0}
+  .class-badge{padding:6px 10px;border-radius:999px;background:linear-gradient(90deg,#083033,#0b2f2f);color:#dff7ff;font-weight:700}
+  .list{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+  .chip{padding:6px 8px;border-radius:8px;background:rgba(255,255,255,0.02);font-size:13px}
+  .footer{font-size:12px;color:var(--muted);text-align:center;margin-top:8px}
+  @media (max-width:1000px){ .layout{grid-template-columns:1fr} .grid8{gap:6px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Household Inventory — 8 Slots & 8×8 Grid</h1>
+  <div class="layout">
+    <div class="panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div style="font-size:13px;color:var(--muted)">8×8 grid — one unique item per cell</div>
+        <div style="font-size:12px;color:var(--muted)">Click a cell to pick into inventory</div>
+      </div>
+      <div id="grid" class="grid8" aria-label="8 by 8 item grid"></div>
+      <div style="margin-top:12px;display:flex;justify-content:space-between;align-items:center">
+        <div class="controls">
+          <button id="shuffleGrid">Shuffle Grid</button>
+          <button id="resetGrid">Reset Grid</button>
+          <button id="repopulate">Repopulate (new random 64)</button>
+        </div>
+        <div style="font-size:12px;color:var(--muted)">Once picked, a cell becomes empty. Items are unique.</div>
+      </div>
+      <div class="footer">Cells numbered 1–64. Click inventory slot to return item to its original grid cell (or to any empty cell).</div>
+    </div>
+
+    <div class="panel side">
+      <div style="font-weight:800;color:#e9fbff">Inventory — 8 slots</div>
+      <div id="inventory" class="inventory" aria-label="inventory slots"></div>
+
+      <div class="controls" style="margin-top:8px">
+        <button id="randomFill">Randomize Inventory</button>
+        <button id="clearInv">Clear Inventory</button>
+        <button id="export" class="big">Export Build</button>
+      </div>
+
+      <div class="stats">
+        <div class="stat-row"><div>Class</div><div class="class-badge" id="className">—</div></div>
+        <div class="stat-row"><div>Profession</div><div id="profession" class="chip">—</div></div>
+        <div class="stat-row"><div>Top Tags</div><div id="topTags" class="chip">—</div></div>
+        <div class="stat-row">
+          <div>Scores</div>
+          <div style="text-align:right;color:var(--muted)">
+            <div>Chef: <span id="scoreChef">0</span></div>
+            <div>Artist: <span id="scoreArtist">0</span></div>
+            <div>Engineer: <span id="scoreEng">0</span></div>
+            <div>Collector: <span id="scoreColl">0</span></div>
+          </div>
+        </div>
+        <div style="margin-top:8px;color:var(--muted)">Current Items:</div>
+        <div id="listItems" class="list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* 64 "palm" items and 64 "hand" items — household objects */
+const PALM = [
+"coin","ring","jewel","crystal","stone","grain","prism","die","lens","button",
+"bead","marble","pebble","seed","leaf","shell","charm","key","battery","magnet",
+"screw","nut","washer","paperclip","token","sticker","ticket","receipt","thread","needle",
+"safetypin","badge","pendant","pearl","cork","shard","relic","scrap","lozenge","candy",
+"gum","pill","pill","capsule","label","memo","matchstick","dime","nickel","quarter",
+"bead2","pebble2","shell2","talisman","amulet","barcode","tag","seed2","grain2","button2",
+"charm2","pendant2","token2","watch","thimble"
+];
+
+const HAND = [
+"teacup","glass","teapot","pencil","paper","eraser","pen","ink bottle","cheese","milk bottle",
+"donut","pillow","blanket","book","magazine","remote","phone","tablet","laptop","mug",
+"plate","fork","spoon","knife","scissors","carrot","apple","pan","pot","frying pan",
+"spatula","whisk","brush","comb","hairbrush","toothbrush","towel","lamp","candle","flashlight",
+"camera","keys","backpack","bag","shoe","slipper","chair","stool","broom","vacuum",
+"printer","keyboard","mouse","headphones","speaker","guitar","bottle","jar","cushion","thermos",
+"helmet","toolbox","drill","paintbrush","pistol","screwdriver","ruler","notebook"
+];
+
+/* Build unified ITEMS list (128 entries) */
+const ITEMS = [];
+function tagItem(name, type){
+  const n = name.toLowerCase();
+  const tags = new Set();
+  if(type === 'palm'){
+    if(/coin|dime|nickel|quarter|watch|battery/.test(n)) tags.add('metal'), tags.add('personal');
+    if(/ring|jewel|pearl|pendant|talisman|amulet|relic|charm|bead/.test(n)) tags.add('keepsake'), tags.add('personal');
+    if(/crystal|prism|lens|shard/.test(n)) tags.add('fragile'), tags.add('decor');
+    if(/grain|seed|leaf|shell|pebble|marble/.test(n)) tags.add('nature');
+    if(/button|paperclip|needle|thread|safetypin|cork|washer|screw|nut|thimble/.test(n)) tags.add('tool'), tags.add('craft');
+    if(/matchstick|lozenge|candy|gum|pill|capsule/.test(n)) tags.add('consumable');
+    if(/ticket|receipt|label|barcode|memo/.test(n)) tags.add('paper'), tags.add('office');
+    if(tags.size===0) tags.add('small');
+  } else {
+    if(/teacup|glass|teapot|mug|plate|bottle|jar|pot|pan|frying pan|spatula|whisk|cheese|donut|milk/.test(n)) tags.add('kitchen'), tags.add('food');
+    if(/pencil|paper|pen|eraser|book|magazine|paintbrush|ink bottle|keyboard|mouse|notebook|ruler/.test(n)) tags.add('office'), tags.add('craft');
+    if(/phone|tablet|laptop|printer|mouse|camera|headphones|speaker/.test(n)) tags.add('electronic');
+    if(/scissors|knife|drill|toolbox|screwdriver|tool/.test(n)) tags.add('tool');
+    if(/pillow|blanket|towel|cushion|slipper/.test(n)) tags.add('fabric'), tags.add('home');
+    if(/chair|stool|broom|vacuum/.test(n)) tags.add('furniture'), tags.add('home');
+    if(/guitar/.test(n)) tags.add('music'), tags.add('craft');
+    if(/keys|backpack|bag|shoe|helmet/.test(n)) tags.add('personal');
+    if(/lamp|candle|flashlight/.test(n)) tags.add('light'), tags.add('tool');
+    if(/pistol/.test(n)) tags.add('danger'), tags.add('heavy');
+    if(tags.size===0) tags.add('household');
+  }
+  return Array.from(tags);
+}
+function addItems(list, type){
+  list.forEach((name, idx)=>{
+    const id = type[0] + ('00' + (idx+1)).slice(-3) + '_' + name.replace(/\W+/g,'');
+    ITEMS.push({ id, name, type, tags: tagItem(name, type) });
+  });
+}
+addItems(PALM, 'palm');
+addItems(HAND, 'hand');
+
+/* Grid: choose 64 unique items from ITEMS (shuffle then take first 64) */
+let pool = ITEMS.slice();
+function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]] = [a[j],a[i]]; } }
+shuffle(pool);
+let gridItems = pool.slice(0,64);          // items placed on grid
+let gridCells = gridItems.map(it => it.id); // id or null
+const idToOriginalCell = {};                // item id -> original cell index (for returning)
+gridCells.forEach((id, idx)=> { idToOriginalCell[id] = idx; });
+
+/* Inventory: 8 slots */
+let inventory = Array(8).fill(null);
+
+/* DOM refs */
+const gridEl = document.getElementById('grid');
+const invEl = document.getElementById('inventory');
+const classEl = document.getElementById('className');
+const profEl = document.getElementById('profession');
+const topTagsEl = document.getElementById('topTags');
+const scoreChefEl = document.getElementById('scoreChef');
+const scoreArtistEl = document.getElementById('scoreArtist');
+const scoreEngEl = document.getElementById('scoreEng');
+const scoreCollEl = document.getElementById('scoreColl');
+const listItemsEl = document.getElementById('listItems');
+
+/* Icon by tag */
+function iconFor(it){
+  const t = it.tags[0] || '';
+  if(t==='kitchen') return '🍽';
+  if(t==='food' || t==='consumable') return '🍪';
+  if(t==='electronic') return '📱';
+  if(t==='tool') return '🔧';
+  if(t==='fabric') return '🧵';
+  if(t==='keepsake') return '📿';
+  if(t==='fragile') return '💎';
+  if(t==='music') return '🎸';
+  if(t==='office') return '📎';
+  if(t==='personal' || t==='metal') return '🔑';
+  if(t==='nature') return '🍂';
+  if(t==='danger') return '⚠️';
+  return '🏺';
+}
+
+/* Render grid */
+function renderGrid(){
+  gridEl.innerHTML = '';
+  for(let i=0;i<64;i++){
+    const cell = document.createElement('div');
+    cell.className = 'cell' + (gridCells[i] ? '' : ' empty');
+    cell.dataset.index = i;
+    if(gridCells[i]){
+      const it = findItem(gridCells[i]);
+      cell.innerHTML = `<div class="ic">${iconFor(it)}</div><div class="name">${it.name}</div>`;
+      cell.title = it.tags.join(', ');
+      cell.onclick = ()=> pickFromGrid(i);
+    } else {
+      cell.innerHTML = `<div class="ic">—</div><div class="name">empty</div>`;
+      cell.onclick = ()=> {};
+    }
+    gridEl.appendChild(cell);
+  }
+}
+
+/* Render inventory */
+function renderInventory(){
+  invEl.innerHTML = '';
+  for(let i=0;i<8;i++){
+    const s = document.createElement('div');
+    s.className = 'slot' + (inventory[i] ? '' : ' empty');
+    s.dataset.index = i;
+    if(inventory[i]){
+      const it = findItem(inventory[i]);
+      s.innerHTML = `<div class="ic">${iconFor(it)}</div><div class="name">${it.name}</div>`;
+      s.title = 'Click to return to grid';
+      s.onclick = ()=> returnToGrid(i);
+    } else {
+      s.innerHTML = `<div style="font-size:12px;color:var(--muted)">Slot ${i+1}</div><div style="font-size:11px;color:var(--muted)">empty</div>`;
+      s.onclick = ()=> {};
+    }
+    invEl.appendChild(s);
+  }
+}
+
+/* Helpers */
+function findItem(id){ return ITEMS.find(it => it.id === id); }
+
+/* Pick from grid into first free inventory slot (or replace prompt if full) */
+function pickFromGrid(gridIndex){
+  const id = gridCells[gridIndex];
+  if(!id) return;
+  const free = inventory.indexOf(null);
+  if(free === -1){
+    if(!confirm('Inventory full. Replace slot 1 with this item? OK to replace, Cancel to abort.')) return;
+    // return replaced item to any empty grid cell if possible
+    const replaced = inventory[0];
+    if(replaced){
+      const orig = idToOriginalCell[replaced];
+      if(orig !== undefined && gridCells[orig] === null){
+        gridCells[orig] = replaced;
+      } else {
+        const emptyIdx = gridCells.findIndex(c => c === null);
+        if(emptyIdx >= 0) gridCells[emptyIdx] = replaced;
+      }
+    }
+    inventory[0] = id;
+    gridCells[gridIndex] = null;
+  } else {
+    inventory[free] = id;
+    gridCells[gridIndex] = null;
+  }
+  renderGrid(); renderInventory(); computeClass();
+}
+
+/* Return inventory slot item to its original cell or any empty cell */
+function returnToGrid(slotIndex){
+  const id = inventory[slotIndex];
+  if(!id) return;
+  const orig = idToOriginalCell[id];
+  if(orig !== undefined && gridCells[orig] === null){
+    gridCells[orig] = id;
+  } else {
+    const empty = gridCells.findIndex(c => c === null);
+    if(empty >= 0) gridCells[empty] = id;
+    else { alert('No empty grid cell to return to. Clear a grid cell first.'); return; }
+  }
+  inventory[slotIndex] = null;
+  renderGrid(); renderInventory(); computeClass();
+}
+
+/* Randomize inventory: pick up to 8 random items from grid */
+function randomizeInventory(){
+  // collect available ids with their index
+  const available = gridCells.map((id, idx) => ({id, idx})).filter(x => x.id);
+  shuffle(available);
+  // clear existing inventory back to grid
+  for(let i=0;i<8;i++){
+    if(inventory[i]){
+      const id = inventory[i];
+      const orig = idToOriginalCell[id];
+      if(orig !== undefined && gridCells[orig] === null) gridCells[orig] = id;
+      else {
+        const emptyIdx = gridCells.findIndex(c => c === null);
+        if(emptyIdx >= 0) gridCells[emptyIdx] = id;
+      }
+      inventory[i] = null;
+    }
+  }
+  // pick first up to 8
+  for(let i=0;i<Math.min(8, available.length); i++){
+    inventory[i] = available[i].id;
+    gridCells[available[i].idx] = null;
+  }
+  renderGrid(); renderInventory(); computeClass();
+}
+
+/* Export build JSON */
+function exportBuild(){
+  const payload = { slots: inventory.map(s => s ? findItem(s).name : null), timestamp: Date.now() };
+  prompt('Copy build JSON:', JSON.stringify(payload, null, 2));
+}
+
+/* Shuffle grid cells' positions */
+function shuffleGrid(){
+  // shuffle gridCells array
+  shuffle(gridCells);
+  // rebuild idToOriginalCell mapping to reflect new original positions
+  gridCells.forEach((id, idx)=>{ if(id) idToOriginalCell[id] = idx; });
+  renderGrid();
+}
+
+/* Reset grid to current gridItems (repopulate with same 64 items shuffled) */
+function resetGrid(){
+  gridCells = gridItems.map(it => it.id);
+  shuffle(gridCells);
+  gridCells.forEach((id, idx)=>{ if(id) idToOriginalCell[id] = idx; });
+  inventory = Array(8).fill(null);
+  renderGrid(); renderInventory(); computeClass();
+}
+
+/* Repopulate grid with a new random selection of 64 items from ITEMS */
+function repopulateGrid(){
+  pool = ITEMS.slice();
+  shuffle(pool);
+  gridItems = pool.slice(0,64);
+  gridCells = gridItems.map(it => it.id);
+  gridCells.forEach((id, idx)=>{ idToOriginalCell[id] = idx; });
+  inventory = Array(8).fill(null);
+  renderGrid(); renderInventory(); computeClass();
+}
+
+/* Compute class & profession from inventory items (tag tally & heuristics) */
+function computeClass(){
+  const tagCounts = {};
+  const present = inventory.filter(Boolean).map(id => findItem(id));
+  present.forEach(it => it.tags.forEach(t => tagCounts[t] = (tagCounts[t]||0)+1));
+
+  const scores = { chef:0, artist:0, engineer:0, collector:0 };
+  for(const [tag, cnt] of Object.entries(tagCounts)){
+    if(tag === 'kitchen' || tag === 'food') { scores.chef += cnt * 3; scores.collector += cnt * 0.2; }
+    if(tag === 'craft' || tag === 'music' || tag === 'paper' || tag === 'office') { scores.artist += cnt * 3; scores.engineer += cnt * 0.4; }
+    if(tag === 'tool' || tag === 'electronic' || tag === 'metal') { scores.engineer += cnt * 3; scores.chef += cnt * 0.3; }
+    if(tag === 'keepsake' || tag === 'personal' || tag === 'relic' || tag === 'fragile') { scores.collector += cnt * 3; scores.artist += cnt * 0.4; }
+    if(tag === 'fabric' || tag === 'home' || tag === 'furniture') { scores.artist += cnt * 1.2; scores.collector += cnt * 0.8; }
+    if(tag === 'consumable') { scores.chef += cnt * 1.8; }
+    if(tag === 'nature') { scores.collector += cnt * 1.2; scores.chef += cnt * 0.4; }
+    if(tag === 'danger') { scores.engineer += cnt * 1.6; scores.collector += cnt * 0.2; }
+    if(tag === 'small' || tag === 'household') { scores.collector += cnt * 0.4; scores.engineer += cnt * 0.3; }
+  }
+
+  const names = present.map(i => i.name.toLowerCase());
+  if(names.some(n => /pan|frying|spatula|pot|teapot|mug|donut|cheese/.test(n))) scores.chef += 3;
+  if(names.some(n => /paintbrush|pencil|book|magazine|guitar/.test(n))) scores.artist += 3;
+  if(names.some(n => /drill|toolbox|printer|laptop|camera|keyboard|screwdriver/.test(n))) scores.engineer += 3;
+  if(names.some(n => /relic|watch|token|badge|pendant/.test(n))) scores.collector += 3;
+
+  const order = Object.keys(scores).sort((a,b)=>scores[b]-scores[a]);
+  const top = order[0];
+
+  const profession = determineProfession(top, tagCounts, present);
+
+  const topTags = Object.entries(tagCounts).sort((a,b)=>b[1]-a[1]).slice(0,4).map(t=>t[0] + (t[1]>1?`(${t[1]})`:'')) || [];
+
+  classEl.textContent = top ? capitalize(top) : '—';
+  profEl.textContent = profession || '—';
+  topTagsEl.textContent = topTags.length ? topTags.join(', ') : '—';
+  scoreChefEl.textContent = Math.round(scores.chef*10)/10;
+  scoreArtistEl.textContent = Math.round(scores.artist*10)/10;
+  scoreEngEl.textContent = Math.round(scores.engineer*10)/10;
+  scoreCollEl.textContent = Math.round(scores.collector*10)/10;
+
+  listItemsEl.innerHTML = '';
+  present.forEach(it => {
+    const el = document.createElement('div');
+    el.className = 'chip';
+    el.textContent = `${iconFor(it)} ${it.name}`;
+    listItemsEl.appendChild(el);
+  });
+}
+
+/* Profession heuristics */
+function determineProfession(classKey, tagCounts, items){
+  const tc = Object.assign({}, tagCounts);
+  ['kitchen','food','tool','electronic','craft','music','keepsake','personal','fragile','fabric','office','furniture','consumable','danger'].forEach(t=>tc[t]=tc[t]||0);
+  const names = items.map(i=>i.name.toLowerCase());
+
+  const professions = {
+    chef:[
+      {name:'Homecook', score: ()=> tc.kitchen*2 + tc.food + (names.some(n=>/mug|teacup|donut|pan/.test(n))?1:0)},
+      {name:'Baker', score: ()=> (names.some(n=>/donut|cookie|bake/.test(n))?2:0) + tc.food},
+      {name:'Barista', score: ()=> (names.some(n=>/mug|teacup/.test(n))?1:0) + tc.kitchen},
+      {name:'Preserver', score: ()=> (names.some(n=>/jar|bottle|cork/.test(n))?2:0) + tc.kitchen}
+    ],
+    artist:[
+      {name:'Painter', score: ()=> tc.craft*2 + (names.some(n=>/paintbrush/.test(n))?1:0)},
+      {name:'Writer', score: ()=> tc.office*2 + (names.some(n=>/paper|pencil|notebook/.test(n))?1:0)},
+      {name:'Musician', score: ()=> tc.music*2 + (names.some(n=>/guitar/.test(n))?1:0)},
+      {name:'Designer', score: ()=> tc.fabric + tc.craft*1.2}
+    ],
+    engineer:[
+      {name:'Mechanic', score: ()=> tc.tool*2 + (tc.metal||0)},
+      {name:'Electrician', score: ()=> tc.electronic*2 + tc.tool},
+      {name:'Maker', score: ()=> tc.tool + tc.electronic + tc.craft},
+      {name:'Tinkerer', score: ()=> tc.tool + (tc.household||0)}
+    ],
+    collector:[
+      {name:'Curator', score: ()=> (tc.keepsake||0)*2 + (tc.decor||0)},
+      {name:'Antique Dealer', score: ()=> (tc.relic||0)*2 + (tc.keepsake||0)},
+      {name:'Hoarder', score: ()=> Object.values(tagCounts).reduce((a,b)=>a+b,0)},
+      {name:'Archivist', score: ()=> (tc.paper||0) + (tc.office||0)}
+    ]
+  };
+
+  if(!classKey) return null;
+  if(classKey === 'chef' && names.some(n=>/donut|cheese|pan|spatula/.test(n))) return 'Homecook';
+  if(classKey === 'artist' && names.some(n=>/paintbrush|guitar|pencil/.test(n))) return 'Painter';
+  if(classKey === 'engineer' && names.some(n=>/drill|toolbox|printer|laptop|screwdriver/.test(n))) return 'Tinkerer';
+  if(classKey === 'collector' && names.some(n=>/relic|watch|badge|pendant/.test(n))) return 'Curator';
+
+  const list = professions[classKey];
+  const scored = list.map(p=>({name:p.name, score: p.score()}));
+  scored.sort((a,b)=>b.score-a.score);
+  return scored[0].score > 0 ? scored[0].name : list[0].name;
+}
+
+/* Utilities */
+function capitalize(s){ return s ? s.charAt(0).toUpperCase()+s.slice(1) : s; }
+function iconFor(it){
+  return iconForTag(it.tags[0] || '');
+}
+function iconForTag(t){
+  if(t==='kitchen') return '🍽';
+  if(t==='food' || t==='consumable') return '🍪';
+  if(t==='electronic') return '📱';
+  if(t==='tool') return '🔧';
+  if(t==='fabric') return '🧵';
+  if(t==='keepsake') return '📿';
+  if(t==='fragile') return '💎';
+  if(t==='music') return '🎸';
+  if(t==='office') return '📎';
+  if(t==='personal' || t==='metal') return '🔑';
+  if(t==='nature') return '🍂';
+  if(t==='danger') return '⚠️';
+  return '🏺';
+}
+function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } }
+
+/* Buttons */
+document.getElementById('shuffleGrid').onclick = ()=> { shuffleGrid(); renderGrid(); };
+document.getElementById('resetGrid').onclick = ()=> { resetGrid(); };
+document.getElementById('repopulate').onclick = ()=> { repopulateGrid(); };
+document.getElementById('randomFill').onclick = ()=> { randomizeInventory(); };
+document.getElementById('clearInv').onclick = ()=> { inventory = Array(8).fill(null); renderInventory(); computeClass(); };
+document.getElementById('export').onclick = ()=> { exportBuild(); };
+
+/* Initial render */
+renderGrid();
+renderInventory();
+computeClass();
+</script>
+</body>
+</html>
