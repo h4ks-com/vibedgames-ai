@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Draggable Resizable Form Windows</title>
+<style>
+  :root{
+    --win-bg:#c0c0c0;
+    --menu-bg:#e0e0e0;
+    --title-bg:#000080;
+    --title-fg:#ffffff;
+    --bevel-light:#ffffff;
+    --bevel-dark:#404040;
+    --font-family: "Segoe UI", Tahoma, "MS Sans Serif", Arial, sans-serif;
+  }
+  html,body{height:100%;margin:0;background:linear-gradient(#6b8ebd,#91b0d8);font-family:var(--font-family);}
+  .desk {
+    position:relative;
+    width:100%;
+    height:100%;
+    overflow:hidden;
+  }
+
+  /* Window shell */
+  .win {
+    position:absolute;
+    min-width:220px;
+    min-height:140px;
+    width:360px;
+    height:260px;
+    box-sizing:border-box;
+    background:var(--win-bg);
+    border:2px solid var(--bevel-dark);
+    box-shadow: 6px 6px 0 rgba(0,0,0,0.15);
+    user-select:none;
+  }
+  .win:active { cursor:grabbing; }
+
+  /* Titlebar */
+  .win .titlebar {
+    display:flex;
+    align-items:center;
+    height:28px;
+    padding:0 6px;
+    background:linear-gradient(#0000a0,#000060);
+    color:var(--title-fg);
+    font-weight:bold;
+    font-size:13px;
+    border-bottom:2px solid var(--bevel-dark);
+    cursor:grab;
+  }
+  .title {
+    flex:1;
+    padding-left:4px;
+  }
+  .win .titlebar .controls {
+    display:flex;
+    gap:4px;
+  }
+  .btn {
+    width:18px;
+    height:16px;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    background:linear-gradient(#f0f0f0,#c0c0c0);
+    border:1px solid #808080;
+    color:#000;
+    font-size:12px;
+    cursor:pointer;
+  }
+
+  /* Menu bar (Windows 98 style) */
+  .menubar {
+    display:flex;
+    gap:4px;
+    padding:4px;
+    background:var(--menu-bg);
+    border-bottom:2px solid var(--bevel-dark);
+    box-sizing:border-box;
+  }
+  .menu {
+    position:relative;
+    padding:2px 8px;
+    background:linear-gradient(#e8e8e8,#cfcfcf);
+    border:1px solid #808080;
+    cursor:pointer;
+    font-size:12px;
+    box-shadow: inset -1px -1px 0 rgba(255,255,255,0.6);
+  }
+  .menu:active { transform:translateY(1px); }
+  .menu .dropdown {
+    position:absolute;
+    left:0;
+    top:100%;
+    background:#f0f0f0;
+    border:2px solid #404040;
+    min-width:120px;
+    z-index:9999;
+    padding:6px 0;
+    box-shadow: 3px 3px 0 rgba(0,0,0,0.2);
+  }
+  .menuitem {
+    padding:4px 12px;
+    font-size:13px;
+    white-space:nowrap;
+    cursor:pointer;
+  }
+  .menuitem:hover { background:#000080; color:#fff; }
+
+  /* Content and form */
+  .content {
+    padding:10px;
+    height: calc(100% - 28px - 36px - 12px); /* title + menubar + padding adjust */
+    box-sizing:border-box;
+    overflow:auto;
+  }
+  form label { display:block; margin:8px 0 4px; font-size:13px; }
+  form input[type="text"], form input[type="email"], form textarea, form select {
+    width:100%;
+    box-sizing:border-box;
+    padding:6px;
+    border:2px inset #fff;
+    outline:none;
+    font-size:13px;
+  }
+  form textarea { resize:vertical; min-height:60px; }
+
+  .form-actions {
+    display:flex;
+    gap:8px;
+    margin-top:10px;
+  }
+  .action-btn {
+    padding:6px 12px;
+    background:linear-gradient(#fff,#cfcfcf);
+    border:1px solid #808080;
+    cursor:pointer;
+    font-size:13px;
+  }
+
+  /* Resize handle */
+  .resize-handle {
+    width:14px;
+    height:14px;
+    position:absolute;
+    right:1px;
+    bottom:1px;
+    cursor:se-resize;
+    background:linear-gradient(#cfcfcf,#9a9a9a);
+    border:1px solid #404040;
+  }
+
+  /* Utility toolbar to create windows */
+  .toolbar {
+    position:fixed;
+    left:10px;
+    top:10px;
+    display:flex;
+    gap:8px;
+    z-index:99999;
+  }
+  .toolbar .tool {
+    padding:6px 10px;
+    background:#fff;
+    border:2px groove #d0d0d0;
+    cursor:pointer;
+    font-weight:bold;
+  }
+
+  /* Simple modal for About */
+  .modal-backdrop {
+    position:fixed; inset:0; background:rgba(0,0,0,0.35); display:flex; align-items:center; justify-content:center; z-index:200000;
+  }
+  .modal {
+    background:#fff; padding:16px; border:2px solid #404040; width:320px; box-shadow:8px 8px 0 rgba(0,0,0,0.2);
+  }
+  .modal h3 { margin:0 0 8px 0; }
+</style>
+</head>
+<body>
+<div class="desk" id="desk"></div>
+
+<div class="toolbar">
+  <div class="tool" id="newDefault">New Window</div>
+  <div class="tool" id="newAt">Create at (x,y)</div>
+</div>
+
+<script>
+(function(){
+  const desk = document.getElementById('desk');
+  let zIndexCounter = 100;
+  let windowIdCounter = 1;
+
+  // Utility: bring window to front
+  function bringToFront(el){
+    zIndexCounter++;
+    el.style.zIndex = zIndexCounter;
+  }
+
+  // Create a form window at x,y with title (optional)
+  window.createFormWindow = function(x = 60 + (windowIdCounter-1)*20, y = 60 + (windowIdCounter-1)*20, title){
+    const id = 'win' + (windowIdCounter++);
+    const win = document.createElement('div');
+    win.className = 'win';
+    win.id = id;
+    win.style.left = (x||60) + 'px';
+    win.style.top = (y||60) + 'px';
+    win.style.zIndex = ++zIndexCounter;
+
+    const winTitle = title ? String(title) : 'Untitled Form';
+
+    win.innerHTML = `
+      <div class="titlebar" data-drag-handle>
+        <div class="title">${escapeHtml(winTitle)}</div>
+        <div class="controls">
+          <div class="btn" title="Minimize">_</div>
+          <div class="btn" title="Maximize">▢</div>
+          <div class="btn close-btn" title="Close">X</div>
+        </div>
+      </div>
+      <div class="menubar">
+        <div class="menu" data-menu="file">File
+          <div class="dropdown" style="display:none">
+            <div class="menuitem" data-action="new">New</div>
+            <div class="menuitem" data-action="save">Save</div>
+            <div class="menuitem" data-action="close">Close</div>
+          </div>
+        </div>
+        <div class="menu" data-menu="edit">Edit
+          <div class="dropdown" style="display:none">
+            <div class="menuitem" data-action="undo">Undo</div>
+            <div class="menuitem" data-action="clear">Clear</div>
+            <div class="menuitem" data-action="duplicate">Duplicate</div>
+          </div>
+        </div>
+        <div class="menu" data-menu="about">About
+          <div class="dropdown" style="display:none">
+            <div class="menuitem" data-action="about">About this</div>
+          </div>
+        </div>
+      </div>
+      <div class="content">
+        <form class="form">
+          <label>Name</label>
+          <input type="text" name="name" placeholder="Your name" />
+          <label>Email</label>
+          <input type="email" name="email" placeholder="you@example.com" />
+          <label>Reason</label>
+          <select name="reason">
+            <option value="feedback">Feedback</option>
+            <option value="bug">Bug Report</option>
+            <option value="other">Other</option>
+          </select>
+          <label>Details</label>
+          <textarea name="details" placeholder="Tell us more..."></textarea>
+          <div class="form-actions">
+            <button type="button" class="action-btn submit-btn">Submit</button>
+            <button type="button" class="action-btn cancel-btn">Cancel</button>
+          </div>
+        </form>
+      </div>
+      <div class="resize-handle" title="Resize"></div>
+    `;
+
+    desk.appendChild(win);
+
+    // Dragging
+    const titlebar = win.querySelector('[data-drag-handle]');
+    titlebar.addEventListener('mousedown', startDrag);
+    titlebar.addEventListener('touchstart', startDrag, {passive:false});
+
+    function startDrag(e){
+      e.preventDefault();
+      bringToFront(win);
+      const rect = win.getBoundingClientRect();
+      const startX = (e.touches ? e.touches[0].clientX : e.clientX);
+      const startY = (e.touches ? e.touches[0].clientY : e.clientY);
+      const offsetX = startX - rect.left;
+      const offsetY = startY - rect.top;
+
+      function onMove(ev){
+        const clientX = (ev.touches ? ev.touches[0].clientX : ev.clientX);
+        const clientY = (ev.touches ? ev.touches[0].clientY : ev.clientY);
+        let nx = clientX - offsetX;
+        let ny = clientY - offsetY;
+        // constrain inside desk
+        const dRect = desk.getBoundingClientRect();
+        nx = Math.max(0, Math.min(nx, dRect.width - win.offsetWidth));
+        ny = Math.max(0, Math.min(ny, dRect.height - win.offsetHeight));
+        win.style.left = nx + 'px';
+        win.style.top = ny + 'px';
+      }
+      function end(){
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', end);
+        window.removeEventListener('touchmove', onMove);
+        window.removeEventListener('touchend', end);
+      }
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', end);
+      window.addEventListener('touchmove', onMove, {passive:false});
+      window.addEventListener('touchend', end);
+    }
+
+    // Resize
+    const handle = win.querySelector('.resize-handle');
+    handle.addEventListener('mousedown', startResize);
+    handle.addEventListener('touchstart', startResize, {passive:false});
+    function startResize(e){
+      e.preventDefault();
+      bringToFront(win);
+      const startX = (e.touches ? e.touches[0].clientX : e.clientX);
+      const startY = (e.touches ? e.touches[0].clientY : e.clientY);
+      const startW = win.offsetWidth;
+      const startH = win.offsetHeight;
+
+      function onMove(ev){
+        const clientX = (ev.touches ? ev.touches[0].clientX : ev.clientX);
+        const clientY = (ev.touches ? ev.touches[0].clientY : ev.clientY);
+        let nw = Math.max(220, startW + (clientX - startX));
+        let nh = Math.max(140, startH + (clientY - startY));
+        // optionally constrain to desk
+        const dRect = desk.getBoundingClientRect();
+        const left = parseInt(win.style.left,10) || 0;
+        const top = parseInt(win.style.top,10) || 0;
+        nw = Math.min(nw, dRect.width - left);
+        nh = Math.min(nh, dRect.height - top);
+        win.style.width = nw + 'px';
+        win.style.height = nh + 'px';
+      }
+      function end(){
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', end);
+        window.removeEventListener('touchmove', onMove);
+        window.removeEventListener('touchend', end);
+      }
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', end);
+      window.addEventListener('touchmove', onMove, {passive:false});
+      window.addEventListener('touchend', end);
+    }
+
+    // Focus handling
+    win.addEventListener('mousedown', ()=>bringToFront(win));
+    win.addEventListener('touchstart', ()=>bringToFront(win));
+
+    // Close button
+    win.querySelector('.close-btn').addEventListener('click', ()=>win.remove());
+
+    // Form actions
+    const form = win.querySelector('.form');
+    const submitBtn = win.querySelector('.submit-btn');
+    const cancelBtn = win.querySelector('.cancel-btn');
+
+    submitBtn.addEventListener('click', ()=>{
+      const data = new FormData(form);
+      const obj = {};
+      for(const [k,v] of data.entries()) obj[k]=v;
+      // Save -> just log and show a small alert inside window
+      console.log('Form saved from', id, obj);
+      flashMessage(win, 'Saved!');
+    });
+    cancelBtn.addEventListener('click', ()=>{
+      form.reset();
+      flashMessage(win, 'Cleared');
+    });
+
+    // Menus
+    const menus = win.querySelectorAll('.menu');
+    menus.forEach(menu=>{
+      const label = menu;
+      const dropdown = menu.querySelector('.dropdown');
+      label.addEventListener('click', (e)=>{
+        e.stopPropagation();
+        // close other menus in this window
+        win.querySelectorAll('.dropdown').forEach(d=>{ if(d!==dropdown) d.style.display='none'; });
+        dropdown.style.display = dropdown.style.display === 'block' ? 'none' : 'block';
+        bringToFront(win);
+      });
+
+      dropdown.querySelectorAll('.menuitem').forEach(item=>{
+        item.addEventListener('click', (ev)=>{
+          ev.stopPropagation();
+          dropdown.style.display='none';
+          const action = item.getAttribute('data-action');
+          handleMenuAction(action, win, form);
+        });
+      });
+    });
+
+    // Click outside to close dropdowns
+    function closeMenuOnOutside(e){
+      if(!win.contains(e.target)){
+        win.querySelectorAll('.dropdown').forEach(d=>d.style.display='none');
+      }
+    }
+    window.addEventListener('click', closeMenuOnOutside);
+    window.addEventListener('touchstart', closeMenuOnOutside);
+
+    return win;
+  };
+
+  // Menu actions for each menu item
+  function handleMenuAction(action, win, form){
+    switch(action){
+      case 'new':
+        createFormWindow((parseInt(win.style.left||0,10) || 60)+30, (parseInt(win.style.top||0,10)||60)+30, null);
+        break;
+      case 'save':
+        // gather form
+        const data = new FormData(form);
+        const obj = {};
+        for(const [k,v] of data.entries()) obj[k]=v;
+        console.log('Saved from menu:', obj);
+        flashMessage(win, 'Saved!');
+        break;
+      case 'close':
+        win.remove();
+        break;
+      case 'undo':
+        flashMessage(win, 'Undo not implemented');
+        break;
+      case 'clear':
+        form.reset();
+        flashMessage(win, 'Cleared');
+        break;
+      case 'duplicate':
+        // clone at offset
+        const title = win.querySelector('.title').textContent || '';
+        const left = parseInt(win.style.left||0,10) + 20;
+        const top = parseInt(win.style.top||0,10) + 20;
+        const newW = createFormWindow(left, top, title);
+        // copy values
+        const originalData = new FormData(form);
+        for(const [k,v] of originalData.entries()){
+          const el = newW.querySelector(`[name="${k}"]`);
+          if(el) el.value = v;
+        }
+        break;
+      case 'about':
+        showAbout(win);
+        break;
+      default:
+        flashMessage(win, 'Action: ' + action);
+    }
+  }
+
+  // small floating message inside window
+  function flashMessage(win, msg){
+    let badge = win.querySelector('.__badge');
+    if(!badge){
+      badge = document.createElement('div');
+      badge.className='__badge';
+      badge.style.position='absolute';
+      badge.style.right='8px';
+      badge.style.top='36px';
+      badge.style.background='#000080';
+      badge.style.color='#fff';
+      badge.style.padding='4px 8px';
+      badge.style.border='1px solid #404040';
+      badge.style.zIndex='99999';
+      badge.style.fontSize='12px';
+      win.appendChild(badge);
+    }
+    badge.textContent = msg;
+    badge.style.opacity = '1';
+    setTimeout(()=>{ badge.style.transition='opacity 700ms'; badge.style.opacity='0'; }, 900);
+    setTimeout(()=>{ if(badge.parentNode) badge.parentNode.removeChild(badge); }, 1700);
+  }
+
+  // About modal
+  function showAbout(win){
+    const modalBackdrop = document.createElement('div');
+    modalBackdrop.className='modal-backdrop';
+    modalBackdrop.innerHTML = `<div class="modal">
+      <h3>About</h3>
+      <p>Simple demo of draggable, resizable Windows 98 style form windows.<br><br>Window ID: ${escapeHtml(win.id)}</p>
+      <div style="text-align:right;margin-top:8px;"><button class="action-btn ok">OK</button></div>
+    </div>`;
+    document.body.appendChild(modalBackdrop);
+    modalBackdrop.querySelector('.ok').addEventListener('click', ()=>modalBackdrop.remove());
+    modalBackdrop.addEventListener('click',(e)=>{ if(e.target===modalBackdrop) modalBackdrop.remove(); });
+  }
+
+  // Escape helper
+  function escapeHtml(s){ return String(s).replace(/[&<>"']/g, function(m){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]; }); }
+
+  // Small utility to prompt coordinates & title
+  document.getElementById('newDefault').addEventListener('click', ()=>createFormWindow());
+  document.getElementById('newAt').addEventListener('click', ()=>{
+    const raw = prompt('Enter x,y,title (comma separated). Example: 120,140,Contact');
+    if(!raw) return;
+    const parts = raw.split(',');
+    const x = parseInt(parts[0],10) || 60;
+    const y = parseInt(parts[1],10) || 60;
+    const title = parts.slice(2).join(',').trim() || null;
+    createFormWindow(x,y,title);
+  });
+
+  // Create a couple of sample windows on load
+  createFormWindow(80,80,'Contact');
+  createFormWindow(200,140,'Feedback');
+
+  // Prevent text selection when dragging (extra safety)
+  document.addEventListener('dragstart', e=>e.preventDefault());
+})();
+</script>
+</body>
+</html>
