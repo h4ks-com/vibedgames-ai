@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>8×8 Household Grid — Inventory Game (Wizard/Fighter/Thief/Cleric)</title>
+<style>
+  :root{
+    --bg:#071026;
+    --panel:#0c1620;
+    --muted:#98a8bc;
+    --accent:#7bd389;
+    --slot:#0b2330;
+    --tile:#0f2b35;
+    --tile-border:#173d45;
+    --gap:8px;
+    --half: 0px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:Inter,Segoe UI,Arial,sans-serif;background:linear-gradient(180deg,#031222,#071427);color:#e8f7ff}
+  .wrap{max-width:1100px;margin:20px auto;padding:18px}
+  h1{margin:0 0 12px 0;font-size:20px;text-align:center}
+  .layout{display:grid;grid-template-columns:640px 1fr;gap:18px}
+  .panel{background:linear-gradient(180deg,var(--panel),#061018);border-radius:12px;padding:12px;border:1px solid rgba(255,255,255,0.03)}
+  .grid8{display:block}
+  .row{
+    display:flex;
+    gap:var(--gap);
+    margin-bottom:var(--gap);
+    transition:transform .18s;
+  }
+  .row.shifted{
+    transform: translateX(var(--half));
+  }
+  .cell{
+    background:linear-gradient(180deg,var(--tile),#062027);
+    border-radius:8px;
+    height:70px;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    border:1px solid var(--tile-border);
+    cursor:pointer;
+    user-select:none;
+    color:#dff7ff;
+    font-size:13px;
+    flex: 1 1 0;
+    min-width:0;
+  }
+  .cell.empty{opacity:0.28;color:var(--muted);cursor:default}
+  .cell .ic{font-size:22px;line-height:1}
+  .cell .name{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:86%}
+  .side {display:flex;flex-direction:column;gap:12px}
+  .inventory{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .slot{height:74px;background:linear-gradient(180deg,#08161b,#051218);border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,0.03);cursor:pointer;position:relative}
+  .slot.empty{color:var(--muted)}
+  .slot .ic{font-size:24px}
+  .slot .name{font-size:12px;color:#dff7ff}
+  .controls{display:flex;gap:8px;flex-wrap:wrap}
+  button{background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--muted);padding:8px 10px;border-radius:8px;cursor:pointer}
+  button:hover{border-color:var(--accent);color:var(--accent)}
+  .big{background:linear-gradient(90deg,var(--accent),#ffd18a);color:#072018;font-weight:700}
+  .stats{padding:10px;border-radius:10px;background:linear-gradient(180deg,rgba(255,255,255,0.01),transparent);border:1px solid rgba(255,255,255,0.02)}
+  .stat-row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed rgba(255,255,255,0.02)}
+  .stat-row:last-child{border-bottom:0}
+  .class-badge{padding:6px 10px;border-radius:999px;background:linear-gradient(90deg,#4a2b6b,#2b486a);color:#dff7ff;font-weight:700}
+  .list{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+  .chip{padding:6px 8px;border-radius:8px;background:rgba(255,255,255,0.02);font-size:13px}
+  .footer{font-size:12px;color:var(--muted);text-align:center;margin-top:8px}
+  @media (max-width:980px){ .layout{grid-template-columns:1fr} .row{margin-bottom:6px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>8×8 Household Grid — Inventory Game</h1>
+  <div class="layout">
+    <div class="panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div style="font-size:13px;color:var(--muted)">8×8 Grid — alternate rows shifted by half a cell</div>
+        <div style="font-size:12px;color:var(--muted)">Click a cell to pick into inventory</div>
+      </div>
+
+      <div id="grid" class="grid8" aria-label="8 by 8 item grid"></div>
+
+      <div style="margin-top:12px;display:flex;justify-content:space-between;align-items:center">
+        <div class="controls">
+          <button id="shuffleGrid">Shuffle Grid</button>
+          <button id="resetGrid">Reset Grid</button>
+          <button id="refill">Refill Grid</button>
+        </div>
+        <div style="font-size:12px;color:var(--muted)">Unique items — once picked, cell becomes empty</div>
+      </div>
+      <div class="footer">Cells 1–64. Inventory slots 1–8. Click inventory slot to return item to original cell (or any empty).</div>
+    </div>
+
+    <div class="panel side">
+      <div style="font-weight:800;color:#e9fbff">Inventory — 8 slots</div>
+      <div id="inventory" class="inventory" aria-label="inventory slots"></div>
+
+      <div class="controls" style="margin-top:8px">
+        <button id="randomFill">Randomize Inventory</button>
+        <button id="clearInv">Clear Inventory</button>
+        <button id="export" class="big">Export Build</button>
+      </div>
+
+      <div class="stats">
+        <div class="stat-row"><div>Class</div><div class="class-badge" id="className">—</div></div>
+        <div class="stat-row"><div>Profession</div><div id="profession" class="chip">—</div></div>
+        <div class="stat-row"><div>Top Tags</div><div id="topTags" class="chip">—</div></div>
+        <div class="stat-row">
+          <div>Scores</div>
+          <div style="text-align:right;color:var(--muted)">
+            <div>Wizard: <span id="scoreW">0</span></div>
+            <div>Fighter: <span id="scoreF">0</span></div>
+            <div>Thief: <span id="scoreT">0</span></div>
+            <div>Cleric: <span id="scoreC">0</span></div>
+          </div>
+        </div>
+        <div style="margin-top:8px;color:var(--muted)">Current Items:</div>
+        <div id="listItems" class="list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// 128 sample household items (palm and hand)
+const PALM = [
+"coin","ring","jewel","crystal","stone","grain","prism","die","lens","button",
+"bead","marble","pebble","seed","leaf","shell","charm","key","battery","magnet",
+"screw","nut","washer","paperclip","token","sticker","ticket","receipt","thread","needle",
+"safetypin","badge","pendant","pearl","cork","shard","relic","scrap","lozenge","candy",
+"gum","pill","pill","capsule","label","memo","matchstick","dime","nickel","quarter",
+"bead2","pebble2","shell2","talisman","amulet","barcode","tag","seed2","grain2","button2",
+"charm2","pendant2","token2","watch","thimble"
+];
+
+const HAND = [
+"teacup","glass","teapot","pencil","paper","eraser","pen","ink bottle","cheese","milk bottle",
+"donut","pillow","blanket","book","magazine","remote","phone","tablet","laptop","mug",
+"plate","fork","spoon","knife","scissors","carrot","apple","pan","pot","frying pan",
+"spatula","whisk","brush","comb","hairbrush","toothbrush","towel","lamp","candle","flashlight",
+"camera","keys","backpack","bag","shoe","slipper","chair","stool","broom","vacuum",
+"printer","keyboard","mouse","headphones","speaker","guitar","bottle","jar","cushion","thermos",
+"helmet","toolbox","drill","paintbrush","pistol","screwdriver","ruler","notebook"
+];
+
+const ITEMS = [];
+function tagItem(name, type){
+  const n = name.toLowerCase();
+  const tags = new Set();
+  if(type === 'palm'){
+    if(/coin|dime|nickel|quarter|watch|battery/.test(n)) tags.add('metal'), tags.add('personal');
+    if(/ring|jewel|pearl|pendant|talisman|amulet|relic|charm|bead/.test(n)) tags.add('keepsake'), tags.add('personal');
+    if(/crystal|prism|lens|shard/.test(n)) tags.add('fragile'), tags.add('arcana');
+    if(/grain|seed|leaf|shell|pebble|marble/.test(n)) tags.add('nature');
+    if(/button|paperclip|needle|thread|safetypin|cork|washer|screw|nut|thimble/.test(n)) tags.add('tool'), tags.add('stealth');
+    if(/matchstick|lozenge|candy|gum|pill|capsule/.test(n)) tags.add('consumable'), tags.add('support');
+    if(/ticket|receipt|label|barcode|memo/.test(n)) tags.add('paper'), tags.add('knowledge');
+    if(tags.size===0) tags.add('small');
+  } else {
+    if(/teacup|glass|teapot|mug|plate|bottle|jar|pot|pan|frying pan|spatula|whisk|cheese|donut|milk/.test(n)) tags.add('kitchen'), tags.add('consumable');
+    if(/pencil|paper|pen|eraser|book|magazine|paintbrush|ink bottle|keyboard|mouse|notebook|ruler/.test(n)) tags.add('knowledge'), tags.add('craft');
+    if(/phone|tablet|laptop|printer|camera|headphones|speaker/.test(n)) tags.add('electronic');
+    if(/scissors|knife|drill|toolbox|screwdriver|tool/.test(n)) tags.add('weapon'), tags.add('tool');
+    if(/pillow|blanket|towel|cushion|slipper/.test(n)) tags.add('healing'), tags.add('home');
+    if(/chair|stool|broom|vacuum/.test(n)) tags.add('furniture'), tags.add('home');
+    if(/guitar/.test(n)) tags.add('music'), tags.add('craft');
+    if(/keys|backpack|bag|shoe|helmet/.test(n)) tags.add('stealth'), tags.add('personal');
+    if(/lamp|candle|flashlight/.test(n)) tags.add('light'), tags.add('support');
+    if(/pistol/.test(n)) tags.add('danger'), tags.add('weapon');
+    if(tags.size===0) tags.add('household');
+  }
+  return Array.from(tags);
+}
+function addItems(list, type){
+  list.forEach((name, idx)=>{
+    const id = type[0] + ('00' + (idx+1)).slice(-3) + '_' + name.replace(/\W+/g,'');
+    ITEMS.push({ id, name, type, tags: tagItem(name, type) });
+  });
+}
+addItems(PALM, 'palm');
+addItems(HAND, 'hand');
+
+// build 64 grid items (32 palms + 32 hands)
+const GRID_ITEMS = [];
+for(let i=0;i<32;i++) GRID_ITEMS.push(ITEMS[i]);       // first 32 palms
+for(let i=64;i<96;i++) GRID_ITEMS.push(ITEMS[i]);     // first 32 hands
+
+// unique emoji for the 64 grid items
+const UNIQUE_EMOJI = [
+  "🪙","💍","💎","🔮","🪨","🌾","🔷","🎲","🔍","🟣","🧵","🪡","🧿","📿","🔑","🔋",
+  "🧲","🔩","🔧","📎","🎫","🧾","🕯️","🪶","🪴","🪵","🧸","🎗️","🎟️","💌","🔗","🧭",
+  "🍽","🥄","☕️","✏️","📄","✒️","🧴","🧀","🥛","🍩","🛏️","📚","📰","📱","💻","📷",
+  "🔑","🎸","🧰","🔨","🔧","🔩","🪣","🧯","🪄","🖌️","🔦","🕰️","🧭","🧷","📒","📏"
+];
+const idToEmoji = {};
+GRID_ITEMS.forEach((it, idx)=> idToEmoji[it.id] = UNIQUE_EMOJI[idx] || '🏺');
+
+// grid state
+let gridCells = GRID_ITEMS.map(it=>it.id);
+let idToGridIndex = {};
+gridCells.forEach((id, idx)=> idToGridIndex[id] = idx);
+
+// inventory (8 slots)
+let inventory = Array(8).fill(null);
+
+// DOM refs
+const gridEl = document.getElementById('grid');
+const invEl = document.getElementById('inventory');
+const classEl = document.getElementById('className');
+const profEl = document.getElementById('profession');
+const topTagsEl = document.getElementById('topTags');
+const scoreW = document.getElementById('scoreW');
+const scoreF = document.getElementById('scoreF');
+const scoreT = document.getElementById('scoreT');
+const scoreC = document.getElementById('scoreC');
+const listItemsEl = document.getElementById('listItems');
+
+function iconForId(id){ return idToEmoji[id] || '🏺'; }
+function findItem(id){ return ITEMS.find(it=>it.id===id); }
+
+// render grid as 8 rows shifted alternately
+function renderGrid(){
+  gridEl.innerHTML = '';
+  for(let r=0;r<8;r++){
+    const row = document.createElement('div');
+    row.className = 'row';
+    if(r%2===1) row.classList.add('shifted');
+    for(let c=0;c<8;c++){
+      const idx = r*8 + c;
+      const cell = document.createElement('div');
+      cell.className = 'cell' + (gridCells[idx] ? '' : ' empty');
+      cell.dataset.index = idx;
+      if(gridCells[idx]){
+        const it = findItem(gridCells[idx]);
+        cell.innerHTML = `<div class="ic">${iconForId(it.id)}</div><div class="name">${it.name}</div>`;
+        cell.title = it.tags.join(', ');
+        cell.onclick = ()=> pickFromGrid(idx);
+      } else {
+        cell.innerHTML = `<div class="ic">—</div><div class="name">empty</div>`;
+      }
+      row.appendChild(cell);
+    }
+    gridEl.appendChild(row);
+  }
+  requestAnimationFrame(updateHalfShift);
+}
+
+// render inventory slots
+function renderInventory(){
+  invEl.innerHTML = '';
+  for(let i=0;i<8;i++){
+    const s = document.createElement('div');
+    s.className = 'slot' + (inventory[i] ? '' : ' empty');
+    s.dataset.index = i;
+    if(inventory[i]){
+      const it = findItem(inventory[i]);
+      s.innerHTML = `<div class="ic">${iconForId(it.id)}</div><div class="name">${it.name}</div>`;
+      s.title = 'Click to return';
+      s.onclick = ()=> returnToGrid(i);
+    } else {
+      s.innerHTML = `<div style="font-size:12px;color:var(--muted)">Slot ${i+1}</div><div style="font-size:11px;color:var(--muted)">empty</div>`;
+    }
+    invEl.appendChild(s);
+  }
+}
+
+// pick up item from grid into inventory
+function pickFromGrid(gridIndex){
+  const id = gridCells[gridIndex];
+  if(!id) return;
+  const free = inventory.indexOf(null);
+  if(free !== -1){
+    inventory[free] = id;
+    gridCells[gridIndex] = null;
+  } else {
+    const replace = prompt('Inventory full. Enter slot number 1–8 to replace (or Cancel):');
+    if(!replace) return;
+    const ri = parseInt(replace,10)-1;
+    if(isNaN(ri) || ri<0 || ri>7) return alert('Invalid slot.');
+    const replaced = inventory[ri];
+    if(replaced){
+      const orig = idToGridIndex[replaced];
+      if(orig !== undefined && gridCells[orig] === null){
+        gridCells[orig] = replaced;
+      } else {
+        const empty = gridCells.findIndex(c=>c===null);
+        if(empty>=0) gridCells[empty] = replaced;
+        else gridCells[0] = replaced;
+      }
+    }
+    inventory[ri] = id;
+    gridCells[gridIndex] = null;
+  }
+  renderGrid(); renderInventory(); computeClass();
+}
+
+// return inventory item to its original or any empty cell
+function returnToGrid(slotIndex){
+  const id = inventory[slotIndex];
+  if(!id) return;
+  const orig = idToGridIndex[id];
+  if(orig !== undefined && gridCells[orig] === null){
+    gridCells[orig] = id;
+  } else {
+    const empty = gridCells.findIndex(c=>c===null);
+    if(empty>=0) gridCells[empty] = id;
+    else { alert('No empty cell to return the item.'); return; }
+  }
+  inventory[slotIndex] = null;
+  renderGrid(); renderInventory(); computeClass();
+}
+
+// shuffle grid positions of existing items (inventory unchanged)
+function shuffleGrid(){
+  const present = gridCells.map((id, idx)=>({id, idx})).filter(x=>x.id).map(x=>x.id);
+  shuffleArray(present);
+  let p=0;
+  for(let i=0;i<64;i++){
+    if(gridCells[i]) gridCells[i] = present[p++];
+  }
+  gridCells.forEach((id, idx)=>{ if(id) idToGridIndex[id]=idx; });
+  renderGrid();
+}
+
+// reset to initial ordered GRID_ITEMS
+function resetGrid(){
+  gridCells = GRID_ITEMS.map(it=>it.id);
+  gridCells.forEach((id, idx)=>{ if(id) idToGridIndex[id]=idx; });
+  inventory = Array(8).fill(null);
+  renderGrid(); renderInventory(); computeClass();
+}
+
+// refill grid and clear inventory
+function refillGrid(){
+  gridCells = GRID_ITEMS.map(it=>it.id);
+  shuffleArray(gridCells);
+  gridCells.forEach((id, idx)=>{ if(id) idToGridIndex[id]=idx; });
+  inventory = Array(8).fill(null);
+  renderGrid(); renderInventory(); computeClass();
+}
+
+// randomize inventory by pulling up to 8 available grid items
+function randomizeInventory(){
+  for(let i=0;i<8;i++){
+    if(inventory[i]){
+      const id = inventory[i];
+      const orig = idToGridIndex[id];
+      if(orig !== undefined && gridCells[orig]===null) gridCells[orig] = id;
+      else {
+        const empty = gridCells.findIndex(c=>c===null);
+        if(empty>=0) gridCells[empty] = id;
+        else gridCells[0] = id;
+      }
+      inventory[i] = null;
+    }
+  }
+  const available = gridCells.map((id, idx)=>({id, idx})).filter(x=>x.id);
+  shuffleArray(available);
+  available.slice(0,8).forEach((p, i)=>{ inventory[i] = p.id; gridCells[p.idx] = null; });
+  renderGrid(); renderInventory(); computeClass();
+}
+
+// export inventory build
+function exportBuild(){ prompt('Copy build JSON:', JSON.stringify({ slots: inventory.map(s=> s ? findItem(s).name : null), timestamp: Date.now() }, null, 2)); }
+
+// compute half-shift value based on cell width
+function updateHalfShift(){
+  const anyCell = gridEl.querySelector('.cell');
+  if(!anyCell) return;
+  const cellWidth = anyCell.getBoundingClientRect().width;
+  const half = Math.round(cellWidth/2);
+  document.documentElement.style.setProperty('--half', half + 'px');
+  gridEl.style.paddingLeft = (half + 6) + 'px';
+  gridEl.style.paddingRight = (half + 6) + 'px';
+}
+
+// class & profession computation tailored to wizard/fighter/thief/cleric
+function computeClass(){
+  const tagCounts = {};
+  const present = inventory.filter(Boolean).map(id => findItem(id));
+  present.forEach(it => it.tags.forEach(t => tagCounts[t] = (tagCounts[t]||0)+1));
+
+  const scores = { wizard:0, fighter:0, thief:0, cleric:0 };
+
+  for(const [tag,cnt] of Object.entries(tagCounts)){
+    // heuristics mapping household tags to fantasy classes
+    if(tag === 'arcana' || tag === 'knowledge' || tag === 'paper') { scores.wizard += cnt * 3; scores.cleric += cnt * 0.6; }
+    if(tag === 'fragile' || tag === 'keepsake' || tag === 'personal') { scores.wizard += cnt * 1.6; scores.thief += cnt * 0.8; scores.cleric += cnt * 1.2; }
+    if(tag === 'tool' || tag === 'weapon' || tag === 'metal') { scores.fighter += cnt * 3; scores.thief += cnt * 0.8; }
+    if(tag === 'danger' || tag === 'heavy') { scores.fighter += cnt * 2.6; }
+    if(tag === 'stealth' || tag === 'small' || tag === 'personal') { scores.thief += cnt * 2.4; }
+    if(tag === 'kitchen' || tag === 'consumable' || tag === 'healing') { scores.cleric += cnt * 1.4; scores.wizard += cnt * 0.4; }
+    if(tag === 'light' || tag === 'support') { scores.cleric += cnt * 1.8; scores.wizard += cnt * 0.6; }
+    if(tag === 'music' || tag === 'craft') { scores.wizard += cnt * 0.8; scores.thief += cnt * 0.6; scores.fighter += cnt * 0.4; }
+    if(tag === 'home' || tag === 'furniture') { scores.cleric += cnt * 1.0; scores.fighter += cnt * 0.5; }
+    if(tag === 'nature') { scores.wizard += cnt * 1.2; scores.thief += cnt * 0.5; }
+  }
+
+  const names = present.map(i => i.name.toLowerCase());
+  if(names.some(n=>/pencil|book|magazine|paper|ink|memo|journal/.test(n))) scores.wizard += 2.4;
+  if(names.some(n=>/drill|toolbox|knife|pan|spatula|screwdriver/.test(n))) scores.fighter += 2.4;
+  if(names.some(n=>/keys|coin|ring|watch|pocket|token|paperclip/.test(n))) scores.thief += 2.4;
+  if(names.some(n=>/pendant|relic|pearl|amulet|candle|lamp/.test(n))) scores.cleric += 2.4;
+
+  // determine top class
+  const order = Object.keys(scores).sort((a,b)=>scores[b]-scores[a]);
+  const top = order[0];
+
+  // profession selection: broad list of occupations; choose based on tags and items
+  const profession = determineProfession(top, tagCounts, present);
+
+  const topTags = Object.entries(tagCounts).sort((a,b)=>b[1]-a[1]).slice(0,4).map(t=>t[0] + (t[1]>1?`(${t[1]})`:'')) || [];
+
+  classEl.textContent = top ? capitalize(top) : '—';
+  profEl.textContent = profession || '—';
+  topTagsEl.textContent = topTags.length ? topTags.join(', ') : '—';
+  scoreW.textContent = Math.round(scores.wizard*10)/10;
+  scoreF.textContent = Math.round(scores.fighter*10)/10;
+  scoreT.textContent = Math.round(scores.thief*10)/10;
+  scoreC.textContent = Math.round(scores.cleric*10)/10;
+
+  // update item list
+  listItemsEl.innerHTML = '';
+  present.forEach(it=>{
+    const el = document.createElement('div');
+    el.className = 'chip';
+    el.textContent = `${idToEmoji[it.id] || '🏺'} ${it.name}`;
+    listItemsEl.appendChild(el);
+  });
+}
+
+// determine profession (any occupation) using flexible heuristics
+function determineProfession(classKey, tagCounts, items){
+  const names = items.map(i=>i.name.toLowerCase());
+  const tc = Object.assign({}, tagCounts);
+  ['kitchen','consumable','tool','electronic','craft','music','keepsake','personal','fragile','home','office','weapon','danger','healing','light'].forEach(t=>tc[t]=tc[t]||0);
+
+  // broad occupations pool
+  const occupations = [
+    "Baker","Barista","Chef","Gardener","Mechanic","Electrician","Carpenter","Plumber","Tailor","Blacksmith",
+    "Artist","Painter","Writer","Musician","Teacher","Nurse","Doctor","Shopkeeper","Clerk","Librarian",
+    "Archivist","Curator","Antique Dealer","Technician","Engineer","Tinkerer","Cleaner","Courier","Chef de Partie","Barber",
+    "Makeup Artist","Photographer","Programmer","Researcher","Chef-Baker","Restorer","Cabinetmaker","Ceramicist","Florist","Toymaker",
+    "Bartender","Receptionist","Housekeeper","Bartender","Sommelier","Jeweler","Watchmaker","Apothecary","Herbalist","Conservator"
+  ];
+
+  // class-aligned profession suggestions
+  const candidates = [];
+  if(classKey === 'wizard'){
+    if(tc.knowledge > 0 || names.some(n=>/book|pencil|paper|magazine|ink|memo/.test(n))) candidates.push("Researcher","Writer","Librarian","Apothecary","Herbalist");
+    if(tc.arcana || tc.fragile || tc.keepsake) candidates.push("Restorer","Conservator","Jeweler","Watchmaker");
+    if(candidates.length===0) candidates.push("Artist","Programmer","Teacher","Photographer");
+  }
+  if(classKey === 'fighter'){
+    if(tc.tool > 0 || tc.weapon > 0) candidates.push("Mechanic","Carpenter","Blacksmith","Plumber");
+    if(tc.home > 0) candidates.push("Builder","Cabinetmaker");
+    if(candidates.length===0) candidates.push("Security Guard","Firefighter","Mechanic");
+  }
+  if(classKey === 'thief'){
+    if(tc.personal > 0 || tc.small > 0) candidates.push("Courier","Shopkeeper","Jeweler (assistant)","Watchmaker (assistant)");
+    if(tc.stealth > 0 || names.some(n=>/keys|coin|ring|token|paperclip/.test(n))) candidates.push("Courier","Cleaner","Antique Dealer");
+    if(candidates.length===0) candidates.push("Courier","Receptionist","Cleaner");
+  }
+  if(classKey === 'cleric'){
+    if(tc.healing > 0 || tc.consumable > 0) candidates.push("Nurse","Herbalist","Apothecary","Caregiver");
+    if(tc.keepsake > 0 || tc.fragile > 0) candidates.push("Curator","Archivist","Conservator");
+    if(candidates.length===0) candidates.push("Teacher","Counselor","Clergy");
+  }
+
+  // fallback: pick an occupation influenced by tags
+  if(candidates.length===0) candidates.push(...occupations);
+
+  // pick top candidate by small weighting using tag counts
+  const scored = candidates.map(name=>{
+    let score = 0;
+    const n = name.toLowerCase();
+    if(/baker|chef|barista/.test(n)) score += tc.kitchen*2 + tc.consumable;
+    if(/mechanic|carpenter|blacksmith|engineer|tinkerer|technician/.test(n)) score += tc.tool*2 + tc.electronic;
+    if(/artist|painter|photographer|designer/.test(n)) score += tc.craft*2 + tc.music;
+    if(/librarian|writer|archivist|researcher/.test(n)) score += tc.knowledge*2 + tc.paper;
+    if(/curator|conservator|antique/.test(n)) score += tc.keepsake*2 + tc.fragile;
+    if(/nurse|apothecary|herbalist|caregiver/.test(n)) score += tc.healing*2 + tc.consumable;
+    if(/jeweler|watchmaker/.test(n)) score += tc.personal + tc.metal;
+    return {name, score};
+  });
+  scored.sort((a,b)=>b.score-a.score);
+  return (scored[0] && scored[0].score>0) ? scored[0].name : candidates[0];
+}
+
+// misc utilities
+function capitalize(s){ return s ? s.charAt(0).toUpperCase()+s.slice(1) : s; }
+function shuffleArray(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } }
+
+// UI functions wiring
+function renderAll(){ renderGrid(); renderInventory(); computeClass(); }
+
+document.getElementById('shuffleGrid').onclick = ()=> { shuffleGrid(); };
+document.getElementById('resetGrid').onclick = ()=> { resetGrid(); };
+document.getElementById('refill').onclick = ()=> { refillGrid(); };
+document.getElementById('randomFill').onclick = ()=> { randomizeInventory(); };
+document.getElementById('clearInv').onclick = ()=> { inventory = Array(8).fill(null); renderInventory(); computeClass(); };
+document.getElementById('export').onclick = ()=> { exportBuild(); };
+
+function exportBuild(){ prompt('Copy build JSON:', JSON.stringify({ slots: inventory.map(s=> s ? findItem(s).name : null), timestamp: Date.now() }, null, 2)); }
+
+// initial shuffle & render
+shuffleArray(gridCells);
+gridCells.forEach((id, idx)=> { if(id) idToGridIndex[id] = idx; });
+renderAll();
+
+// update half-shift on resize
+function updateHalfShift(){
+  const anyCell = gridEl.querySelector('.cell');
+  if(!anyCell) return;
+  const cellWidth = anyCell.getBoundingClientRect().width;
+  const half = Math.round(cellWidth/2);
+  document.documentElement.style.setProperty('--half', half + 'px');
+  gridEl.style.paddingLeft = (half + 6) + 'px';
+  gridEl.style.paddingRight = (half + 6) + 'px';
+}
+window.addEventListener('resize', ()=> requestAnimationFrame(updateHalfShift));
+requestAnimationFrame(updateHalfShift);
+</script>
+</body>
+</html>
