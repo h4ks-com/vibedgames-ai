@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Digital Flip Book - 100 Pages</title>
+<style>
+  :root{
+    --book-width: 441px;
+    --book-height: 623px;
+    --page-bg: #fffdf8;
+    --paper-edge: #e6dcca;
+    --shadow: rgba(0,0,0,0.18);
+    --accent: #2b6cb0;
+    --radius: 6px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:linear-gradient(180deg,#e9eef6 0%, #f7f9fc 100%);display:flex;align-items:center;justify-content:center;padding-left:10%}
+  .scene{width:calc(var(--book-width) + 40px); display:flex;flex-direction:column;align-items:center;gap:18px}
+  .book-wrap{perspective:2000px; width:var(--book-width); height:var(--book-height); position:relative;}
+  .book{
+    width:100%; height:100%; position:relative; transform-style:preserve-3d;
+    margin:0 auto;
+  }
+
+  .page{
+    width:100%; height:100%; position:absolute; top:0; left:0;
+    transform-style:preserve-3d;
+    transition: transform 700ms cubic-bezier(.2,.9,.3,1), z-index 0ms linear 0ms;
+    transform-origin: left center;
+    cursor: pointer;
+    border-radius: var(--radius);
+    box-shadow: 0 8px 26px var(--shadow);
+    overflow: hidden;
+    will-change: transform;
+    background: linear-gradient(180deg,#ffffff 0%, var(--page-bg) 100%);
+  }
+
+  .page-layer{
+    position:absolute; inset:0; border-radius:inherit; overflow:auto;
+    display:flex; flex-direction:column; backface-visibility: hidden;
+    -webkit-backface-visibility: hidden; padding:20px 22px;
+    user-select: text; -webkit-user-select: text;
+  }
+
+  .back{
+    transform: rotateY(180deg);
+    background: linear-gradient(180deg,#fbfbfb 0%, #f2f2f2 100%);
+  }
+
+  .page .content{width:100%;height:100%;overflow:auto; display:flex;flex-direction:column; user-select:text; -webkit-user-select:text}
+  .page h1{margin:0 0 6px;font-size:20px;color:var(--accent)}
+  .page h2{margin:0 0 8px;font-size:14px;color:#333}
+  .page p{margin:0 0 12px;color:#333;line-height:1.45}
+  .page .meta{font-size:12px;color:#666;margin-top:auto}
+
+  .page .back .content{color:#222}
+  .page .back h1{color:#444}
+
+  .page.flipped{
+    transform: rotateY(-180deg);
+    z-index:1;
+  }
+
+  .page::after{
+    content:"";
+    position:absolute; inset:0;
+    pointer-events:none;
+    background: linear-gradient(90deg, rgba(0,0,0,0.06) 0%, rgba(0,0,0,0) 15%, rgba(0,0,0,0) 85%, rgba(0,0,0,0.03) 100%);
+    opacity:0;
+    transition:opacity 300ms;
+    border-radius:inherit;
+  }
+  .page.flipped::after{ opacity:0.7; transform: translateZ(0); }
+
+  .hotspots{position:absolute; inset:0; pointer-events:none}
+  .hotspot{position:absolute; top:0; bottom:0; width:50%; pointer-events:auto}
+  .hotspot.left{left:0}
+  .hotspot.right{right:0}
+  .hotspot:hover{cursor:pointer}
+  .controls{display:flex;gap:12px; align-items:center}
+  .btn{
+    background:#fff; border:1px solid #d6dce7; padding:8px 12px; border-radius:6px;
+    color:#203040; font-weight:600; box-shadow:0 6px 18px rgba(20,30,50,0.06);
+    user-select:none;
+  }
+  .pager{font-size:14px;color:#333; padding:6px 10px; background:transparent}
+  .hint{font-size:12px;color:#64748b}
+  @media (max-width:800px){
+    :root{--book-width:360px; --book-height:520px}
+    .scene{width:calc(var(--book-width) + 40px)}
+  }
+
+  .note{background:#fff7d6;padding:10px;border-radius:8px;margin:10px 0;border:1px dashed #f0d58a}
+  .page-layer::-webkit-scrollbar { height:8px; width:8px; }
+  .page-layer::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.08); border-radius:8px; }
+
+  .longtext{white-space:pre-wrap; word-break:break-word; font-family: "Courier New", ui-monospace, SFMono-Regular, Menlo, Monaco, monospace; font-size:12px; line-height:1.35; color:#111; margin-top:10px; padding-right:2px; user-select:text; -webkit-user-select:text}
+
+  ::selection { background: #b3d4ff; color: #021826; }
+</style>
+</head>
+<body>
+<div class="scene" aria-hidden="false">
+  <div class="book-wrap" id="wrap">
+    <div class="book" id="book" role="region" aria-label="Flip book">
+      <!-- Pages injected by JS -->
+    </div>
+    <div class="hotspots" aria-hidden="true">
+      <div class="hotspot left" id="hot-left" title="Previous"></div>
+      <div class="hotspot right" id="hot-right" title="Next"></div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn" id="prevBtn">◀ Previous</button>
+    <div class="pager" id="pager">Page 1 / 100</div>
+    <button class="btn" id="nextBtn">Next ▶</button>
+    <div style="width:12px"></div>
+    <div class="hint">Tip: Click the right or left side of the book, or use ← → keys</div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const PAGES = 100;
+  const MIN_CH = 1000;
+  const MAX_CH = 1500;
+  const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.-";
+  const bookEl = document.getElementById('book');
+  const pagerEl = document.getElementById('pager');
+  const prevBtn = document.getElementById('prevBtn');
+  const nextBtn = document.getElementById('nextBtn');
+  const hotLeft = document.getElementById('hot-left');
+  const hotRight = document.getElementById('hot-right');
+
+  function randInt(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
+  function randomText(len){
+    let out = "";
+    for(let i=0;i<len;i++){
+      out += ALPHABET.charAt(Math.floor(Math.random()*ALPHABET.length));
+    }
+    return out;
+  }
+
+  // Build pages
+  const total = PAGES;
+  const pages = [];
+  const frag = document.createDocumentFragment();
+  for(let i=0;i<total;i++){
+    const p = document.createElement('div');
+    p.className = 'page';
+    p.dataset.index = i;
+
+    const front = document.createElement('div');
+    front.className = 'page-layer front';
+    // generate random text length between MIN_CH and MAX_CH
+    const txt = randomText(randInt(MIN_CH, MAX_CH));
+    front.innerHTML = `<div class="content"><h1>Page ${i+1}</h1><h2>Random text</h2><div class="longtext">${txt}</div><div class="meta">Page ${i+1} of ${PAGES}</div></div>`;
+
+    const back = document.createElement('div');
+    back.className = 'page-layer back';
+    back.innerHTML = `<div class="content"><h1>Back of Page ${i+1}</h1><p class="meta">Flip to continue</p></div>`;
+
+    p.appendChild(front);
+    p.appendChild(back);
+
+    p.style.zIndex = (total - i).toString();
+
+    frag.appendChild(p);
+    pages.push(p);
+  }
+  bookEl.appendChild(frag);
+
+  let flipped = 0;
+
+  function updatePager(){
+    const current = Math.min(flipped + 1, total);
+    pagerEl.textContent = `Page ${current} / ${total}`;
+  }
+  updatePager();
+
+  function next(){
+    if(flipped >= total-1) return;
+    const target = pages[flipped];
+    target.style.transformOrigin = 'left center';
+    requestAnimationFrame(()=> {
+      target.classList.add('flipped');
+    });
+    flipped++;
+    updatePager();
+  }
+
+  function prev(){
+    if(flipped <= 0) return;
+    const target = pages[flipped-1];
+    target.style.transformOrigin = 'left center';
+    target.classList.remove('flipped');
+    flipped--;
+    updatePager();
+  }
+
+  hotRight.addEventListener('click', next);
+  hotLeft.addEventListener('click', prev);
+  nextBtn.addEventListener('click', next);
+  prevBtn.addEventListener('click', prev);
+
+  bookEl.addEventListener('click', function(e){
+    const rect = bookEl.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    if (x > rect.width * 0.55) next();
+    else if (x < rect.width * 0.45) prev();
+  });
+
+  window.addEventListener('keydown', function(e){
+    if(e.key === 'ArrowRight') next();
+    if(e.key === 'ArrowLeft') prev();
+  });
+
+  let touchStartX = 0;
+  bookEl.addEventListener('touchstart', function(e){
+    touchStartX = e.touches[0].clientX;
+  }, {passive:true});
+  bookEl.addEventListener('touchend', function(e){
+    if(!touchStartX) return;
+    const dx = (e.changedTouches[0].clientX - touchStartX);
+    if(Math.abs(dx) > 40){
+      if(dx < 0) next(); else prev();
+    }
+    touchStartX = 0;
+  });
+
+  bookEl.addEventListener('dragstart', e => e.preventDefault());
+
+  pages.forEach((p, idx) => {
+    p.addEventListener('transitionend', (ev) => {
+      if(ev.propertyName !== 'transform') return;
+      if(p.classList.contains('flipped')) {
+        p.style.zIndex = (1 + idx).toString();
+      } else {
+        p.style.zIndex = (total - idx).toString();
+      }
+    });
+  });
+
+  bookEl.style.transform = 'rotateX(0.6deg)';
+
+  window._flipbook = { next, prev, pages, dataCount: total };
+})();
+</script>
+</body>
+</html>
