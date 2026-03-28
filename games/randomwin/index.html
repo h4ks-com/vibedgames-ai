@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Random Styled Windows</title>
+<style>
+  :root{--bg:#0e1012;--fg:#e6e6e6}
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  .topbar{display:flex;align-items:center;gap:12px;padding:12px;background:linear-gradient(#111,#0b0b0b);border-bottom:1px solid rgba(255,255,255,0.03)}
+  .btn{background:#1f1f1f;border:1px solid rgba(255,255,255,0.04);color:#fff;padding:8px 12px;border-radius:6px;cursor:pointer;font-weight:600}
+  .btn:hover{filter:brightness(1.15)}
+  .workspace{position:relative;height:calc(100% - 56px);overflow:hidden}
+  /* window */
+  .win{
+    position:absolute;
+    border-radius:8px;
+    box-shadow:0 8px 30px rgba(0,0,0,0.6);
+    overflow:hidden;
+    min-width:220px;
+    min-height:120px;
+    resize:both;
+    display:flex;
+    flex-direction:column;
+    user-select:none;
+  }
+  .win:focus{outline:none}
+  .titlebar{
+    height:36px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:6px 8px;
+    cursor:grab;
+    flex:0 0 36px;
+  }
+  .titlebar:active{cursor:grabbing}
+  .title-text{font-weight:700;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:8px}
+  .controls{display:flex;gap:6px;align-items:center}
+  .icon-btn{
+    width:30px;height:28px;border-radius:6px;border:none;background:rgba(255,255,255,0.06);color:inherit;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;font-weight:700
+  }
+  .icon-btn:hover{transform:scale(1.04)}
+  .content{
+    padding:12px;
+    overflow:auto;
+    flex:1 1 auto;
+  }
+  .handle{position:absolute;right:6px;bottom:6px;width:14px;height:14px;opacity:0.25;background:transparent}
+  /* Prevent text selection while dragging */
+  .no-select{user-select:none;-webkit-user-select:none;-ms-user-select:none}
+  /* small helper */
+  .small{font-size:12px;opacity:0.9}
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <button id="newWin" class="btn">New Window</button>
+    <div class="small">Click "New Window" to spawn a random movable, resizable window.</div>
+  </div>
+  <div id="workspace" class="workspace"></div>
+
+<script>
+(() => {
+  const workspace = document.getElementById('workspace');
+  let zTop = 100;
+
+  // Typeface options (some system fonts and web-safe fallbacks)
+  const typefaces = [
+    'Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial',
+    'Georgia, "Times New Roman", Times, serif',
+    '"Courier New", Courier, monospace',
+    'Trebuchet MS, Helvetica, Arial, sans-serif',
+    '"Palatino Linotype", "Book Antiqua", Palatino, serif',
+    '"Lucida Sans Unicode", "Lucida Grande", Tahoma, sans-serif',
+    '"Comic Sans MS", "Comic Sans", cursive, sans-serif',
+    '"Brush Script MT", cursive, sans-serif',
+    '"Montserrat", "Helvetica Neue", Arial, sans-serif',
+    '"Roboto Mono", monospace'
+  ];
+
+  function rand(min=0,max=1){
+    return Math.random() * (max - min) + min;
+  }
+  function rint(min, max){ return Math.floor(rand(min, max+1)); }
+
+  function randHsl(){ // return as {h,s,l,css}
+    const h = rint(0,359);
+    const s = rint(45,85);
+    const l = rint(20,75);
+    return {h,s,l,css:`hsl(${h} ${s}% ${l}%)`};
+  }
+
+  function luminanceFromHsl({h,s,l}){
+    // approximate luminance from lightness
+    // l is 0-100
+    return l/100;
+  }
+
+  function contrastingTextColor(bgHsl){
+    // pick random foreground color but fallback to black/white if too low contrast
+    const fg = randHsl();
+    const lumBg = luminanceFromHsl(bgHsl);
+    const lumFg = luminanceFromHsl(fg);
+    const contrast = Math.abs(lumBg - lumFg);
+    if(contrast < 0.28){
+      // choose black or white depending on bg
+      return (lumBg > 0.5) ? '#111' : '#fff';
+    }
+    return fg.css;
+  }
+
+  function randomFontSize(){
+    return rint(12, 22) + 'px';
+  }
+
+  function randomTypeface(){
+    return typefaces[rint(0, typefaces.length-1)];
+  }
+
+  function makeWindowContent(id, styles){
+    // create some sample styled HTML content
+    const html = `
+      <div style="font-family:${styles.font};font-size:${styles.fontSize};color:${styles.textColor};background:${styles.textBG};padding:12px;border-radius:6px;">
+        <div style="font-weight:700;margin-bottom:8px">Window #${id}</div>
+        <div style="line-height:1.45">
+          This is a randomly styled window. Typeface: <em style="font-family:${styles.font}">${styles.font}</em> · Font-size: ${styles.fontSize}
+        </div>
+        <div style="margin-top:10px;font-size:0.92em;opacity:0.9">
+          <button class="spawnInner" style="padding:6px 8px;border-radius:6px;border:none;background:rgba(255,255,255,0.06);color:inherit;cursor:pointer">Spawn New</button>
+          <button class="closeInner" style="padding:6px 8px;border-radius:6px;border:none;background:rgba(255,255,255,0.06);color:inherit;cursor:pointer;margin-left:6px">Close</button>
+        </div>
+      </div>
+    `;
+    return html;
+  }
+
+  let winCount = 0;
+
+  function createWindow(opts={}) {
+    winCount++;
+    const id = winCount;
+    const win = document.createElement('div');
+    win.className = 'win';
+    win.tabIndex = 0; // make focusable
+    win.style.zIndex = ++zTop;
+
+    // random size
+    const w = rint(260, 520);
+    const h = rint(160, 420);
+    win.style.width = w + 'px';
+    win.style.height = h + 'px';
+
+    // random position within workspace bounds
+    const rect = workspace.getBoundingClientRect();
+    const left = rint(16, Math.max(16, Math.max(16, rect.width - w - 32)));
+    const top = rint(16, Math.max(16, Math.max(16, rect.height - h - 32)));
+    win.style.left = left + 'px';
+    win.style.top = top + 'px';
+
+    // random styles
+    const windowBG = randHsl();
+    const titleBG = `hsl(${(windowBG.h+10)%360} ${Math.max(20,windowBG.s-10)}% ${Math.max(10,windowBG.l-12)}%)`;
+    const textBG = randHsl();
+    let textColor = randHsl().css;
+    // ensure some readability: fallback if too low contrast
+    textColor = contrastingTextColor(textBG);
+    const fontSize = randomFontSize();
+    const font = randomTypeface();
+
+    // apply base style
+    win.style.background = windowBG.css;
+    win.style.color = textColor;
+    win.style.fontFamily = font;
+    win.style.fontSize = fontSize;
+
+    // build inner HTML
+    win.innerHTML = `
+      <div class="titlebar" style="background:${titleBG};color:${textColor};">
+        <div class="title-text">Random Window ${id}</div>
+        <div class="controls">
+          <button class="icon-btn spawn" title="New Window">＋</button>
+          <button class="icon-btn close" title="Close">✕</button>
+        </div>
+      </div>
+      <div class="content" style="background:${textBG.css};color:${textColor};font-family:${font};font-size:${fontSize};">
+        ${makeWindowContent(id, {font, fontSize, textColor, textBG: textBG.css})}
+      </div>
+      <div class="handle" aria-hidden="true"></div>
+    `;
+
+    // add to workspace
+    workspace.appendChild(win);
+
+    // Dragging
+    const titlebar = win.querySelector('.titlebar');
+    let dragging = false;
+    let dragOffsetX = 0, dragOffsetY = 0;
+
+    titlebar.addEventListener('pointerdown', (e) => {
+      // ignore if clicking on controls
+      if (e.target.closest('.controls')) return;
+      dragging = true;
+      win.style.zIndex = ++zTop;
+      const rect = win.getBoundingClientRect();
+      dragOffsetX = e.clientX - rect.left;
+      dragOffsetY = e.clientY - rect.top;
+      document.body.classList.add('no-select');
+      win.setPointerCapture?.(e.pointerId);
+    });
+
+    titlebar.addEventListener('pointerup', (e) => {
+      dragging = false;
+      document.body.classList.remove('no-select');
+      win.releasePointerCapture?.(e.pointerId);
+    });
+
+    // Move on pointermove anywhere while dragging
+    window.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      const parentRect = workspace.getBoundingClientRect();
+      let nx = e.clientX - dragOffsetX - parentRect.left;
+      let ny = e.clientY - dragOffsetY - parentRect.top;
+      // clamp to workspace
+      nx = Math.max(-40, Math.min(nx, parentRect.width - 80));
+      ny = Math.max(-40, Math.min(ny, parentRect.height - 40));
+      win.style.left = nx + 'px';
+      win.style.top = ny + 'px';
+    });
+
+    window.addEventListener('pointerup', () => {
+      dragging = false;
+      document.body.classList.remove('no-select');
+    });
+
+    // Focus on mousedown
+    win.addEventListener('mousedown', () => {
+      win.style.zIndex = ++zTop;
+    });
+
+    // Close button
+    const closeBtn = win.querySelector('.icon-btn.close');
+    closeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      win.remove();
+    });
+
+    // Spawn new from window control
+    const spawnBtn = win.querySelector('.icon-btn.spawn');
+    spawnBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      createWindow();
+    });
+
+    // Inner spawn/close buttons in content
+    win.querySelectorAll('.spawnInner').forEach(btn => {
+      btn.addEventListener('click', (ev) => { ev.stopPropagation(); createWindow(); });
+    });
+    win.querySelectorAll('.closeInner').forEach(btn => {
+      btn.addEventListener('click', (ev) => { ev.stopPropagation(); win.remove(); });
+    });
+
+    // Make sure the window stays on top when focused by tabbing
+    win.addEventListener('focus', () => { win.style.zIndex = ++zTop; });
+
+    return win;
+  }
+
+  // Bind main New Window button
+  document.getElementById('newWin').addEventListener('click', () => createWindow());
+
+  // Create a couple initial windows
+  createWindow();
+  createWindow();
+})();
+</script>
+</body>
+</html>
