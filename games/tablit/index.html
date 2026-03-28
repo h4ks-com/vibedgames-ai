@@ -1,0 +1,160 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Windows with Tables</title>
+<style>
+body{margin:0;font-family:system-ui;background:#111;color:#eee}
+#bar{padding:8px;background:#0b0b0b;border-bottom:1px solid #222}
+button{padding:6px 8px;border-radius:6px;border:0;background:#222;color:#fff;cursor:pointer}
+#space{position:fixed;inset:40px;overflow:hidden}
+.win{position:absolute;border-radius:6px;box-shadow:0 10px 30px rgba(0,0,0,.6);min-width:220px;min-height:140px;resize:both;display:flex;flex-direction:column;overflow:hidden}
+.title{height:34px;display:flex;align-items:center;justify-content:space-between;padding:0 8px;cursor:grab}
+.title.dragging{user-select:none}
+.controls{display:flex;gap:6px;align-items:center}
+.icon{width:28px;height:26px;border-radius:6px;border:0;background:rgba(255,255,255,.06);color:inherit;cursor:pointer}
+.body{padding:8px;overflow:auto;background:rgba(0,0,0,.04);flex:1 1 auto}
+table{border-collapse:collapse;width:100%}
+td,th{border:1px solid rgba(255,255,255,.08);padding:6px;background:transparent}
+td[contenteditable]{outline:none}
+.small{font-size:12px;opacity:.9}
+</style>
+</head>
+<body>
+<div id="bar"><button id="new">New Window</button></div>
+<div id="space"></div>
+<script>
+(() => {
+  const space = document.getElementById('space'), newBtn = document.getElementById('new');
+  let z = 100, idn = 0;
+  const fonts = ['system-ui','Georgia,serif','Courier,monospace','Trebuchet MS,Arial','Arial,sans-serif'];
+
+  function rnd(a,b){return Math.floor(Math.random()*(b-a+1))+a}
+  function pick(arr){return arr[rnd(0,arr.length-1)]}
+  function colorH(){return 'hsl('+rnd(0,359)+' '+rnd(40,80)+'% '+rnd(20,60)+'%)'}
+
+  function makeTable(rows=3,cols=3){
+    const tbl = document.createElement('table');
+    for(let r=0;r<rows;r++){
+      const tr = tbl.insertRow();
+      for(let c=0;c<cols;c++){
+        const td = tr.insertCell();
+        td.contentEditable = "true";
+        td.textContent = (r===0)? String.fromCharCode(65+c) : '';
+      }
+    }
+    return tbl;
+  }
+
+  function exportCSV(tbl, name){
+    if(!tbl.rows.length) return;
+    const headerCols = tbl.rows[0].cells.length;
+    const rows = [];
+    // start from 1 to skip header row
+    for(let r=1;r<tbl.rows.length;r++){
+      const tr = tbl.rows[r];
+      const cols = [];
+      for(let c=0;c<headerCols;c++){
+        const cell = tr.cells[c];
+        let v = cell ? (cell.textContent||'') : '';
+        v = v.replace(/"/g,'""');
+        if(v.indexOf(',')>=0 || v.indexOf('"')>=0 || v.indexOf('\n')>=0) v = `"${v}"`;
+        cols.push(v);
+      }
+      rows.push(cols.join(','));
+    }
+    const blob = new Blob([rows.join('\n')],{type:'text/csv;charset=utf-8'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name || 'table.csv'; document.body.appendChild(a); a.click();
+    a.remove(); URL.revokeObjectURL(url);
+  }
+
+  function createWindow(){
+    idn++; const id = idn;
+    const w = document.createElement('div'); w.className = 'win';
+    w.style.width = rnd(260,480)+'px';
+    w.style.height = rnd(160,420)+'px';
+    const R = space.getBoundingClientRect();
+    w.style.left = rnd(8, Math.max(8, R.width-240))+'px';
+    w.style.top = rnd(8, Math.max(8, R.height-160))+'px';
+    const bg = colorH(), titleBg = colorH(), txtBg = colorH();
+    const ff = pick(fonts), fs = rnd(12,18)+'px';
+    w.style.background = bg;
+    w.style.color = '#fff';
+    w.style.fontFamily = ff;
+    w.style.fontSize = fs;
+
+    w.innerHTML = `
+      <div class="title" style="background:${titleBg}">
+        <div class="ttext">Table ${id}</div>
+        <div class="controls">
+          <button class="icon addRow" title="Add row">+R</button>
+          <button class="icon addCol" title="Add col">+C</button>
+          <button class="icon exp" title="Export CSV">CSV</button>
+          <button class="icon close" title="Close">✕</button>
+        </div>
+      </div>
+      <div class="body" style="background:${txtBg}">
+        <div class="tablewrap"></div>
+      </div>
+    `;
+    w.style.zIndex = ++z;
+    space.appendChild(w);
+
+    const title = w.querySelector('.title');
+    const tablewrap = w.querySelector('.tablewrap');
+    const tbl = makeTable(3,3);
+    tablewrap.appendChild(tbl);
+
+    // draggable
+    let dragging=false, ox=0, oy=0, pid=null;
+    title.addEventListener('pointerdown', e=>{
+      if(e.target.closest('button')) return;
+      dragging=true; pid=e.pointerId;
+      const r=w.getBoundingClientRect();
+      ox = e.clientX - r.left; oy = e.clientY - r.top;
+      title.classList.add('dragging');
+      title.setPointerCapture && title.setPointerCapture(pid);
+      w.style.zIndex = ++z;
+    });
+    title.addEventListener('pointerup', e=>{ dragging=false; title.classList.remove('dragging'); title.releasePointerCapture && title.releasePointerCapture(e.pointerId); pid=null; });
+    window.addEventListener('pointermove', e=>{
+      if(!dragging) return;
+      if(pid!=null && e.pointerId!==pid) return;
+      const R = space.getBoundingClientRect();
+      let nx = e.clientX - ox - R.left, ny = e.clientY - oy - R.top;
+      nx = Math.max(-120, Math.min(nx, R.width-80)); ny = Math.max(-120, Math.min(ny, R.height-40));
+      w.style.left = nx+'px'; w.style.top = ny+'px';
+    });
+
+    // controls
+    w.querySelector('.close').addEventListener('click', ()=> w.remove());
+    w.querySelector('.addRow').addEventListener('click', ()=>{
+      const cols = tbl.rows[0].cells.length;
+      const tr = tbl.insertRow();
+      for(let c=0;c<cols;c++){
+        const td = tr.insertCell(); td.contentEditable = "true"; td.textContent = '';
+      }
+    });
+    w.querySelector('.addCol').addEventListener('click', ()=>{
+      const rows = tbl.rows.length;
+      // append new header label
+      const hdr = tbl.rows[0].insertCell(); hdr.contentEditable="true"; hdr.textContent = String.fromCharCode(65 + tbl.rows[0].cells.length - 1);
+      for(let r=1;r<rows;r++){
+        const td = tbl.rows[r].insertCell(); td.contentEditable="true"; td.textContent = '';
+      }
+    });
+    w.querySelector('.exp').addEventListener('click', ()=>{
+      exportCSV(tbl, 'table-'+id+'.csv');
+    });
+    return w;
+  }
+
+  newBtn.addEventListener('click', createWindow);
+  createWindow(); createWindow();
+})();
+</script>
+</body>
+</html>
