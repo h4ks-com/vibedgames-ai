@@ -1,0 +1,719 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Spawnable Spreadsheet Window</title>
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; margin: 16px; background: #f3f3f3; }
+  button.spawn-btn { padding: 10px 14px; font-size: 14px; cursor: pointer; }
+  .sheet-window {
+    position: absolute;
+    border: 1px solid rgba(0,0,0,0.2);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+    min-width: 320px;
+    min-height: 240px;
+    resize: both;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    background-clip: padding-box;
+  }
+  .sheet-header {
+    cursor: move;
+    padding: 8px 10px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    user-select:none;
+  }
+  .sheet-title { font-weight:700; }
+  .sheet-controls { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .sheet-controls button { padding:6px 8px; font-size:12px; cursor:pointer; }
+  .sheet-body { padding:10px; display:flex; flex-direction:column; gap:12px; align-items:stretch; flex:1 1 auto; min-height:0; }
+  .sheet-left { flex: 1 1 auto; min-width:240px; display:flex; flex-direction:column; gap:8px; min-height:0; }
+  table.sheet-table { border-collapse: collapse; width:100%; background: transparent; table-layout: fixed; }
+  table.sheet-table thead, table.sheet-table tbody { display: table; width: 100%; }
+  table.sheet-table thead { width: calc(100% - 0px); }
+  table.sheet-table tbody { display:block; overflow:auto; }
+  table.sheet-table tr { display: table; width: 100%; table-layout: fixed; }
+  table.sheet-table th, table.sheet-table td {
+    border: 1px solid rgba(0,0,0,0.08);
+    padding:6px 8px;
+    min-width:60px;
+    max-width:400px;
+    vertical-align:top;
+    box-sizing: border-box;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  table.sheet-table th { background: rgba(255,255,255,0.6); font-weight:700; text-align:center; }
+  table.sheet-table td { background: rgba(255,255,255,0.85); }
+  table.sheet-table td[contenteditable="true"]:focus { outline: 2px solid rgba(0,120,215,0.25); }
+  .text-area {
+    border:1px solid rgba(0,0,0,0.08);
+    padding:8px;
+    min-height:120px;
+    max-height:260px;
+    overflow:auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    border-radius:4px;
+  }
+  .selection-stack { border:1px dashed rgba(0,0,0,0.06); padding:6px; max-height:220px; overflow:auto; background: rgba(255,255,255,0.7); border-radius:4px; }
+  .stack-item { display:flex; gap:8px; align-items:flex-start; padding:6px; border-bottom:1px solid rgba(0,0,0,0.03); }
+  .color-swatch { width:18px; height:18px; border-radius:3px; border:1px solid rgba(0,0,0,0.08); flex:0 0 auto; }
+  .stack-meta { font-size:12px; color:#333; }
+  .stack-content { font-size:13px; white-space:pre-wrap; }
+  .small { font-size:12px; color:#444; }
+  .button-row { display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap; }
+  .mini { font-size:12px; padding:6px 8px; cursor:pointer; }
+  .close-btn { background:transparent; border:none; font-size:16px; cursor:pointer; }
+  .header-opts { display:flex; gap:6px; align-items:center; }
+  .controls-bottom { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+</style>
+</head>
+<body>
+  <button class="spawn-btn" id="spawnBtn">Spawn Sheet Window</button>
+
+<script>
+(function(){
+  let sheetCounter = 0;
+
+  const fonts = [
+    'Arial, sans-serif','Helvetica, Arial, sans-serif','"Segoe UI", Tahoma, Geneva, Verdana, sans-serif',
+    '"Times New Roman", Times, serif','Georgia, serif','"Courier New", Courier, monospace',
+    '"Lucida Console", Monaco, monospace','"Trebuchet MS", Helvetica, sans-serif','"Comic Sans MS", cursive'
+  ];
+
+  function randInt(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
+  function randColor() {
+    const h = Math.floor(Math.random()*360);
+    const s = randInt(55,85);
+    const l = randInt(55,78);
+    return `hsl(${h} ${s}% ${l}%)`;
+  }
+  function randDarkColor() {
+    const h = Math.floor(Math.random()*360);
+    const s = randInt(40,80);
+    const l = randInt(12,28);
+    return `hsl(${h} ${s}% ${l}%)`;
+  }
+
+  function colIndexToName(n) {
+    let s = '';
+    n++;
+    while (n>0) {
+      let rem = (n-1)%26;
+      s = String.fromCharCode(65+rem)+s;
+      n = Math.floor((n-1)/26);
+    }
+    return s;
+  }
+
+  function createTable(rows, cols) {
+    const table = document.createElement('table');
+    table.className = 'sheet-table';
+    const theadRow = document.createElement('tr');
+    const corner = document.createElement('th');
+    corner.textContent = '';
+    theadRow.appendChild(corner);
+    for (let c=0;c<cols;c++){
+      const th = document.createElement('th');
+      th.textContent = colIndexToName(c);
+      theadRow.appendChild(th);
+    }
+    const thead = document.createElement('thead');
+    thead.appendChild(theadRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    for (let r=0;r<rows;r++){
+      const tr = document.createElement('tr');
+      const rth = document.createElement('th');
+      rth.textContent = (r+1);
+      tr.appendChild(rth);
+      for (let c=0;c<cols;c++){
+        const td = document.createElement('td');
+        td.contentEditable = "true";
+        td.spellcheck = false;
+        td.dataset.r = r;
+        td.dataset.c = c;
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    return table;
+  }
+
+  function exportTableToCSV(table) {
+    const rows = [];
+    const tbody = table.tBodies[0];
+    for (let r=0; r<tbody.rows.length; r++){
+      const tr = tbody.rows[r];
+      const cells = [];
+      for (let c=1; c<tr.cells.length; c++){
+        const cell = tr.cells[c];
+        let text = cell.textContent || '';
+        text = text.replace(/\r\n/g, "\n");
+        if (text.includes('"') || text.includes(',') || text.includes('\n')) {
+          text = '"' + text.replace(/"/g,'""') + '"';
+        }
+        cells.push(text);
+      }
+      rows.push(cells.join(','));
+    }
+    return rows.join('\r\n');
+  }
+
+  function exportCSSForWindow(w) {
+    const style = window.getComputedStyle(w);
+    const bg = style.backgroundColor;
+    const color = style.color;
+    const font = style.fontFamily;
+    const fsize = style.fontSize;
+    const textarea = w.querySelector('.text-area');
+    const taStyle = textarea ? window.getComputedStyle(textarea) : null;
+    const taBg = taStyle ? taStyle.backgroundColor : '';
+    const taColor = taStyle ? taStyle.color : '';
+    const css = `/* Auto-generated CSS for .custom-sheet-${w.dataset.sheetId} */\n` +
+      `.custom-sheet-${w.dataset.sheetId} {\n` +
+      `  background: ${bg};\n` +
+      `  color: ${color};\n` +
+      `  font-family: ${font};\n` +
+      `  font-size: ${fsize};\n` +
+      `}\n\n` +
+      `.custom-sheet-${w.dataset.sheetId} .text-area {\n` +
+      `  background: ${taBg};\n` +
+      `  color: ${taColor};\n` +
+      `}\n`;
+    return css;
+  }
+
+  function downloadFile(filename, content, type='text/plain;charset=utf-8') {
+    const blob = new Blob([content], {type});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 2000);
+  }
+
+  function makeSpawnedWindow() {
+    sheetCounter++;
+    const id = sheetCounter;
+
+    const win = document.createElement('div');
+    win.className = 'sheet-window';
+    win.dataset.sheetId = id;
+
+    const winW = randInt(380,760);
+    const winH = randInt(320,680);
+    const left = randInt(40, Math.max(40, window.innerWidth - winW - 40));
+    const top = randInt(40, Math.max(40, window.innerHeight - winH - 40));
+    win.style.left = `${left}px`;
+    win.style.top = `${top}px`;
+    win.style.width = `${winW}px`;
+    win.style.height = `${winH}px`;
+
+    const bg = randColor();
+    const textColor = randDarkColor();
+    const font = fonts[Math.floor(Math.random()*fonts.length)];
+    const fontSize = randInt(12,18) + 'px';
+
+    win.style.background = bg;
+    win.style.color = textColor;
+    win.style.fontFamily = font;
+    win.style.fontSize = fontSize;
+
+    const header = document.createElement('div');
+    header.className = 'sheet-header';
+    header.style.background = 'linear-gradient(rgba(255,255,255,0.06), rgba(255,255,255,0.02))';
+
+    const title = document.createElement('div');
+    title.className = 'sheet-title';
+    title.textContent = `Sheet #${id}`;
+    header.appendChild(title);
+
+    const headerOpts = document.createElement('div');
+    headerOpts.className = 'header-opts';
+
+    const controls = document.createElement('div');
+    controls.className = 'sheet-controls';
+
+    const addRowBtn = document.createElement('button');
+    addRowBtn.className = 'mini';
+    addRowBtn.textContent = 'Add Row';
+
+    const delRowBtn = document.createElement('button');
+    delRowBtn.className = 'mini';
+    delRowBtn.textContent = 'Delete Row';
+
+    const addColBtn = document.createElement('button');
+    addColBtn.className = 'mini';
+    addColBtn.textContent = 'Add Column';
+
+    const delColBtn = document.createElement('button');
+    delColBtn.className = 'mini';
+    delColBtn.textContent = 'Delete Column';
+
+    const exportCsvBtn = document.createElement('button');
+    exportCsvBtn.className = 'mini';
+    exportCsvBtn.textContent = 'Export CSV';
+
+    const exportCssBtn = document.createElement('button');
+    exportCssBtn.className = 'mini';
+    exportCssBtn.textContent = 'Export CSS';
+
+    const exportJsonBtn = document.createElement('button');
+    exportJsonBtn.className = 'mini';
+    exportJsonBtn.textContent = 'Export Highlights (JSON)';
+
+    controls.appendChild(addRowBtn);
+    controls.appendChild(delRowBtn);
+    controls.appendChild(addColBtn);
+    controls.appendChild(delColBtn);
+    controls.appendChild(exportCsvBtn);
+    controls.appendChild(exportCssBtn);
+    controls.appendChild(exportJsonBtn);
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'close-btn';
+    closeBtn.title = 'Close';
+    closeBtn.innerHTML = '&times;';
+
+    headerOpts.appendChild(controls);
+    headerOpts.appendChild(closeBtn);
+
+    header.appendChild(headerOpts);
+    win.appendChild(header);
+
+    const body = document.createElement('div');
+    body.className = 'sheet-body';
+
+    const leftPane = document.createElement('div');
+    leftPane.className = 'sheet-left';
+
+    // EVERY WINDOW BEGINS WITH 1x5
+    const table = createTable(1,5);
+    leftPane.appendChild(table);
+
+    const controlsBottom = document.createElement('div');
+    controlsBottom.className = 'controls-bottom';
+
+    const textLabel = document.createElement('div');
+    textLabel.className = 'small';
+    textLabel.textContent = 'Selectable text area (select and press "Record Selection"):';
+    controlsBottom.appendChild(textLabel);
+
+    leftPane.appendChild(controlsBottom);
+
+    const textArea = document.createElement('div');
+    textArea.className = 'text-area';
+    textArea.contentEditable = true;
+    textArea.spellcheck = false;
+    textArea.style.background = randColor();
+    textArea.style.color = randDarkColor();
+    textArea.style.fontFamily = font;
+    textArea.style.fontSize = fontSize;
+    textArea.textContent = "This is an example text block. You may edit this text. Select any portion and click Record Selection to capture it. Multiple selections are allowed and will be highlighted with a random color and pushed into the stack below.\n\nTry selecting across words, multiple times, and watch the stack of recorded selections build up.";
+    leftPane.appendChild(textArea);
+
+    const br = document.createElement('div');
+    br.className = 'button-row';
+    const recordBtn = document.createElement('button');
+    recordBtn.textContent = 'Record Selection';
+    recordBtn.className = 'mini';
+    const clearHighlightsBtn = document.createElement('button');
+    clearHighlightsBtn.textContent = 'Clear Highlights';
+    clearHighlightsBtn.className = 'mini';
+    br.appendChild(recordBtn);
+    br.appendChild(clearHighlightsBtn);
+    leftPane.appendChild(br);
+
+    const stackLabel = document.createElement('div');
+    stackLabel.className = 'small';
+    stackLabel.textContent = 'Selection Stack:';
+    leftPane.appendChild(stackLabel);
+
+    const stackBox = document.createElement('div');
+    stackBox.className = 'selection-stack';
+    leftPane.appendChild(stackBox);
+
+    body.appendChild(leftPane);
+    win.appendChild(body);
+    document.body.appendChild(win);
+
+    win.classList.add(`custom-sheet-${id}`);
+
+    (function enableDrag(dragHandle, element) {
+      let dragging = false, startX=0, startY=0, origX=0, origY=0;
+      dragHandle.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        dragging = true;
+        startX = e.clientX; startY = e.clientY;
+        const rect = element.getBoundingClientRect();
+        origX = rect.left; origY = rect.top;
+        element.style.transition = 'none';
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+        e.preventDefault();
+      });
+      function onMove(e){
+        if(!dragging) return;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        element.style.left = (origX + dx) + 'px';
+        element.style.top = (origY + dy) + 'px';
+      }
+      function onUp(){
+        dragging = false;
+        element.style.transition = '';
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      }
+    })(header, win);
+
+    closeBtn.addEventListener('click', ()=>win.remove());
+
+    function getColCount() {
+      return table.tHead.rows[0].cells.length - 1;
+    }
+    function getRowCount() {
+      return table.tBodies[0].rows.length;
+    }
+
+    let lastManualChangeTime = 0;
+    function touchManual() { lastManualChangeTime = Date.now(); }
+
+    function addRow() {
+      const tbody = table.tBodies[0];
+      const newRow = document.createElement('tr');
+      const rn = tbody.rows.length + 1;
+      const rth = document.createElement('th');
+      rth.textContent = rn;
+      newRow.appendChild(rth);
+      const colCount = getColCount();
+      for (let c=0;c<colCount;c++){
+        const td = document.createElement('td');
+        td.contentEditable = "true";
+        td.spellcheck = false;
+        newRow.appendChild(td);
+      }
+      tbody.appendChild(newRow);
+      touchManual();
+    }
+    function removeRow() {
+      const tbody = table.tBodies[0];
+      if (tbody.rows.length > 1) {
+        tbody.deleteRow(tbody.rows.length - 1);
+        for (let r=0;r<tbody.rows.length;r++){
+          const th = tbody.rows[r].querySelector('th');
+          if (th) th.textContent = (r+1);
+        }
+        touchManual();
+      }
+    }
+    function addColumn() {
+      const headerRow = table.tHead.rows[0];
+      const colCount = getColCount();
+      const newTh = document.createElement('th');
+      newTh.textContent = colIndexToName(colCount);
+      headerRow.appendChild(newTh);
+      const tbody = table.tBodies[0];
+      for (let r=0;r<tbody.rows.length;r++){
+        const td = document.createElement('td');
+        td.contentEditable = "true";
+        td.spellcheck = false;
+        tbody.rows[r].appendChild(td);
+      }
+      touchManual();
+    }
+    function removeColumn() {
+      const headerRow = table.tHead.rows[0];
+      const colCount = getColCount();
+      if (colCount <= 1) return;
+      const lastIndex = headerRow.cells.length - 1;
+      if (lastIndex >= 0) headerRow.deleteCell(lastIndex);
+      const tbody = table.tBodies[0];
+      for (let r=0;r<tbody.rows.length;r++){
+        const row = tbody.rows[r];
+        const lastCellIndex = row.cells.length - 1;
+        if (lastCellIndex >= 0) row.deleteCell(lastCellIndex);
+      }
+      touchManual();
+    }
+
+    addRowBtn.addEventListener('click', addRow);
+    delRowBtn.addEventListener('click', removeRow);
+    addColBtn.addEventListener('click', addColumn);
+    delColBtn.addEventListener('click', removeColumn);
+
+    exportCsvBtn.addEventListener('click', ()=>{
+      const csv = exportTableToCSV(table);
+      const filename = `sheet-${id}.csv`;
+      downloadFile(filename, csv, 'text/csv;charset=utf-8');
+    });
+    exportCssBtn.addEventListener('click', ()=>{
+      const css = exportCSSForWindow(win);
+      const filename = `sheet-${id}.css`;
+      downloadFile(filename, css, 'text/css;charset=utf-8');
+    });
+
+    // selection stack and highlights
+    const stack = [];
+    let stackCounter = 0;
+
+    function addStackItem(item) {
+      stackCounter++;
+      item.id = stackCounter;
+      stack.push(item);
+      renderStack();
+    }
+
+    function renderStack() {
+      stackBox.innerHTML = '';
+      for (let i=0;i<stack.length;i++){
+        const it = stack[i];
+        const div = document.createElement('div');
+        div.className = 'stack-item';
+        const sw = document.createElement('div');
+        sw.className = 'color-swatch';
+        sw.style.background = it.color;
+        const meta = document.createElement('div');
+        meta.className = 'stack-meta';
+        meta.innerHTML = `<div style="font-weight:700;">Selection ${it.id}</div><div>start: ${it.start}, end: ${it.end}</div>`;
+        const content = document.createElement('div');
+        content.className = 'stack-content';
+        content.textContent = it.content;
+        div.appendChild(sw);
+        div.appendChild(meta);
+        div.appendChild(content);
+
+        div.addEventListener('click', ()=>{
+          navigator.clipboard && navigator.clipboard.writeText(it.content).catch(()=>{});
+        });
+
+        stackBox.appendChild(div);
+      }
+    }
+
+    function getRangeOffsets(range, container) {
+      const pre = document.createRange();
+      pre.setStart(container, 0);
+      pre.setEnd(range.startContainer, range.startOffset);
+      const start = pre.toString().length;
+      pre.setEnd(range.endContainer, range.endOffset);
+      const end = pre.toString().length;
+      return {start, end};
+    }
+
+    recordBtn.addEventListener('click', ()=>{
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) {
+        alert('No selection to record.');
+        return;
+      }
+      const range = sel.getRangeAt(0);
+      const container = textArea;
+      if (!container.contains(range.commonAncestorContainer)) {
+        alert('Selection must be inside the text area.');
+        return;
+      }
+      if (range.collapsed) {
+        alert('Please select a non-empty range.');
+        return;
+      }
+      const offsets = getRangeOffsets(range, container);
+      const textContent = range.toString();
+      const span = document.createElement('span');
+      const color = randColor();
+      span.style.background = color;
+      span.style.borderRadius = '2px';
+      span.style.padding = '0 2px';
+      try {
+        const frag = range.extractContents();
+        span.appendChild(frag);
+        range.insertNode(span);
+      } catch (e) {
+        try {
+          range.surroundContents(span);
+        } catch (e2) {
+        }
+      }
+      addStackItem({content: textContent, start: offsets.start, end: offsets.end, color: color});
+      sel.removeAllRanges();
+    });
+
+    clearHighlightsBtn.addEventListener('click', ()=>{
+      const spans = Array.from(textArea.querySelectorAll('span'));
+      spans.forEach(s=>{
+        const parent = s.parentNode;
+        while (s.firstChild) {
+          parent.insertBefore(s.firstChild, s);
+        }
+        parent.removeChild(s);
+      });
+      stack.length = 0;
+      renderStack();
+    });
+
+    // export highlights as JSON
+    exportJsonBtn.addEventListener('click', ()=>{
+      const data = {
+        sheetId: id,
+        text: textArea.textContent || '',
+        highlights: stack.map(h => ({ id: h.id, content: h.content, start: h.start, end: h.end, color: h.color }))
+      };
+      const filename = `sheet-${id}-highlights.json`;
+      downloadFile(filename, JSON.stringify(data, null, 2), 'application/json;charset=utf-8');
+    });
+
+    table.addEventListener('keydown', (e)=>{
+      const active = document.activeElement;
+      if (!active || active.tagName !== 'TD') return;
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const td = active;
+        const tr = td.parentElement;
+        const tbodyRows = table.tBodies[0].rows;
+        const rowIndex = Array.from(tbodyRows).indexOf(tr);
+        const cellIndex = Array.from(tr.cells).indexOf(td);
+        let nextRow = rowIndex;
+        let nextCell = cellIndex + 1;
+        if (e.shiftKey) {
+          nextCell = cellIndex - 1;
+          if (nextCell <= 0) {
+            if (rowIndex>0) {
+              nextRow = rowIndex - 1;
+              const prevRow = tbodyRows[nextRow];
+              nextCell = prevRow.cells.length - 1;
+            } else {
+              nextCell = 1;
+            }
+          }
+        } else {
+          if (nextCell >= tr.cells.length) {
+            if (rowIndex < tbodyRows.length - 1) {
+              nextRow = rowIndex + 1;
+              nextCell = 1;
+            } else {
+              addRow();
+              nextRow = table.tBodies[0].rows.length - 1;
+              nextCell = 1;
+            }
+          }
+        }
+        const target = table.tBodies[0].rows[nextRow].cells[nextCell];
+        target && target.focus();
+      }
+    });
+
+    table.addEventListener('mousedown', (e)=>{
+      if (e.target.tagName === 'TH') {
+        e.preventDefault();
+      }
+    });
+
+    // Auto-resize to accommodate window size: adjust columns and rows based on available pixels
+    const MIN_CELL_WIDTH = 80; // px
+    const ROW_HEIGHT_MEASURE = 34; // approximate px
+
+    let initialLock = true;
+    setTimeout(()=> initialLock = false, 700);
+
+    let roScheduled = false;
+    const ro = new ResizeObserver(() => {
+      if (!roScheduled) {
+        roScheduled = true;
+        requestAnimationFrame(()=>{ adjustTableToSize(); roScheduled = false; });
+      }
+    });
+    ro.observe(win);
+
+    function adjustTableToSize() {
+      const containerWidth = leftPane.clientWidth;
+      const availableWidth = Math.max(120, containerWidth - 4);
+
+      const computedCols = Math.max(1, Math.floor(availableWidth / MIN_CELL_WIDTH));
+      const currentCols = getColCount();
+
+      const recentManual = (Date.now() - lastManualChangeTime) < 600;
+
+      if (!initialLock) {
+        if (computedCols > currentCols && !recentManual) {
+          for (let i=0;i<computedCols-currentCols;i++) addColumn();
+        } else if (computedCols < currentCols) {
+          for (let i=0;i<currentCols-computedCols;i++) removeColumn();
+        }
+      }
+
+      // compute available height for table body area
+      let othersHeight = 0;
+      Array.from(leftPane.children).forEach(child=>{
+        if (child === table) return;
+        const style = getComputedStyle(child);
+        othersHeight += child.offsetHeight + parseFloat(style.marginTop||0) + parseFloat(style.marginBottom||0);
+      });
+      const availableHeightForTable = Math.max(60, leftPane.clientHeight - othersHeight - 6);
+      const tbody = table.tBodies[0];
+      let rowHeight = ROW_HEIGHT_MEASURE;
+      if (tbody.rows.length > 0) {
+        rowHeight = tbody.rows[0].offsetHeight || ROW_HEIGHT_MEASURE;
+      }
+      const headerHeight = table.tHead.offsetHeight || 30;
+      const computedRows = Math.max(1, Math.floor((availableHeightForTable - headerHeight) / Math.max(24, rowHeight)));
+      const currentRows = getRowCount();
+
+      const recentRowManual = (Date.now() - lastManualChangeTime) < 600;
+
+      if (!initialLock) {
+        if (computedRows > currentRows && !recentRowManual) {
+          for (let i=0;i<computedRows-currentRows;i++) addRow();
+        } else if (computedRows < currentRows) {
+          for (let i=0;i<currentRows-computedRows;i++) removeRow();
+        }
+      }
+
+      const tbodyEl = table.tBodies[0];
+      tbodyEl.style.maxHeight = Math.max(40, availableHeightForTable - headerHeight) + 'px';
+
+      const totalCols = getColCount();
+      if (totalCols > 0) {
+        const colWidth = Math.floor(containerWidth / (totalCols + 1));
+        const headCells = table.tHead.rows[0].cells;
+        for (let i=0;i<headCells.length;i++){
+          headCells[i].style.width = i===0 ? '40px' : `${colWidth}px`;
+        }
+        for (let r=0;r<tbody.rows.length;r++){
+          const cells = tbody.rows[r].cells;
+          for (let i=0;i<cells.length;i++){
+            cells[i].style.width = i===0 ? '40px' : `${colWidth}px`;
+          }
+        }
+      }
+    }
+
+    requestAnimationFrame(adjustTableToSize);
+
+    const mo = new MutationObserver((mutations)=>{
+      if (!document.body.contains(win)) {
+        ro.disconnect();
+        mo.disconnect();
+      }
+    });
+    mo.observe(document.body, {childList:true, subtree:true});
+
+    return win;
+  }
+
+  document.getElementById('spawnBtn').addEventListener('click', ()=> makeSpawnedWindow());
+  makeSpawnedWindow();
+
+})();
+</script>
+</body>
+</html>
