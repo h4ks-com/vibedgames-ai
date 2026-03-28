@@ -1,0 +1,600 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Spawnable Spreadsheet Window</title>
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; margin: 16px; background: #f3f3f3; }
+  button.spawn-btn { padding: 10px 14px; font-size: 14px; cursor: pointer; }
+  .sheet-window {
+    position: absolute;
+    border: 1px solid rgba(0,0,0,0.2);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+    min-width: 300px;
+    min-height: 200px;
+    resize: both;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+  }
+  .sheet-header {
+    cursor: move;
+    padding: 8px 10px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    user-select:none;
+  }
+  .sheet-title { font-weight:700; }
+  .sheet-controls { display:flex; gap:6px; align-items:center; }
+  .sheet-controls button { padding:6px 8px; font-size:12px; cursor:pointer; }
+  .sheet-body { padding:10px; display:flex; gap:12px; align-items:flex-start; }
+  .sheet-left { flex: 1 1 auto; min-width:240px; }
+  table.sheet-table { border-collapse: collapse; width:100%; background: transparent; }
+  table.sheet-table th, table.sheet-table td {
+    border: 1px solid rgba(0,0,0,0.08);
+    padding:6px 8px;
+    min-width:60px;
+    max-width:300px;
+    vertical-align:top;
+  }
+  table.sheet-table th { background: rgba(255,255,255,0.6); font-weight:700; text-align:center; }
+  table.sheet-table td { background: rgba(255,255,255,0.85); }
+  table.sheet-table td[contenteditable="true"]:focus { outline: 2px solid rgba(0,120,215,0.25); }
+  .sheet-right { width: 320px; max-width: 40%; display:flex; flex-direction:column; gap:8px; }
+  .text-area {
+    border:1px solid rgba(0,0,0,0.08);
+    padding:8px;
+    min-height:120px;
+    max-height:280px;
+    overflow:auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    border-radius:4px;
+  }
+  .selection-stack { border:1px dashed rgba(0,0,0,0.06); padding:6px; max-height:220px; overflow:auto; background: rgba(255,255,255,0.7); border-radius:4px; }
+  .stack-item { display:flex; gap:8px; align-items:flex-start; padding:6px; border-bottom:1px solid rgba(0,0,0,0.03); }
+  .color-swatch { width:18px; height:18px; border-radius:3px; border:1px solid rgba(0,0,0,0.08); flex:0 0 auto; }
+  .stack-meta { font-size:12px; color:#333; }
+  .stack-content { font-size:13px; white-space:pre-wrap; }
+  .small { font-size:12px; color:#444; }
+  .button-row { display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap; }
+  .mini { font-size:12px; padding:6px 8px; }
+  .close-btn { background:transparent; border:none; font-size:16px; cursor:pointer; }
+  .header-opts { display:flex; gap:6px; }
+</style>
+</head>
+<body>
+  <button class="spawn-btn" id="spawnBtn">Spawn Sheet Window</button>
+
+<script>
+(function(){
+  let sheetCounter = 0;
+
+  const fonts = [
+    'Arial, sans-serif','Helvetica, Arial, sans-serif','"Segoe UI", Tahoma, Geneva, Verdana, sans-serif',
+    '"Times New Roman", Times, serif','Georgia, serif','"Courier New", Courier, monospace',
+    '"Lucida Console", Monaco, monospace','"Trebuchet MS", Helvetica, sans-serif','"Comic Sans MS", cursive'
+  ];
+
+  function randInt(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
+  function randColor() {
+    // nicer pastels
+    const h = Math.floor(Math.random()*360);
+    const s = randInt(55,85);
+    const l = randInt(55,78);
+    return `hsl(${h} ${s}% ${l}%)`;
+  }
+  function randDarkColor() {
+    const h = Math.floor(Math.random()*360);
+    const s = randInt(40,80);
+    const l = randInt(12,28);
+    return `hsl(${h} ${s}% ${l}%)`;
+  }
+
+  function colIndexToName(n) {
+    // 0 -> A, 25-> Z, 26 -> AA
+    let s = '';
+    n++;
+    while (n>0) {
+      let rem = (n-1)%26;
+      s = String.fromCharCode(65+rem)+s;
+      n = Math.floor((n-1)/26);
+    }
+    return s;
+  }
+
+  function createTable(rows, cols) {
+    const table = document.createElement('table');
+    table.className = 'sheet-table';
+    const thead = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    const corner = document.createElement('th');
+    corner.textContent = ''; // top-left
+    headRow.appendChild(corner);
+    for (let c=0;c<cols;c++){
+      const th = document.createElement('th');
+      th.textContent = colIndexToName(c);
+      headRow.appendChild(th);
+    }
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    for (let r=0;r<rows;r++){
+      const tr = document.createElement('tr');
+      const rth = document.createElement('th');
+      rth.textContent = (r+1);
+      tr.appendChild(rth);
+      for (let c=0;c<cols;c++){
+        const td = document.createElement('td');
+        td.contentEditable = "true";
+        td.spellcheck = false;
+        td.dataset.r = r;
+        td.dataset.c = c;
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    return table;
+  }
+
+  function exportTableToCSV(table) {
+    // ignore thead headers and first column (row numbers)
+    const rows = [];
+    const tbody = table.tBodies[0];
+    for (let r=0; r<tbody.rows.length; r++){
+      const tr = tbody.rows[r];
+      const cells = [];
+      for (let c=1; c<tr.cells.length; c++){ // skip first th cell (row number)
+        const cell = tr.cells[c];
+        // Some browsers expose th in tbody? We used td, so okay.
+        let text = cell.textContent || '';
+        // Normalize CRLF to LF
+        text = text.replace(/\r\n/g, "\n");
+        // escape quotes
+        if (text.includes('"') || text.includes(',') || text.includes('\n')) {
+          text = '"' + text.replace(/"/g,'""') + '"';
+        }
+        cells.push(text);
+      }
+      rows.push(cells.join(','));
+    }
+    return rows.join('\r\n');
+  }
+
+  function exportCSSForWindow(w) {
+    // gather inline styles relevant for export
+    const style = window.getComputedStyle(w);
+    const bg = style.backgroundColor;
+    const color = style.color;
+    const font = style.fontFamily;
+    const fsize = style.fontSize;
+    // text area inside
+    const textarea = w.querySelector('.text-area');
+    const taStyle = textarea ? window.getComputedStyle(textarea) : null;
+    const taBg = taStyle ? taStyle.backgroundColor : '';
+    const taColor = taStyle ? taStyle.color : '';
+    const css = `/* Auto-generated CSS for .custom-sheet-${w.dataset.sheetId} */\n` +
+      `.custom-sheet-${w.dataset.sheetId} {\n` +
+      `  background: ${bg};\n` +
+      `  color: ${color};\n` +
+      `  font-family: ${font};\n` +
+      `  font-size: ${fsize};\n` +
+      `}\n\n` +
+      `.custom-sheet-${w.dataset.sheetId} .text-area {\n` +
+      `  background: ${taBg};\n` +
+      `  color: ${taColor};\n` +
+      `}\n`;
+    return css;
+  }
+
+  function downloadFile(filename, content, type='text/plain;charset=utf-8') {
+    const blob = new Blob([content], {type});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 2000);
+  }
+
+  function makeSpawnedWindow() {
+    sheetCounter++;
+    const id = sheetCounter;
+
+    const win = document.createElement('div');
+    win.className = 'sheet-window';
+    win.dataset.sheetId = id;
+
+    // random styling
+    const winW = randInt(360,680);
+    const winH = randInt(260,520);
+    const left = randInt(40, Math.max(40, window.innerWidth - winW - 40));
+    const top = randInt(40, Math.max(40, window.innerHeight - winH - 40));
+    win.style.left = `${left}px`;
+    win.style.top = `${top}px`;
+    win.style.width = `${winW}px`;
+    win.style.height = `${winH}px`;
+
+    const bg = randColor();
+    const textColor = randDarkColor();
+    const font = fonts[Math.floor(Math.random()*fonts.length)];
+    const fontSize = randInt(12,18) + 'px';
+
+    win.style.background = bg;
+    win.style.color = textColor;
+    win.style.fontFamily = font;
+    win.style.fontSize = fontSize;
+
+    // header
+    const header = document.createElement('div');
+    header.className = 'sheet-header';
+    header.style.background = 'linear-gradient(rgba(255,255,255,0.06), rgba(255,255,255,0.02))';
+
+    const title = document.createElement('div');
+    title.className = 'sheet-title';
+    title.textContent = `Sheet #${id}`;
+    header.appendChild(title);
+
+    const headerOpts = document.createElement('div');
+    headerOpts.className = 'header-opts';
+
+    const controls = document.createElement('div');
+    controls.className = 'sheet-controls';
+
+    const addRowBtn = document.createElement('button');
+    addRowBtn.className = 'mini';
+    addRowBtn.textContent = 'Add Row';
+
+    const addColBtn = document.createElement('button');
+    addColBtn.className = 'mini';
+    addColBtn.textContent = 'Add Column';
+
+    const exportCsvBtn = document.createElement('button');
+    exportCsvBtn.className = 'mini';
+    exportCsvBtn.textContent = 'Export CSV';
+
+    const exportCssBtn = document.createElement('button');
+    exportCssBtn.className = 'mini';
+    exportCssBtn.textContent = 'Export CSS';
+
+    controls.appendChild(addRowBtn);
+    controls.appendChild(addColBtn);
+    controls.appendChild(exportCsvBtn);
+    controls.appendChild(exportCssBtn);
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'close-btn';
+    closeBtn.title = 'Close';
+    closeBtn.innerHTML = '&times;';
+
+    headerOpts.appendChild(controls);
+    headerOpts.appendChild(closeBtn);
+
+    header.appendChild(headerOpts);
+
+    win.appendChild(header);
+
+    // body
+    const body = document.createElement('div');
+    body.className = 'sheet-body';
+
+    const leftPane = document.createElement('div');
+    leftPane.className = 'sheet-left';
+
+    // initial 3x3
+    const table = createTable(3,3);
+    leftPane.appendChild(table);
+
+    body.appendChild(leftPane);
+
+    const rightPane = document.createElement('div');
+    rightPane.className = 'sheet-right';
+
+    // text area
+    const textLabel = document.createElement('div');
+    textLabel.className = 'small';
+    textLabel.textContent = 'Selectable text area (make selections and click "Record Selection"):';
+    rightPane.appendChild(textLabel);
+
+    const textArea = document.createElement('div');
+    textArea.className = 'text-area';
+    textArea.contentEditable = true;
+    textArea.spellcheck = false;
+    textArea.style.background = randColor();
+    // ensure text color contrasts a bit
+    textArea.style.color = randDarkColor();
+    textArea.style.fontFamily = font;
+    textArea.style.fontSize = fontSize;
+    textArea.textContent = "This is an example text block. You may edit this text. Select any portion and click Record Selection to capture it. Multiple selections are allowed and will be highlighted with a random color and pushed into the stack below.\n\nTry selecting across words, multiple times, and watch the stack of recorded selections build up.";
+
+    rightPane.appendChild(textArea);
+
+    const recordBtn = document.createElement('button');
+    recordBtn.textContent = 'Record Selection';
+    recordBtn.className = 'mini';
+    rightPane.appendChild(recordBtn);
+
+    const clearHighlightsBtn = document.createElement('button');
+    clearHighlightsBtn.textContent = 'Clear Highlights';
+    clearHighlightsBtn.className = 'mini';
+    rightPane.appendChild(clearHighlightsBtn);
+
+    const stackLabel = document.createElement('div');
+    stackLabel.className = 'small';
+    stackLabel.textContent = 'Selection Stack:';
+    rightPane.appendChild(stackLabel);
+
+    const stackBox = document.createElement('div');
+    stackBox.className = 'selection-stack';
+    rightPane.appendChild(stackBox);
+
+    body.appendChild(rightPane);
+    win.appendChild(body);
+
+    document.body.appendChild(win);
+
+    // allow CSS export to refer to a class name
+    win.classList.add(`custom-sheet-${id}`);
+
+    // Drag to move
+    (function enableDrag(dragHandle, element) {
+      let dragging = false, startX=0, startY=0, origX=0, origY=0;
+      dragHandle.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        dragging = true;
+        startX = e.clientX; startY = e.clientY;
+        const rect = element.getBoundingClientRect();
+        origX = rect.left; origY = rect.top;
+        element.style.transition = 'none';
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+        e.preventDefault();
+      });
+      function onMove(e){
+        if(!dragging) return;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        element.style.left = (origX + dx) + 'px';
+        element.style.top = (origY + dy) + 'px';
+      }
+      function onUp(){
+        dragging = false;
+        element.style.transition = '';
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      }
+    })(header, win);
+
+    // Close
+    closeBtn.addEventListener('click', ()=>win.remove());
+
+    // Table functionality
+    addRowBtn.addEventListener('click', ()=>{
+      const tbody = table.tBodies[0];
+      const newRow = document.createElement('tr');
+      const rn = tbody.rows.length + 1;
+      const rth = document.createElement('th');
+      rth.textContent = rn;
+      newRow.appendChild(rth);
+      const colCount = table.tHead.rows[0].cells.length - 1;
+      for (let c=0;c<colCount;c++){
+        const td = document.createElement('td');
+        td.contentEditable = "true";
+        td.spellcheck = false;
+        newRow.appendChild(td);
+      }
+      tbody.appendChild(newRow);
+    });
+
+    addColBtn.addEventListener('click', ()=>{
+      const thead = table.tHead.rows[0];
+      const colCount = thead.cells.length - 1;
+      const newTh = document.createElement('th');
+      newTh.textContent = colIndexToName(colCount);
+      thead.appendChild(newTh);
+      const tbody = table.tBodies[0];
+      for (let r=0;r<tbody.rows.length;r++){
+        const td = document.createElement('td');
+        td.contentEditable = "true";
+        td.spellcheck = false;
+        tbody.rows[r].appendChild(td);
+      }
+    });
+
+    exportCsvBtn.addEventListener('click', ()=>{
+      const csv = exportTableToCSV(table);
+      const filename = `sheet-${id}.csv`;
+      downloadFile(filename, csv, 'text/csv;charset=utf-8');
+    });
+
+    exportCssBtn.addEventListener('click', ()=>{
+      const css = exportCSSForWindow(win);
+      const filename = `sheet-${id}.css`;
+      downloadFile(filename, css, 'text/css;charset=utf-8');
+    });
+
+    // Selection stack management
+    const stack = []; // {content, start, end, color, id}
+    let stackCounter = 0;
+
+    function addStackItem(item) {
+      stackCounter++;
+      item.id = stackCounter;
+      stack.push(item);
+      renderStack();
+    }
+
+    function renderStack() {
+      stackBox.innerHTML = '';
+      for (let i=0;i<stack.length;i++){
+        const it = stack[i];
+        const div = document.createElement('div');
+        div.className = 'stack-item';
+        const sw = document.createElement('div');
+        sw.className = 'color-swatch';
+        sw.style.background = it.color;
+        const meta = document.createElement('div');
+        meta.className = 'stack-meta';
+        meta.innerHTML = `<div style="font-weight:700;">Selection ${it.id}</div><div>start: ${it.start}, end: ${it.end}</div>`;
+        const content = document.createElement('div');
+        content.className = 'stack-content';
+        content.textContent = it.content;
+        div.appendChild(sw);
+        div.appendChild(meta);
+        div.appendChild(content);
+
+        // click to copy or to highlight focus
+        div.addEventListener('click', ()=>{
+          // copy content to clipboard
+          navigator.clipboard && navigator.clipboard.writeText(it.content).catch(()=>{});
+        });
+
+        stackBox.appendChild(div);
+      }
+    }
+
+    function getRangeOffsets(range, container) {
+      // returns {start, end} character offsets relative to container.textContent
+      const pre = document.createRange();
+      // start at container, 0
+      pre.setStart(container, 0);
+      pre.setEnd(range.startContainer, range.startOffset);
+      const start = pre.toString().length;
+      pre.setEnd(range.endContainer, range.endOffset);
+      const end = pre.toString().length;
+      return {start, end};
+    }
+
+    recordBtn.addEventListener('click', ()=>{
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) {
+        alert('No selection to record.');
+        return;
+      }
+      const range = sel.getRangeAt(0);
+      // ensure selection within textArea
+      const container = textArea;
+      if (!container.contains(range.commonAncestorContainer)) {
+        alert('Selection must be inside the text area.');
+        return;
+      }
+      if (range.collapsed) {
+        alert('Please select a non-empty range.');
+        return;
+      }
+      // compute offsets relative to container's textual content
+      const offsets = getRangeOffsets(range, container);
+      const textContent = range.toString();
+
+      // create highlight span
+      const span = document.createElement('span');
+      const color = randColor();
+      span.style.background = color;
+      span.style.borderRadius = '2px';
+      span.style.padding = '0 2px';
+      try {
+        // replace selected content with span-wrapped fragment
+        const frag = range.extractContents();
+        span.appendChild(frag);
+        range.insertNode(span);
+      } catch (e) {
+        // fallback: try surroundContents (might throw)
+        try {
+          range.surroundContents(span);
+        } catch (e2) {
+          // as ultimate fallback, just leave text and note selection without highlight
+        }
+      }
+
+      // record into stack
+      addStackItem({content: textContent, start: offsets.start, end: offsets.end, color: color});
+      sel.removeAllRanges();
+    });
+
+    clearHighlightsBtn.addEventListener('click', ()=>{
+      // Remove all spans inserted inside textArea while preserving text content
+      const spans = Array.from(textArea.querySelectorAll('span'));
+      spans.forEach(s=>{
+        const parent = s.parentNode;
+        while (s.firstChild) {
+          parent.insertBefore(s.firstChild, s);
+        }
+        parent.removeChild(s);
+      });
+      // clear stack
+      stack.length = 0;
+      renderStack();
+    });
+
+    // Basic keyboard navigation for table: allow Tab to move right/enter
+    table.addEventListener('keydown', (e)=>{
+      const active = document.activeElement;
+      if (!active || active.tagName !== 'TD') return;
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const td = active;
+        // find position
+        const tr = td.parentElement;
+        const rowIndex = Array.from(tr.parentElement.rows).indexOf(tr);
+        const cellIndex = Array.from(tr.cells).indexOf(td);
+        // cellIndex: first cell is th for row number? We use only tds in body; first cell is td at index 1? Actually in tbody rows we appended first th then tds => td index begins at 1, so move to next td cellIndex+1
+        let nextRow = rowIndex;
+        let nextCell = cellIndex + 1;
+        if (e.shiftKey) {
+          // back
+          nextCell = cellIndex - 1;
+          if (nextCell <= 0) {
+            // move to previous row last cell if exists
+            if (rowIndex>0) {
+              nextRow = rowIndex - 1;
+              const prevRow = table.tBodies[0].rows[nextRow];
+              nextCell = prevRow.cells.length - 1;
+            } else {
+              nextCell = 1;
+            }
+          }
+        } else {
+          if (nextCell >= tr.cells.length) {
+            // move to next row first editable cell
+            if (rowIndex < table.tBodies[0].rows.length - 1) {
+              nextRow = rowIndex + 1;
+              nextCell = 1;
+            } else {
+              // add a row
+              addRowBtn.click();
+              nextRow = table.tBodies[0].rows.length - 1;
+              nextCell = 1;
+            }
+          }
+        }
+        const target = table.tBodies[0].rows[nextRow].cells[nextCell];
+        target && target.focus();
+      }
+    });
+
+    // Make sure clicking table header cells isn't editing
+    table.addEventListener('mousedown', (e)=>{
+      if (e.target.tagName === 'TH') {
+        e.preventDefault();
+      }
+    });
+
+    // return instance if needed
+    return win;
+  }
+
+  // Spawn button
+  document.getElementById('spawnBtn').addEventListener('click', ()=> makeSpawnedWindow());
+
+  // Spawn one by default
+  makeSpawnedWindow();
+
+})();
+</script>
+</body>
+</html>
