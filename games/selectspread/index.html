@@ -1,0 +1,381 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Spawnable Spreadsheet Window</title>
+<style>
+  :root { --ui-font: Arial, sans-serif; }
+  body { font-family: var(--ui-font); margin: 16px; background: #f4f6f8; }
+  .spawn-btn { padding:10px 14px; font-size:14px; cursor:pointer; }
+  .sheet-window {
+    position: absolute;
+    border-radius:6px;
+    border:1px solid rgba(0,0,0,0.12);
+    box-shadow:0 10px 30px rgba(0,0,0,0.12);
+    display:flex;
+    flex-direction:column;
+    resize: both;
+    overflow: hidden;
+    min-width:320px;
+    min-height:240px;
+    background-clip: padding-box;
+  }
+  .sheet-header {
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:8px 10px;
+    cursor: move;
+    user-select: none;
+  }
+  .sheet-title { font-weight:700; font-size:14px; }
+  .sheet-controls { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .sheet-controls button { padding:6px 8px; font-size:12px; cursor:pointer; border-radius:4px; border:1px solid rgba(0,0,0,0.06); background: rgba(255,255,255,0.6); }
+  .sheet-body { padding:10px; display:flex; flex-direction:column; gap:10px; align-items:stretch; min-height:0; flex:1 1 auto; box-sizing:border-box; overflow:auto; }
+  .table-wrap { width:100%; display:flex; flex-direction:column; gap:8px; min-height:0; }
+  table.sheet-table { width:100%; border-collapse:collapse; table-layout: fixed; }
+  table.sheet-table thead th, table.sheet-table tbody th, table.sheet-table td {
+    border:1px solid rgba(0,0,0,0.08);
+    padding:6px 8px;
+    box-sizing:border-box;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+  }
+  table.sheet-table thead th { background: rgba(255,255,255,0.6); font-weight:700; text-align:center; }
+  table.sheet-table tbody th { background: rgba(255,255,255,0.9); font-weight:700; width:40px; text-align:right; }
+  table.sheet-table td { background: rgba(255,255,255,0.95); min-width:60px; }
+  table.sheet-table td[contenteditable="true"]:focus { outline:2px solid rgba(0,120,215,0.18); }
+  .text-area {
+    border-radius:6px;
+    padding:8px;
+    min-height:120px;
+    max-height:260px;
+    overflow:auto;
+    white-space:pre-wrap;
+    word-break:break-word;
+  }
+  .controls-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .mini { padding:6px 8px; font-size:12px; cursor:pointer; border-radius:4px; border:1px solid rgba(0,0,0,0.06); background: rgba(255,255,255,0.6); }
+  .stack { border:1px dashed rgba(0,0,0,0.06); padding:8px; border-radius:6px; max-height:220px; overflow:auto; background:rgba(255,255,255,0.7); }
+  .stack-item { display:flex; gap:8px; align-items:flex-start; padding:6px 4px; border-bottom:1px solid rgba(0,0,0,0.04); }
+  .sw { width:18px; height:18px; border-radius:3px; border:1px solid rgba(0,0,0,0.08); flex:0 0 auto; }
+  .stack-meta { font-size:12px; color:#222; }
+  .stack-content { font-size:13px; color:#111; white-space:pre-wrap; }
+</style>
+</head>
+<body>
+
+<button class="spawn-btn" id="spawn">Spawn Sheet Window</button>
+
+<script>
+(() => {
+  let sheetIdCounter = 0;
+
+  const FONTS = [
+    'Arial, sans-serif','Helvetica, Arial, sans-serif','"Segoe UI", Tahoma, Geneva, Verdana, sans-serif',
+    '"Times New Roman", Times, serif','Georgia, serif','"Courier New", Courier, monospace',
+    '"Lucida Console", Monaco, monospace','"Trebuchet MS", Helvetica, sans-serif'
+  ];
+
+  function randInt(min,max){ return Math.floor(Math.random()*(max-min+1))+min; }
+  function randHsl(pastel=false){
+    const h = Math.floor(Math.random()*360);
+    const s = pastel ? randInt(40,70) : randInt(40,90);
+    const l = pastel ? randInt(65,85) : randInt(20,60);
+    return `hsl(${h} ${s}% ${l}%)`;
+  }
+  function colName(n){
+    let s=''; n++;
+    while(n>0){ let r=(n-1)%26; s=String.fromCharCode(65+r)+s; n=Math.floor((n-1)/26); }
+    return s;
+  }
+
+  function createTable(rows, cols){
+    const table = document.createElement('table');
+    table.className = 'sheet-table';
+    const thead = document.createElement('thead');
+    const trh = document.createElement('tr');
+    const corner = document.createElement('th'); corner.textContent = '';
+    trh.appendChild(corner);
+    for(let c=0;c<cols;c++){ const th=document.createElement('th'); th.textContent = colName(c); trh.appendChild(th); }
+    thead.appendChild(trh);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    for(let r=0;r<rows;r++){
+      const tr = document.createElement('tr');
+      const rth = document.createElement('th'); rth.textContent = (r+1); tr.appendChild(rth);
+      for(let c=0;c<cols;c++){ const td=document.createElement('td'); td.contentEditable='true'; td.spellcheck=false; tr.appendChild(td); }
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    return table;
+  }
+
+  function exportCSV(table){
+    const lines=[];
+    const tbody = table.tBodies[0];
+    for(let r=0;r<tbody.rows.length;r++){
+      const tr = tbody.rows[r];
+      const vals=[];
+      for(let c=1;c<tr.cells.length;c++){
+        let txt = tr.cells[c].textContent || '';
+        txt = txt.replace(/\r\n/g,'\n');
+        if (txt.includes('"')||txt.includes(',')||txt.includes('\n')) txt = '"' + txt.replace(/"/g,'""') + '"';
+        vals.push(txt);
+      }
+      lines.push(vals.join(','));
+    }
+    return lines.join('\r\n');
+  }
+
+  function exportCSS(win){
+    const comp = getComputedStyle(win);
+    const ta = win.querySelector('.text-area');
+    const taStyle = ta ? getComputedStyle(ta) : null;
+    const css = `/* .custom-sheet-${win.dataset.sheetId} */\n.custom-sheet-${win.dataset.sheetId} {\n  background: ${comp.backgroundColor};\n  color: ${comp.color};\n  font-family: ${comp.fontFamily};\n  font-size: ${comp.fontSize};\n}\n.custom-sheet-${win.dataset.sheetId} .text-area {\n  background: ${taStyle ? taStyle.backgroundColor : 'transparent'};\n  color: ${taStyle ? taStyle.color : 'inherit'};\n}\n`;
+    return css;
+  }
+
+  function download(name, content, type='text/plain;charset=utf-8'){
+    const blob = new Blob([content], {type});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1500);
+  }
+
+  function getRangeOffsets(range, container){
+    const pre = document.createRange();
+    pre.setStart(container,0);
+    pre.setEnd(range.startContainer, range.startOffset);
+    const start = pre.toString().length;
+    pre.setEnd(range.endContainer, range.endOffset);
+    const end = pre.toString().length;
+    return {start, end};
+  }
+
+  function makeWindow(){
+    sheetIdCounter++;
+    const id = sheetIdCounter;
+
+    const win = document.createElement('div');
+    win.className = 'sheet-window custom-sheet-' + id;
+    win.dataset.sheetId = id;
+
+    // random position & size & styling
+    const w = randInt(360,720), h = randInt(300,580);
+    const left = randInt(20, Math.max(20, innerWidth - w - 20));
+    const top = randInt(20, Math.max(20, innerHeight - h - 20));
+    win.style.left = left + 'px';
+    win.style.top = top + 'px';
+    win.style.width = w + 'px';
+    win.style.height = h + 'px';
+
+    const bg = randHsl(true);
+    const textBg = randHsl(true);
+    const fg = randHsl(false);
+    const font = FONTS[randInt(0, FONTS.length-1)];
+    const fsize = randInt(12,18) + 'px';
+
+    win.style.background = bg;
+    win.style.color = fg;
+    win.style.fontFamily = font;
+    win.style.fontSize = fsize;
+
+    // header
+    const header = document.createElement('div'); header.className = 'sheet-header';
+    header.style.background = 'linear-gradient(rgba(255,255,255,0.06), rgba(255,255,255,0.02))';
+    const title = document.createElement('div'); title.className='sheet-title'; title.textContent = 'Sheet #' + id;
+    const ctrls = document.createElement('div'); ctrls.className='sheet-controls';
+    const btnAddRow = document.createElement('button'); btnAddRow.className='mini'; btnAddRow.textContent='Add Row';
+    const btnAddCol = document.createElement('button'); btnAddCol.className='mini'; btnAddCol.textContent='Add Column';
+    const btnCSV = document.createElement('button'); btnCSV.className='mini'; btnCSV.textContent='Export CSV';
+    const btnCSS = document.createElement('button'); btnCSS.className='mini'; btnCSS.textContent='Export CSS';
+    ctrls.appendChild(btnAddRow); ctrls.appendChild(btnAddCol); ctrls.appendChild(btnCSV); ctrls.appendChild(btnCSS);
+    const closeBtn = document.createElement('button'); closeBtn.className='mini'; closeBtn.textContent='✕';
+    header.appendChild(title); header.appendChild(ctrls); header.appendChild(closeBtn);
+    win.appendChild(header);
+
+    // body
+    const body = document.createElement('div'); body.className='sheet-body';
+
+    const tableWrap = document.createElement('div'); tableWrap.className='table-wrap';
+    // initial 1x5
+    const table = createTable(1,5);
+    tableWrap.appendChild(table);
+    body.appendChild(tableWrap);
+
+    // text area label + controls
+    const controlsRow = document.createElement('div'); controlsRow.className='controls-row';
+    const taLabel = document.createElement('div'); taLabel.className='small'; taLabel.textContent='Selectable text area:';
+    const recBtn = document.createElement('button'); recBtn.className='mini'; recBtn.textContent='Record Selection';
+    const clearBtn = document.createElement('button'); clearBtn.className='mini'; clearBtn.textContent='Clear Highlights';
+    controlsRow.appendChild(taLabel); controlsRow.appendChild(recBtn); controlsRow.appendChild(clearBtn);
+    body.appendChild(controlsRow);
+
+    const ta = document.createElement('div'); ta.className='text-area';
+    ta.contentEditable = true; ta.spellcheck = false;
+    ta.style.background = textBg;
+    ta.style.color = randHsl(false);
+    ta.style.border = '1px solid rgba(0,0,0,0.06)';
+    ta.style.minHeight = '120px';
+    ta.textContent = 'Editable sample text. Select any part of this text and click "Record Selection". You can make multiple selections; each will be highlighted with a random color and added to the stack below. Offsets are recorded as begin and end character positions relative to the full text.';
+    body.appendChild(ta);
+
+    // stack listing
+    const stackLabel = document.createElement('div'); stackLabel.className='small'; stackLabel.textContent='Selection Stack:';
+    body.appendChild(stackLabel);
+    const stackBox = document.createElement('div'); stackBox.className='stack';
+    body.appendChild(stackBox);
+
+    win.appendChild(body);
+    document.body.appendChild(win);
+
+    // store selections
+    const stack = [];
+    let counter = 0;
+
+    function renderStack(){
+      stackBox.innerHTML = '';
+      stack.forEach(it=>{
+        const el = document.createElement('div'); el.className='stack-item';
+        const sw = document.createElement('div'); sw.className='sw'; sw.style.background = it.color;
+        const meta = document.createElement('div'); meta.className='stack-meta';
+        meta.innerHTML = `<div style="font-weight:700">#${it.id}</div><div>begin: ${it.start} &nbsp; end: ${it.end}</div>`;
+        const content = document.createElement('div'); content.className='stack-content'; content.textContent = it.content;
+        el.appendChild(sw); el.appendChild(meta); el.appendChild(content);
+        stackBox.appendChild(el);
+      });
+    }
+
+    // header drag
+    (function(dragHandle, el){
+      let dragging=false, sx=0, sy=0, ox=0, oy=0;
+      dragHandle.addEventListener('mousedown', (ev)=>{
+        if(ev.button!==0) return;
+        dragging=true; sx=ev.clientX; sy=ev.clientY;
+        const rect = el.getBoundingClientRect(); ox=rect.left; oy=rect.top;
+        document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+        ev.preventDefault();
+      });
+      function onMove(ev){
+        if(!dragging) return;
+        el.style.left = (ox + (ev.clientX - sx)) + 'px';
+        el.style.top = (oy + (ev.clientY - sy)) + 'px';
+      }
+      function onUp(){ dragging=false; document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); }
+    })(header, win);
+
+    closeBtn.addEventListener('click', ()=> win.remove());
+
+    // add row/col functions
+    function getColCount(){
+      return table.tHead.rows[0].cells.length - 1;
+    }
+    function getRowCount(){
+      return table.tBodies[0].rows.length;
+    }
+    function addRow(){
+      const tbody = table.tBodies[0];
+      const r = tbody.rows.length + 1;
+      const tr = document.createElement('tr');
+      const rth = document.createElement('th'); rth.textContent = r; tr.appendChild(rth);
+      const cols = getColCount();
+      for(let c=0;c<cols;c++){ const td=document.createElement('td'); td.contentEditable='true'; td.spellcheck=false; tr.appendChild(td); }
+      tbody.appendChild(tr);
+    }
+    function addCol(){
+      const head = table.tHead.rows[0];
+      const newIdx = getColCount();
+      const th = document.createElement('th'); th.textContent = colName(newIdx); head.appendChild(th);
+      const tbody = table.tBodies[0];
+      for(let r=0;r<tbody.rows.length;r++){
+        const td = document.createElement('td'); td.contentEditable='true'; td.spellcheck=false;
+        tbody.rows[r].appendChild(td);
+      }
+    }
+
+    btnAddRow.addEventListener('click', addRow);
+    btnAddCol.addEventListener('click', addCol);
+
+    // Export CSV (without headers and row numbers)
+    btnCSV.addEventListener('click', ()=>{
+      const csv = exportCSV(table);
+      download('sheet-' + id + '.csv', csv, 'text/csv;charset=utf-8');
+    });
+
+    // Export CSS for this window
+    btnCSS.addEventListener('click', ()=>{
+      const css = exportCSS(win);
+      download('sheet-' + id + '.css', css, 'text/css;charset=utf-8');
+    });
+
+    // Record selection
+    recBtn.addEventListener('click', ()=>{
+      const sel = window.getSelection();
+      if(!sel || sel.rangeCount===0){ alert('No selection'); return; }
+      const range = sel.getRangeAt(0);
+      if(!ta.contains(range.commonAncestorContainer)){ alert('Selection must be inside the text area'); return; }
+      if(range.collapsed){ alert('Select a non-empty range'); return; }
+      // compute offsets relative to ta textContent BEFORE modification
+      const {start, end} = getRangeOffsets(range, ta);
+      const text = range.toString();
+      const color = randHsl(false);
+      // highlight by wrapping in span
+      const span = document.createElement('span');
+      span.style.background = color;
+      span.style.borderRadius = '3px';
+      span.style.padding = '0 2px';
+      try {
+        const frag = range.extractContents();
+        span.appendChild(frag);
+        range.insertNode(span);
+      } catch(e){
+        try { range.surroundContents(span); } catch(e2) { /* fallback: do nothing */ }
+      }
+      counter++;
+      stack.push({ id: counter, content: text, start, end, color });
+      renderStack();
+      sel.removeAllRanges();
+    });
+
+    clearBtn.addEventListener('click', ()=>{
+      // unwrap spans inside ta
+      const spans = Array.from(ta.querySelectorAll('span'));
+      spans.forEach(s=>{
+        const p = s.parentNode;
+        while(s.firstChild) p.insertBefore(s.firstChild, s);
+        p.removeChild(s);
+      });
+      stack.length = 0;
+      renderStack();
+    });
+
+    // ensure initial table remains 1x5 visually (avoid immediate auto changes)
+    // set some minimal column widths for clarity
+    requestAnimationFrame(()=> {
+      const cols = getColCount();
+      const width = Math.max(60, Math.floor((win.clientWidth - 60) / cols));
+      const headCells = table.tHead.rows[0].cells;
+      for(let i=0;i<headCells.length;i++){ headCells[i].style.width = i===0 ? '40px' : width + 'px'; }
+      const tbody = table.tBodies[0];
+      for(let r=0;r<tbody.rows.length;r++){
+        const cells = tbody.rows[r].cells;
+        for(let c=0;c<cells.length;c++){ cells[c].style.width = c===0 ? '40px' : width + 'px'; }
+      }
+    });
+
+    return win;
+  }
+
+  document.getElementById('spawn').addEventListener('click', makeWindow);
+
+  // spawn one on load
+  makeWindow();
+
+})();
+</script>
+</body>
+</html>
