@@ -1,0 +1,697 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Shadowed House — Survival Horror (Original)</title>
+<style>
+  :root{
+    --bg:#0b0f12;
+    --panel:#0f1720;
+    --accent:#ff7d5a;
+    --muted:#9aa4b2;
+  }
+  html,body{height:100%;margin:0;background:linear-gradient(180deg,#05060a,#0b1116);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial;color:#e6eef6}
+  .ui{
+    position:fixed;left:12px;top:12px;padding:10px;border-radius:8px;background:rgba(8,12,16,0.6);backdrop-filter:blur(4px);
+    border:1px solid rgba(255,255,255,0.03);z-index:20;max-width:320px;
+  }
+  .ui .row{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:6px}
+  .ui .label{font-size:13px;color:var(--muted)}
+  .ui .val{font-weight:800;color:var(--accent)}
+  #gameCanvas{display:block;position:fixed;left:0;top:0;width:100vw;height:100vh;background:#05060a;cursor:none}
+  .centerMsg{
+    position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);padding:16px 22px;border-radius:10px;background:rgba(6,9,12,0.7);
+    border:1px solid rgba(255,255,255,0.04);text-align:center;z-index:30;color:#eaf6ff
+  }
+  .hint{font-size:13px;color:var(--muted)}
+  button.btn{background:var(--accent);border:0;padding:8px 12px;border-radius:8px;font-weight:700;color:#07121a;cursor:pointer}
+  .footer{position:fixed;left:50%;bottom:12px;transform:translateX(-50%);color:var(--muted);font-size:12px;z-index:20}
+</style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+
+<div class="ui" id="ui">
+  <div class="row"><div class="label">Health</div><div class="val" id="healthVal">100</div></div>
+  <div class="row"><div class="label">Flash Battery</div><div class="val" id="batteryVal">100%</div></div>
+  <div class="row"><div class="label">Keys</div><div class="val" id="keysVal">0</div></div>
+  <div class="row"><div class="label">Time</div><div class="val" id="timeVal">0.0s</div></div>
+  <div style="margin-top:8px;display:flex;gap:8px">
+    <button class="btn" id="startBtn">Start</button>
+    <button class="btn" id="restartBtn">Restart</button>
+    <button class="btn" id="muteBtn">Mute</button>
+  </div>
+  <div style="margin-top:8px" class="hint">WASD to move • Mouse to aim • Left click to dash (short) • E to interact</div>
+</div>
+
+<div class="centerMsg" id="splash" style="width:420px;">
+  <div style="font-size:18px;font-weight:800;margin-bottom:8px">Shadowed House</div>
+  <div style="margin-bottom:12px">An original survival‑horror microgame. Find the key, avoid the shadows, and escape to the gate.</div>
+  <div style="display:flex;gap:8px;justify-content:center">
+    <button class="btn" id="sStart">Play</button>
+    <button class="btn" id="sHow">How to Play</button>
+  </div>
+</div>
+
+<div class="footer">Tip: Conserve battery — your flashlight reveals enemies but drains quickly.</div>
+
+<script>
+(() => {
+  // Canvas & context
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+
+  // Resize handling
+  function resizeCanvas(){
+    const dpr = window.devicePixelRatio || 1;
+    canvas.style.width = window.innerWidth + 'px';
+    canvas.style.height = window.innerHeight + 'px';
+    canvas.width = Math.floor(window.innerWidth * dpr);
+    canvas.height = Math.floor(window.innerHeight * dpr);
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+  }
+  window.addEventListener('resize', resizeCanvas);
+  resizeCanvas();
+
+  // UI refs
+  const healthVal = document.getElementById('healthVal');
+  const batteryVal = document.getElementById('batteryVal');
+  const keysVal = document.getElementById('keysVal');
+  const timeVal = document.getElementById('timeVal');
+  const splash = document.getElementById('splash');
+  const startBtn = document.getElementById('startBtn');
+  const restartBtn = document.getElementById('restartBtn');
+  const sStart = document.getElementById('sStart');
+  const sHow = document.getElementById('sHow');
+  const muteBtn = document.getElementById('muteBtn');
+
+  // Sound simple
+  let audioCtx = null;
+  let muted = false;
+  function ensureAudio(){
+    if(!audioCtx && window.AudioContext) audioCtx = new AudioContext();
+  }
+  function tone(freq, len=0.08, vol=0.02){
+    if(muted) return;
+    ensureAudio();
+    if(!audioCtx) return;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type='sine'; o.frequency.value = freq;
+    g.gain.value = vol;
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(); o.stop(audioCtx.currentTime + len);
+  }
+
+  muteBtn.addEventListener('click', ()=>{
+    muted = !muted;
+    muteBtn.textContent = muted ? 'Unmute' : 'Mute';
+  });
+
+  sHow.addEventListener('click', ()=> {
+    alert('Move with WASD. Aim with mouse. Left click to dash. Press E to pick up key or batteries. Avoid enemies in darkness—they hurt when they touch you. Use flashlight to reveal and stun briefly but battery drains. Find key and reach the gate to escape.');
+  });
+
+  // Game state
+  let running = false;
+  let lastTime = performance.now();
+  let elapsed = 0;
+
+  let map = null;
+  let player = null;
+  let entities = [];
+  let items = [];
+  let enemies = [];
+  let walls = [];
+  let lightRadius = 260; // base
+  let batteryMax = 100;
+  let victory = false;
+  let failure = false;
+
+  // Controls
+  const keys = {};
+  window.addEventListener('keydown', (e) => { keys[e.key.toLowerCase()] = true; if(e.key === 'e' || e.key === 'E') interact(); });
+  window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+  let mouse = {x:0,y:0,down:false};
+  canvas.addEventListener('mousemove', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    mouse.x = e.clientX - rect.left;
+    mouse.y = e.clientY - rect.top;
+  });
+  canvas.addEventListener('mousedown', (e) => { if(e.button === 0) mouse.down = true; });
+  canvas.addEventListener('mouseup', (e) => { if(e.button === 0) mouse.down = false; });
+
+  // Map generation: simple rooms with corridors
+  function createMap(){
+    const W = Math.max(800, window.innerWidth);
+    const H = Math.max(600, window.innerHeight);
+    // walls are rectangles {x,y,w,h}
+    walls = [];
+    // outer walls
+    walls.push({x:0,y:0,w:W,h:20});
+    walls.push({x:0,y:H-20,w:W,h:20});
+    walls.push({x:0,y:0,w:20,h:H});
+    walls.push({x:W-20,y:0,w:20,h:H});
+    // internal rooms: create a few rectangles
+    const roomDefs = [
+      {x:80,y:80,w:420,h:260},
+      {x:560,y:80,w:360,h:220},
+      {x:140,y:380,w:260,h:220},
+      {x:460,y:340,w:420,h:260}
+    ];
+    for(const r of roomDefs){
+      // border walls
+      walls.push({x:r.x,y:r.y,w:r.w,h:14}); // top
+      walls.push({x:r.x,y:r.y+r.h-14,w:r.w,h:14}); // bottom
+      walls.push({x:r.x,y:r.y,w:14,h:r.h}); // left
+      walls.push({x:r.x+r.w-14,y:r.y,w:14,h:r.h}); // right
+    }
+    // corridors as narrow walls create
+    walls.push({x:480,y:170,w:80,h:80});
+    walls.push({x:420,y:260,w:60,h:18});
+    return {W,H,roomDefs};
+  }
+
+  // Entities: player, items, enemies
+  function resetEntities(){
+    entities = [];
+    items = [];
+    enemies = [];
+    const {W,H} = map;
+    player = {
+      x: 120, y: map.roomDefs[0].y + map.roomDefs[0].h/2, radius: 12,
+      angle: 0, speed: 140, health: 100, battery: batteryMax, keys:0, dashCooldown:0
+    };
+
+    // place a key in a room and a battery pack
+    items.push({type:'key', x: map.roomDefs[1].x + 80, y: map.roomDefs[1].y + 120, picked:false});
+    items.push({type:'battery', x: map.roomDefs[2].x + 120, y: map.roomDefs[2].y + 80, picked:false});
+    items.push({type:'battery', x: map.roomDefs[3].x + 300, y: map.roomDefs[3].y + 160, picked:false});
+
+    // place exit gate near far right top
+    items.push({type:'exit', x: map.W - 120, y: 60 + 40, picked:false});
+
+    // enemies with simple AI
+    enemies.push(makeEnemy(map.roomDefs[1].x+120, map.roomDefs[1].y+40));
+    enemies.push(makeEnemy(map.roomDefs[3].x+220, map.roomDefs[3].y+160));
+    enemies.push(makeEnemy(map.roomDefs[2].x+80, map.roomDefs[2].y+120));
+  }
+
+  function makeEnemy(x,y){
+    return {
+      x,y, radius:14, speed:60 + Math.random()*40, state:'idle', fear:0, homeX:x, homeY:y, alerted: false, stunTimer:0
+    };
+  }
+
+  // Collision helpers
+  function rectIntersectsCircle(rect, cx, cy, r){
+    const nearestX = Math.max(rect.x, Math.min(cx, rect.x + rect.w));
+    const nearestY = Math.max(rect.y, Math.min(cy, rect.y + rect.h));
+    const dx = cx - nearestX;
+    const dy = cy - nearestY;
+    return (dx*dx + dy*dy) <= r*r;
+  }
+  function collidesWithWalls(x,y,r){
+    for(const w of walls){
+      if(rectIntersectsCircle(w,x,y,r)) return true;
+    }
+    return false;
+  }
+
+  // Movement clamp with wall collision
+  function movePlayer(dx,dy,dt){
+    const speed = player.speed * (player.dash ? 2.2 : 1);
+    let nx = player.x + dx * speed * dt;
+    let ny = player.y + dy * speed * dt;
+    // simple collision pushback: if collides, try axis wise
+    if(!collidesWithWalls(nx,ny,player.radius)){
+      player.x = nx; player.y = ny;
+    } else {
+      if(!collidesWithWalls(nx,player.y,player.radius)){ player.x = nx; }
+      else if(!collidesWithWalls(player.x,ny,player.radius)){ player.y = ny; }
+      // else blocked
+    }
+  }
+
+  // Interaction
+  function interact(){
+    for(const it of items){
+      if(it.picked) continue;
+      const d = Math.hypot(player.x - it.x, player.y - it.y);
+      if(d < 30){
+        if(it.type === 'key'){ it.picked = true; player.keys++; tone(1200,0.08,0.03); log('Picked up a key.'); }
+        else if(it.type === 'battery'){ it.picked = true; player.battery = Math.min(batteryMax, player.battery + 45); tone(1000,0.06,0.03); log('Picked battery pack.'); }
+        else if(it.type === 'exit'){
+          if(player.keys > 0){ victory = true; running = false; tone(1800,0.2,0.06); log('You escaped!'); }
+          else { log('The gate is locked. Find a key.'); tone(400,0.06,0.02); }
+        }
+      }
+    }
+  }
+
+  // Logging small overlay messages
+  let eventLog = [];
+  function log(str){
+    eventLog.unshift({t:elapsed, text:str});
+    if(eventLog.length>6) eventLog.pop();
+  }
+
+  // Enemy AI: basic chase when in darkness or when player is seen by light; different behavior:
+  function updateEnemies(dt){
+    for(const e of enemies){
+      // if stunned
+      if(e.stunTimer > 0){ e.stunTimer -= dt; if(e.stunTimer <= 0) e.stunTimer = 0; continue; }
+      // detect player: if player in dark, enemy is more bold; if player in light cone, enemy is frightened or stunned slightly
+      const dx = player.x - e.x, dy = player.y - e.y;
+      const dist = Math.hypot(dx,dy);
+      // is within player's light cone?
+      const angleToE = Math.atan2(dy,dx);
+      const playerAngle = player.angle;
+      let angDiff = Math.abs(normalizeAngle(angleToE - playerAngle));
+      const inCone = (angDiff < 0.45 && dist < lightRadius * (player.battery/100 + 0.1)); // cone radius influenced by battery
+      if(inCone && player.battery > 6){
+        // enemy is revealed; simple behavior: flee briefly or be stunned with some chance if hit by "blinding"
+        if(Math.random() < 0.08){
+          e.stunTimer = 0.9 + Math.random()*0.9;
+          log('An enemy stunned by your light!');
+          tone(1600,0.06,0.03);
+          continue;
+        }
+        // else become alerted and move away from light (or towards if aggressive)
+        e.alerted = true;
+        // small chance to charge player
+        if(dist < 160 && Math.random() < 0.015){
+          e.state = 'charge';
+        } else {
+          e.state = 'avoid';
+        }
+      } else {
+        // not in cone: wander or patrol
+        if(Math.random() < dt * 0.06) {
+          e.state = ['idle','patrol','patrol'][Math.floor(Math.random()*3)];
+        }
+        // maybe slowly home
+        e.alerted = false;
+      }
+
+      // state behavior
+      let tx = e.homeX, ty = e.homeY;
+      if(e.state === 'charge'){
+        tx = player.x; ty = player.y;
+      } else if(e.state === 'avoid'){
+        // move away from player
+        const nx = e.x - dx, ny = e.y - dy;
+        const nlen = Math.hypot(nx,ny) || 1;
+        tx = e.x + (nx/nlen) * 120;
+        ty = e.y + (ny/nlen) * 120;
+      } else if(e.state === 'patrol'){
+        // small random wander
+        if(!e._target || Math.hypot(e._target.x - e.x, e._target.y - e.y) < 8) {
+          e._target = {x: e.homeX + randRange(-160,160), y: e.homeY + randRange(-120,120)};
+        }
+        tx = e._target.x; ty = e._target.y;
+      } else {
+        // idle: slight drift near home
+        tx = e.homeX + Math.sin(elapsed * 0.2 + e.x) * 12;
+        ty = e.homeY + Math.cos(elapsed * 0.3 + e.y) * 12;
+      }
+
+      // move toward tx,ty
+      const ddx = tx - e.x, ddy = ty - e.y;
+      const dlen = Math.hypot(ddx,ddy);
+      if(dlen > 1){
+        const vx = (ddx / dlen) * e.speed;
+        const vy = (ddy / dlen) * e.speed;
+        let nx = e.x + vx * dt;
+        let ny = e.y + vy * dt;
+        // avoid walls
+        if(!collidesWithWalls(nx,ny,e.radius)){
+          e.x = nx; e.y = ny;
+        } else {
+          // try small adjustments
+          if(!collidesWithWalls(e.x + vx * dt, e.y, e.radius)) e.x += vx*dt;
+          else if(!collidesWithWalls(e.x, e.y + vy * dt, e.radius)) e.y += vy*dt;
+        }
+      }
+
+      // contact with player?
+      const dplayer = Math.hypot(player.x - e.x, player.y - e.y);
+      if(dplayer < player.radius + e.radius){
+        // damage player
+        if(!player.invul && !e.stunTimer){
+          player.health -= 12;
+          player.invul = 0.9;
+          log('You are attacked! Health -12.');
+          tone(180,0.08,0.06);
+        }
+      }
+    }
+  }
+
+  // Utility helpers
+  function randRange(a,b){ return a + Math.random()*(b-a); }
+  function normalizeAngle(a){
+    while(a<-Math.PI) a+=Math.PI*2;
+    while(a>Math.PI) a-=Math.PI*2;
+    return a;
+  }
+
+  // Dash mechanic: short speed burst and brief battery cost
+  function tryDash(){
+    if(player.dashCooldown > 0) return;
+    player.dash = true;
+    player.dashTimer = 0.25;
+    player.dashCooldown = 1.2;
+    player.battery = Math.max(0, player.battery - 6);
+    tone(1000,0.05,0.03);
+  }
+  canvas.addEventListener('click', (e) => {
+    // left click -> dash
+    if(e.button === 0) tryDash();
+  });
+
+  // Main update
+  function update(dt){
+    if(!running) return;
+    elapsed += dt;
+
+    // player orientation: aim at mouse
+    const rect = canvas.getBoundingClientRect();
+    const mx = mouse.x;
+    const my = mouse.y;
+    player.angle = Math.atan2(my - player.y, mx - player.x);
+
+    // movement WASD
+    let dx=0, dy=0;
+    if(keys['w']||keys['arrowup']) dy -= 1;
+    if(keys['s']||keys['arrowdown']) dy += 1;
+    if(keys['a']||keys['arrowleft']) dx -= 1;
+    if(keys['d']||keys['arrowright']) dx += 1;
+    if(Math.hypot(dx,dy) > 0){ const len = Math.hypot(dx,dy); dx/=len; dy/=len; }
+
+    // dash timers
+    if(player.dash){
+      player.dashTimer -= dt;
+      if(player.dashTimer <= 0){ player.dash = false; player.dashTimer = 0; }
+    }
+    if(player.dashCooldown > 0) player.dashCooldown = Math.max(0, player.dashCooldown - dt);
+
+    // battery consumption: flashlight active if mouse moved or always on; we treat as always on but intensity depends on battery
+    const batteryDrainBase = 6 * (player.dash ? 1.5 : 1); // per second when on at default intensity
+    // reduce drain if stationary and battery low
+    const drain = (mouse.x !== undefined ? batteryDrainBase : 2.0);
+    player.battery = Math.max(0, player.battery - drain * dt * 0.12);
+
+    // move
+    movePlayer(dx,dy,dt);
+
+    // invulnerability after hit
+    if(player.invul){ player.invul -= dt; if(player.invul < 0) player.invul = 0; }
+
+    // update enemies
+    updateEnemies(dt);
+
+    // check items auto pickup when close
+    for(const it of items){
+      if(it.picked) continue;
+      const d = Math.hypot(player.x - it.x, player.y - it.y);
+      if(d < 28){
+        if(it.type === 'key'){ it.picked = true; player.keys++; tone(1200,0.06,0.03); log('Picked a key.'); }
+        else if(it.type === 'battery'){ it.picked = true; player.battery = Math.min(batteryMax, player.battery + 45); tone(1000,0.06,0.03); log('Picked battery pack.'); }
+      }
+    }
+
+    // check exit auto when close
+    for(const it of items){
+      if(it.type === 'exit' && Math.hypot(player.x - it.x, player.y - it.y) < 40){
+        if(player.keys > 0){ victory = true; running = false; tone(1800,0.2,0.06); log('You escaped!'); }
+      }
+    }
+
+    // health check
+    if(player.health <= 0 && !failure){
+      failure = true; running = false; tone(120,0.6,0.08); log('You succumbed in the dark.');
+    }
+
+    // battery affects light radius
+    lightRadius = 180 + (player.battery/100) * 240; // vary between 180..420
+
+    // degrade over time or victory state
+    // UI updates
+    healthVal.textContent = Math.max(0, Math.round(player.health));
+    batteryVal.textContent = Math.round(player.battery) + '%';
+    keysVal.textContent = player.keys;
+    timeVal.textContent = elapsed.toFixed(1) + 's';
+  }
+
+  // Drawing dark + cone of light
+  function render(){
+    const W = canvas.clientWidth;
+    const H = canvas.clientHeight;
+    ctx.clearRect(0,0,W,H);
+
+    // Ambient: floor texture-ish using subtle noise
+    ctx.fillStyle = '#0b1013';
+    ctx.fillRect(0,0,W,H);
+
+    // draw walls as rectangles with shading
+    for(const w of walls){
+      ctx.fillStyle = '#1b1f23';
+      ctx.fillRect(w.x, w.y, w.w, w.h);
+      // inner shadow
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.strokeRect(w.x+1, w.y+1, w.w-2, w.h-2);
+    }
+
+    // draw items (if not picked) with faint glow
+    for(const it of items){
+      if(it.picked) continue;
+      if(it.type === 'key'){
+        drawSpriteKey(it.x, it.y);
+      } else if(it.type === 'battery'){
+        drawSpriteBattery(it.x, it.y);
+      } else if(it.type === 'exit'){
+        drawExit(it.x, it.y);
+      }
+    }
+
+    // draw enemies as shadows until revealed by light
+    for(const e of enemies){
+      // compute if exposed by player light cone
+      const dx = e.x - player.x, dy = e.y - player.y;
+      const dist = Math.hypot(dx,dy);
+      const angleToE = Math.atan2(dy,dx);
+      const angDiff = Math.abs(normalizeAngle(angleToE - player.angle));
+      const inCone = (angDiff < 0.45 && dist < lightRadius);
+      // visual: if in cone, draw full color; else dark silhouette
+      if(inCone || e.stunTimer > 0){
+        // reveal
+        ctx.save();
+        ctx.translate(e.x, e.y);
+        // pulsing highlight if stunned
+        if(e.stunTimer > 0) {
+          ctx.beginPath();
+          ctx.fillStyle = 'rgba(180,240,255,0.25)';
+          ctx.arc(0,0,e.radius+8*Math.sin(elapsed*20),0,Math.PI*2);
+          ctx.fill();
+        }
+        ctx.fillStyle = '#8b2f2f';
+        ctx.beginPath(); ctx.arc(0,0,e.radius,0,Math.PI*2); ctx.fill();
+        ctx.restore();
+      } else {
+        // shadow blob
+        ctx.save();
+        ctx.globalAlpha = 0.35;
+        ctx.fillStyle = '#02060a';
+        ctx.beginPath(); ctx.ellipse(e.x, e.y, e.radius*1.6, e.radius*1.0, 0, 0, Math.PI*2); ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    // draw player softly
+    ctx.save();
+    ctx.translate(player.x, player.y);
+    // body
+    ctx.fillStyle = '#d8c9b2';
+    ctx.beginPath(); ctx.arc(0,0, player.radius,0,Math.PI*2); ctx.fill();
+    // face or mask
+    ctx.fillStyle = player.invul ? 'rgba(255,255,255,0.7)' : '#1b1b1b';
+    ctx.beginPath(); ctx.arc(0, -2, 4, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+
+    // draw burgers? (no)
+    // draw overlay darkness
+    // create darkness layer
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.95)';
+    ctx.fillRect(0,0,W,H);
+
+    // create flashlight cone as hole using destination-out trick with gradient
+    ctx.globalCompositeOperation = 'destination-out';
+    const coneAngle = 0.9; // radians wide
+    const grad = ctx.createRadialGradient(player.x, player.y, 10, player.x, player.y, lightRadius);
+    grad.addColorStop(0, 'rgba(0,0,0,1)');
+    grad.addColorStop(0.15, 'rgba(0,0,0,0.6)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    // rough cone mask
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(player.x, player.y);
+    ctx.arc(player.x, player.y, lightRadius, player.angle - coneAngle/2, player.angle + coneAngle/2);
+    ctx.closePath();
+    ctx.fillStyle = '#000';
+    ctx.fill();
+    // soften edges by drawing gradient on top and using destination-out again
+    ctx.restore();
+
+    // subtle light texture (draw light on top with 'lighter')
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.beginPath();
+    ctx.moveTo(player.x, player.y);
+    ctx.arc(player.x, player.y, lightRadius, player.angle - coneAngle/2, player.angle + coneAngle/2);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(255,245,200,0.06)';
+    ctx.fill();
+
+    // small bright center
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, 16, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(255,245,200,0.22)';
+    ctx.fill();
+
+    // restore composite
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.restore();
+
+    // HUD overlay: show items around player when close (glow)
+    for(const it of items){
+      if(it.picked) continue;
+      const d = Math.hypot(player.x - it.x, player.y - it.y);
+      if(d < 120){
+        ctx.save();
+        ctx.fillStyle = 'rgba(255,255,255,0.02)';
+        ctx.beginPath();
+        ctx.arc(it.x, it.y, 28, 0, Math.PI*2);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    // log small
+    ctx.save();
+    ctx.font = '12px system-ui';
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    for(let i=0;i<eventLog.length;i++){
+      const e = eventLog[i];
+      ctx.fillText(e.text, 18, 120 + i*18);
+    }
+    ctx.restore();
+
+    // End messages overlay
+    if(victory){
+      ctx.save();
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(0,0,W,H);
+      ctx.fillStyle = '#e7ffe9';
+      ctx.font = '36px system-ui';
+      ctx.fillText('You Escaped!', W/2 - 120, H/2);
+      ctx.restore();
+    } else if(failure){
+      ctx.save();
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(0,0,W,H);
+      ctx.fillStyle = '#ffd6d6';
+      ctx.font = '36px system-ui';
+      ctx.fillText('You Died...', W/2 - 90, H/2);
+      ctx.restore();
+    }
+  }
+
+  // sprite helpers
+  function drawSpriteKey(x,y){
+    ctx.save();
+    ctx.translate(x,y);
+    ctx.fillStyle = '#ffd965';
+    ctx.beginPath();
+    ctx.arc(-4,0,6,0,Math.PI*2); ctx.fill();
+    ctx.fillRect(-1,-2,14,4);
+    ctx.fillStyle = '#b38c2b';
+    ctx.fillRect(8,-4,4,2); ctx.fillRect(8,0,4,2);
+    ctx.restore();
+  }
+  function drawSpriteBattery(x,y){
+    ctx.save();
+    ctx.translate(x,y);
+    ctx.fillStyle = '#cfeeff';
+    ctx.fillRect(-10,-8,20,16);
+    ctx.fillStyle = '#2a8f7a';
+    const lvl = Math.round((player.battery/100)*16);
+    ctx.fillRect(-8, -6 + (16-lvl), 12, lvl);
+    ctx.fillStyle = '#21373a';
+    ctx.fillRect(12,-4,4,8);
+    ctx.restore();
+  }
+  function drawExit(x,y){
+    ctx.save();
+    ctx.translate(x,y);
+    ctx.fillStyle = '#a7f0c3';
+    ctx.fillRect(-28,-12,56,24);
+    ctx.fillStyle = '#083a2b';
+    ctx.fillRect(-22,-6,44,12);
+    ctx.restore();
+  }
+
+  // Main loop
+  function loop(ts){
+    const now = ts || performance.now();
+    let dt = (now - lastTime) / 1000;
+    if(dt > 0.05) dt = 0.05;
+    lastTime = now;
+    if(running) update(dt);
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  // Start / Restart
+  function startGame(){
+    map = createMap();
+    resetEntities();
+    running = true;
+    elapsed = 0;
+    lastTime = performance.now();
+    victory = false; failure = false;
+    splash.style.display = 'none';
+    tone(880,0.06,0.03);
+    log('Game started.');
+  }
+  function restartGame(){
+    startGame();
+  }
+
+  startBtn.addEventListener('click', () => startGame());
+  sStart.addEventListener('click', () => startGame());
+  restartBtn.addEventListener('click', () => restartGame());
+
+  // expose interact key 'E'
+  window.addEventListener('keydown', (e)=> { if(e.key.toLowerCase() === 'e') interact(); });
+
+  // ensure audio resume on user gesture
+  document.addEventListener('mousedown', ()=> { if(audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); });
+
+  // utility: small random helper
+  function randomChoice(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+
+  // initialize
+  map = createMap();
+  resetEntities();
+  render();
+  requestAnimationFrame(loop);
+
+  // Minimal hints & logs
+  log('Welcome to Shadowed House.');
+
+})();
+</script>
+</body>
+</html>
