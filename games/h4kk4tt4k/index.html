@@ -1,131 +1,716 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>2D Fighting Game</title>
-  <style>
-    body {
-      margin: 0;
-      padding: 0;
-      background-color: #1e1e1e;
-      overflow: hidden;
-    }
-    canvas {
-      display: block;
-      margin: 0 auto;
-      background-color: #000;
-    }
-    #healthBar1, #healthBar2 {
-      position: fixed;
-      top: 20px;
-      width: 200px;
-      height: 20px;
-      background-color: red;
-    }
-    #healthBar1 {
-      left: 20px;
-    }
-    #healthBar2 {
-      right: 20px;
-    }
-  </style>
+<meta charset="utf-8" />
+<title>h4kk4tt4k - Simple 2D Fighting Game</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  html,body { height:100%; margin:0; background:#121217; color:#eee; font-family:Segoe UI, Roboto, Arial, sans-serif; -webkit-font-smoothing:antialiased; }
+  #gameWrap { display:flex; flex-direction:column; align-items:center; gap:8px; padding:12px; box-sizing:border-box; }
+  canvas { background: linear-gradient(#5a9,#235); border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,0.6); }
+  .hud { width:900px; display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  .bar { width:420px; height:26px; background:rgba(0,0,0,0.5); border-radius:6px; padding:3px; box-sizing:border-box; position:relative; overflow:hidden; }
+  .hp { height:100%; border-radius:4px; transition:width 0.2s linear; box-shadow:inset 0 0 10px rgba(0,0,0,0.5); }
+  .meter { height:8px; background:linear-gradient(90deg,#222,#444); border-radius:6px; margin-top:6px; position:relative; overflow:hidden; }
+  .meterFill { height:100%; background:linear-gradient(90deg,#0ff,#03f); transition:width 0.2s linear; }
+  .centerHud { display:flex; flex-direction:column; align-items:center; gap:6px; width:60px; }
+  button, .toggle { background:#222; color:#fff; border:1px solid #444; padding:6px 10px; border-radius:6px; cursor:pointer; }
+  button:hover, .toggle:hover { border-color:#7cf; }
+  .controls { width:900px; color:#ddd; background:rgba(0,0,0,0.25); padding:8px; border-radius:6px; font-size:13px; display:flex; justify-content:space-between; box-sizing:border-box; }
+  .small { font-size:12px; color:#bfe; }
+  .winnerText { font-weight:700; color:#ffd; text-shadow:0 2px 6px rgba(0,0,0,0.7); }
+  @media (max-width:940px){ canvas { transform:scale(0.85); transform-origin:top center; } .hud,.controls{ transform:scale(0.85); transform-origin:top center; } }
+</style>
 </head>
 <body>
-  <canvas id="gameCanvas"></canvas>
-  <script>
-    const canvas = document.getElementById('gameCanvas');
-    const ctx = canvas.getContext('2d');
-    canvas.width = 800;
-    canvas.height = 400;
+<div id="gameWrap">
+  <div class="hud">
+    <div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <div style="width:80px; text-align:left; font-weight:700;">P1</div>
+        <div class="bar">
+          <div id="hp1" class="hp" style="width:100%; background:linear-gradient(90deg,#ff6060,#ff1a1a)"></div>
+        </div>
+      </div>
+      <div class="meter"><div id="meter1" class="meterFill" style="width:0%"></div></div>
+    </div>
 
-    const player1 = {
-      x: 100,
-      y: canvas.height - 150,
-      width: 50,
-      height: 100,
-      color: 'blue',
-      dx: 0,
-      dy: 0,
-      health: 100
-    };
+    <div class="centerHud">
+      <div id="timer" style="font-size:22px;">60</div>
+      <div class="small">Round <span id="roundNum">1</span> · Best of 3</div>
+      <div id="roundResult" class="winnerText"></div>
+    </div>
 
-    const player2 = {
-      x: canvas.width - 150,
-      y: canvas.height - 150,
-      width: 50,
-      height: 100,
-      color: 'red',
-      dx: 0,
-      dy: 0,
-      health: 100
-    };
+    <div style="text-align:right;">
+      <div style="display:flex; gap:8px; align-items:center; justify-content:flex-end;">
+        <div style="width:80px; font-weight:700;">P2</div>
+        <div class="bar">
+          <div id="hp2" class="hp" style="width:100%; background:linear-gradient(90deg,#66f,#0033ff)"></div>
+        </div>
+      </div>
+      <div class="meter"><div id="meter2" class="meterFill" style="width:0%"></div></div>
+    </div>
+  </div>
 
-    const gravity = 1;
-    const friction = 0.9;
+  <canvas id="c" width="900" height="420"></canvas>
 
-    let keys = {};
+  <div style="display:flex; gap:8px; align-items:center;">
+    <button id="restart">Restart Match</button>
+    <button id="toggleCPU" class="toggle">Toggle CPU: Off</button>
+    <div style="width:12px"></div>
+    <div class="small">P1: A/D walk, W jump, S crouch/block, J light, K medium, L heavy</div>
+    <div style="width:18px"></div>
+    <div class="small">P2: ←/→ walk, ↑ jump, ↓ crouch/block, N light, M medium, , heavy</div>
+  </div>
 
-    document.addEventListener('keydown', (e) => {
-      keys[e.code] = true;
-    });
+  <div class="controls">
+    <div>Hitboxes are simplified. Combo by chaining attacks. Hold block (S/↓) to reduce damage. Win 2 rounds to win match.</div>
+    <div style="font-weight:600;">h4kk4tt4k — a tiny 2D fighter</div>
+  </div>
+</div>
 
-    document.addEventListener('keyup', (e) => {
-      keys[e.code] = false;
-    });
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const groundY = H - 64;
+  let lastTime = 0;
+  const gravity = 1800;
+  const keys = {};
+  let cpuOn = false;
+  const restartBtn = document.getElementById('restart');
+  const toggleCPU = document.getElementById('toggleCPU');
+  const hp1Bar = document.getElementById('hp1');
+  const hp2Bar = document.getElementById('hp2');
+  const meter1Bar = document.getElementById('meter1');
+  const meter2Bar = document.getElementById('meter2');
+  const timerEl = document.getElementById('timer');
+  const roundNumEl = document.getElementById('roundNum');
+  const roundResultEl = document.getElementById('roundResult');
 
-    function update() {
-      player1.x += player1.dx;
-      player1.y += player1.dy;
+  // audio helpers (tiny beeps)
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  function beep(freq=440,dur=0.06,vol=0.08,type='sine') {
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = type;
+    o.frequency.value = freq;
+    g.gain.value = vol;
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start();
+    g.gain.setValueAtTime(vol,audioCtx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+    o.stop(audioCtx.currentTime + dur + 0.02);
+  }
 
-      player2.x += player2.dx;
-      player2.y += player2.dy;
-
-      // Player 1 Movement
-      if (keys['ArrowLeft']) player1.dx = -5;
-      else if (keys['ArrowRight']) player1.dx = 5;
-      else player1.dx *= friction;
-
-      if (keys['ArrowUp'] && player1.y === canvas.height - 150) player1.dy = -15;
-
-      player1.dy += gravity;
-      if (player1.y >= canvas.height - 150) player1.dy = 0;
-
-      // Player 2 Movement
-      if (keys['KeyA']) player2.dx = -5;
-      else if (keys['KeyD']) player2.dx = 5;
-      else player2.dx *= friction;
-
-      if (keys['KeyW'] && player2.y === canvas.height - 150) player2.dy = -15;
-
-      player2.dy += gravity;
-      if (player2.y >= canvas.height - 150) player2.dy = 0;
-
-      // Health Bar Update
-      document.getElementById('healthBar1').style.width = player1.health + 'px';
-      document.getElementById('healthBar2').style.width = player2.health + 'px';
-
-      // Collision Detection (Punch)
-      if (Math.abs(player1.x - player2.x) < player1.width && Math.abs(player1.y - player2.y) < player1.height) {
-        if (keys['Space']) player2.health -= 1;
-        if (keys['KeyH']) player1.health -= 1;
-      }
-
-      // Draw
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = player1.color;
-      ctx.fillRect(player1.x, player1.y, player1.width, player1.height);
-
-      ctx.fillStyle = player2.color;
-      ctx.fillRect(player2.x, player2.y, player2.width, player2.height);
-
-      requestAnimationFrame(update);
+  // Player class
+  class Fighter {
+    constructor(x, color, controls) {
+      this.spawnX = x;
+      this.x = x;
+      this.y = groundY;
+      this.vx = 0;
+      this.vy = 0;
+      this.w = 44;
+      this.h = 88;
+      this.color = color;
+      this.facing = 1; // 1 = right, -1 = left
+      this.onGround = true;
+      this.state = 'idle'; // idle, walk, jump, crouch, attack, hit, down, block
+      this.hitstun = 0;
+      this.health = 100;
+      this.maxHealth = 100;
+      this.meter = 0;
+      this.controls = controls;
+      this.attack = null; // details of attack: type,duration,timer,hitbox...
+      this.lastAttackTime = 0;
+      this.wasHitBy = null;
+      this.roundsWon = 0;
+      this.comboCounter = 0;
+      this.invulTimer = 0;
+      this.blocking = false;
     }
 
-    update();
-  </script>
+    resetForRound() {
+      this.x = this.spawnX;
+      this.y = groundY;
+      this.vx = 0;
+      this.vy = 0;
+      this.onGround = true;
+      this.state = 'idle';
+      this.hitstun = 0;
+      this.health = this.health<=0 ? this.maxHealth : this.health; // keep health if still alive, handled by round flow
+      this.meter = 0;
+      this.attack = null;
+      this.comboCounter = 0;
+      this.blocking = false;
+      this.invulTimer = 0;
+      this.wasHitBy = null;
+    }
 
-  <div id="healthBar1"></div>
-  <div id="healthBar2"></div>
+    hurtbox() {
+      return {
+        x: this.x - this.w/2,
+        y: this.y - this.h,
+        w: this.w,
+        h: this.h
+      };
+    }
+
+    attackBox(atk) {
+      // returns global rect for active attack
+      const hb = this.hurtbox();
+      const rangeForward = atk.range || 40;
+      const up = atk.yOffset || -20;
+      const width = atk.width || 36;
+      if (this.facing === 1) {
+        return {
+          x: hb.x + hb.w/2 + (this.w/2),
+          y: hb.y + up,
+          w: rangeForward,
+          h: width
+        };
+      } else {
+        return {
+          x: hb.x + hb.w/2 - rangeForward,
+          y: hb.y + up,
+          w: rangeForward,
+          h: width
+        };
+      }
+    }
+
+    applyInput(dt, inps) {
+      // inps is object mapping actions to booleans
+      const moveSpeed = 260;
+      if (this.hitstun > 0 || this.state === 'down') {
+        // can't control
+        return;
+      }
+
+      // Blocking / crouch
+      if (inps.block) {
+        // standing block if not moving down? We'll allow crouch or standing block based on state
+        this.blocking = true;
+        this.state = 'block';
+        this.vx = 0;
+        return;
+      } else {
+        this.blocking = false;
+      }
+
+      // Jump
+      if (inps.jump && this.onGround) {
+        this.vy = -680;
+        this.onGround = false;
+        this.state = 'jump';
+        beep(880,0.04,0.03,'sine');
+      }
+
+      // Movement
+      if (inps.left && !inps.right) {
+        this.vx = -moveSpeed;
+        this.facing = -1;
+        if (this.onGround && this.state !== 'attack') this.state = 'walk';
+      } else if (inps.right && !inps.left) {
+        this.vx = moveSpeed;
+        this.facing = 1;
+        if (this.onGround && this.state !== 'attack') this.state = 'walk';
+      } else {
+        // slow down
+        if (this.onGround) {
+          this.vx = 0;
+          if (this.state !== 'attack') this.state = 'idle';
+        } else {
+          // mid-air slight control
+          this.vx *= 0.98;
+        }
+      }
+
+      // Attacks
+      if (inps.light) this.tryAttack('light');
+      if (inps.medium) this.tryAttack('medium');
+      if (inps.heavy) this.tryAttack('heavy');
+    }
+
+    tryAttack(type) {
+      if (this.attack || this.hitstun > 0 || this.state === 'down' || this.invulTimer > 0) return;
+      const attacks = {
+        light: {name:'light', damage:6, meterGain:6, startup:0.08, active:0.12, recovery:0.28, range:48, width:26, knock:120, stun:0.16},
+        medium:{name:'medium', damage:10, meterGain:10, startup:0.12, active:0.18, recovery:0.36, range:62, width:28, knock:180, stun:0.22},
+        heavy: {name:'heavy', damage:16, meterGain:16, startup:0.18, active:0.22, recovery:0.44, range:86, width:34, knock:260, stun:0.36}
+      };
+      const a = attacks[type];
+      this.attack = {
+        type: type,
+        timer: 0,
+        startup: a.startup,
+        active: a.active,
+        recovery: a.recovery,
+        damage: a.damage,
+        meterGain: a.meterGain,
+        range: a.range,
+        width: a.width,
+        knock: a.knock,
+        stun: a.stun,
+        hitTargets: new Set()
+      };
+      this.state = 'attack';
+      beep(400 + (this.facing===1?0:40) + (type==='heavy'?200:0), 0.06, 0.07, type==='light'?'sine':(type==='medium'?'square':'sawtooth'));
+      // small impulse forward on attack
+      const impulse = (type==='heavy'?100:(type==='medium'?60:30));
+      this.vx += this.facing * impulse;
+    }
+
+    update(dt, opponent) {
+      // timers
+      if (this.invulTimer > 0) this.invulTimer = Math.max(0, this.invulTimer - dt);
+      if (this.hitstun > 0) {
+        this.hitstun = Math.max(0, this.hitstun - dt);
+        if (this.hitstun === 0 && this.state !== 'down') this.state = 'idle';
+      }
+
+      if (this.attack) {
+        this.attack.timer += dt;
+        // attack phases: startup, active window, recovery
+        const t = this.attack.timer;
+        if (t < this.attack.startup) {
+          // startup
+        } else if (t < this.attack.startup + this.attack.active) {
+          // active
+          // check collision with opponent
+          const box = this.attackBox(this.attack);
+          const oppHb = opponent.hurtbox();
+          if (rectOverlap(box, oppHb) && !this.attack.hitTargets.has(opponent)) {
+            // hit confirmed
+            this.attack.hitTargets.add(opponent);
+            let blocked = opponent.blocking && this.isFacingOpponent(opponent);
+            const damage = blocked ? Math.max(1, Math.round(this.attack.damage * 0.3)) : this.attack.damage;
+            opponent.takeHit(damage, this.attack.knock, blocked, this, this.attack.stun);
+            // meter gain
+            this.meter = Math.min(100, this.meter + this.attack.meterGain);
+            // small airtime if opponent in air
+            beep(120 + (blocked?200:0), 0.06, 0.09, blocked ? 'sine' : 'square');
+            // create combo effect
+            this.comboCounter++;
+          }
+        } else if (t > this.attack.startup + this.attack.active + this.attack.recovery) {
+          // finish
+          this.attack = null;
+          if (this.state !== 'down' && this.hitstun === 0) this.state = 'idle';
+        }
+      }
+
+      // physics
+      this.vy += gravity * dt;
+      this.x += this.vx * dt;
+      this.y += this.vy * dt;
+
+      // ground collision
+      if (this.y >= groundY) {
+        if (!this.onGround && this.vy > 600) {
+          // hard landing -> some stagger?
+          // not implemented
+        }
+        this.y = groundY;
+        this.vy = 0;
+        this.onGround = true;
+      } else {
+        this.onGround = false;
+      }
+
+      // friction and limits
+      if (this.onGround) {
+        this.vx *= 0.86;
+        if (Math.abs(this.vx) < 6) this.vx = 0;
+      } else {
+        this.vx *= 0.995;
+      }
+
+      // keep inside stage
+      const hb = this.hurtbox();
+      if (hb.x < 28) {
+        this.x = 28 + this.w/2;
+        this.vx = 0;
+      }
+      if (hb.x + hb.w > W - 28) {
+        this.x = W - 28 - this.w/2;
+        this.vx = 0;
+      }
+
+      // when being knocked down and landing
+      if (this.state === 'down' && this.onGround && this.vy === 0) {
+        this.invulTimer = 0.1; // small invul on stand
+      }
+    }
+
+    takeHit(damage, knock, blocked, attacker, stun) {
+      if (this.invulTimer > 0) return;
+      if (this.health <= 0) return;
+      // reduce damage if blocking
+      if (blocked) {
+        this.health = Math.max(0, this.health - damage);
+        this.hitstun = stun * 0.6;
+        // slight pushback
+        this.vx = -attacker.facing * 80;
+      } else {
+        this.health = Math.max(0, this.health - damage);
+        this.hitstun = stun;
+        // knockback + launch
+        this.vx = -attacker.facing * (knock * 0.4);
+        this.vy = Math.min(-180, -knock * 0.45);
+        this.onGround = false;
+      }
+      // combo handling
+      if (this.wasHitBy === attacker) {
+        // continuing combo
+      } else {
+        this.comboCounter = 0;
+      }
+      this.wasHitBy = attacker;
+      // meter gain on getting hit slightly
+      attacker.meter = Math.min(100, attacker.meter + 4);
+      // if low health -> down
+      if (this.health <= 0) {
+        this.state = 'down';
+        this.vx = -attacker.facing * 120;
+        this.vy = -300;
+        this.invulTimer = 0.2;
+      } else {
+        this.state = 'hit';
+      }
+    }
+
+    isFacingOpponent(op) {
+      return (this.x < op.x && this.facing === 1) || (this.x > op.x && this.facing === -1);
+    }
+  }
+
+  // helper collision
+  function rectOverlap(a,b) {
+    return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  }
+
+  // initialize fighters
+  const p1 = new Fighter(220, '#ff6666', {
+    left: 'KeyA', right: 'KeyD', jump: 'KeyW', block: 'KeyS', light: 'KeyJ', medium: 'KeyK', heavy: 'KeyL'
+  });
+  const p2 = new Fighter(680, '#6699ff', {
+    left: 'ArrowLeft', right: 'ArrowRight', jump: 'ArrowUp', block: 'ArrowDown', light: 'KeyN', medium: 'KeyM', heavy: 'Comma'
+  });
+
+  // game state
+  let roundTime = 60;
+  let roundNum = 1;
+  let matchesToWin = 2;
+  let matchOver = false;
+  let roundOver = false;
+  let roundAnnounceTimer = 0;
+  let roundWinner = null;
+  let matchWinner = null;
+
+  function resetRound(starting=false) {
+    p1.resetForRound();
+    p2.resetForRound();
+    p1.x = 220; p2.x = 680;
+    roundTime = 60;
+    roundOver = false;
+    roundWinner = null;
+    roundNumEl.textContent = roundNum;
+    roundResultEl.textContent = '';
+    matchOver = false;
+    matchWinner = null;
+  }
+
+  resetRound(true);
+
+  // input handling
+  window.addEventListener('keydown', e => {
+    keys[e.code] = true;
+    // resume audio on first key
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    // prevent arrow keys from behaving strangely
+    if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.code)) {
+      e.preventDefault();
+    }
+  });
+  window.addEventListener('keyup', e => {
+    keys[e.code] = false;
+    if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.code)) {
+      e.preventDefault();
+    }
+  });
+
+  toggleCPU.addEventListener('click', () => {
+    cpuOn = !cpuOn;
+    toggleCPU.textContent = 'Toggle CPU: ' + (cpuOn ? 'On' : 'Off');
+  });
+
+  restartBtn.addEventListener('click', () => {
+    // reset everything
+    p1.roundsWon = 0; p2.roundsWon = 0;
+    roundNum = 1;
+    resetRound(true);
+  });
+
+  // CPU simple AI for p2 when enabled
+  function cpuThink(ai, opp, dt) {
+    // very simple state machine: close in, occasionally attack, block if player attacking
+    const inRange = Math.abs(ai.x - opp.x) < 110;
+    const left = ai.x > opp.x;
+    // decide movement
+    let desireLeft = false, desireRight = false;
+    if (Math.random() < 0.005) {
+      // small random idle
+    }
+    if (!inRange) {
+      if (left) desireLeft = true;
+      else desireRight = true;
+    } else {
+      // sometimes circle
+      if (Math.random() < 0.01) {
+        desireLeft = Math.random() < 0.5;
+        desireRight = !desireLeft;
+      }
+    }
+    // decide jump occasionally
+    const desireJump = !ai.onGround ? false : (Math.random() < (inRange?0.003:0.004));
+    // block if player attacking and close
+    const desireBlock = Math.abs(opp.x - ai.x) < 140 && (opp.attack && opp.attack.timer > opp.attack.startup && opp.attack.timer < opp.attack.startup + opp.attack.active);
+    // attack if in range and not already attacking
+    let attackChoice = null;
+    if (inRange && !ai.attack && Math.random() < 0.02 && !desireBlock) {
+      const r = Math.random();
+      if (r < 0.5) attackChoice = 'light';
+      else if (r < 0.85) attackChoice = 'medium';
+      else attackChoice = 'heavy';
+    }
+    // feed inputs object
+    const inps = {
+      left: desireLeft,
+      right: desireRight,
+      jump: desireJump,
+      block: desireBlock,
+      light: attackChoice === 'light',
+      medium: attackChoice === 'medium',
+      heavy: attackChoice === 'heavy'
+    };
+    return inps;
+  }
+
+  // main loop
+  function loop(t) {
+    if (!lastTime) lastTime = t;
+    const dt = Math.min(1/30, (t - lastTime) / 1000);
+    lastTime = t;
+    update(dt);
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  function getInputForPlayer(player) {
+    return {
+      left: !!keys[player.controls.left],
+      right: !!keys[player.controls.right],
+      jump: !!keys[player.controls.jump],
+      block: !!keys[player.controls.block],
+      light: !!keys[player.controls.light],
+      medium: !!keys[player.controls.medium],
+      heavy: !!keys[player.controls.heavy]
+    };
+  }
+
+  function update(dt) {
+    if (matchOver) return;
+    if (roundOver) {
+      roundAnnounceTimer -= dt;
+      if (roundAnnounceTimer <= 0) {
+        // next round or match end
+        if (p1.roundsWon >= matchesToWin || p2.roundsWon >= matchesToWin) {
+          matchOver = true;
+          matchWinner = p1.roundsWon > p2.roundsWon ? 'P1' : 'P2';
+          roundResultEl.textContent = matchWinner + ' wins match!';
+        } else {
+          roundNum++;
+          resetRound();
+        }
+      }
+      return;
+    }
+
+    // countdown timer
+    roundTime -= dt;
+    if (roundTime <= 0) {
+      roundTime = 0;
+      // decide winner by health
+      if (p1.health > p2.health) {
+        endRound('P1');
+      } else if (p2.health > p1.health) {
+        endRound('P2');
+      } else {
+        // tie -> sudden death (just pick ties as no one)
+        endRound('draw');
+      }
+    }
+    timerEl.textContent = Math.ceil(roundTime);
+
+    // inputs
+    const in1 = getInputForPlayer(p1);
+    let in2;
+    if (cpuOn) {
+      in2 = cpuThink(p2, p1, dt);
+    } else {
+      in2 = getInputForPlayer(p2);
+    }
+
+    // face each other
+    if (p1.x < p2.x) { p1.facing = 1; p2.facing = -1; } else { p1.facing = -1; p2.facing = 1; }
+
+    // apply inputs
+    p1.applyInput(dt, in1);
+    p2.applyInput(dt, in2);
+
+    // update fighters
+    p1.update(dt, p2);
+    p2.update(dt, p1);
+
+    // check KO
+    if (p1.health <= 0 && !roundOver) {
+      endRound('P2');
+    } else if (p2.health <= 0 && !roundOver) {
+      endRound('P1');
+    }
+
+    // update HUD
+    hp1Bar.style.width = Math.max(0, (p1.health / p1.maxHealth) * 100) + '%';
+    hp2Bar.style.width = Math.max(0, (p2.health / p2.maxHealth) * 100) + '%';
+    meter1Bar.style.width = p1.meter + '%';
+    meter2Bar.style.width = p2.meter + '%';
+  }
+
+  function endRound(winner) {
+    roundOver = true;
+    roundWinner = winner;
+    if (winner === 'P1') p1.roundsWon++;
+    else if (winner === 'P2') p2.roundsWon++;
+    roundResultEl.textContent = (winner === 'draw' ? 'Draw!' : winner + ' wins round!') + ' (Score ' + p1.roundsWon + ' - ' + p2.roundsWon + ')';
+    roundAnnounceTimer = 2.2;
+    beep(220,0.14,0.14,'sine');
+    if (p1.roundsWon >= matchesToWin || p2.roundsWon >= matchesToWin) {
+      // match over will be set after timer
+    }
+  }
+
+  // rendering
+  function render() {
+    ctx.clearRect(0,0,W,H);
+    // background sky
+    const g = ctx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0,'#0b2340'); g.addColorStop(1, '#0a1a24');
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,W,H);
+
+    // stage: distant mountains
+    ctx.fillStyle = '#08354a';
+    ctx.beginPath();
+    ctx.moveTo(0,H-120);
+    ctx.quadraticCurveTo(180,H-290,360,H-120);
+    ctx.quadraticCurveTo(500,H-40,720,H-120);
+    ctx.quadraticCurveTo(820,H-170,W,H-120);
+    ctx.lineTo(W,H); ctx.lineTo(0,H); ctx.closePath();
+    ctx.fill();
+
+    // foreground ground
+    ctx.fillStyle = '#2b3b2f';
+    ctx.fillRect(0,groundY, W, H-groundY);
+
+    // draw center line on ground
+    ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+    ctx.beginPath(); ctx.moveTo(W/2, groundY+8); ctx.lineTo(W/2, H); ctx.stroke();
+
+    // draw fighters and hitboxes
+    drawFighter(p1);
+    drawFighter(p2);
+
+    // HUD centered draw combos small
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.font = '12px monospace';
+    ctx.fillText('P1 combo: ' + p1.comboCounter, 18, 24);
+    ctx.fillText('P2 combo: ' + p2.comboCounter, W-130, 24);
+
+    // display round/match if match over
+    if (matchOver) {
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(0,0,W,H);
+      ctx.fillStyle = '#ffd';
+      ctx.font = '46px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(matchWinner + ' wins match!', W/2, H/2 - 8);
+      ctx.font = '18px sans-serif';
+      ctx.fillText('Press Restart Match to play again', W/2, H/2 + 24);
+      ctx.textAlign = 'start';
+    }
+  }
+
+  function drawFighter(p) {
+    const hb = p.hurtbox();
+    // shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.beginPath();
+    ctx.ellipse(hb.x + hb.w/2, groundY + 12, 46, 12, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // body
+    ctx.save();
+    ctx.translate(hb.x + hb.w/2, hb.y + hb.h);
+    if (p.state === 'down') ctx.globalAlpha = 0.8;
+    // draw body rectangle
+    ctx.fillStyle = p.color;
+    ctx.fillRect(-p.w/2, -p.h, p.w, p.h);
+    // face
+    ctx.fillStyle = '#222';
+    ctx.fillRect(-p.w/6, -p.h+10, p.w/3, 14);
+    // simple eyes
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(-p.w/6 + (p.facing===1?6:-6), -p.h+14, 6, 6);
+    ctx.fillRect(-p.w/6 + (p.facing===1? -6 : 6), -p.h+14, 6, 6);
+    // health spike if in hitstun
+    if (p.hitstun > 0) {
+      ctx.fillStyle = 'rgba(255,255,255,0.06)';
+      ctx.fillRect(-p.w/2, -p.h - 6, p.w, 4);
+    }
+    ctx.restore();
+
+    // draw hurtbox outline (debug subtle)
+    ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+    ctx.strokeRect(hb.x, hb.y, hb.w, hb.h);
+
+    // draw active attack box
+    if (p.attack && p.attack.timer >= p.attack.startup && p.attack.timer < p.attack.startup + p.attack.active) {
+      const ab = p.attackBox(p.attack);
+      ctx.fillStyle = 'rgba(255,220,80,0.28)';
+      ctx.fillRect(ab.x, ab.y, ab.w, ab.h);
+      ctx.strokeStyle = 'rgba(255,220,80,0.6)';
+      ctx.strokeRect(ab.x, ab.y, ab.w, ab.h);
+    }
+
+    // draw small state indicator
+    ctx.font = '12px monospace';
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.fillText(p.state + (p.blocking ? ' (B)' : ''), Math.max(8, Math.min(W-120, hb.x)), hb.y - 6);
+    // draw tiny health text
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.fillText(Math.round(p.health) + ' HP', hb.x, hb.y - 18);
+  }
+
+  // start loop
+  requestAnimationFrame(loop);
+
+  // small accessibility: focus window to capture keys
+  window.focus();
+
+})();
+</script>
 </body>
 </html>
