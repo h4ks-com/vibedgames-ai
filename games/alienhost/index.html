@@ -1,0 +1,982 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>slowflite — Turn-based Collaborative Flight Sim (with trees & buildings)</title>
+<style>
+  :root{
+    --bg:#0b1220; --panel:#0f1724; --accent:#49c6ff; --muted:#7f8fa4; --card:#0b1320;
+    --success:#6ee7b7; --danger:#ff7b7b;
+    font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:linear-gradient(180deg,#071027 0%, #04101b 100%);color:#e6eef6}
+  .app{display:flex;height:100vh;width:100vw;padding:18px;gap:18px}
+  .left{width:420px;min-width:320px;background:linear-gradient(180deg,rgba(255,255,255,0.02),transparent);border:1px solid rgba(255,255,255,0.02);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:12px}
+  .right{flex:1;display:flex;flex-direction:column;gap:12px}
+  h1{margin:0;font-size:18px;display:flex;align-items:center;gap:10px}
+  h1 .logo{height:24px;width:24px;border-radius:6px;background:linear-gradient(90deg,var(--accent),#7d5bff);display:inline-block;box-shadow:0 6px 20px rgba(73,198,255,0.12), inset 0 -6px 20px rgba(255,255,255,0.04)}
+  .panel{background:var(--panel);border-radius:10px;padding:10px;border:1px solid rgba(255,255,255,0.02)}
+  label{font-size:12px;color:var(--muted);display:block;margin-bottom:6px}
+  input[type=text],input[type=number],select{width:100%;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:inherit}
+  button{padding:8px 12px;border-radius:8px;border:0;background:var(--accent);color:#04202a;font-weight:600;cursor:pointer}
+  .muted{color:var(--muted);font-size:13px}
+  .room-row{display:flex;gap:8px;align-items:center}
+  .room-id{font-family:monospace;background:rgba(255,255,255,0.03);padding:6px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.02)}
+  .players{display:flex;flex-direction:column;gap:8px}
+  .player{display:flex;align-items:center;gap:8px;padding:8px;border-radius:8px;background:linear-gradient(180deg,rgba(255,255,255,0.01),transparent);border:1px solid rgba(255,255,255,0.02)}
+  .avatar{height:36px;width:36px;border-radius:8px;flex-shrink:0;background:#072037;display:flex;align-items:center;justify-content:center;color:var(--accent);font-weight:700}
+  .player .meta{flex:1}
+  .player .meta .name{font-weight:700}
+  .player .meta .sub{font-size:12px;color:var(--muted)}
+  .host-badge{background:linear-gradient(90deg,#ffd166,#ff8a00);padding:4px 8px;border-radius:999px;font-size:12px;color:#04202a;font-weight:700}
+  .controls{display:flex;flex-direction:column;gap:8px}
+  .slider-row{display:flex;align-items:center;gap:12px}
+  .slider-row input[type=range]{flex:1}
+  .small{font-size:13px;color:var(--muted)}
+  .footer{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-top:auto}
+  .right-top{display:flex;gap:12px;align-items:center;justify-content:space-between}
+  #world{flex:1;border-radius:12px;background:linear-gradient(180deg,#041428,#00121a);border:1px solid rgba(255,255,255,0.02);position:relative;overflow:hidden}
+  #canvas{width:100%;height:100%;display:block}
+  .hud{position:absolute;left:12px;top:12px;background:rgba(6,10,16,0.6);padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.02);backdrop-filter:blur(6px)}
+  .turn{font-size:13px}
+  .log{height:120px;overflow:auto;background:rgba(7,14,22,0.6);padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.02);font-family:monospace;font-size:13px}
+  .chat{display:flex;gap:8px;padding-top:8px}
+  .chat input{flex:1}
+  .pill{display:inline-block;padding:6px 10px;border-radius:999px;background:rgba(255,255,255,0.02);font-size:12px}
+  .status-dot{width:10px;height:10px;border-radius:999px;display:inline-block;margin-right:8px}
+  .status-online{background:#6ee7b7}
+  .status-offline{background:#ff7b7b}
+  .center{display:flex;align-items:center;justify-content:center}
+  .small-muted{font-size:12px;color:var(--muted)}
+  .btn-ghost{background:transparent;border:1px solid rgba(255,255,255,0.03);color:inherit;padding:8px;border-radius:8px}
+  .control-row{display:flex;gap:8px;align-items:center}
+  .turn-indicator{padding:6px 10px;border-radius:8px;background:rgba(255,255,255,0.02);font-weight:700}
+  footer.note{font-size:12px;color:var(--muted);text-align:center;padding-top:6px}
+  @media (max-width:900px){
+    .app{flex-direction:column;padding:12px}
+    .left{width:100%;min-width:auto}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="left panel">
+    <div style="display:flex;gap:8px;align-items:center;justify-content:space-between">
+      <h1><span class="logo"></span> slowflite <span class="small-muted" style="margin-left:6px;font-weight:600;">turn-based collaborative flight sim</span></h1>
+      <div style="text-align:right">
+        <div class="small-muted">Room</div>
+        <div class="room-row">
+          <div id="roomId" class="room-id">—</div>
+          <button id="newRoomBtn" class="btn-ghost" title="New room">New</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" style="display:flex;gap:8px;flex-direction:column;">
+      <label>Your name</label>
+      <input id="nameInput" type="text" placeholder="Pilot name (e.g. Skyler)" maxlength="20"/>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button id="joinBtn">Join Room</button>
+        <div class="small-muted">or open this file in another tab with same room to invite others</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div><label>Players</label></div>
+        <div class="small-muted">Host controls the sim</div>
+      </div>
+      <div id="playersList" class="players"></div>
+      <div style="display:flex;gap:6px;margin-top:8px">
+        <button id="becomeHostBtn" class="btn-ghost">Claim Host</button>
+        <button id="leaveBtn" class="btn-ghost">Leave</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <label>Turn Info</label>
+      <div style="display:flex;gap:8px;align-items:center;justify-content:space-between">
+        <div class="turn">
+          <div>Turn #: <span id="turnNumber">0</span></div>
+          <div>Active: <span id="activePlayer">—</span></div>
+        </div>
+        <div style="text-align:right">
+          <div class="pill" id="hostPill">No host</div>
+        </div>
+      </div>
+      <div style="margin-top:8px" class="small-muted">Only the active player may set controls. Host is authoritative for running the physics and broadcasting results.</div>
+    </div>
+
+    <div class="panel">
+      <label>Controls (active player)</label>
+      <div class="controls" id="controlsPanel">
+        <div class="slider-row">
+          <div style="width:72px" class="small-muted">Throttle</div>
+          <input id="throttle" type="range" min="0" max="100" step="1" value="40"/>
+          <div class="small muted" style="width:36px;text-align:right" id="throttleVal">0.40</div>
+        </div>
+        <div class="slider-row">
+          <div style="width:72px" class="small-muted">Turn</div>
+          <input id="yaw" type="range" min="-100" max="100" step="1" value="0"/>
+          <div class="small muted" style="width:36px;text-align:right" id="yawVal">0</div>
+        </div>
+        <div class="slider-row">
+          <div style="width:72px" class="small-muted">Pitch</div>
+          <input id="pitch" type="range" min="-100" max="100" step="1" value="0"/>
+          <div class="small muted" style="width:36px;text-align:right" id="pitchVal">0</div>
+        </div>
+
+        <div class="control-row">
+          <button id="submitTurnBtn">End Turn</button>
+          <button id="simTurnBtn" class="btn-ghost">Simulate Now (host)</button>
+          <div class="small-muted" style="margin-left:auto">Turn length:
+            <select id="turnLength">
+              <option value="3">3s</option>
+              <option value="5" selected>5s</option>
+              <option value="8">8s</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div id="controlsNotice" class="small-muted" style="margin-top:8px">Join a room and wait your turn to control the plane.</div>
+    </div>
+
+    <div class="panel">
+      <label>Chat</label>
+      <div id="chatBox" class="log"></div>
+      <div class="chat">
+        <input id="chatInput" type="text" placeholder="Say something..." />
+        <button id="chatSend">Send</button>
+      </div>
+    </div>
+
+    <div class="footer">
+      <div class="small-muted">Local collaborative demo — same-device or same-tab sharing via BroadcastChannel/localStorage</div>
+      <div style="text-align:right" class="small-muted">slowflite</div>
+    </div>
+  </div>
+
+  <div class="right">
+    <div class="right-top">
+      <div class="panel" style="flex:1;display:flex;gap:12px;align-items:center">
+        <div style="display:flex;flex-direction:column">
+          <div class="small-muted">Aircraft</div>
+          <div style="font-weight:700;font-size:16px" id="planeInfo">Nimble-1</div>
+        </div>
+        <div style="display:flex;gap:12px;align-items:center;margin-left:auto">
+          <div class="small-muted">Altitude <div id="altitude" style="font-weight:800">1200</div></div>
+          <div class="small-muted">Speed <div id="speed" style="font-weight:800">120</div></div>
+          <div class="small-muted">Heading <div id="heading" style="font-weight:800">0°</div></div>
+        </div>
+      </div>
+
+      <div style="width:260px" class="panel">
+        <div class="small-muted">Simulation Log</div>
+        <div id="simLog" class="small muted" style="font-family:monospace;max-height:54px;overflow:auto"></div>
+      </div>
+    </div>
+
+    <div id="world" class="panel">
+      <canvas id="canvas"></canvas>
+      <div class="hud">
+        <div class="turn">Turn <span id="hudTurn">0</span></div>
+        <div class="turn small-muted">Active: <span id="hudActive">—</span></div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:12px">
+      <div style="flex:1" class="panel">
+        <label>Turn History</label>
+        <div id="history" class="log" style="height:120px"></div>
+      </div>
+      <div style="width:260px" class="panel">
+        <label>Session Status</label>
+        <div id="statusBox" class="log" style="height:120px"></div>
+      </div>
+    </div>
+
+    <footer class="note small-muted">Tip: Open multiple tabs/windows of this file with the same room ID to simulate multiple players locally.</footer>
+  </div>
+</div>
+
+<script>
+(function(){
+  // slowflite single-file collaborative turn-based simulator
+  // Adds trees and buildings to the canvas world
+  function $(id){return document.getElementById(id)}
+  function now(){return Date.now()}
+  function clamp(v,a,b){return Math.max(a,Math.min(b,v))}
+  function randId(len=6){const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let s=''; for(let i=0;i<len;i++) s+=chars[Math.floor(Math.random()*chars.length)]; return s}
+  function fmt(n,dec=0){return n.toFixed(dec)}
+
+  // Seeded RNG utilities for consistent environment per room
+  function xmur3(str) {
+    let h = 1779033703 ^ str.length;
+    for (let i = 0; i < str.length; i++) {
+      h = Math.imul(h ^ str.charCodeAt(i), 3432918353);
+      h = (h << 13) | (h >>> 19);
+    }
+    return function() {
+      h = Math.imul(h ^ (h >>> 16), 2246822507);
+      h = Math.imul(h ^ (h >>> 13), 3266489909);
+      return (h ^= h >>> 16) >>> 0;
+    }
+  }
+  function mulberry32(a) {
+    return function() {
+      var t = a += 0x6D2B79F5;
+      t = Math.imul(t ^ t >>> 15, t | 1);
+      t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    }
+  }
+
+  // Messaging layer
+  function createComm(room){
+    const channelName = 'slowflite-room-' + room;
+    let bc = null;
+    let fallbackKey = 'slowflite-fallback-' + room;
+    if('BroadcastChannel' in self){
+      try{ bc = new BroadcastChannel(channelName); }catch(e){ bc = null }
+    }
+    const listeners = [];
+    function onReceive(msg){
+      try{
+        const data = typeof msg === 'string' ? JSON.parse(msg) : msg;
+        listeners.forEach(fn=>fn(data));
+      }catch(e){}
+    }
+    if(bc){
+      bc.onmessage = ev => onReceive(ev.data);
+    } else {
+      window.addEventListener('storage', e=>{
+        if(e.key === fallbackKey && e.newValue){
+          try{ onReceive(JSON.parse(e.newValue)) }catch(e){}
+        }
+      });
+    }
+    function send(obj){
+      obj._ts = now();
+      if(bc){
+        try{ bc.postMessage(obj) }catch(e){}
+      } else {
+        try{ localStorage.setItem(fallbackKey, JSON.stringify(obj)); }catch(e){}
+      }
+    }
+    function on(fn){ listeners.push(fn); }
+    function close(){ if(bc) try{ bc.close() }catch(e){} }
+    return {send,on,close};
+  }
+
+  // App state
+  const state = {
+    room: (new URLSearchParams(location.search)).get('room') || randId(),
+    me: {id: null, name: '', joinedAt: 0},
+    players: [],
+    hostId: null,
+    activePlayerIdx: 0,
+    turn: 0,
+    plane: {x:0,y:0,heading:0,speed:80,altitude:1200},
+    history: [],
+    simLog: [],
+    env: {trees:[],buildings:[]}
+  };
+
+  let comm = createComm(state.room);
+
+  // DOM refs
+  const roomIdEl = $('roomId');
+  const nameInput = $('nameInput');
+  const joinBtn = $('joinBtn');
+  const leaveBtn = $('leaveBtn');
+  const newRoomBtn = $('newRoomBtn');
+  const playersListEl = $('playersList');
+  const hostPill = $('hostPill');
+  const turnNumberEl = $('turnNumber');
+  const activePlayerEl = $('activePlayer');
+  const throttleEl = $('throttle');
+  const pitchEl = $('pitch');
+  const yawEl = $('yaw');
+  const throttleVal = $('throttleVal');
+  const pitchVal = $('pitchVal');
+  const yawVal = $('yawVal');
+  const submitTurnBtn = $('submitTurnBtn');
+  const simTurnBtn = $('simTurnBtn');
+  const turnLengthSel = $('turnLength');
+  const controlsNotice = $('controlsNotice');
+  const chatBox = $('chatBox');
+  const chatInput = $('chatInput');
+  const chatSend = $('chatSend');
+  const historyEl = $('history');
+  const statusBox = $('statusBox');
+  const simLogEl = $('simLog');
+  const hudTurn = $('hudTurn');
+  const hudActive = $('hudActive');
+  const planeInfo = $('planeInfo');
+  const altitudeEl = $('altitude');
+  const speedEl = $('speed');
+  const headingEl = $('heading');
+  const canvas = $('canvas');
+  const world = $('world');
+
+  roomIdEl.textContent = state.room;
+
+  // Canvas setup
+  const ctx = canvas.getContext('2d');
+  function resizeCanvas(){
+    canvas.width = world.clientWidth * devicePixelRatio;
+    canvas.height = world.clientHeight * devicePixelRatio;
+    canvas.style.width = world.clientWidth + 'px';
+    canvas.style.height = world.clientHeight + 'px';
+    ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+    drawScene();
+  }
+  window.addEventListener('resize', resizeCanvas);
+  resizeCanvas();
+
+  // World rendering
+  function drawScene(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    const w = world.clientWidth, h = world.clientHeight;
+    // sky/ground gradient
+    ctx.save();
+    const g = ctx.createLinearGradient(0,0,0,h);
+    g.addColorStop(0,'#021628');
+    g.addColorStop(0.6,'#022630');
+    g.addColorStop(1,'#01151a');
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,w,h);
+    ctx.restore();
+
+    // distant faint grid for scale
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.02)';
+    ctx.lineWidth = 1;
+    const grid = 80;
+    for(let gx=0;gx<w;gx+=grid){
+      ctx.beginPath(); ctx.moveTo(gx,0); ctx.lineTo(gx,h); ctx.stroke();
+    }
+    for(let gy=0;gy<h;gy+=grid){
+      ctx.beginPath(); ctx.moveTo(0,gy); ctx.lineTo(w,gy); ctx.stroke();
+    }
+    ctx.restore();
+
+    // Draw environment: buildings behind everything (but in front of ground)
+    drawBuildings(ctx);
+    drawTrees(ctx);
+
+    // draw trail from history
+    ctx.save();
+    ctx.lineWidth = 2;
+    for(let i=0;i<state.history.length;i++){
+      const hist = state.history[i].plane;
+      const fade = 1 - (state.history.length - i - 1)/Math.max(1,state.history.length);
+      ctx.strokeStyle = `rgba(73,198,255,${0.06 + fade*0.22})`;
+      ctx.beginPath();
+      const pts = hist.trace || [[hist.x,hist.y]];
+      for(let j=0;j<pts.length;j++){
+        const p = toScreen({x:pts[j][0], y:pts[j][1]});
+        if(j===0) ctx.moveTo(p.x,p.y); else ctx.lineTo(p.x,p.y);
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // draw plane with simple shadow
+    const p = state.plane;
+    const sc = toScreen(p);
+    // shadow based on altitude
+    ctx.save();
+    const shadowAlpha = clamp(0.35 - Math.min(0.8, p.altitude/2000), 0.05, 0.4);
+    ctx.fillStyle = `rgba(0,0,0,${shadowAlpha})`;
+    ctx.beginPath();
+    const shadowWidth = 40 + p.speed*0.12;
+    ctx.ellipse(sc.x + 6, sc.y + 10, Math.max(8, shadowWidth*0.25), Math.max(6, shadowWidth*0.08), 0, 0, 2*Math.PI);
+    ctx.fill();
+    ctx.restore();
+
+    ctx.save();
+    ctx.translate(sc.x,sc.y);
+    ctx.rotate(p.heading);
+    // wings
+    ctx.fillStyle = '#79e6ff';
+    ctx.strokeStyle = '#04596a';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0,-8);
+    ctx.lineTo(26,0);
+    ctx.lineTo(0,8);
+    ctx.lineTo(-26,0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    // body
+    ctx.fillStyle = '#dffaff';
+    ctx.beginPath();
+    ctx.ellipse(0,0,10,6,0,0,2*Math.PI);
+    ctx.fill();
+    // nose
+    ctx.fillStyle = '#7df2ff';
+    ctx.beginPath();
+    ctx.moveTo(10,0);
+    ctx.lineTo(18,4);
+    ctx.lineTo(18,-4);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    // HUD marker circle
+    ctx.save();
+    ctx.fillStyle = 'rgba(255,255,255,0.03)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    ctx.beginPath();
+    ctx.arc(sc.x,sc.y,28,0,2*Math.PI);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function toScreen(point){
+    const w = world.clientWidth, h = world.clientHeight;
+    const scale = 0.28; // pixels per meter
+    const cx = w/2, cy = h/2;
+    return {x: cx + point.x*scale, y: cy - point.y*scale};
+  }
+
+  // Environment drawing helpers
+  function drawBuildings(ctx){
+    const buildings = state.env.buildings || [];
+    const w = world.clientWidth, h = world.clientHeight;
+    ctx.save();
+    buildings.forEach(b=>{
+      // building shape in world coords with center at (b.x,b.y)
+      const center = toScreen({x:b.x, y:b.y});
+      const bw = Math.max(4, b.w) * 0.28; // meters->pixels
+      const bh = Math.max(4, b.h) * 0.28;
+      // shadow
+      ctx.save();
+      const shadowAlpha = 0.18;
+      ctx.fillStyle = `rgba(0,0,0,${shadowAlpha})`;
+      ctx.beginPath();
+      ctx.ellipse(center.x + 6, center.y + bh*0.5 + 6, bw*0.6, 8, 0, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+
+      // building body
+      ctx.save();
+      ctx.translate(center.x, center.y - bh/2);
+      ctx.fillStyle = b.color;
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.rect(-bw/2, 0, bw, bh);
+      ctx.fill();
+      ctx.stroke();
+
+      // windows grid
+      const cols = Math.max(1, Math.floor(bw/18));
+      const rows = Math.max(1, Math.floor(bh/18));
+      const winW = Math.max(4, (bw - (cols+1)*6) / cols);
+      const winH = Math.max(6, (bh - (rows+1)*6) / rows);
+      for(let r=0;r<rows;r++){
+        for(let c=0;c<cols;c++){
+          const gx = -bw/2 + 6 + c*(winW + 6);
+          const gy = 6 + r*(winH + 6);
+          const lit = (b.windowSeed((r*cols)+c) > 0.5);
+          ctx.fillStyle = lit ? 'rgba(255,241,180,0.95)' : 'rgba(10,20,30,0.6)';
+          roundRect(ctx, gx, gy, winW, winH, 2, true, false);
+        }
+      }
+      // roof details
+      ctx.fillStyle = 'rgba(0,0,0,0.12)';
+      ctx.fillRect(-bw/2, -6, bw, 6);
+      ctx.restore();
+    });
+    ctx.restore();
+  }
+
+  function drawTrees(ctx){
+    const trees = state.env.trees || [];
+    ctx.save();
+    trees.forEach(t=>{
+      const sc = toScreen({x:t.x,y:t.y});
+      // trunk
+      const trunkH = Math.max(6, t.size*0.18*10);
+      const trunkW = Math.max(3, t.size*0.08*10);
+      ctx.save();
+      ctx.fillStyle = '#4b2f20';
+      ctx.beginPath();
+      ctx.rect(sc.x - trunkW/2, sc.y, trunkW, trunkH);
+      ctx.fill();
+      ctx.restore();
+      // canopy layers
+      const layers = 3;
+      for(let i=0;i<layers;i++){
+        const r = (t.size * (1 - i*0.18)) * 0.5;
+        const yoff = sc.y - (i*12) - (t.size*0.12);
+        ctx.beginPath();
+        ctx.fillStyle = shadeColor(t.color, -10 * i);
+        ctx.ellipse(sc.x, yoff, r, r*0.75, 0, 0, Math.PI*2);
+        ctx.fill();
+      }
+    });
+    ctx.restore();
+  }
+
+  function roundRect(ctx, x, y, w, h, r, fill, stroke){
+    if(typeof r === 'undefined') r = 5;
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);
+    ctx.arcTo(x+w,y,x+w,y+h,r);
+    ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r);
+    ctx.arcTo(x,y,x+w,y,r);
+    ctx.closePath();
+    if(fill) ctx.fill();
+    if(stroke) ctx.stroke();
+  }
+  function shadeColor(col, percent){
+    // expect hex-like or rgb; simple parse for #rrggbb
+    if(col[0]==='#' && col.length===7){
+      const R=parseInt(col.substr(1,2),16), G=parseInt(col.substr(3,2),16), B=parseInt(col.substr(5,2),16);
+      const t = percent<0?0:255; const p = Math.abs(percent)/100;
+      const r=Math.round((t - R)*p)+R; const g=Math.round((t - G)*p)+G; const b=Math.round((t - B)*p)+B;
+      return `rgb(${r},${g},${b})`;
+    }
+    return col;
+  }
+
+  // Simple physics model (unchanged)
+  function simulatePhysics(plane, controls, dt){
+    const maxAccel = 20;
+    const dragCoeff = 0.02;
+    const maxTurnRateAtSpeed = 1.2;
+    const thrust = controls.throttle * maxAccel;
+    const drag = dragCoeff * plane.speed * plane.speed;
+    plane.speed += (thrust - drag) * dt;
+    plane.speed = Math.max(0, plane.speed);
+    const speedFactor = 1/(1 + plane.speed/200);
+    const turnRate = controls.yaw * maxTurnRateAtSpeed * (1 + (0.5 - speedFactor));
+    plane.heading += turnRate * dt;
+    plane.x += Math.cos(plane.heading) * plane.speed * dt;
+    plane.y += Math.sin(plane.heading) * plane.speed * dt;
+    const altChange = controls.pitch * (3 + controls.throttle*4) * dt;
+    plane.altitude = Math.max(0, plane.altitude + altChange);
+    plane.heading = (plane.heading + Math.PI*10) % (Math.PI*2) - 0;
+    return plane;
+  }
+
+  // Local flags
+  let localSubmitted = false;
+
+  // UI updates & helpers
+  function renderPlayers(){
+    playersListEl.innerHTML = '';
+    state.players.sort((a,b)=>a.joinedAt - b.joinedAt).forEach((p,idx)=>{
+      const el = document.createElement('div'); el.className='player';
+      const avatar = document.createElement('div'); avatar.className='avatar'; avatar.textContent = (p.name||p.id).toUpperCase().slice(0,2);
+      const meta = document.createElement('div'); meta.className='meta';
+      const name = document.createElement('div'); name.className='name'; name.textContent = p.name || p.id;
+      const sub = document.createElement('div'); sub.className='sub'; sub.textContent = 'Joined ' + new Date(p.joinedAt).toLocaleTimeString();
+      meta.appendChild(name); meta.appendChild(sub);
+      const right = document.createElement('div'); right.style.textAlign='right';
+      if(p.id === state.hostId){
+        const b = document.createElement('div'); b.className='host-badge'; b.textContent='HOST'; right.appendChild(b);
+      } else {
+        const s = document.createElement('div'); s.className='small-muted'; s.textContent = (idx === state.activePlayerIdx ? 'Active' : '');
+        right.appendChild(s);
+      }
+      el.appendChild(avatar); el.appendChild(meta); el.appendChild(right);
+      playersListEl.appendChild(el);
+    });
+    hostPill.textContent = state.hostId ? ('Host: ' + (state.players.find(p=>p.id===state.hostId)?.name || state.hostId)) : 'No host';
+    activePlayerEl.textContent = (state.players[state.activePlayerIdx]?.name || '—');
+    turnNumberEl.textContent = state.turn;
+    hudTurn.textContent = state.turn;
+    hudActive.textContent = (state.players[state.activePlayerIdx]?.name || '—');
+  }
+
+  function appendChat(name,msg){ const d = document.createElement('div'); d.innerHTML = '<b>' + escapeHtml(name) + ':</b> ' + escapeHtml(msg); chatBox.appendChild(d); chatBox.scrollTop = chatBox.scrollHeight; }
+  function appendStatus(msg){ const d = document.createElement('div'); d.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg; statusBox.appendChild(d); statusBox.scrollTop = statusBox.scrollHeight; }
+  function appendHistory(entry){ const d = document.createElement('div'); const ts = new Date(entry.ts).toLocaleTimeString(); d.innerHTML = ts + ' — Turn ' + entry.turn + ' by ' + escapeHtml(entry.playerName) + ' — T:' + fmt(entry.controls.throttle,2) + ' Y:' + fmt(entry.controls.yaw,2) + ' P:' + fmt(entry.controls.pitch,2); historyEl.appendChild(d); historyEl.scrollTop = historyEl.scrollHeight; }
+  function appendSimLog(text){ const d = document.createElement('div'); d.textContent = text; simLogEl.appendChild(d); simLogEl.scrollTop = simLogEl.scrollHeight; }
+  function escapeHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+
+  // Input handlers
+  throttleEl.addEventListener('input', ()=>{ throttleVal.textContent = (throttleEl.value/100).toFixed(2) });
+  yawEl.addEventListener('input', ()=>{ yawVal.textContent = yawEl.value });
+  pitchEl.addEventListener('input', ()=>{ pitchVal.textContent = pitchEl.value });
+  chatSend.addEventListener('click', sendChat);
+  chatInput.addEventListener('keydown', e=>{ if(e.key==='Enter') sendChat(); });
+  newRoomBtn.addEventListener('click', ()=>{
+    const newId = randId();
+    state.room = newId;
+    roomIdEl.textContent = newId;
+    historyEl.innerHTML=''; statusBox.innerHTML=''; chatBox.innerHTML=''; simLogEl.innerHTML='';
+    try{ comm.close(); }catch(e){}
+    comm = createComm(newId);
+    setupListeners();
+    appendStatus('Created new room ' + newId);
+    const url = new URL(location.href);
+    url.searchParams.set('room', newId);
+    history.replaceState(null, '', url.toString());
+    // regenerate environment for new room
+    generateEnvironment();
+    drawScene();
+  });
+
+  function sendChat(){
+    const msg = chatInput.value.trim();
+    if(!msg) return;
+    const payload = {type:'chat', fromId: state.me.id, fromName: state.me.name, text: msg, ts: now()};
+    comm.send(payload);
+    chatInput.value = '';
+    appendChat(state.me.name || state.me.id, msg);
+  }
+
+  // Join / leave
+  joinBtn.addEventListener('click', ()=>{
+    const name = nameInput.value.trim() || ('Pilot-' + randId(3));
+    if(!state.me.id){
+      state.me.id = 'u-' + randId(8);
+      state.me.name = name;
+      state.me.joinedAt = now();
+    } else {
+      state.me.name = name;
+    }
+    comm.send({type:'join', id: state.me.id, name: state.me.name, ts: now()});
+    appendStatus('Joined as ' + state.me.name);
+    joinBtn.disabled = true;
+    nameInput.disabled = true;
+    if(!state.players.find(p=>p.id===state.me.id)){
+      state.players.push({id:state.me.id,name:state.me.name,joinedAt:state.me.joinedAt});
+    }
+    if(!state.hostId){
+      state.hostId = state.me.id;
+      appendStatus('You are host');
+      comm.send({type:'hostClaim', id: state.me.id, ts: now()});
+    }
+    renderPlayers();
+    updateControlsState();
+    comm.send({type:'requestSync', from: state.me.id, ts:now()});
+    // save session
+    sessionStorage.setItem('slowflite-me-id-' + state.room, state.me.id);
+    sessionStorage.setItem('slowflite-me-name-' + state.room, state.me.name);
+  });
+
+  leaveBtn.addEventListener('click', ()=>{
+    if(!state.me.id) return;
+    comm.send({type:'leave', id: state.me.id, ts: now()});
+    appendStatus('Left room');
+    state.players = state.players.filter(p=>p.id!==state.me.id);
+    if(state.hostId === state.me.id) state.hostId = state.players[0]?.id || null;
+    state.me = {id:null,name:'',joinedAt:0};
+    joinBtn.disabled = false;
+    nameInput.disabled = false;
+    renderPlayers();
+    updateControlsState();
+    sessionStorage.removeItem('slowflite-me-id-' + state.room);
+    sessionStorage.removeItem('slowflite-me-name-' + state.room);
+  });
+
+  $('becomeHostBtn').addEventListener('click', ()=>{
+    if(!state.me.id) return;
+    state.hostId = state.me.id;
+    comm.send({type:'hostClaim', id: state.me.id, ts: now()});
+    appendStatus('Requested host claim');
+    renderPlayers();
+  });
+
+  submitTurnBtn.addEventListener('click', ()=>{
+    if(!state.me.id) return alert('Join a room first');
+    if(state.players[state.activePlayerIdx]?.id !== state.me.id) {
+      appendStatus('Not your turn');
+      return;
+    }
+    if(localSubmitted) { appendStatus('You already submitted this turn'); return; }
+    const controls = {
+      throttle: throttleEl.value/100,
+      yaw: yawEl.value/100,
+      pitch: pitchEl.value/100
+    };
+    localSubmitted = true;
+    comm.send({type:'submitTurn', playerId: state.me.id, playerName: state.me.name, turn: state.turn+1, controls, ts: now()});
+    appendStatus('Submitted controls for turn ' + (state.turn+1));
+    appendHistory({ts:now(),turn:state.turn+1,playerName:state.me.name,controls});
+    if(state.hostId === state.me.id){
+      startHostSim();
+    }
+    updateControlsState();
+  });
+
+  simTurnBtn.addEventListener('click', ()=>{
+    if(state.hostId !== state.me.id) { appendStatus('Only host can simulate'); return; }
+    startHostSim(true);
+  });
+
+  // Comm handlers
+  function setupListeners(){ comm.on(handleMessage); }
+
+  function handleMessage(msg){
+    if(!msg || !msg.type) return;
+    switch(msg.type){
+      case 'join':
+        if(!state.players.find(p=>p.id===msg.id)){
+          state.players.push({id:msg.id,name:msg.name,joinedAt:msg.ts || now()});
+          appendStatus((msg.name || msg.id) + ' joined');
+          if(!state.hostId){ state.hostId = state.players[0].id; appendStatus('Host set to ' + (state.players[0].name)); }
+          renderPlayers();
+        }
+        break;
+      case 'leave':
+        state.players = state.players.filter(p=>p.id!==msg.id);
+        appendStatus((msg.id===state.me.id ? 'You left' : (msg.id + ' left')));
+        if(state.hostId === msg.id){ state.hostId = state.players[0]?.id || null; appendStatus('Host changed to ' + (state.players.find(p=>p.id===state.hostId)?.name || 'none')); }
+        renderPlayers();
+        break;
+      case 'hostClaim':
+        state.hostId = msg.id;
+        appendStatus((msg.id===state.me.id ? 'You claimed host' : (msg.id + ' is now host')));
+        renderPlayers();
+        break;
+      case 'chat':
+        appendChat(msg.fromName || msg.fromId || 'anon', msg.text);
+        break;
+      case 'submitTurn':
+        appendStatus((msg.playerName||msg.playerId) + ' submitted turn ' + msg.turn);
+        state.lastSubmission = {playerId: msg.playerId, playerName: msg.playerName, controls: msg.controls, turn: msg.turn, ts: msg.ts};
+        appendHistory({ts:msg.ts, turn: msg.turn, playerName: msg.playerName, controls: msg.controls});
+        if(state.hostId === getMyOrHostId() && state.players[state.activePlayerIdx]?.id === msg.playerId){
+          startHostSim();
+        }
+        break;
+      case 'simResult':
+        if(msg.state && msg.turn){
+          state.plane = msg.state.plane;
+          state.turn = msg.turn;
+          state.history.push({turn: msg.turn, ts: msg.ts, playerName: msg.playerName, plane: {x: msg.state.plane.x, y: msg.state.plane.y, heading: msg.state.plane.heading, speed: msg.state.plane.speed, altitude: msg.state.plane.altitude, trace: msg.state.trace}});
+          appendSimLog('Host simulated turn ' + msg.turn + ' by ' + (msg.playerName||msg.playerId));
+          appendStatus('Turn ' + msg.turn + ' simulated. Active -> next player.');
+          state.activePlayerIdx = (state.activePlayerIdx + 1) % Math.max(1,state.players.length);
+          localSubmitted = false;
+          renderPlayers();
+          updateControlsState();
+          drawScene();
+          updateTelemetry();
+        }
+        break;
+      case 'syncState':
+        if(msg.state){
+          if(!msg.state.ts || (msg.state.ts && (!state.lastSyncTs || msg.state.ts > state.lastSyncTs))){
+            state.players = msg.state.players || state.players;
+            state.hostId = msg.state.hostId || state.hostId;
+            state.activePlayerIdx = msg.state.activePlayerIdx || state.activePlayerIdx;
+            state.turn = msg.state.turn || state.turn;
+            state.plane = msg.state.plane || state.plane;
+            if(msg.state.history) state.history = msg.state.history;
+            state.lastSyncTs = msg.state.ts;
+            appendStatus('Synchronized session state from peer.');
+            renderPlayers();
+            drawScene();
+            updateTelemetry();
+          }
+        }
+        break;
+      case 'requestSync':
+        if(state.me.id && state.players.length>0 && (state.hostId===state.me.id || state.players.find(p=>p.id===state.me.id))){
+          const snapshot = {
+            type: 'syncState',
+            state: {
+              ts: now(),
+              players: state.players,
+              hostId: state.hostId,
+              activePlayerIdx: state.activePlayerIdx,
+              turn: state.turn,
+              plane: state.plane,
+              history: state.history
+            }
+          };
+          comm.send(snapshot);
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  function getMyOrHostId(){ return state.me.id || state.hostId; }
+
+  // Host simulation
+  let hostSimInProgress = false;
+  async function startHostSim(force=false){
+    if(hostSimInProgress) return;
+    if(!state.hostId) return;
+    if(state.hostId !== state.me.id) return;
+    const active = state.players[state.activePlayerIdx];
+    if(!active){ appendStatus('No active player to simulate for.'); return; }
+    let submission = null;
+    if(state.lastSubmission && state.lastSubmission.playerId === active.id && state.lastSubmission.turn === state.turn+1){
+      submission = state.lastSubmission;
+    }
+    if(!submission && active.id === state.me.id && localSubmitted){
+      submission = state.lastSubmission || {playerId: state.me.id, playerName: state.me.name, controls: {throttle: throttleEl.value/100, yaw: yawEl.value/100, pitch: pitchEl.value/100}, turn: state.turn+1, ts: now()};
+    }
+    if(!submission && !force){
+      appendStatus('No submission to simulate for active player.');
+      return;
+    }
+    const controls = (submission && submission.controls) ? submission.controls : {throttle: throttleEl.value/100, yaw: yawEl.value/100, pitch: pitchEl.value/100};
+    hostSimInProgress = true;
+    appendStatus('Host simulating turn ' + (state.turn+1) + ' for ' + (active.name || active.id));
+    const turnSecs = parseFloat(turnLengthSel.value) || 5;
+    const steps = Math.max(3, Math.floor(turnSecs * 10));
+    const dt = turnSecs / steps;
+    const trace = [];
+    let simPlane = Object.assign({}, state.plane);
+    for(let i=0;i<steps;i++){
+      simPlane = Object.assign({}, simPlane);
+      simulatePhysics(simPlane, controls, dt);
+      trace.push([simPlane.x, simPlane.y]);
+      state.plane = simPlane;
+      drawScene();
+      await sleep(40);
+    }
+    state.turn += 1;
+    const payload = {
+      type: 'simResult',
+      turn: state.turn,
+      playerId: active.id,
+      playerName: active.name,
+      state: { plane: simPlane, trace },
+      ts: now()
+    };
+    state.plane = simPlane;
+    state.history.push({turn: state.turn, ts: now(), playerName: active.name, plane: {x: simPlane.x, y: simPlane.y, heading: simPlane.heading, speed: simPlane.speed, altitude: simPlane.altitude, trace}});
+    state.activePlayerIdx = (state.activePlayerIdx + 1) % Math.max(1,state.players.length);
+    localSubmitted = false;
+    renderPlayers();
+    updateTelemetry();
+    comm.send(payload);
+    appendSimLog('Simulated by host: turn ' + state.turn);
+    hostSimInProgress = false;
+  }
+
+  function sleep(ms){ return new Promise(res=>setTimeout(res,ms)); }
+
+  // UI state
+  function updateControlsState(){
+    const joined = !!state.me.id;
+    const isActive = (state.players[state.activePlayerIdx]?.id === state.me.id);
+    const isHost = (state.hostId === state.me.id);
+    throttleEl.disabled = !(joined && isActive);
+    yawEl.disabled = !(joined && isActive);
+    pitchEl.disabled = !(joined && isActive);
+    submitTurnBtn.disabled = !(joined && isActive);
+    simTurnBtn.disabled = !(isHost);
+    controlsNotice.textContent = joined ? (isActive ? 'You are active — set controls and End Turn.' : 'Waiting for your turn...') : 'Join to control the plane.';
+    if(localSubmitted) submitTurnBtn.textContent = 'Submitted'; else submitTurnBtn.textContent = 'End Turn';
+  }
+
+  // Telemetry
+  function updateTelemetry(){
+    altitudeEl.textContent = Math.round(state.plane.altitude) + 'ft';
+    speedEl.textContent = Math.round(state.plane.speed) + ' kts';
+    headingEl.textContent = Math.round((state.plane.heading * 180/Math.PI + 360) % 360) + '°';
+    planeInfo.textContent = 'Nimble-1';
+  }
+
+  // Environment generation using seeded RNG based on room id
+  function generateEnvironment(){
+    const seedHash = xmur3(state.room)();
+    const rng = mulberry32(seedHash);
+    state.env = {trees:[], buildings:[]};
+    // create buildings: cluster near center-left/right
+    const bcount = 8 + Math.floor(rng()*6);
+    for(let i=0;i<bcount;i++){
+      const x = (rng()*2-1)*1200 + (i%2===0 ? -300 : 300) + (Math.floor(i/2)*50);
+      const y = (rng()*2-1)*800 + (i%3===0 ? -100 : 100);
+      const w = 40 + rng()*140; // meters
+      const h = 30 + rng()*220; // meters
+      const color = palettePick(rng);
+      // windowSeed use per-building rng to vary windows
+      const wsSeed = Math.floor(rng()*4294967295);
+      const windowSeed = (idx)=> { return ((wsSeed + idx*2654435761) % 4294967295)/4294967295; };
+      state.env.buildings.push({x,y,w,h,color,windowSeed});
+    }
+    // trees
+    const tcount = 30 + Math.floor(rng()*40);
+    for(let i=0;i<tcount;i++){
+      const x = (rng()*2-1) * 1600;
+      const y = (rng()*2-1) * 1200;
+      const size = 6 + rng()*18; // meters canopy diameter
+      const color = ['#1b6b2e','#1e7a33','#2aa052'][Math.floor(rng()*3)];
+      state.env.trees.push({x,y,size,color});
+    }
+  }
+
+  function palettePick(rng){
+    const palettes = ['#8c6cff','#6b9cff','#d47d4b','#6b8f6b','#5d8b93','#b06b6b'];
+    return palettes[Math.floor(rng()*palettes.length)];
+  }
+
+  // initial scene and listeners
+  function initState(){
+    const heading = Math.random()*Math.PI*2;
+    state.plane = {x:0,y:0,heading: heading, speed:80, altitude:1200};
+    state.players = [];
+    state.hostId = null;
+    state.activePlayerIdx = 0;
+    state.turn = 0;
+    state.history = [];
+    generateEnvironment();
+    appendStatus('Room ready: ' + state.room);
+    renderPlayers();
+    drawScene();
+    updateTelemetry();
+  }
+
+  // Message listeners
+  setupListeners();
+
+  initState();
+  updateControlsState();
+
+  // Periodic redraw
+  setInterval(()=>{ drawScene(); }, 1000);
+
+  // session restore
+  const savedId = sessionStorage.getItem('slowflite-me-id-' + state.room);
+  if(savedId){
+    state.me.id = savedId;
+    const savedName = sessionStorage.getItem('slowflite-me-name-' + state.room);
+    state.me.name = savedName || state.me.id;
+    nameInput.value = state.me.name;
+    joinBtn.click();
+  }
+
+  joinBtn.addEventListener('click', ()=>{
+    if(state.me.id){
+      sessionStorage.setItem('slowflite-me-id-' + state.room, state.me.id);
+      sessionStorage.setItem('slowflite-me-name-' + state.room, state.me.name);
+    }
+  });
+
+  window.addEventListener('beforeunload', ()=>{
+    if(state.me.id){
+      try{ comm.send({type:'leave', id: state.me.id, ts: now()}); }catch(e){}
+    }
+  });
+
+  statusBox.addEventListener('dblclick', ()=>{
+    appendStatus('Dump state: ' + JSON.stringify({players:state.players.map(p=>p.name),host:state.hostId,turn:state.turn}));
+  });
+
+  // utility
+  function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+
+})();
+</script>
+</body>
+</html>
