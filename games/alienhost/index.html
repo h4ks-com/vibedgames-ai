@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>slowflite — Turn-based Collaborative Flight Sim (with trees & buildings)</title>
+<title>slowflite — Turn-based Collaborative Flight Sim (networked)</title>
 <style>
   :root{
     --bg:#0b1220; --panel:#0f1724; --accent:#49c6ff; --muted:#7f8fa4; --card:#0b1320;
@@ -79,7 +79,7 @@
       <input id="nameInput" type="text" placeholder="Pilot name (e.g. Skyler)" maxlength="20"/>
       <div style="display:flex;gap:8px;align-items:center">
         <button id="joinBtn">Join Room</button>
-        <div class="small-muted">or open this file in another tab with same room to invite others</div>
+        <div class="small-muted">Open this page on another device and enter the same room ID to join.</div>
       </div>
     </div>
 
@@ -153,7 +153,7 @@
     </div>
 
     <div class="footer">
-      <div class="small-muted">Local collaborative demo — same-device or same-tab sharing via BroadcastChannel/localStorage</div>
+      <div class="small-muted">Network mode: WebSocket relay, BroadcastChannel, or localStorage (best-effort).</div>
       <div style="text-align:right" class="small-muted">slowflite</div>
     </div>
   </div>
@@ -197,21 +197,20 @@
       </div>
     </div>
 
-    <footer class="note small-muted">Tip: Open multiple tabs/windows of this file with the same room ID to simulate multiple players locally.</footer>
+    <footer class="note small-muted">Tip: Open this file on another device/browser and enter same room ID to connect (network relay may be used).</footer>
   </div>
 </div>
 
 <script>
 (function(){
-  // slowflite single-file collaborative turn-based simulator
-  // Adds trees and buildings to the canvas world
+  // Networked slowflite — tries to use BroadcastChannel, then a WebSocket relay (PieSocket demo), then localStorage fallback.
   function $(id){return document.getElementById(id)}
   function now(){return Date.now()}
   function clamp(v,a,b){return Math.max(a,Math.min(b,v))}
   function randId(len=6){const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let s=''; for(let i=0;i<len;i++) s+=chars[Math.floor(Math.random()*chars.length)]; return s}
   function fmt(n,dec=0){return n.toFixed(dec)}
 
-  // Seeded RNG utilities for consistent environment per room
+  // Seed RNG for environment
   function xmur3(str) {
     let h = 1779033703 ^ str.length;
     for (let i = 0; i < str.length; i++) {
@@ -233,44 +232,73 @@
     }
   }
 
-  // Messaging layer
+  // Communication abstraction tries BC -> WebSocket relay -> localStorage
   function createComm(room){
-    const channelName = 'slowflite-room-' + room;
-    let bc = null;
-    let fallbackKey = 'slowflite-fallback-' + room;
-    if('BroadcastChannel' in self){
-      try{ bc = new BroadcastChannel(channelName); }catch(e){ bc = null }
-    }
     const listeners = [];
-    function onReceive(msg){
+    function onReceive(data){ try{ listeners.forEach(fn=>fn(data)); }catch(e){} }
+    function on(fn){ listeners.push(fn); }
+
+    // BroadcastChannel preferred (works across tabs in same origin)
+    if('BroadcastChannel' in self){
       try{
-        const data = typeof msg === 'string' ? JSON.parse(msg) : msg;
-        listeners.forEach(fn=>fn(data));
+        const bc = new BroadcastChannel('slowflite-room-' + room);
+        bc.onmessage = ev => { onReceive(ev.data); };
+        function send(obj){ obj._via='bc'; obj._ts = now(); bc.postMessage(obj); }
+        function close(){ try{ bc.close(); }catch(e){} }
+        return {send,on,close,mode:'bc'};
       }catch(e){}
     }
-    if(bc){
-      bc.onmessage = ev => onReceive(ev.data);
-    } else {
-      window.addEventListener('storage', e=>{
-        if(e.key === fallbackKey && e.newValue){
-          try{ onReceive(JSON.parse(e.newValue)) }catch(e){}
-        }
-      });
-    }
-    function send(obj){
-      obj._ts = now();
-      if(bc){
-        try{ bc.postMessage(obj) }catch(e){}
-      } else {
-        try{ localStorage.setItem(fallbackKey, JSON.stringify(obj)); }catch(e){}
+
+    // Next: attempt WebSocket relay using PieSocket demo (best-effort).
+    // URL: wss://demo.piesocket.com/v3/channel_<room>?api_key=demo
+    // If unavailable, fallback to localStorage.
+    try{
+      // sanitize room for URL
+      const safeRoom = String(room).replace(/[^A-Za-z0-9_-]/g,'_').slice(0,48) || 'room';
+      const wsUrl = 'wss://demo.piesocket.com/v3/channel_' + safeRoom + '?api_key=demo&notify_self';
+      let ws = new WebSocket(wsUrl);
+      let ready = false;
+      const queue = [];
+      const reconnect = {attempts:0};
+      ws.onopen = ()=>{ ready = true; reconnect.attempts = 0; // flush queue
+        queue.forEach(m=>ws.send(JSON.stringify(m))); queue.length=0;
+        appendStatus('Connected to WebSocket relay for room ' + room);
+      };
+      ws.onmessage = (ev)=> {
+        try{
+          const parsed = JSON.parse(ev.data);
+          onReceive(parsed);
+        }catch(e){}
+      };
+      ws.onclose = ()=>{ ready = false; appendStatus('WebSocket relay disconnected. Will attempt reconnect.'); setTimeout(()=>{ reconnect.attempts++; try{ ws = new WebSocket(wsUrl); ws.onopen = arguments.callee; ws.onmessage = ws.onmessage; ws.onclose = ws.onclose;}catch(e){} }, Math.min(5000,1000*reconnect.attempts)); };
+      ws.onerror = ()=>{};
+      function send(obj){
+        obj._via='ws'; obj._ts = now();
+        const s = JSON.stringify(obj);
+        if(ready){
+          try{ ws.send(s); }catch(e){ queue.push(obj); }
+        } else queue.push(obj);
       }
+      function close(){ try{ ws.close(); }catch(e){} }
+      return {send,on,close,mode:'ws'};
+    }catch(e){
+      // continue to fallback
     }
-    function on(fn){ listeners.push(fn); }
-    function close(){ if(bc) try{ bc.close() }catch(e){} }
-    return {send,on,close};
+
+    // LocalStorage fallback
+    const fallbackKey = 'slowflite-fallback-' + room;
+    window.addEventListener('storage', e=>{
+      if(e.key === fallbackKey && e.newValue){
+        try{ onReceive(JSON.parse(e.newValue)); }catch(e){}
+      }
+    });
+    function send(obj){ obj._via='ls'; obj._ts = now(); try{ localStorage.setItem(fallbackKey, JSON.stringify(obj)); }catch(e){} }
+    function close(){}
+    appendStatus('Using localStorage fallback for room ' + room);
+    return {send,on,close,mode:'ls'};
   }
 
-  // App state
+  // Application state
   const state = {
     room: (new URLSearchParams(location.search)).get('room') || randId(),
     me: {id: null, name: '', joinedAt: 0},
@@ -323,7 +351,7 @@
 
   roomIdEl.textContent = state.room;
 
-  // Canvas setup
+  // Canvas
   const ctx = canvas.getContext('2d');
   function resizeCanvas(){
     canvas.width = world.clientWidth * devicePixelRatio;
@@ -336,11 +364,11 @@
   window.addEventListener('resize', resizeCanvas);
   resizeCanvas();
 
-  // World rendering
+  // Render scene with environment
   function drawScene(){
     ctx.clearRect(0,0,canvas.width,canvas.height);
     const w = world.clientWidth, h = world.clientHeight;
-    // sky/ground gradient
+    // background
     ctx.save();
     const g = ctx.createLinearGradient(0,0,0,h);
     g.addColorStop(0,'#021628');
@@ -350,7 +378,7 @@
     ctx.fillRect(0,0,w,h);
     ctx.restore();
 
-    // distant faint grid for scale
+    // faint grid
     ctx.save();
     ctx.strokeStyle = 'rgba(255,255,255,0.02)';
     ctx.lineWidth = 1;
@@ -363,11 +391,11 @@
     }
     ctx.restore();
 
-    // Draw environment: buildings behind everything (but in front of ground)
+    // draw buildings and trees (positioned by world coords)
     drawBuildings(ctx);
     drawTrees(ctx);
 
-    // draw trail from history
+    // trails
     ctx.save();
     ctx.lineWidth = 2;
     for(let i=0;i<state.history.length;i++){
@@ -384,10 +412,9 @@
     }
     ctx.restore();
 
-    // draw plane with simple shadow
+    // plane shadow & plane
     const p = state.plane;
     const sc = toScreen(p);
-    // shadow based on altitude
     ctx.save();
     const shadowAlpha = clamp(0.35 - Math.min(0.8, p.altitude/2000), 0.05, 0.4);
     ctx.fillStyle = `rgba(0,0,0,${shadowAlpha})`;
@@ -400,7 +427,6 @@
     ctx.save();
     ctx.translate(sc.x,sc.y);
     ctx.rotate(p.heading);
-    // wings
     ctx.fillStyle = '#79e6ff';
     ctx.strokeStyle = '#04596a';
     ctx.lineWidth = 1;
@@ -412,70 +438,56 @@
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
-    // body
     ctx.fillStyle = '#dffaff';
     ctx.beginPath();
     ctx.ellipse(0,0,10,6,0,0,2*Math.PI);
     ctx.fill();
-    // nose
     ctx.fillStyle = '#7df2ff';
     ctx.beginPath();
-    ctx.moveTo(10,0);
-    ctx.lineTo(18,4);
-    ctx.lineTo(18,-4);
-    ctx.closePath();
-    ctx.fill();
+    ctx.moveTo(10,0); ctx.lineTo(18,4); ctx.lineTo(18,-4); ctx.closePath(); ctx.fill();
     ctx.restore();
 
-    // HUD marker circle
+    // HUD ring
     ctx.save();
     ctx.fillStyle = 'rgba(255,255,255,0.03)';
     ctx.strokeStyle = 'rgba(255,255,255,0.05)';
     ctx.beginPath();
     ctx.arc(sc.x,sc.y,28,0,2*Math.PI);
-    ctx.fill();
-    ctx.stroke();
+    ctx.fill(); ctx.stroke();
     ctx.restore();
   }
 
   function toScreen(point){
     const w = world.clientWidth, h = world.clientHeight;
-    const scale = 0.28; // pixels per meter
+    const scale = 0.28;
     const cx = w/2, cy = h/2;
     return {x: cx + point.x*scale, y: cy - point.y*scale};
   }
 
-  // Environment drawing helpers
+  // Environment helpers
   function drawBuildings(ctx){
-    const buildings = state.env.buildings || [];
-    const w = world.clientWidth, h = world.clientHeight;
+    const b = state.env.buildings || [];
     ctx.save();
-    buildings.forEach(b=>{
-      // building shape in world coords with center at (b.x,b.y)
-      const center = toScreen({x:b.x, y:b.y});
-      const bw = Math.max(4, b.w) * 0.28; // meters->pixels
-      const bh = Math.max(4, b.h) * 0.28;
-      // shadow
+    b.forEach(bld=>{
+      const center = toScreen({x:bld.x, y:bld.y});
+      const bw = Math.max(4, bld.w) * 0.28;
+      const bh = Math.max(4, bld.h) * 0.28;
       ctx.save();
-      const shadowAlpha = 0.18;
-      ctx.fillStyle = `rgba(0,0,0,${shadowAlpha})`;
+      ctx.fillStyle = `rgba(0,0,0,0.14)`;
       ctx.beginPath();
       ctx.ellipse(center.x + 6, center.y + bh*0.5 + 6, bw*0.6, 8, 0, 0, Math.PI*2);
       ctx.fill();
       ctx.restore();
 
-      // building body
       ctx.save();
       ctx.translate(center.x, center.y - bh/2);
-      ctx.fillStyle = b.color;
+      ctx.fillStyle = bld.color;
       ctx.strokeStyle = 'rgba(0,0,0,0.35)';
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.rect(-bw/2, 0, bw, bh);
-      ctx.fill();
-      ctx.stroke();
+      ctx.fill(); ctx.stroke();
 
-      // windows grid
       const cols = Math.max(1, Math.floor(bw/18));
       const rows = Math.max(1, Math.floor(bh/18));
       const winW = Math.max(4, (bw - (cols+1)*6) / cols);
@@ -484,12 +496,11 @@
         for(let c=0;c<cols;c++){
           const gx = -bw/2 + 6 + c*(winW + 6);
           const gy = 6 + r*(winH + 6);
-          const lit = (b.windowSeed((r*cols)+c) > 0.5);
+          const lit = (bld.windowSeed((r*cols)+c) > 0.5);
           ctx.fillStyle = lit ? 'rgba(255,241,180,0.95)' : 'rgba(10,20,30,0.6)';
           roundRect(ctx, gx, gy, winW, winH, 2, true, false);
         }
       }
-      // roof details
       ctx.fillStyle = 'rgba(0,0,0,0.12)';
       ctx.fillRect(-bw/2, -6, bw, 6);
       ctx.restore();
@@ -502,7 +513,6 @@
     ctx.save();
     trees.forEach(t=>{
       const sc = toScreen({x:t.x,y:t.y});
-      // trunk
       const trunkH = Math.max(6, t.size*0.18*10);
       const trunkW = Math.max(3, t.size*0.08*10);
       ctx.save();
@@ -511,7 +521,6 @@
       ctx.rect(sc.x - trunkW/2, sc.y, trunkW, trunkH);
       ctx.fill();
       ctx.restore();
-      // canopy layers
       const layers = 3;
       for(let i=0;i<layers;i++){
         const r = (t.size * (1 - i*0.18)) * 0.5;
@@ -538,7 +547,6 @@
     if(stroke) ctx.stroke();
   }
   function shadeColor(col, percent){
-    // expect hex-like or rgb; simple parse for #rrggbb
     if(col[0]==='#' && col.length===7){
       const R=parseInt(col.substr(1,2),16), G=parseInt(col.substr(3,2),16), B=parseInt(col.substr(5,2),16);
       const t = percent<0?0:255; const p = Math.abs(percent)/100;
@@ -548,7 +556,7 @@
     return col;
   }
 
-  // Simple physics model (unchanged)
+  // Physics
   function simulatePhysics(plane, controls, dt){
     const maxAccel = 20;
     const dragCoeff = 0.02;
@@ -568,10 +576,10 @@
     return plane;
   }
 
-  // Local flags
+  // Local state
   let localSubmitted = false;
 
-  // UI updates & helpers
+  // UI functions
   function renderPlayers(){
     playersListEl.innerHTML = '';
     state.players.sort((a,b)=>a.joinedAt - b.joinedAt).forEach((p,idx)=>{
@@ -604,12 +612,13 @@
   function appendSimLog(text){ const d = document.createElement('div'); d.textContent = text; simLogEl.appendChild(d); simLogEl.scrollTop = simLogEl.scrollHeight; }
   function escapeHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 
-  // Input handlers
+  // Inputs
   throttleEl.addEventListener('input', ()=>{ throttleVal.textContent = (throttleEl.value/100).toFixed(2) });
   yawEl.addEventListener('input', ()=>{ yawVal.textContent = yawEl.value });
   pitchEl.addEventListener('input', ()=>{ pitchVal.textContent = pitchEl.value });
   chatSend.addEventListener('click', sendChat);
   chatInput.addEventListener('keydown', e=>{ if(e.key==='Enter') sendChat(); });
+
   newRoomBtn.addEventListener('click', ()=>{
     const newId = randId();
     state.room = newId;
@@ -617,12 +626,11 @@
     historyEl.innerHTML=''; statusBox.innerHTML=''; chatBox.innerHTML=''; simLogEl.innerHTML='';
     try{ comm.close(); }catch(e){}
     comm = createComm(newId);
-    setupListeners();
+    comm.on(handleMessage);
     appendStatus('Created new room ' + newId);
     const url = new URL(location.href);
     url.searchParams.set('room', newId);
     history.replaceState(null, '', url.toString());
-    // regenerate environment for new room
     generateEnvironment();
     drawScene();
   });
@@ -636,7 +644,7 @@
     appendChat(state.me.name || state.me.id, msg);
   }
 
-  // Join / leave
+  // Join/leave
   joinBtn.addEventListener('click', ()=>{
     const name = nameInput.value.trim() || ('Pilot-' + randId(3));
     if(!state.me.id){
@@ -647,12 +655,9 @@
       state.me.name = name;
     }
     comm.send({type:'join', id: state.me.id, name: state.me.name, ts: now()});
-    appendStatus('Joined as ' + state.me.name);
-    joinBtn.disabled = true;
-    nameInput.disabled = true;
-    if(!state.players.find(p=>p.id===state.me.id)){
-      state.players.push({id:state.me.id,name:state.me.name,joinedAt:state.me.joinedAt});
-    }
+    appendStatus('Joined as ' + state.me.name + ' (comm mode: ' + (comm.mode||'unknown') + ')');
+    joinBtn.disabled = true; nameInput.disabled = true;
+    if(!state.players.find(p=>p.id===state.me.id)) state.players.push({id:state.me.id,name:state.me.name,joinedAt:state.me.joinedAt});
     if(!state.hostId){
       state.hostId = state.me.id;
       appendStatus('You are host');
@@ -661,7 +666,6 @@
     renderPlayers();
     updateControlsState();
     comm.send({type:'requestSync', from: state.me.id, ts:now()});
-    // save session
     sessionStorage.setItem('slowflite-me-id-' + state.room, state.me.id);
     sessionStorage.setItem('slowflite-me-name-' + state.room, state.me.name);
   });
@@ -673,8 +677,7 @@
     state.players = state.players.filter(p=>p.id!==state.me.id);
     if(state.hostId === state.me.id) state.hostId = state.players[0]?.id || null;
     state.me = {id:null,name:'',joinedAt:0};
-    joinBtn.disabled = false;
-    nameInput.disabled = false;
+    joinBtn.disabled = false; nameInput.disabled = false;
     renderPlayers();
     updateControlsState();
     sessionStorage.removeItem('slowflite-me-id-' + state.room);
@@ -691,23 +694,14 @@
 
   submitTurnBtn.addEventListener('click', ()=>{
     if(!state.me.id) return alert('Join a room first');
-    if(state.players[state.activePlayerIdx]?.id !== state.me.id) {
-      appendStatus('Not your turn');
-      return;
-    }
+    if(state.players[state.activePlayerIdx]?.id !== state.me.id) { appendStatus('Not your turn'); return; }
     if(localSubmitted) { appendStatus('You already submitted this turn'); return; }
-    const controls = {
-      throttle: throttleEl.value/100,
-      yaw: yawEl.value/100,
-      pitch: pitchEl.value/100
-    };
+    const controls = { throttle: throttleEl.value/100, yaw: yawEl.value/100, pitch: pitchEl.value/100 };
     localSubmitted = true;
     comm.send({type:'submitTurn', playerId: state.me.id, playerName: state.me.name, turn: state.turn+1, controls, ts: now()});
     appendStatus('Submitted controls for turn ' + (state.turn+1));
     appendHistory({ts:now(),turn:state.turn+1,playerName:state.me.name,controls});
-    if(state.hostId === state.me.id){
-      startHostSim();
-    }
+    if(state.hostId === state.me.id) startHostSim();
     updateControlsState();
   });
 
@@ -717,7 +711,7 @@
   });
 
   // Comm handlers
-  function setupListeners(){ comm.on(handleMessage); }
+  comm.on(handleMessage);
 
   function handleMessage(msg){
     if(!msg || !msg.type) return;
@@ -748,9 +742,7 @@
         appendStatus((msg.playerName||msg.playerId) + ' submitted turn ' + msg.turn);
         state.lastSubmission = {playerId: msg.playerId, playerName: msg.playerName, controls: msg.controls, turn: msg.turn, ts: msg.ts};
         appendHistory({ts:msg.ts, turn: msg.turn, playerName: msg.playerName, controls: msg.controls});
-        if(state.hostId === getMyOrHostId() && state.players[state.activePlayerIdx]?.id === msg.playerId){
-          startHostSim();
-        }
+        if(state.hostId === state.me.id && state.players[state.activePlayerIdx]?.id === msg.playerId) startHostSim();
         break;
       case 'simResult':
         if(msg.state && msg.turn){
@@ -772,8 +764,8 @@
           if(!msg.state.ts || (msg.state.ts && (!state.lastSyncTs || msg.state.ts > state.lastSyncTs))){
             state.players = msg.state.players || state.players;
             state.hostId = msg.state.hostId || state.hostId;
-            state.activePlayerIdx = msg.state.activePlayerIdx || state.activePlayerIdx;
-            state.turn = msg.state.turn || state.turn;
+            state.activePlayerIdx = typeof msg.state.activePlayerIdx !== 'undefined' ? msg.state.activePlayerIdx : state.activePlayerIdx;
+            state.turn = typeof msg.state.turn !== 'undefined' ? msg.state.turn : state.turn;
             state.plane = msg.state.plane || state.plane;
             if(msg.state.history) state.history = msg.state.history;
             state.lastSyncTs = msg.state.ts;
@@ -786,18 +778,7 @@
         break;
       case 'requestSync':
         if(state.me.id && state.players.length>0 && (state.hostId===state.me.id || state.players.find(p=>p.id===state.me.id))){
-          const snapshot = {
-            type: 'syncState',
-            state: {
-              ts: now(),
-              players: state.players,
-              hostId: state.hostId,
-              activePlayerIdx: state.activePlayerIdx,
-              turn: state.turn,
-              plane: state.plane,
-              history: state.history
-            }
-          };
+          const snapshot = { type: 'syncState', state: { ts: now(), players: state.players, hostId: state.hostId, activePlayerIdx: state.activePlayerIdx, turn: state.turn, plane: state.plane, history: state.history } };
           comm.send(snapshot);
         }
         break;
@@ -844,14 +825,7 @@
       await sleep(40);
     }
     state.turn += 1;
-    const payload = {
-      type: 'simResult',
-      turn: state.turn,
-      playerId: active.id,
-      playerName: active.name,
-      state: { plane: simPlane, trace },
-      ts: now()
-    };
+    const payload = { type: 'simResult', turn: state.turn, playerId: active.id, playerName: active.name, state: { plane: simPlane, trace }, ts: now() };
     state.plane = simPlane;
     state.history.push({turn: state.turn, ts: now(), playerName: active.name, plane: {x: simPlane.x, y: simPlane.y, heading: simPlane.heading, speed: simPlane.speed, altitude: simPlane.altitude, trace}});
     state.activePlayerIdx = (state.activePlayerIdx + 1) % Math.max(1,state.players.length);
@@ -865,7 +839,7 @@
 
   function sleep(ms){ return new Promise(res=>setTimeout(res,ms)); }
 
-  // UI state
+  // Controls state
   function updateControlsState(){
     const joined = !!state.me.id;
     const isActive = (state.players[state.activePlayerIdx]?.id === state.me.id);
@@ -887,41 +861,34 @@
     planeInfo.textContent = 'Nimble-1';
   }
 
-  // Environment generation using seeded RNG based on room id
+  // Environment generation
   function generateEnvironment(){
     const seedHash = xmur3(state.room)();
     const rng = mulberry32(seedHash);
     state.env = {trees:[], buildings:[]};
-    // create buildings: cluster near center-left/right
     const bcount = 8 + Math.floor(rng()*6);
     for(let i=0;i<bcount;i++){
       const x = (rng()*2-1)*1200 + (i%2===0 ? -300 : 300) + (Math.floor(i/2)*50);
       const y = (rng()*2-1)*800 + (i%3===0 ? -100 : 100);
-      const w = 40 + rng()*140; // meters
-      const h = 30 + rng()*220; // meters
+      const w = 40 + rng()*140;
+      const h = 30 + rng()*220;
       const color = palettePick(rng);
-      // windowSeed use per-building rng to vary windows
       const wsSeed = Math.floor(rng()*4294967295);
       const windowSeed = (idx)=> { return ((wsSeed + idx*2654435761) % 4294967295)/4294967295; };
       state.env.buildings.push({x,y,w,h,color,windowSeed});
     }
-    // trees
     const tcount = 30 + Math.floor(rng()*40);
     for(let i=0;i<tcount;i++){
       const x = (rng()*2-1) * 1600;
       const y = (rng()*2-1) * 1200;
-      const size = 6 + rng()*18; // meters canopy diameter
+      const size = 6 + rng()*18;
       const color = ['#1b6b2e','#1e7a33','#2aa052'][Math.floor(rng()*3)];
       state.env.trees.push({x,y,size,color});
     }
   }
+  function palettePick(rng){ const palettes = ['#8c6cff','#6b9cff','#d47d4b','#6b8f6b','#5d8b93','#b06b6b']; return palettes[Math.floor(rng()*palettes.length)]; }
 
-  function palettePick(rng){
-    const palettes = ['#8c6cff','#6b9cff','#d47d4b','#6b8f6b','#5d8b93','#b06b6b'];
-    return palettes[Math.floor(rng()*palettes.length)];
-  }
-
-  // initial scene and listeners
+  // Initialization
   function initState(){
     const heading = Math.random()*Math.PI*2;
     state.plane = {x:0,y:0,heading: heading, speed:80, altitude:1200};
@@ -931,22 +898,18 @@
     state.turn = 0;
     state.history = [];
     generateEnvironment();
-    appendStatus('Room ready: ' + state.room);
+    appendStatus('Room ready: ' + state.room + ' (comm: ' + (comm.mode||'unknown') + ')');
     renderPlayers();
     drawScene();
     updateTelemetry();
   }
 
-  // Message listeners
-  setupListeners();
-
+  // Setup listeners
   initState();
   updateControlsState();
-
-  // Periodic redraw
   setInterval(()=>{ drawScene(); }, 1000);
 
-  // session restore
+  // Session restore
   const savedId = sessionStorage.getItem('slowflite-me-id-' + state.room);
   if(savedId){
     state.me.id = savedId;
@@ -969,12 +932,7 @@
     }
   });
 
-  statusBox.addEventListener('dblclick', ()=>{
-    appendStatus('Dump state: ' + JSON.stringify({players:state.players.map(p=>p.name),host:state.hostId,turn:state.turn}));
-  });
-
-  // utility
-  function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+  statusBox.addEventListener('dblclick', ()=>{ appendStatus('Dump state: ' + JSON.stringify({players:state.players.map(p=>p.name),host:state.hostId,turn:state.turn})); });
 
 })();
 </script>
