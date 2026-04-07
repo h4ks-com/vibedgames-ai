@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>H3KMA - Open World Wizard</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000;color:#fff;font-family:'Segoe UI',Arial,sans-serif;overflow:hidden;user-select:none}
+canvas{display:block}
+.screen{position:fixed;top:0;left:0;width:100%;height:100%;display:none;align-items:center;justify-content:center;z-index:50;background:rgba(0,0,0,0.88)}
+.screen.active{display:flex}
+.menu{text-align:center}
+.menu h1{font-size:4rem;letter-spacing:0.15em;background:linear-gradient(135deg,#33ff88,#ff9933);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:0.2em}
+.menu .sub{font-size:1rem;letter-spacing:0.25em;color:#88cc44;margin-bottom:1.5em}
+.menu button{display:block;margin:0.5em auto;padding:12px 36px;font-size:1rem;font-weight:700;letter-spacing:0.08em;border:2px solid rgba(50,255,120,0.4);background:rgba(50,255,120,0.08);color:#fff;cursor:pointer;transition:all 0.2s;border-radius:4px}
+.menu button:hover{background:rgba(50,255,120,0.2);border-color:#33ff88;box-shadow:0 0 15px rgba(50,255,120,0.3)}
+.ctrl{text-align:left;max-width:420px;padding:1.5em 2em;background:rgba(10,20,10,0.95);border:1px solid rgba(50,255,120,0.2);border-radius:8px}
+.ctrl h2{text-align:center;margin-bottom:0.8em;color:#33ff88;font-size:1.3rem}
+.ctrl .r{padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.04);font-size:0.85rem}
+.ctrl .k{display:inline-block;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);padding:1px 7px;border-radius:3px;font-size:0.8rem;margin:0 2px}
+.ctrl button{margin-top:1em;display:block;margin-left:auto;margin-right:auto}
+#hud{position:fixed;top:10px;left:10px;z-index:40;display:none;font-size:0.8rem;pointer-events:none}
+.hbar{width:160px;height:14px;background:rgba(0,0,0,0.5);border:1px solid rgba(255,255,255,0.15);margin:3px 0;border-radius:2px;overflow:hidden}
+.hfill{height:100%;transition:width 0.15s;border-radius:2px}
+.hp-fill{background:linear-gradient(90deg,#00cc44,#00ff55);width:100%}
+.mp-fill{background:linear-gradient(90deg,#3344ff,#55aaff);width:100%}
+.hbar-label{font-size:0.65rem;color:#aaa;letter-spacing:0.05em}
+#minimap{position:fixed;bottom:10px;right:10px;width:140px;height:140px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.5);z-index:40;display:none;border-radius:4px}
+#score{position:fixed;top:10px;right:10px;z-index:40;display:none;text-align:right;font-size:0.8rem;pointer-events:none}
+#msg{position:fixed;top:40%;left:50%;transform:translate(-50%,-50%);z-index:45;display:none;text-align:center;font-size:1.8rem;font-weight:700;text-shadow:0 0 20px rgba(50,255,120,0.6);pointer-events:none}
+</style>
+</head>
+<body>
+<div id="menu-screen" class="screen active"><div class="menu">
+<h1>H3KMA</h1><div class="sub">OPEN WORLD WIZARD</div>
+<button id="btn-play">EXPLORE</button><button id="btn-ctrl">CONTROLS</button>
+</div></div>
+<div id="ctrl-screen" class="screen"><div class="ctrl">
+<h2>CONTROLS</h2>
+<div class="r"><span class="k">W</span><span class="k">A</span><span class="k">S</span><span class="k">D</span> Move</div>
+<div class="r"><span class="k">SHIFT</span> Sprint</div>
+<div class="r"><span class="k">SPACE</span> Jump</div>
+<div class="r"><span class="k">Mouse</span> Look around</div>
+<div class="r"><span class="k">E</span> Collect cheese</div>
+<div class="r"><span class="k">O</span> Cast spell</div>
+<hr style="border-color:rgba(255,255,255,0.08);margin:0.6em 0">
+<div class="r" style="color:#ff9933">Collect falling cheese for points!</div>
+<div class="r" style="color:#cc33ff">Cast spells to fight wildlife</div>
+<div class="r" style="color:#33ff88">Avoid toxic waste puddles</div>
+<button id="btn-back">BACK</button>
+</div></div>
+<div id="hud">
+<div class="hbar-label">HP</div><div class="hbar"><div class="hfill hp-fill" id="hp-bar"></div></div>
+<div class="hbar-label">MANA</div><div class="hbar"><div class="hfill mp-fill" id="mp-bar"></div></div>
+<div id="spell-label" style="color:#cc66ff;margin-top:4px;font-size:0.7rem">Spell: --</div>
+</div>
+<div id="score"><div id="cheese-score">Cheese: 0</div><div id="kill-score" style="color:#ff6644">Kills: 0</div></div>
+<canvas id="minimap"></canvas>
+<div id="msg"></div>
+<canvas id="c"></canvas>
+<script type="importmap">
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js"}}
+</script>
+<script type="module">
+import*as THREE from'three';
+
+// ── World constants ──
+const W=200,HALF=W/2,TREE_N=120,FLOWER_N=200,INSECT_N=40,DEER_N=12,TOXIC_N=15,CHEESE_MAX=8;
+const GRAV=-0.02,GROUND=0,MAX_HP=100,MAX_MP=100;
+
+// ── Renderer ──
+const canvas=document.getElementById('c');
+const R=new THREE.WebGLRenderer({canvas,antialias:true});
+R.setSize(innerWidth,innerHeight);R.setPixelRatio(Math.min(devicePixelRatio,1.5));
+R.shadowMap.enabled=true;R.toneMapping=THREE.ACESFilmicToneMapping;R.toneMappingExposure=1.1;
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x88bbee);
+scene.fog=new THREE.FogExp2(0x88bbee,0.008);
+
+const camera=new THREE.PerspectiveCamera(60,innerWidth/innerHeight,0.1,300);
+
+// ── Lighting ──
+scene.add(new THREE.AmbientLight(0x556677,0.7));
+const hemi=new THREE.HemisphereLight(0x88aadd,0x445522,0.6);scene.add(hemi);
+const sun=new THREE.DirectionalLight(0xffeedd,1.3);
+sun.position.set(40,60,30);sun.castShadow=true;
+sun.shadow.mapSize.set(1024,1024);
+const sc=60;sun.shadow.camera.left=-sc;sun.shadow.camera.right=sc;sun.shadow.camera.top=sc;sun.shadow.camera.bottom=-sc;
+sun.shadow.camera.far=150;
+scene.add(sun);
+
+// ── Terrain ──
+const groundGeo=new THREE.PlaneGeometry(W,W,64,64);
+// gentle hills
+const pos=groundGeo.attributes.position;
+const heightMap=[];
+for(let i=0;i<pos.count;i++){
+  const x=pos.getX(i),y=pos.getY(i);
+  const h=Math.sin(x*0.05)*1.5+Math.cos(y*0.07)*1.2+Math.sin(x*0.12+y*0.08)*0.8;
+  pos.setZ(i,h);heightMap.push(h);
+}
+groundGeo.computeVertexNormals();
+const groundMat=new THREE.MeshStandardMaterial({color:0x3a7d3a,roughness:0.85,flatShading:true});
+const ground=new THREE.Mesh(groundGeo,groundMat);
+ground.rotation.x=-Math.PI/2;ground.receiveShadow=true;scene.add(ground);
+
+function getTerrainH(x,z){
+  const lx=(x+HALF)/W*64,lz=(z+HALF)/W*64;
+  const ix=Math.floor(lx),iz=Math.floor(lz);
+  const fx=lx-ix,fz=lz-iz;
+  const g=(ix2,iz2)=>{const ci=Math.min(iz2,64)*(64+1)+Math.min(ix2,64);return heightMap[ci]||0;};
+  return g(ix,iz)*(1-fx)*(1-fz)+g(ix+1,iz)*fx*(1-fz)+g(ix,iz+1)*(1-fx)*fz+g(ix+1,iz+1)*fx*fz;
+}
+
+// ── Trees ──
+const treeTrunkGeo=new THREE.CylinderGeometry(0.15,0.25,2,5);
+const treeTopGeo=new THREE.ConeGeometry(1.2,2.5,6);
+const treeMats=[
+  new THREE.MeshStandardMaterial({color:0x225522,roughness:0.8,flatShading:true}),
+  new THREE.MeshStandardMaterial({color:0x2a6e2a,roughness:0.8,flatShading:true}),
+  new THREE.MeshStandardMaterial({color:0x1e4e1e,roughness:0.8,flatShading:true}),
+];
+const trunkMat=new THREE.MeshStandardMaterial({color:0x5a3a1a,roughness:0.9});
+const trees=[];
+for(let i=0;i<TREE_N;i++){
+  const x=(Math.random()-0.5)*W*0.9,z=(Math.random()-0.5)*W*0.9;
+  const h=getTerrainH(x,z);
+  const s=0.7+Math.random()*0.8;
+  const g=new THREE.Group();
+  const trunk=new THREE.Mesh(treeTrunkGeo,trunkMat);trunk.castShadow=true;
+  trunk.position.y=1*s;g.add(trunk);
+  const top=new THREE.Mesh(treeTopGeo,treeMats[i%3]);top.castShadow=true;
+  top.position.y=2.8*s;g.add(top);
+  g.position.set(x,h,z);g.scale.setScalar(s);
+  scene.add(g);
+  trees.push({pos:new THREE.Vector3(x,h,z),r:0.4*s});
+}
+
+// ── Flowers ──
+const flowerColors=[0xff4488,0xffaa22,0xff66cc,0xaabb00,0xee5533,0x66ccff,0xffff44,0xff8855];
+const flowerGeo=new THREE.SphereGeometry(0.12,4,4);
+const stemGeo=new THREE.CylinderGeometry(0.02,0.02,0.3,3);
+const stemMat=new THREE.MeshStandardMaterial({color:0x228822});
+for(let i=0;i<FLOWER_N;i++){
+  const x=(Math.random()-0.5)*W*0.9,z=(Math.random()-0.5)*W*0.9;
+  const h=getTerrainH(x,z);
+  const g=new THREE.Group();
+  const st=new THREE.Mesh(stemGeo,stemMat);st.position.y=0.15;g.add(st);
+  const fl=new THREE.Mesh(flowerGeo,new THREE.MeshStandardMaterial({color:flowerColors[i%flowerColors.length],roughness:0.5}));
+  fl.position.y=0.32;g.add(fl);
+  g.position.set(x,h,z);scene.add(g);
+}
+
+// ── Toxic waste puddles ──
+const toxicGeo=new THREE.CircleGeometry(1.5,12);
+const toxics=[];
+for(let i=0;i<TOXIC_N;i++){
+  const x=(Math.random()-0.5)*W*0.8,z=(Math.random()-0.5)*W*0.8;
+  const h=getTerrainH(x,z);
+  const r=1+Math.random()*1.5;
+  const geo=new THREE.CircleGeometry(r,12);
+  const mat=new THREE.MeshStandardMaterial({color:0x33ff00,emissive:0x11aa00,emissiveIntensity:0.5,transparent:true,opacity:0.7,roughness:0.2});
+  const m=new THREE.Mesh(geo,mat);m.rotation.x=-Math.PI/2;m.position.set(x,h+0.02,z);
+  scene.add(m);
+  // Glow
+  const gl=new THREE.PointLight(0x33ff00,0.4,r*3);gl.position.set(x,h+0.5,z);scene.add(gl);
+  toxics.push({x,z,r,mat,phase:Math.random()*6.28});
+}
+
+// ── Insects ──
+const insects=[];
+const insectGeo=new THREE.SphereGeometry(0.05,4,3);
+const insectMat=new THREE.MeshBasicMaterial({color:0xffff88});
+for(let i=0;i<INSECT_N;i++){
+  const x=(Math.random()-0.5)*W*0.7,z=(Math.random()-0.5)*W*0.7;
+  const m=new THREE.Mesh(insectGeo,insectMat.clone());
+  m.material.color.setHex([0xffff88,0x88ff88,0xff8888,0x88ffff][i%4]);
+  const h=getTerrainH(x,z);
+  m.position.set(x,h+1+Math.random(),z);scene.add(m);
+  insects.push({mesh:m,ox:x,oz:z,phase:Math.random()*6.28,speed:0.5+Math.random()*1.5,radius:1+Math.random()*3,oy:h+0.8+Math.random()*1.5});
+}
+
+// ── Deer ──
+const deerList=[];
+function makeDeer(x,z){
+  const g=new THREE.Group();
+  const bodyMat=new THREE.MeshStandardMaterial({color:0x996633,roughness:0.7,flatShading:true});
+  // body
+  const body=new THREE.Mesh(new THREE.CylinderGeometry(0.25,0.3,1,6),bodyMat);
+  body.rotation.z=Math.PI/2;body.position.y=0.8;g.add(body);
+  // head
+  const head=new THREE.Mesh(new THREE.SphereGeometry(0.18,5,5),bodyMat);
+  head.position.set(0.6,1,0);g.add(head);
+  // legs
+  const legGeo=new THREE.CylinderGeometry(0.04,0.04,0.5,4);
+  const legMat=new THREE.MeshStandardMaterial({color:0x774422,flatShading:true});
+  for(const [lx,lz] of [[-0.3,-0.12],[-0.3,0.12],[0.3,-0.12],[0.3,0.12]]){
+    const l=new THREE.Mesh(legGeo,legMat);l.position.set(lx,0.3,lz);g.add(l);
+  }
+  // antlers
+  const antMat=new THREE.MeshStandardMaterial({color:0xccaa66});
+  for(const s of[-1,1]){
+    const a=new THREE.Mesh(new THREE.CylinderGeometry(0.02,0.03,0.35,3),antMat);
+    a.position.set(0.65,1.25,s*0.12);a.rotation.z=s*0.4;g.add(a);
+  }
+  const h=getTerrainH(x,z);
+  g.position.set(x,h,z);g.castShadow=true;scene.add(g);
+  return{group:g,x,z,hp:30,maxHp:30,dir:Math.random()*Math.PI*2,speed:0.01+Math.random()*0.015,
+    moveTimer:60+Math.random()*120|0,alive:true,flash:0};
+}
+for(let i=0;i<DEER_N;i++){
+  deerList.push(makeDeer((Math.random()-0.5)*W*0.7,(Math.random()-0.5)*W*0.7));
+}
+
+// ── Cheese rain ──
+const cheeseList=[];
+const cheeseGeo=new THREE.BoxGeometry(0.3,0.2,0.3);
+const cheeseMat=new THREE.MeshStandardMaterial({color:0xffcc00,emissive:0x664400,emissiveIntensity:0.2,roughness:0.5});
+let cheeseTimer=0;
+
+// ── Spells (projectiles in world) ──
+const spellProjs=[];
+const SPELLS=[
+  {name:'Arcane Bolt',dmg:12,spd:0.4,col:0x9933ff,sz:0.15,cost:10},
+  {name:'Fireball',dmg:20,spd:0.3,col:0xff4400,sz:0.25,cost:20},
+  {name:'Ice Shard',dmg:8,spd:0.5,col:0x00ccff,sz:0.12,cost:8},
+  {name:'Lightning',dmg:15,spd:0.6,col:0xffff00,sz:0.1,cost:15},
+];
+let curSpell=0;
+
+// ── Player ──
+const player={
+  pos:new THREE.Vector3(0,0,0),vel:new THREE.Vector3(),
+  yaw:0,pitch:0,hp:MAX_HP,mp:MAX_MP,grounded:true,
+  cheese:0,kills:0,speed:0.08,sprintMul:1.8,
+};
+
+// Player model
+const pGroup=new THREE.Group();
+const pc1=0x1a0a3e;
+// body
+const pBody=new THREE.Mesh(new THREE.CylinderGeometry(0.2,0.16,0.65,8),new THREE.MeshStandardMaterial({color:0x3344aa,roughness:0.6}));
+pBody.position.y=0.92;pBody.castShadow=true;pGroup.add(pBody);
+// head
+const pHead=new THREE.Mesh(new THREE.SphereGeometry(0.16,6,6),new THREE.MeshStandardMaterial({color:0xddbb88}));
+pHead.position.y=1.44;pHead.castShadow=true;pGroup.add(pHead);
+// legs
+const pLegGeo=new THREE.CylinderGeometry(0.06,0.05,0.5,5);
+const pLegMat=new THREE.MeshStandardMaterial({color:0x333355});
+const pLegL=new THREE.Mesh(pLegGeo,pLegMat);pLegL.position.set(-0.08,0.32,0);pGroup.add(pLegL);
+const pLegR=new THREE.Mesh(pLegGeo.clone(),pLegMat.clone());pLegR.position.set(0.08,0.32,0);pGroup.add(pLegR);
+// arms
+const pArmGeo=new THREE.CylinderGeometry(0.05,0.04,0.4,5);
+const pArmMat=new THREE.MeshStandardMaterial({color:0x3344aa});
+const pArmL=new THREE.Mesh(pArmGeo,pArmMat);pArmL.position.set(-0.28,1,0);pArmL.rotation.z=0.3;pGroup.add(pArmL);
+const pArmR=new THREE.Mesh(pArmGeo.clone(),pArmMat.clone());pArmR.position.set(0.28,1,0);pArmR.rotation.z=-0.3;pGroup.add(pArmR);
+// cloak
+const cloakMat=new THREE.MeshStandardMaterial({color:pc1,emissive:0x220066,emissiveIntensity:0.3,side:THREE.DoubleSide,transparent:true,opacity:0.85});
+const cloak=new THREE.Mesh(new THREE.ConeGeometry(0.45,1,8,1,true),cloakMat);
+cloak.position.y=0.85;pGroup.add(cloak);
+// hat
+const hatMat=new THREE.MeshStandardMaterial({color:pc1,emissive:0x330088,emissiveIntensity:0.4,transparent:true,opacity:1});
+const hat=new THREE.Mesh(new THREE.ConeGeometry(0.18,0.45,6),hatMat);
+hat.position.y=1.68;hat.rotation.z=0.15;pGroup.add(hat);
+const brim=new THREE.Mesh(new THREE.RingGeometry(0.1,0.28,8),hatMat.clone());
+brim.position.y=1.65;brim.rotation.x=-Math.PI/2;pGroup.add(brim);
+scene.add(pGroup);
+
+// ── Input ──
+const keys2={};
+let pointerLocked=false;
+addEventListener('keydown',e=>{keys2[e.code]=true;});
+addEventListener('keyup',e=>{keys2[e.code]=false;});
+canvas.addEventListener('click',()=>{if(!pointerLocked)canvas.requestPointerLock();});
+document.addEventListener('pointerlockchange',()=>{pointerLocked=!!document.pointerLockElement;});
+addEventListener('mousemove',e=>{
+  if(!pointerLocked)return;
+  player.yaw-=e.movementX*0.002;
+  player.pitch=Math.max(-1.2,Math.min(1.2,player.pitch-e.movementY*0.002));
+});
+addEventListener('keydown',e=>{
+  if(e.code==='Tab'){e.preventDefault();curSpell=(curSpell+1)%SPELLS.length;}
+});
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();R.setSize(innerWidth,innerHeight);});
+
+// ── HUD ──
+const $=id=>document.getElementById(id);
+const hud=$('hud'),scoreEl=$('score'),minimapCanvas=$('minimap'),msgEl=$('msg');
+const hpBar=$('hp-bar'),mpBar=$('mp-bar'),spellLabel=$('spell-label');
+const cheeseScoreEl=$('cheese-score'),killScoreEl=$('kill-score');
+const mctx=minimapCanvas.getContext('2d');
+minimapCanvas.width=140;minimapCanvas.height=140;
+let msgTimer=0;
+
+function showMsg(t,dur=2000){msgEl.textContent=t;msgEl.style.display='block';msgTimer=dur;}
+function updateHud(){
+  hpBar.style.width=Math.max(0,player.hp/MAX_HP*100)+'%';
+  hpBar.className='hfill hp-fill'+(player.hp<=25?' low':'');
+  mpBar.style.width=Math.max(0,player.mp/MAX_MP*100)+'%';
+  spellLabel.textContent='Spell [O]: '+SPELLS[curSpell].name+' ('+SPELLS[curSpell].cost+' MP)';
+  spellLabel.style.color='#'+SPELLS[curSpell].col.toString(16).padStart(6,'0');
+  cheeseScoreEl.textContent='Cheese: '+player.cheese;
+  killScoreEl.textContent='Kills: '+player.kills;
+}
+
+function drawMinimap(){
+  mctx.fillStyle='#111';mctx.fillRect(0,0,140,140);
+  // boundary
+  mctx.strokeStyle='#333';mctx.strokeRect(2,2,136,136);
+  const scale=136/W;
+  const px=68+player.pos.x*scale,pz=68+player.pos.z*scale;
+  // trees
+  mctx.fillStyle='#2a6e2a';
+  for(const t of trees){mctx.fillRect(68+t.pos.x*scale-1,68+t.pos.z*scale-1,2,2);}
+  // toxic
+  mctx.fillStyle='rgba(50,255,0,0.4)';
+  for(const t of toxics){const r2=t.r*scale;mctx.beginPath();mctx.arc(68+t.x*scale,68+t.z*scale,Math.max(r2,1),0,6.28);mctx.fill();}
+  // cheese
+  mctx.fillStyle='#ffcc00';
+  for(const c of cheeseList)if(!c.collected){mctx.fillRect(68+c.mesh.position.x*scale-1,68+c.mesh.position.z*scale-1,3,3);}
+  // deer
+  mctx.fillStyle='#996633';
+  for(const d of deerList)if(d.alive){mctx.fillRect(68+d.x*scale-1,68+d.z*scale-1,3,3);}
+  // player
+  mctx.fillStyle='#00ffaa';
+  mctx.beginPath();mctx.arc(px,pz,3,0,6.28);mctx.fill();
+  // direction
+  mctx.strokeStyle='#00ffaa';mctx.lineWidth=1;
+  mctx.beginPath();mctx.moveTo(px,pz);
+  mctx.lineTo(px+Math.sin(player.yaw)*8,pz-Math.cos(player.yaw)*8);mctx.stroke();
+}
+
+// ── Game state ──
+let gameState='menu';
+const clock=new THREE.Clock();
+const TICK=1/60;let accum=0,frame=0,prevE={};
+
+$('btn-play').onclick=()=>{
+  $('menu-screen').classList.remove('active');
+  hud.style.display='block';scoreEl.style.display='block';minimapCanvas.style.display='block';
+  gameState='playing';player.hp=MAX_HP;player.mp=MAX_MP;player.cheese=0;player.kills=0;
+  player.pos.set(0,2,0);player.vel.set(0,0,0);player.yaw=0;player.pitch=0;
+  canvas.requestPointerLock();
+  showMsg('Explore the world, wizard!',3000);
+};
+$('btn-ctrl').onclick=()=>{$('menu-screen').classList.remove('active');$('ctrl-screen').classList.add('active');};
+$('btn-back').onclick=()=>{$('ctrl-screen').classList.remove('active');$('menu-screen').classList.add('active');};
+
+function returnToMenu(){
+  gameState='menu';hud.style.display='none';scoreEl.style.display='none';minimapCanvas.style.display='none';
+  $('menu-screen').classList.add('active');
+  if(document.pointerLockElement)document.exitPointerLock();
+}
+
+// ── Spell casting ──
+let spellCDTimer=0;
+function castSpell(){
+  const sp=SPELLS[curSpell];
+  if(player.mp<sp.cost||spellCDTimer>0)return;
+  player.mp-=sp.cost;spellCDTimer=15;
+  const dir=new THREE.Vector3(0,0,-1).applyAxisAngle(new THREE.Vector3(0,1,0),player.yaw);
+  dir.y=Math.sin(player.pitch);dir.normalize();
+  const geo=new THREE.SphereGeometry(sp.sz,6,6);
+  const mat=new THREE.MeshBasicMaterial({color:sp.col,transparent:true,opacity:0.9});
+  const mesh=new THREE.Mesh(geo,mat);
+  mesh.position.copy(player.pos).add(new THREE.Vector3(0,1.2,0)).add(dir.clone().multiplyScalar(0.5));
+  // glow
+  const gMat=new THREE.MeshBasicMaterial({color:sp.col,transparent:true,opacity:0.3,side:THREE.DoubleSide});
+  mesh.add(new THREE.Mesh(new THREE.RingGeometry(sp.sz*0.5,sp.sz*2,6),gMat));
+  scene.add(mesh);
+  spellProjs.push({mesh,vel:dir.multiplyScalar(sp.spd),dmg:sp.dmg,life:200,col:sp.col});
+}
+
+// ── Update ──
+function fixedUpdate(){
+  if(gameState!=='playing')return;
+  const k=keys2;
+  if(spellCDTimer>0)spellCDTimer--;
+
+  // Movement
+  const spd=player.speed*(k.ShiftLeft||k.ShiftRight?player.sprintMul:1);
+  const fwd=new THREE.Vector3(-Math.sin(player.yaw),0,-Math.cos(player.yaw));
+  const right=new THREE.Vector3(fwd.z,0,-fwd.x);
+  const move=new THREE.Vector3();
+  if(k.KeyW)move.add(fwd);if(k.KeyS)move.sub(fwd);
+  if(k.KeyD)move.add(right);if(k.KeyA)move.sub(right);
+  if(move.lengthSq()>0)move.normalize().multiplyScalar(spd);
+  player.vel.x=move.x;player.vel.z=move.z;
+
+  // Jump
+  if((k.Space)&&player.grounded){player.vel.y=0.2;player.grounded=false;}
+  player.vel.y+=GRAV;
+  player.pos.add(player.vel);
+
+  // Ground
+  const th=getTerrainH(player.pos.x,player.pos.z);
+  if(player.pos.y<=th){player.pos.y=th;player.vel.y=0;player.grounded=true;}
+
+  // World bounds
+  player.pos.x=Math.max(-HALF+1,Math.min(HALF-1,player.pos.x));
+  player.pos.z=Math.max(-HALF+1,Math.min(HALF-1,player.pos.z));
+
+  // Cast spell
+  if(k.KeyO&&!prevE.KeyO)castSpell();
+
+  // Cycle spell
+  // (Tab handled in keydown)
+
+  // Mana regen
+  if(frame%30===0&&player.mp<MAX_MP)player.mp++;
+
+  // Tree collision
+  for(const t of trees){
+    const dx=player.pos.x-t.pos.x,dz=player.pos.z-t.pos.z;
+    const d=Math.sqrt(dx*dx+dz*dz);
+    if(d<t.r+0.3&&d>0){const n=1/d;player.pos.x=t.pos.x+dx*n*(t.r+0.3);player.pos.z=t.pos.z+dz*n*(t.r+0.3);}
+  }
+
+  // Toxic waste damage
+  for(const t of toxics){
+    const dx=player.pos.x-t.x,dz=player.pos.z-t.z;
+    if(Math.sqrt(dx*dx+dz*dz)<t.r){
+      if(frame%20===0){player.hp-=3;showMsg('Toxic waste! -3 HP',600);}
+    }
+  }
+
+  // Cheese rain
+  cheeseTimer--;
+  if(cheeseTimer<=0&&cheeseList.filter(c=>!c.collected).length<CHEESE_MAX){
+    const cx=player.pos.x+(Math.random()-0.5)*60;
+    const cz=player.pos.z+(Math.random()-0.5)*60;
+    const cx2=Math.max(-HALF+2,Math.min(HALF-2,cx));
+    const cz2=Math.max(-HALF+2,Math.min(HALF-2,cz));
+    const m=new THREE.Mesh(cheeseGeo,cheeseMat.clone());
+    m.position.set(cx2,getTerrainH(cx2,cz2)+25+Math.random()*10,cz2);
+    m.castShadow=true;scene.add(m);
+    cheeseList.push({mesh:m,vy:-0.03-Math.random()*0.02,collected:false,ground:false});
+    cheeseTimer=120+Math.random()*180|0;
+  }
+
+  // Update cheese
+  for(const c of cheeseList){
+    if(c.collected)continue;
+    if(!c.ground){
+      c.mesh.position.y+=c.vy;
+      const gh=getTerrainH(c.mesh.position.x,c.mesh.position.z);
+      if(c.mesh.position.y<=gh+0.15){c.mesh.position.y=gh+0.15;c.ground=true;}
+    }
+    c.mesh.rotation.y+=0.02;
+    // Collect
+    if(k.KeyE&&!prevE.KeyE){
+      const dx=player.pos.x-c.mesh.position.x,dz=player.pos.z-c.mesh.position.z;
+      if(Math.sqrt(dx*dx+dz*dz)<2){
+        c.collected=true;c.mesh.visible=false;scene.remove(c.mesh);
+        player.cheese++;player.hp=Math.min(MAX_HP,player.hp+5);
+        showMsg('Cheese collected! +5 HP',1000);
+      }
+    }
+  }
+
+  // Update deer
+  for(const d of deerList){
+    if(!d.alive)continue;
+    d.moveTimer--;
+    if(d.moveTimer<=0){d.dir+=((Math.random()-0.5)*2);d.moveTimer=60+Math.random()*120|0;}
+    // Flee from player
+    const dx=d.x-player.pos.x,dz=d.z-player.pos.z;
+    const dd=Math.sqrt(dx*dx+dz*dz);
+    if(dd<8){d.dir=Math.atan2(dx,dz);d.speed=0.04;}
+    else d.speed=0.01+Math.random()*0.008;
+    d.x+=Math.sin(d.dir)*d.speed;d.z+=Math.cos(d.dir)*d.speed;
+    d.x=Math.max(-HALF+3,Math.min(HALF-3,d.x));
+    d.z=Math.max(-HALF+3,Math.min(HALF-3,d.z));
+    const dh=getTerrainH(d.x,d.z);
+    d.group.position.set(d.x,dh,d.z);
+    d.group.rotation.y=d.dir;
+    // Leg animation
+    const lt=performance.now()*0.004;
+    const legs=d.group.children;
+    if(legs[2])legs[2].rotation.x=Math.sin(lt*2)*0.3;
+    if(legs[3])legs[3].rotation.x=-Math.sin(lt*2)*0.3;
+    if(d.flash>0){d.flash--;d.group.children[0].material.emissive.setScalar(d.flash>0?0.5:0);}
+  }
+
+  // Update spell projectiles
+  for(let i=spellProjs.length-1;i>=0;i--){
+    const p=spellProjs[i];p.life--;
+    p.mesh.position.add(p.vel);
+    if(p.mesh.children[0])p.mesh.children[0].rotation.z+=0.15;
+    // Hit deer
+    for(const d of deerList){
+      if(!d.alive)continue;
+      const dx=p.mesh.position.x-d.x,dz=p.mesh.position.z-d.z,dy=p.mesh.position.y-(getTerrainH(d.x,d.z)+0.8);
+      if(Math.sqrt(dx*dx+dy*dy+dz*dz)<1){
+        d.hp-=p.dmg;d.flash=8;
+        if(d.hp<=0){d.alive=false;scene.remove(d.group);player.kills++;showMsg('Deer defeated!',1000);}
+        scene.remove(p.mesh);spellProjs.splice(i,1);break;
+      }
+    }
+    // Hit ground or expire
+    const gh=getTerrainH(p.mesh.position.x,p.mesh.position.z);
+    if(p.life<=0||p.mesh.position.y<gh||Math.abs(p.mesh.position.x)>HALF||Math.abs(p.mesh.position.z)>HALF){
+      scene.remove(p.mesh);spellProjs.splice(i,1);
+    }
+  }
+
+  // Update insects
+  const t=performance.now()*0.001;
+  for(const ins of insects){
+    ins.mesh.position.x=ins.ox+Math.sin(t*ins.speed+ins.phase)*ins.radius;
+    ins.mesh.position.z=ins.oz+Math.cos(t*ins.speed*0.7+ins.phase)*ins.radius;
+    ins.mesh.position.y=ins.oy+Math.sin(t*ins.speed*2+ins.phase)*0.3;
+  }
+
+  // Toxic waste animation
+  for(const tx of toxics){
+    tx.mat.opacity=0.5+Math.sin(t*2+tx.phase)*0.2;
+    tx.mat.emissiveIntensity=0.3+Math.sin(t*3+tx.phase)*0.2;
+  }
+
+  // Death
+  if(player.hp<=0){
+    player.hp=0;
+    showMsg('You died! Cheese: '+player.cheese+' | Kills: '+player.kills,4000);
+    setTimeout(returnToMenu,4000);
+    gameState='dead';
+  }
+
+  // Msg timer
+  if(msgTimer>0){msgTimer-=16.67;if(msgTimer<=0)msgEl.style.display='none';}
+
+  prevE={...k};
+  updateHud();
+}
+
+function render(dt){
+  // Player model
+  pGroup.position.copy(player.pos);
+  pGroup.rotation.y=player.yaw+Math.PI;
+
+  // Animate legs when moving
+  const moving=player.vel.x!==0||player.vel.z!==0;
+  const lt=performance.now()*0.005;
+  if(moving){
+    pLegL.rotation.x=Math.sin(lt*3)*0.5;pLegR.rotation.x=-Math.sin(lt*3)*0.5;
+    pArmL.rotation.x=-Math.sin(lt*3)*0.3;pArmR.rotation.x=Math.sin(lt*3)*0.3;
+  } else {
+    pLegL.rotation.x=0;pLegR.rotation.x=0;
+    pArmL.rotation.x=0;pArmR.rotation.x=0;
+  }
+
+  // Third-person camera
+  const camDist=4,camHeight=2.5;
+  const behind=new THREE.Vector3(Math.sin(player.yaw)*camDist,camHeight,-Math.cos(player.yaw)*(-camDist));
+  // Actually: camera behind player
+  const ideal=player.pos.clone().add(new THREE.Vector3(
+    Math.sin(player.yaw)*camDist,
+    camHeight,
+    Math.cos(player.yaw)*camDist
+  ));
+  camera.position.lerp(ideal,0.1);
+  const lookAt=player.pos.clone().add(new THREE.Vector3(0,1.2,0));
+  camera.lookAt(lookAt);
+
+  // Shadow follow
+  sun.position.set(player.pos.x+40,60,player.pos.z+30);
+  sun.target.position.copy(player.pos);sun.target.updateMatrixWorld();
+  if(frame%8===0)R.shadowMap.needsUpdate=true;
+
+  if(frame%4===0)drawMinimap();
+  R.render(scene,camera);
+}
+
+// ── Loop ──
+function loop(){
+  requestAnimationFrame(loop);
+  const dt=Math.min(clock.getDelta(),0.05);
+  accum+=dt;
+  while(accum>=TICK){fixedUpdate();accum-=TICK;frame++;}
+  render(dt);
+}
+loop();
+</script>
+</body>
+</html>
