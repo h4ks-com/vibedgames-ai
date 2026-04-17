@@ -1,0 +1,1842 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OLDOWAN TRAIL</title>
+<style>
+html,body{margin:0;padding:0;background:#000;color:#aaa;font-family:monospace;height:100%;overflow:hidden;user-select:none;-webkit-user-select:none}
+#wrap{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;width:100%;padding:8px;box-sizing:border-box}
+#c{image-rendering:pixelated;image-rendering:crisp-edges;-ms-interpolation-mode:nearest-neighbor;border:2px solid #333;background:#000;max-width:100%;max-height:94vh;aspect-ratio:4/3}
+#hint{font-size:12px;color:#555;margin-top:8px;text-align:center;letter-spacing:2px}
+</style>
+</head>
+<body>
+<div id="wrap">
+<canvas id="c" width="640" height="480" tabindex="0"></canvas>
+<div id="hint">ARROWS/WASD &middot; ENTER/SPACE &middot; ESC &middot; 1-9 &middot; M=MUTE</div>
+</div>
+<script>
+'use strict';
+(()=>{
+
+// ============================================================
+// SETUP - 640x480 base, rendered natively
+// ============================================================
+const CV = document.getElementById('c');
+const CTX = CV.getContext('2d');
+CTX.imageSmoothingEnabled = false;
+CV.focus();
+
+const W = 640, H = 480;
+// offscreen buffer lets us do screen-shake without re-drawing
+const BS = document.createElement('canvas');
+BS.width = W; BS.height = H;
+const G = BS.getContext('2d');
+G.imageSmoothingEnabled = false;
+G.textBaseline = 'top';
+
+// CGA/EGA-inspired 16-color palette
+const P = ['#000000','#0000AA','#00AA00','#00AAAA','#AA0000','#AA00AA','#AA5500','#AAAAAA',
+           '#555555','#5555FF','#55FF55','#55FFFF','#FF5555','#FF55FF','#FFFF55','#FFFFFF'];
+
+function rect(x,y,w,h,c){G.fillStyle=P[c];G.fillRect(x|0,y|0,w|0,h|0);}
+function pset(x,y,c){G.fillStyle=P[c];G.fillRect(x|0,y|0,1,1);}
+function pset2(x,y,c){G.fillStyle=P[c];G.fillRect(x|0,y|0,2,2);}
+function clr(c){G.fillStyle=P[c||0];G.fillRect(0,0,W,H);}
+function box(x,y,w,h,fg,bg){ if(bg!==undefined)rect(x,y,w,h,bg); rect(x,y,w,2,fg); rect(x,y+h-2,w,2,fg); rect(x,y,2,h,fg); rect(x+w-2,y,2,h,fg); }
+function box1(x,y,w,h,fg,bg){ if(bg!==undefined)rect(x,y,w,h,bg); rect(x,y,w,1,fg); rect(x,y+h-1,w,1,fg); rect(x,y,1,h,fg); rect(x+w-1,y,1,h,fg); }
+function line(x0,y0,x1,y1,c){
+  let dx=Math.abs(x1-x0),sx=x0<x1?1:-1;
+  let dy=-Math.abs(y1-y0),sy=y0<y1?1:-1;
+  let err=dx+dy,e2;
+  while(true){ pset(x0,y0,c); if(x0===x1&&y0===y1)break; e2=2*err; if(e2>=dy){err+=dy;x0+=sx;} if(e2<=dx){err+=dx;y0+=sy;} }
+}
+
+// Font stack: bold, mono, slightly oversized for readability.
+// Text is rendered natively by the browser, then blitted without smoothing
+// so it stays crisp at 640x480 but still reads as "old school" next to our
+// chunky sprites.
+const FONT_MAIN = '"Courier New","DejaVu Sans Mono","Consolas",monospace';
+
+// draw text with subtle outline for legibility over any background
+function text(s,x,y,c,sz,outline){
+  const size = sz||16;
+  G.font = 'bold '+size+'px '+FONT_MAIN;
+  if(outline!==false){
+    G.fillStyle = P[0];
+    // 4-way cheap outline
+    G.fillText(s,x+1,y); G.fillText(s,x-1,y); G.fillText(s,x,y+1); G.fillText(s,x,y-1);
+  }
+  G.fillStyle = P[c==null?15:c];
+  G.fillText(s,x,y);
+}
+function textPlain(s,x,y,c,sz){
+  G.font = 'bold '+(sz||16)+'px '+FONT_MAIN;
+  G.fillStyle = P[c==null?15:c];
+  G.fillText(s,x,y);
+}
+function textC(s,y,c,sz,outline){
+  const size = sz||18;
+  G.font = 'bold '+size+'px '+FONT_MAIN;
+  const w = G.measureText(s).width;
+  text(s,((W-w)/2)|0,y,c,size,outline);
+}
+function textW(s,x,y,w,c,sz,lh){
+  const size = sz||16;
+  const lineH = lh||(size+4);
+  G.font = 'bold '+size+'px '+FONT_MAIN;
+  const words = s.split(' ');
+  let line='', ly=y;
+  for(const word of words){
+    const tryLine = line?line+' '+word:word;
+    if(G.measureText(tryLine).width > w){
+      text(line,x,ly,c,size);
+      ly += lineH;
+      line = word;
+    } else line = tryLine;
+  }
+  if(line) text(line,x,ly,c,size);
+  return ly + lineH;
+}
+// big "logo" / title text
+function textTitle(s,y,c){
+  const size=56;
+  G.font = 'bold '+size+'px '+FONT_MAIN;
+  const w = G.measureText(s).width;
+  const x = ((W-w)/2)|0;
+  // thick shadow
+  G.fillStyle = P[0];
+  for(let dx=-2;dx<=2;dx++) for(let dy=-2;dy<=2;dy++) if(dx||dy) G.fillText(s,x+dx,y+dy);
+  G.fillStyle = P[c==null?14:c];
+  G.fillText(s,x,y);
+  G.fillStyle = P[15];
+  G.fillText(s,x-1,y-1);
+}
+
+// ============================================================
+// AUDIO - PC-speaker style beeper
+// ============================================================
+let AC, MASTER, mute=false, bgmTimer=null, bgmIdx=0;
+function audioInit(){
+  if(AC) return;
+  try{ AC = new (window.AudioContext||window.webkitAudioContext)();
+       MASTER = AC.createGain(); MASTER.gain.value=0.5; MASTER.connect(AC.destination); }catch(e){}
+}
+function beep(freq,dur,type,vol){
+  if(!AC||mute) return;
+  const o=AC.createOscillator(); const gn=AC.createGain();
+  o.type=type||'square'; o.frequency.value=freq;
+  const t=AC.currentTime;
+  gn.gain.setValueAtTime(0,t);
+  gn.gain.linearRampToValueAtTime(vol==null?0.12:vol, t+0.004);
+  gn.gain.exponentialRampToValueAtTime(0.0001, t+(dur||0.1));
+  o.connect(gn); gn.connect(MASTER);
+  o.start(t); o.stop(t+(dur||0.1)+0.02);
+}
+function noise(dur,vol){
+  if(!AC||mute) return;
+  const bs=AC.sampleRate*(dur||0.15)|0;
+  const buf=AC.createBuffer(1,bs,AC.sampleRate);
+  const d=buf.getChannelData(0);
+  for(let i=0;i<bs;i++) d[i]=(Math.random()*2-1)*(1-i/bs);
+  const src=AC.createBufferSource(); src.buffer=buf;
+  const gn=AC.createGain(); gn.gain.value=vol==null?0.18:vol;
+  src.connect(gn); gn.connect(MASTER);
+  src.start();
+}
+function nt(n){
+  if(n===0) return 0;
+  const m=(''+n).match(/^([A-G])([#b]?)(-?\d)$/);
+  if(!m) return 0;
+  const base={C:0,D:2,E:4,F:5,G:7,A:9,B:11}[m[1]];
+  const sh=m[2]==='#'?1:m[2]==='b'?-1:0;
+  return 440*Math.pow(2,(base+sh+(+m[3]-4)*12-9)/12);
+}
+const SFX = {
+  select: ()=>{beep(880,0.04);setTimeout(()=>beep(1175,0.04),40);},
+  menu: ()=>beep(660,0.03),
+  back: ()=>{beep(440,0.04);setTimeout(()=>beep(330,0.04),40);},
+  hit:  ()=>{noise(0.10,0.22);beep(110,0.08,'square',0.15);},
+  crit: ()=>{noise(0.15,0.28);beep(80,0.14,'sawtooth',0.2);},
+  miss: ()=>beep(220,0.06,'triangle',0.08),
+  heal: ()=>{beep(523,0.06);setTimeout(()=>beep(659,0.06),60);setTimeout(()=>beep(784,0.1),120);},
+  pickup: ()=>{beep(1047,0.04);setTimeout(()=>beep(1568,0.06),45);},
+  bad: ()=>{beep(220,0.1);setTimeout(()=>beep(165,0.2),100);},
+  die: ()=>{let f=440;for(let i=0;i<8;i++)setTimeout(()=>beep(f*Math.pow(0.85,i),0.14,'sawtooth'),i*120);},
+  win: ()=>{const ns=['C5','E5','G5','C6','E5','G5','C6'];ns.forEach((n,i)=>setTimeout(()=>beep(nt(n),0.18),i*140));},
+  step: ()=>{noise(0.03,0.04);},
+  roar: ()=>{for(let i=0;i<5;i++)setTimeout(()=>{beep(80+Math.random()*60,0.2,'sawtooth',0.18);noise(0.1,0.08);},i*80);},
+  thunder: ()=>{noise(1.2,0.25);},
+  splash: ()=>{noise(0.4,0.15);},
+  stone: ()=>{beep(2000,0.03,'square',0.08);setTimeout(()=>beep(1400,0.03),30);setTimeout(()=>noise(0.06,0.06),60);},
+  knap: ()=>{beep(1800,0.02,'square',0.1);setTimeout(()=>noise(0.04,0.08),25);},
+};
+
+const BGM_TRAVEL = [
+  ['A3',1],['E3',1],['A3',1],['C4',1], ['D4',2],['C4',1],['A3',1],
+  ['A3',1],['E3',1],['G3',1],['A3',1], ['E3',2],['D4',1],['C4',1],
+  ['A3',1],['E3',1],['A3',1],['C4',1], ['D4',1],['E4',1],['D4',1],['C4',1],
+  ['A3',2],[0,1],['E3',1],['A3',2],[0,2]
+];
+const BGM_COMBAT = [
+  ['E3',1],['E3',1],['G3',1],['E3',1], ['E3',1],['D3',1],['E3',2],
+  ['E3',1],['E3',1],['G3',1],['A3',1], ['B3',2],['G3',1],['E3',1],
+  ['A3',1],['A3',1],['C4',1],['A3',1], ['G3',1],['E3',1],['D3',2],
+];
+const BGM_TITLE = [
+  ['A3',2],['C4',2],['E4',2],['A4',2], ['G4',2],['E4',2],['C4',2],['D4',2],
+  ['E4',2],['C4',2],['A3',2],['E3',2], ['A3',4],[0,4]
+];
+let curBGM=null;
+function bgmStart(track){
+  bgmStop();
+  if(!AC||mute) return;
+  curBGM=track; bgmIdx=0;
+  const step = ()=>{
+    if(curBGM!==track) return;
+    const n = track[bgmIdx%track.length];
+    bgmIdx++;
+    if(n[0]!==0){
+      const o=AC.createOscillator(); const gn=AC.createGain();
+      o.type='square'; o.frequency.value=nt(n[0]);
+      const t=AC.currentTime;
+      gn.gain.setValueAtTime(0,t);
+      gn.gain.linearRampToValueAtTime(0.035,t+0.01);
+      gn.gain.exponentialRampToValueAtTime(0.001,t+0.22*n[1]);
+      o.connect(gn); gn.connect(MASTER);
+      o.start(t); o.stop(t+0.25*n[1]+0.02);
+    }
+    bgmTimer = setTimeout(step, 220*n[1]);
+  };
+  step();
+}
+function bgmStop(){ if(bgmTimer){clearTimeout(bgmTimer);bgmTimer=null;} curBGM=null; }
+
+// ============================================================
+// SPRITE TABLE
+// ============================================================
+const SPR = {
+player:[
+  "   FF   ",
+  "  F66F  ",
+  "  6666  ",
+  "  6448  ",
+  " 666666 ",
+  "6666666C",
+  "C666666 ",
+  " 6 66 6 ",
+  " 6 66 6 ",
+  " 8 88 8 ",
+  " 8 88 8 ",
+  "77 77 77",
+],
+player_walk:[
+  "   FF   ",
+  "  F66F  ",
+  "  6666  ",
+  "  6448  ",
+  " 666666 ",
+  "C666666 ",
+  " 666666C",
+  "  666   ",
+  "  66 6  ",
+  " 8 8 8  ",
+  " 8  88  ",
+  "7    77 ",
+],
+player_fight:[
+  "    FF    ",
+  "   F66F   ",
+  "   6666   ",
+  "   6448   ",
+  "  666666  ",
+  "CC666666  ",
+  " C666666  ",
+  "   66 6   ",
+  "   66 6   ",
+  "   8  8   ",
+  "   8  8   ",
+  "  77  77  ",
+],
+sabertoothcat:[
+  "                    ",
+  "                    ",
+  "  66       6666666  ",
+  " 6666     66666666  ",
+  "666666   6666664466 ",
+  "6666666666666664466 ",
+  "6666666666666666666 ",
+  "666666666666666F666 ",
+  " 666666666666FFF66  ",
+  "  6666 666  FFF 66  ",
+  "  66 6  6 6FFF  66  ",
+  "  66 6  6 6 F    6  ",
+],
+hyena:[
+  "                    ",
+  "  7 7 7 7 7   77    ",
+  "  77 777 7 77777    ",
+  " 77777777777777777  ",
+  "77777888877777777   ",
+  "77778CCC8777FF7777  ",
+  "777778888777FFFF77  ",
+  "7777777777777FF777  ",
+  "7 777  7 77 7   7   ",
+  "7  77  7  77   7    ",
+  " 7  7 7  7  7 7     ",
+  " 7    7  7          ",
+],
+lion:[
+  "       666          ",
+  "      66666         ",
+  "     6666666        ",
+  "    666666666       ",
+  "   66666666666      ",
+  "   6666E4E466666    ",
+  "   6666EEEE66666    ",
+  "    66666F66666666  ",
+  "     6666FFFF66666  ",
+  "      666 666 666   ",
+  "      66  66  66    ",
+  "      8 8 8 8 8 8   ",
+],
+leopard:[
+  "                    ",
+  "   EE               ",
+  "  EEEE    66 E 66   ",
+  " EE66EE  6E66E66 E  ",
+  "EE66EE66666E666666  ",
+  "E66E66666E66666E66  ",
+  "66E66666666E66E66E  ",
+  " 66E66E66E66666E66  ",
+  "  E E  6  6  6  6   ",
+  "  6 6  6  6  6 6    ",
+  "  8 8  8  8  8 8    ",
+  "                    ",
+],
+croc:[
+  "                            ",
+  "                            ",
+  "  AAAAA   AAAAAAAAAAAAA     ",
+  " AAAAAAAAAAAAAAAAAAAAAAA C  ",
+  "AAAFFAAAAAAAAAAAAAAAAAAA    ",
+  "AAAAAAAAAAAAAAAAAAAAAAAA    ",
+  "AAAAAAAAAAAAAAAAAAAAAAA     ",
+  "A A  A  A A   A A A A       ",
+  "  A  A    A A   A  A        ",
+],
+snake:[
+  "                    ",
+  "                    ",
+  "                    ",
+  "         2222       ",
+  "        222222      ",
+  "       22    22     ",
+  "22    22  22  22    ",
+  "2222  2  2E2  22    ",
+  "22222 2  222  22    ",
+  " 22222222    22     ",
+  "   2222    222      ",
+  "     22  222        ",
+],
+hippo:[
+  "                              ",
+  "                              ",
+  "         DDDDDDDDDDDDDDD      ",
+  "       DDDDDDDDDDDDDDDDDD     ",
+  "      DDDFDDDDDDDDDDDDDDD     ",
+  "      DDDFDDDDDDDDDDDDDDDD    ",
+  "      DDDFFDDDDDDDDDDDDDD     ",
+  "      DDDDFDDDDDDDDDDDDDD     ",
+  "       DDDDDDDDDDDDDDDDDD     ",
+  "       DD DD  DDDD  DD DD     ",
+  "       DD DD  DDDD  DD DD     ",
+  "       88 88  8888  88 88     ",
+],
+elephant:[
+  "                              ",
+  "         7777777777777        ",
+  "        777777777777777       ",
+  "       77777777777777777      ",
+  "      7777F77777777777777     ",
+  "     77777777777777777777     ",
+  "    77777777777777777777      ",
+  "   777777777777FFFF77777      ",
+  "  7 77777777777F  77777       ",
+  " 7  77777777777F   7777       ",
+  " 7  77 77 77 777F  7777       ",
+  "    77 77 77 77    77 7       ",
+],
+hominid:[
+  "                    ",
+  "       EE           ",
+  "      E66E          ",
+  "      6666          ",
+  "      6448          ",
+  "     666666         ",
+  "    6666666C        ",
+  "    6666666         ",
+  "     66 66          ",
+  "     66 66          ",
+  "     8  8           ",
+  "     8  8           ",
+],
+dog:[
+  "                    ",
+  "                    ",
+  "  66         6666   ",
+  "  6666     666666   ",
+  "  666666666666666   ",
+  "  66666666666F66    ",
+  "  66666666666FF     ",
+  "  666666666666      ",
+  "   66 66  66 66     ",
+  "   66 66  66 66     ",
+  "   8  8   8  8      ",
+  "                    ",
+],
+baboon:[
+  "                    ",
+  "      666           ",
+  "     66666          ",
+  "    6C6C6C6         ",
+  "    6CFFFC6         ",
+  "    6FFFFFF         ",
+  "   66666666C        ",
+  "   6C666666         ",
+  "   6C 66 66         ",
+  "    6 66 66         ",
+  "    8 8  8          ",
+  "    8 8  8          ",
+],
+bird:[
+  "                    ",
+  "                    ",
+  "       888          ",
+  "      88888         ",
+  "     8FFFFF8        ",
+  "    88F444888       ",
+  "    8888F8888       ",
+  "     88888          ",
+  "      88            ",
+  "      E E           ",
+  "     E   E          ",
+  "                    ",
+],
+};
+
+function drawSpr(name,x,y,s,flip){
+  const spr=SPR[name]; if(!spr) return;
+  s=s||1;
+  for(let ry=0;ry<spr.length;ry++){
+    const row=spr[ry];
+    for(let rx=0;rx<row.length;rx++){
+      const ch=row[rx];
+      if(ch===' ') continue;
+      const ci=parseInt(ch,16);
+      if(isNaN(ci)) continue;
+      const dx = flip ? x + (row.length-1-rx)*s : x + rx*s;
+      rect(dx,y+ry*s,s,s,ci);
+    }
+  }
+}
+
+// ============================================================
+// GAME DATA (same content as before)
+// ============================================================
+const ITEMS = {
+  lomekwi:     {n:'Lomekwi Core',  d:'Crude heavy flake-off core.', atk:[1,4], w:3, wep:1},
+  chopper:     {n:'Chopper',       d:'Oldowan chopping stone.',    atk:[2,5], w:2, wep:1},
+  flake:       {n:'Flake',         d:'Sharp stone flake.',         atk:[1,3], w:1, wep:1, stack:true},
+  scraper:     {n:'Scraper',       d:'For hides and woodwork.',    atk:[1,2], w:1, wep:1},
+  hammerstone: {n:'Hammerstone',   d:'Dense cobble for knapping.', atk:[2,4], w:3, wep:1},
+  boneclub:    {n:'Bone Club',     d:'Heavy antelope femur.',      atk:[2,5], w:2, wep:1},
+  digstick:    {n:'Digging Stick', d:'Fire-hardened pointed stick.',atk:[1,3], w:1, wep:1},
+  thrownstone: {n:'Throwing Stone',d:'Rounded river pebble.',      w:0, throw:1, stack:true},
+  hide:        {n:'Antelope Hide', d:'Warm covering.',             w:2, armor:1},
+  cloak:       {n:'Fur Cloak',     d:'Stitched hide cloak.',       w:2, armor:2},
+  gourd:       {n:'Baobab Gourd',  d:'Holds water.',               w:1},
+  tortoise:    {n:'Tortoise Shell',d:'Durable water carrier.',     w:2},
+  water:       {n:'Waterskin',     d:'+20 thirst.',                w:1, drink:20, stack:true},
+  tuber:       {n:'Tubers',        d:'+12 hunger. Dug from earth.',w:1, food:12, stack:true},
+  berries:     {n:'Berries',       d:'+6 hunger.',                 w:0, food:6,  stack:true},
+  figs:        {n:'Wild Figs',     d:'+10 hunger.',                w:0, food:10, stack:true},
+  baobab:      {n:'Baobab Fruit',  d:'+8 hunger +4 thirst.',       w:1, food:8, drink:4, stack:true},
+  rawmeat:     {n:'Raw Meat',      d:'+22 hunger, risk of sickness.',w:2, food:22, risk:0.35, stack:true},
+  cookedmeat:  {n:'Cooked Meat',   d:'+28 hunger.',                w:2, food:28, stack:true},
+  marrow:      {n:'Bone Marrow',   d:'+16 hunger. Smash with stone.',w:1, food:16, stack:true},
+  honey:       {n:'Wild Honey',    d:'+10 hunger +2 energy.',      w:0, food:10, energy:2, stack:true},
+  termite:     {n:'Termites',      d:'+5 hunger. Fatty protein.',  w:0, food:5, stack:true},
+  locust:      {n:'Locust',        d:'+4 hunger.',                 w:0, food:4, stack:true},
+  ochre:       {n:'Red Ochre',     d:'Sacred earth pigment.',      w:1},
+  ember:       {n:'Fire Embers',   d:'A glowing spark in moss.',   w:0},
+  tinder:      {n:'Dry Tinder',    d:'Crumbled grass and bark.',   w:0, stack:true},
+  cord:        {n:'Plant Cord',    d:'Woven fiber rope.',          w:0, stack:true},
+  herb:        {n:'Healing Herb',  d:'Bitter leaves. +25 HP.',     w:0, heal:25, stack:true},
+  charm:       {n:'Bone Charm',    d:'Ancestor talisman. +luck.',  w:0, charm:1},
+  shell_edge:  {n:'Shell Edge',    d:'Freshwater shell blade.',    atk:[1,2], w:0, wep:1, stack:true},
+  skull:       {n:'Cracked Skull', d:'A trophy; bad omens.',       w:1},
+  obsidian:    {n:'Obsidian Shard',d:'Volcanic glass. Very sharp.',atk:[2,6], w:1, wep:1, stack:true},
+};
+
+const ENEMIES = {
+  megantereon:{n:'MEGANTEREON',hp:20,atk:[3,6],def:2,spd:7,art:'sabertoothcat',taunt:'A dirk-toothed cat bares its fangs!'},
+  dinofelis:  {n:'DINOFELIS',  hp:24,atk:[3,7],def:3,spd:7,art:'sabertoothcat',taunt:'Dinofelis, the false saber-cat, stalks you!'},
+  homotherium:{n:'HOMOTHERIUM',hp:26,atk:[3,6],def:2,spd:6,art:'sabertoothcat',taunt:'A scimitar-cat pack closes in!'},
+  pachycrocuta:{n:'GIANT HYENA',hp:22,atk:[3,5],def:2,spd:5,art:'hyena',taunt:'A bone-crushing Pachycrocuta charges!'},
+  hyena:      {n:'SPOTTED HYENA',hp:12,atk:[1,4],def:1,spd:5,art:'hyena',taunt:'A hyena giggles and lunges.'},
+  lion:       {n:'CAVE LION',  hp:28,atk:[3,8],def:3,spd:6,art:'lion',taunt:'A huge lion roars.'},
+  leopard:    {n:'LEOPARD',    hp:16,atk:[2,6],def:3,spd:9,art:'leopard',taunt:'A leopard drops from a tree!'},
+  croc:       {n:'NILE CROC',  hp:30,atk:[4,9],def:5,spd:3,art:'croc',taunt:'Jaws burst from muddy water!'},
+  adder:      {n:'PUFF ADDER', hp:5, atk:[2,5],def:1,spd:8,art:'snake',taunt:'A thick viper coils!',venom:1},
+  mamba:      {n:'BLACK MAMBA',hp:4, atk:[3,7],def:2,spd:10,art:'snake',taunt:'A black mamba rears high!',venom:2},
+  hippo:      {n:'BULL HIPPO', hp:40,atk:[4,10],def:6,spd:2,art:'hippo',taunt:'A bull hippo charges from the reeds!'},
+  deinotherium:{n:'DEINOTHERIUM',hp:50,atk:[5,12],def:7,spd:2,art:'elephant',taunt:'A tusked giant trumpets in rage!'},
+  boisei:     {n:'P. BOISEI',  hp:16,atk:[2,5],def:2,spd:5,art:'hominid',taunt:'Robust cousins screech and wave stones!'},
+  rival:      {n:'RIVAL HABILINES',hp:14,atk:[2,5],def:2,spd:5,art:'hominid',taunt:'Rival habilines block your path!'},
+  wilddog:    {n:'HUNTING DOGS',hp:10,atk:[1,4],def:2,spd:7,art:'dog',taunt:'Cursorial dogs circle the grass.'},
+  baboon:     {n:'T. OSWALDI', hp:14,atk:[2,4],def:1,spd:6,art:'baboon',taunt:'A giant gelada baboon bares fangs!'},
+  vulture:    {n:'BONE VULTURES',hp:6,atk:[1,3],def:1,spd:5,art:'bird',taunt:'Vultures mob your kill!'},
+};
+
+const EVENTS = [
+{id:'baobab_tree', terr:['savanna','wood'], weight:3, art:'baobab', txt:'You find a great BAOBAB TREE. Its trunk swells with stored water. Wrinkled pods hang from the branches.',
+ opts:[
+  {lbl:'Climb for fruit (costs energy)', fn:p=>{ p.en-=5; if(roll(20)+p.skl>=9){addItem(p,'baobab',rnd(2,4));return 'You gather BAOBAB FRUIT.';} p.hp-=3; return 'You slip and bruise your ribs. -3 HP'; }},
+  {lbl:'Pound trunk for water', fn:p=>{ p.en-=3; if(hasItem(p,'hammerstone')||hasItem(p,'chopper')){addItem(p,'water',2);return 'Pounded fiber yields WATER.';} return 'You lack a hammering tool. Your knuckles ache.'}},
+  {lbl:'Leave it', fn:p=>'You walk on.'}
+ ]},
+{id:'tubers', terr:['savanna','plain'], weight:4, art:'plain', txt:'A patch of disturbed earth. Wild TUBERS grow beneath.',
+ opts:[
+  {lbl:'Dig with stick/stone', fn:p=>{ p.en-=4; const n=rnd(1,3)+(hasItem(p,'digstick')?1:0); addItem(p,'tuber',n); return 'You pull up '+n+' TUBERS.';}},
+  {lbl:'Walk on', fn:p=>''}
+ ]},
+{id:'figs', terr:['wood'], weight:2, art:'wood', txt:'Wild FIG TREES cluster near a boulder.',
+ opts:[
+  {lbl:'Pick figs', fn:p=>{addItem(p,'figs',rnd(2,5));p.en-=2;return 'You gather WILD FIGS.';}},
+  {lbl:'Walk on', fn:p=>''}
+ ]},
+{id:'termite', terr:['savanna','plain','wood'], weight:2, art:'plain', txt:'A mud TERMITE MOUND rises like a small volcano. Soldier termites swarm.',
+ opts:[
+  {lbl:'Fish with stick', fn:p=>{ p.en-=3; if(hasItem(p,'digstick')){addItem(p,'termite',rnd(3,6));return 'You fish out fat termites.';} addItem(p,'termite',1);return 'Without a stick you get few. 1 TERMITE.'; }},
+  {lbl:'Walk on', fn:p=>''}
+ ]},
+{id:'carcass', terr:['savanna','plain'], weight:3, art:'plain', txt:'A fresh antelope CARCASS lies in the grass. Flies are few. Vultures circle far off.',
+ opts:[
+  {lbl:'Butcher (attracts scavengers)', fn:p=>{ p.en-=4; addItem(p,'rawmeat',rnd(2,4)); if(hasItem(p,'hammerstone'))addItem(p,'marrow',rnd(1,2)); const r=Math.random(); if(r<0.35){G_pending_combat={enemy:pickEnemy(['hyena','vulture','wilddog']),reward:{}}; return 'You butcher well. SCAVENGERS arrive!'} return 'You butcher in peace. Meat secured.';}},
+  {lbl:'Crack bones for marrow', fn:p=>{ if(hasItem(p,'hammerstone')||hasItem(p,'chopper')){addItem(p,'marrow',rnd(2,3)); p.en-=2; return 'You crack the BONES for marrow.';} return 'You need a stone for this.'}},
+  {lbl:'Leave', fn:p=>''}
+ ]},
+{id:'waterhole', terr:['savanna','plain','wood'], weight:3, art:'water', txt:'A muddy WATERHOLE reflects the sky. Footprints circle its edge.',
+ opts:[
+  {lbl:'Fill waterskins (risk of sickness)', fn:p=>{ addItem(p,'water',rnd(2,4)); if(Math.random()<0.2){p.sick=(p.sick||0)+5; return 'You fill your skins. The water tastes foul...';} return 'You fill your skins with WATER.';}},
+  {lbl:'Drink deeply', fn:p=>{ p.th=Math.min(100,p.th+30); if(Math.random()<0.25){p.sick=(p.sick||0)+4;return 'You gulp the cool water. Your belly sours later.';} return 'You quench your thirst.';}},
+  {lbl:'Back away carefully', fn:p=>'You do not trust the hoof prints. Wise.'}
+ ]},
+{id:'river', terr:['river'], weight:999, art:'river', txt:'A broad RIVER bars your path. Eddies swirl. Something dark slides beneath the surface.',
+ opts:[
+  {lbl:'Wade across (risk: crocs)', fn:p=>{ if(Math.random()<0.55){ G_pending_combat={enemy:E('croc'),reward:{}}; return 'A CROCODILE explodes from the water!'} p.en-=6; return 'You wade cautiously across, shivering.';}},
+  {lbl:'Search upstream for ford', fn:p=>{ p.dist-=2; p.en-=4; if(p.dist<0)p.dist=0; if(Math.random()<0.15){addItem(p,'shell_edge',1);} return 'You find a shallow rocky ford. Safer, but you lost distance.';}},
+  {lbl:'Build a raft (needs cord)', fn:p=>{ if(consumeItem(p,'cord',2)){ p.en-=8; return 'You lash logs and cross in peace.'; } return 'You need more PLANT CORD.';}}
+ ]},
+{id:'honey', terr:['wood'], weight:2, art:'wood', txt:'Bees buzz thick around a hollow tree. HONEY glints within.',
+ opts:[
+  {lbl:'Smoke them out (needs embers)', fn:p=>{ if(consumeItem(p,'ember',1)){addItem(p,'honey',rnd(2,4));addItem(p,'tinder',1);return 'Smoke calms the hive. HONEY gathered.';} return 'You lack embers. Better not anger the hive.';}},
+  {lbl:'Grab and run', fn:p=>{ const d=rnd(3,8); p.hp-=d; addItem(p,'honey',rnd(1,2)); return 'You grab a comb but the bees sting fiercely! -'+d+' HP'; }},
+  {lbl:'Admire and leave', fn:p=>''}
+ ]},
+{id:'ochre', terr:['rock','lava'], weight:1, art:'rock', txt:'A seam of RED OCHRE streaks the cliff, bright as old blood.',
+ opts:[
+  {lbl:'Scrape some out', fn:p=>{ addItem(p,'ochre',1); p.en-=2; return 'You gather RED OCHRE. It smells of ancient fires.';}},
+  {lbl:'Mark yourself (for luck)', fn:p=>{ if(hasItem(p,'ochre')){p.charmed=true; return 'You paint your face. The spirits walk with you.';} return 'You have no ochre yet.';}},
+  {lbl:'Walk on', fn:p=>''}
+ ]},
+{id:'obsidian', terr:['lava','rock'], weight:1, art:'rock', txt:'Shards of black OBSIDIAN glint in loose volcanic scree. Sharp as moonlight.',
+ opts:[
+  {lbl:'Collect carefully', fn:p=>{ if(Math.random()<0.2){p.hp-=rnd(1,3);addItem(p,'obsidian',rnd(1,2));return 'You cut your hand but take OBSIDIAN.';} addItem(p,'obsidian',rnd(2,3)); return 'You gather OBSIDIAN shards.';}},
+  {lbl:'Leave be', fn:p=>''}
+ ]},
+{id:'shells', terr:['river'], weight:1, art:'river', txt:'Freshwater MUSSEL shells cluster among the reeds. Their edges would cut.',
+ opts:[
+  {lbl:'Pry some loose', fn:p=>{addItem(p,'shell_edge',rnd(1,3));p.en-=2;return 'You gather SHELL EDGES.';}},
+  {lbl:'Walk on', fn:p=>''}
+ ]},
+{id:'cord_reeds', terr:['river','wood'], weight:2, art:'wood', txt:'Tough REED FIBERS grow by the water, perfect for twisting into cord.',
+ opts:[
+  {lbl:'Weave cord', fn:p=>{ p.en-=3; addItem(p,'cord',rnd(1,3)); return 'You weave PLANT CORD.';}},
+  {lbl:'Walk on', fn:p=>''}
+ ]},
+{id:'herb_grove', terr:['wood','rock'], weight:2, art:'wood', txt:'Bitter-leafed HEALING HERBS grow beneath a leaning stone.',
+ opts:[
+  {lbl:'Harvest', fn:p=>{ addItem(p,'herb',rnd(1,2)); p.en-=2; return 'You gather HEALING HERBS.';}},
+  {lbl:'Walk on', fn:p=>''}
+ ]},
+{id:'abandoned_fire', terr:['savanna','plain','wood'], weight:2, art:'plain', txt:'An old HEARTH still smokes faintly. Someone was here yesterday. Or this morning.',
+ opts:[
+  {lbl:'Scoop embers', fn:p=>{ addItem(p,'ember',1); addItem(p,'tinder',rnd(1,2)); return 'You collect EMBERS and TINDER.';}},
+  {lbl:'Cook raw meat', fn:p=>{ if(consumeItem(p,'rawmeat',1)){addItem(p,'cookedmeat',1); return 'You roast meat. Safer to eat.';} return 'You have no raw meat.';}},
+  {lbl:'Leave quickly', fn:p=>'You do not wait to meet the firemaker.'}
+ ]},
+{id:'skull_cache', terr:['rock','lava','gorge'], weight:1, art:'rock', txt:'A cache of OLD BONES - a hominid skull, crude flakes, a hammerstone. The ancestors made tools here.',
+ opts:[
+  {lbl:'Salvage tools', fn:p=>{ addItem(p,'lomekwi',1); addItem(p,'flake',rnd(1,3)); if(Math.random()<0.3)addItem(p,'hammerstone',1); return 'You salvage LOMEKWIAN tools.';}},
+  {lbl:'Pray and leave them', fn:p=>{ if(hasItem(p,'ochre')){p.charmed=true;return 'You honor the dead. You feel blessed.';} return 'You whisper to the bones and pass.';}}
+ ]},
+{id:'lost_child', terr:['savanna','wood','plain'], weight:1, art:'plain', txt:'A small habiline CHILD crouches alone under a thornbush, eyes huge. Lost from its band.',
+ opts:[
+  {lbl:'Share food', fn:p=>{ if(consumeItem(p,'tuber',1)||consumeItem(p,'cookedmeat',1)||consumeItem(p,'figs',1)){p.karma=(p.karma||0)+1;addItem(p,'charm',1);return 'The child eats. A parent rushes up, grateful. You are given a BONE CHARM.';} return 'You have nothing to share. You walk on, ashamed.';}},
+  {lbl:'Ignore', fn:p=>{p.karma=(p.karma||0)-1; return 'You harden your face and go. The child cries behind you.';}}
+ ]},
+{id:'rival_trader', terr:['savanna','plain'], weight:2, art:'hominid', txt:'A lone HABILINE trader squats with a small heap of goods. He grunts at you warily.',
+ opts:[
+  {lbl:'Trade meat for tools', fn:p=>{ if(consumeItem(p,'rawmeat',2)||consumeItem(p,'cookedmeat',1)){addItem(p,'flake',rnd(2,4));addItem(p,'chopper',1); return 'He gives you FLAKES and a CHOPPER.';} return 'You have no meat to offer.';}},
+  {lbl:'Trade tubers for herbs', fn:p=>{ if(consumeItem(p,'tuber',2)){addItem(p,'herb',2); return 'He pushes you HEALING HERBS.';} return 'You have no tubers to spare.';}},
+  {lbl:'Attack him', fn:p=>{ G_pending_combat={enemy:E('rival'),reward:{flake:3,chopper:1,hammerstone:1}}; return 'You lunge! He fights back!';}},
+  {lbl:'Walk on', fn:p=>''}
+ ]},
+{id:'storm', terr:['savanna','plain','wood','rock','lava','gorge'], weight:2, art:'storm', txt:'A black wall of CLOUDS sweeps across the plains. Thunder rolls.',
+ opts:[
+  {lbl:'Shelter under rocks', fn:p=>{ SFX.thunder(); p.dist-=1; if(p.dist<0)p.dist=0; return 'You wait it out. Lost some distance.';}},
+  {lbl:'Push on through', fn:p=>{ SFX.thunder(); p.en-=8; p.hp-=rnd(1,4); return 'Cold rain lashes you. You press on.';}},
+ ]},
+{id:'twisted_ankle', terr:['rock','lava','gorge','savanna'], weight:2, art:'rock', txt:'A loose stone turns under your foot. Pain shoots up your leg.',
+ opts:[
+  {lbl:'Limp on', fn:p=>{ p.hp-=rnd(2,5); p.en-=4; return 'You hiss and limp onward.';}},
+  {lbl:'Rest a day', fn:p=>{ p.day++; p.hp+=5; p.en=Math.min(100,p.en+20); p.hu-=6; p.th-=6; return 'You rest by the stone. Your ankle eases.';}}
+ ]},
+{id:'dust_storm', terr:['plain','lava'], weight:1, art:'storm', txt:'A wall of red DUST roars across the plain, blotting out the sun.',
+ opts:[
+  {lbl:'Crouch and breathe through hide', fn:p=>{ if(hasItem(p,'hide')||hasItem(p,'cloak')){return 'You wait it out under hide.';} p.th-=8; return 'You cough and cough. Lips crack.';}},
+  {lbl:'Walk blind', fn:p=>{ p.dist=Math.max(0,p.dist-3); return 'You lose your way. Distance lost.';}}
+ ]},
+{id:'lions', terr:['savanna','plain'], weight:2, art:'lion', txt:'A PRIDE OF LIONS lounges ahead, a kill at their feet.',
+ opts:[
+  {lbl:'Detour wide (slow)', fn:p=>{ p.dist=Math.max(0,p.dist-2); p.en-=4; return 'You circle wide. Lost distance.';}},
+  {lbl:'Try to steal meat', fn:p=>{ if(roll(20)+p.skl>=16){addItem(p,'rawmeat',2); return 'You creep in. You slip away with raw meat!'} G_pending_combat={enemy:E('lion'),reward:{rawmeat:2,boneclub:1}}; return 'A male lion sees you and charges!'}},
+ ]},
+{id:'bush_ambush', terr:['wood','rock'], weight:2, art:'wood', txt:'Grass rustles. Eyes flash.',
+ opts:[
+  {lbl:'Ready your weapon!', fn:p=>{ G_pending_combat={enemy:pickEnemy(['leopard','hyena','boisei','baboon','wilddog']),reward:{}}; return 'An attacker springs!';}},
+ ]},
+{id:'snake', terr:['savanna','wood','plain'], weight:2, art:'snake', txt:'Something long and dark flashes beside your foot!',
+ opts:[
+  {lbl:'Leap back!', fn:p=>{ if(roll(20)+(p.charmed?3:0)>=12){ return 'You spring clear. The snake hisses and slides away.'; } G_pending_combat={enemy:pickEnemy(['adder','mamba']),reward:{}}; return 'Too slow!';}},
+ ]},
+{id:'crocs_bank', terr:['river'], weight:1, art:'croc', txt:'A row of logs along the bank... are not logs. CROCODILES bask, eyes half-lidded.',
+ opts:[
+  {lbl:'Back away silently', fn:p=>{ p.dist=Math.max(0,p.dist-1); return 'You retreat. They do not follow.';}},
+  {lbl:'Throw a stone at them', fn:p=>{ if(consumeItem(p,'thrownstone',1)||consumeItem(p,'flake',1)){ G_pending_combat={enemy:E('croc'),reward:{}}; return 'They charge!';} return 'You have nothing to throw.'; }},
+ ]},
+{id:'hippo_pool', terr:['river'], weight:1, art:'hippo', txt:'A deep pool. BULL HIPPOS eye you from the water, ears twitching.',
+ opts:[
+  {lbl:'Skirt far around', fn:p=>{ p.en-=6; p.dist=Math.max(0,p.dist-2); return 'The long way is safer.';}},
+  {lbl:'Dash across bank', fn:p=>{ if(Math.random()<0.6){ G_pending_combat={enemy:E('hippo'),reward:{}}; return 'The bull charges!';} return 'You run past. Your heart hammers.'; }},
+ ]},
+{id:'pack_dogs', terr:['savanna','plain'], weight:1, art:'dog', txt:'HUNTING DOGS lope in a long line across the plain. They have seen you.',
+ opts:[
+  {lbl:'Climb a tree', fn:p=>{ if(hasItem(p,'cord')){p.en-=3; return 'You climb high. They lose interest.';} p.en-=4; p.hp-=rnd(0,3); return 'You scramble up a thorn tree. Painful, but you live.';}},
+  {lbl:'Throw stones to scare them', fn:p=>{ if(consumeItem(p,'thrownstone',2)){ return 'Your stones fly true. The pack veers off.'; } G_pending_combat={enemy:E('wilddog'),reward:{boneclub:1}}; return 'They close in!';}},
+  {lbl:'Stand and fight', fn:p=>{ G_pending_combat={enemy:E('wilddog'),reward:{boneclub:1,hide:1}}; return 'You brace. They come.';}},
+ ]},
+{id:'robust_band', terr:['wood','rock','gorge'], weight:1, art:'hominid', txt:'A band of ROBUST AUSTRALOPITHS - PARANTHROPUS BOISEI - screech and wave stones. They want your tools.',
+ opts:[
+  {lbl:'Offer food as tribute', fn:p=>{ if(consumeItem(p,'tuber',2)||consumeItem(p,'rawmeat',1)||consumeItem(p,'figs',3)){return 'They take your gift. They let you pass.';} return 'You have nothing to offer.';}},
+  {lbl:'Stand your ground', fn:p=>{ G_pending_combat={enemy:E('boisei'),reward:{hammerstone:1,chopper:1}}; return 'They rush you!';}},
+  {lbl:'Run!', fn:p=>{ if(roll(20)+Math.floor(p.en/10)>=13){ p.en-=10; return 'You outrun them.'; } G_pending_combat={enemy:E('boisei'),reward:{hammerstone:1}}; return 'They catch you!'; }},
+ ]},
+{id:'wildfire', terr:['savanna','plain','wood'], weight:1, art:'storm', txt:'Black smoke boils on the horizon. WILDFIRE races through the dry grass!',
+ opts:[
+  {lbl:'Run toward river/rocks', fn:p=>{ p.en-=10; p.hp-=rnd(0,4); return 'You run full out. Smoke burns your lungs.';}},
+  {lbl:'Set back-burn (needs ember)', fn:p=>{ if(consumeItem(p,'ember',1)){addItem(p,'tinder',2); return 'A back-burn saves you. You recover EMBERS after.';} p.hp-=rnd(4,10); return 'The fire reaches you. You are badly burned.';}},
+  {lbl:'Lie flat in a gully', fn:p=>{ if(Math.random()<0.5){p.hp-=rnd(2,5); return 'Smoke sears your throat but you live.';} p.hp-=rnd(6,12); return 'Flames pass over. You are badly burned.';}}
+ ]},
+{id:'infection', terr:['savanna','plain','wood','rock','lava','gorge','river'], weight:1, art:'plain', txt:'An old cut on your arm is hot and swollen. INFECTION.',
+ opts:[
+  {lbl:'Apply herbs', fn:p=>{ if(consumeItem(p,'herb',1)){ return 'The fever breaks.';} p.sick=(p.sick||0)+10; return 'You have no herbs. The fever grows.';}},
+  {lbl:'Cauterize with ember', fn:p=>{ if(consumeItem(p,'ember',1)){p.hp-=rnd(2,4); return 'Pain - but cleanness. Wound seals.';} p.sick=(p.sick||0)+8; return 'No embers. The wound festers.';}},
+  {lbl:'Push through', fn:p=>{ p.sick=(p.sick||0)+5; return 'You ignore it. It watches you.';}}
+ ]},
+{id:'vulture_theft', terr:['savanna','plain'], weight:1, art:'bird', txt:'GIANT VULTURES mob your pack, trying to steal meat.',
+ opts:[
+  {lbl:'Beat them off', fn:p=>{ if(hasItem(p,'boneclub')||hasItem(p,'digstick')||hasItem(p,'chopper')){ return 'You drive them off with your tool.'; } consumeItem(p,'rawmeat',1); consumeItem(p,'cookedmeat',1); return 'They steal some meat!';}},
+  {lbl:'Fight', fn:p=>{ G_pending_combat={enemy:E('vulture'),reward:{rawmeat:1}}; return 'You swing!'; }}
+ ]},
+{id:'flashflood', terr:['river','gorge'], weight:1, art:'river', txt:'A roar upstream! FLASH FLOOD crashes down the gully!',
+ opts:[
+  {lbl:'Scramble up', fn:p=>{ p.en-=8; if(Math.random()<0.4){if(consumeItem(p,'water',1))return 'You climb barely in time. You lost some supplies.';} return 'You climb in time, trembling.'; }},
+  {lbl:'Swim for it', fn:p=>{ p.hp-=rnd(3,8); if(Math.random()<0.5)consumeItem(p,'water',1); return 'You are hurled against rocks.';}}
+ ]},
+{id:'falling_rocks', terr:['rock','lava','gorge'], weight:1, art:'rock', txt:'Pebbles skitter from above. Then BIGGER STONES.',
+ opts:[
+  {lbl:'Dive for cover', fn:p=>{ if(roll(20)+5>=12){return 'You hug the wall. Stones rush past.';} p.hp-=rnd(3,7); return 'A stone clips you.';}},
+  {lbl:'Run forward', fn:p=>{ p.hp-=rnd(1,5); return 'You run - a rock grazes you.';}}
+ ]},
+{id:'thirst_spring', terr:['savanna','plain','rock','lava'], weight:1, art:'water', txt:'A cool SPRING trickles from a rock face. A blessing.',
+ opts:[
+  {lbl:'Drink deep', fn:p=>{ p.th=100; return 'You drink and drink. Thirst gone.';}},
+  {lbl:'Fill everything', fn:p=>{ addItem(p,'water',4); return 'You top up your waterskins.';}}
+ ]},
+{id:'starlight', terr:['savanna','plain'], weight:1, art:'stars', txt:'The stars wheel above. The SKY ROAD points the way.',
+ opts:[
+  {lbl:'Travel by night', fn:p=>{ p.dist+=4; p.en-=6; p.th-=4; return 'You press on by starlight. +Distance.';}},
+  {lbl:'Sleep and dream', fn:p=>{ p.hp=Math.min(p.hpmax,p.hp+8); p.en=Math.min(100,p.en+15); return 'Strange dreams. You wake rested.';}}
+ ]},
+{id:'elephant_graveyard', terr:['plain','lava','gorge'], weight:1, art:'elephant', txt:'Huge bones lie scattered - an ELEPHANT GRAVEYARD. Sacred and dangerous.',
+ opts:[
+  {lbl:'Harvest bone tools', fn:p=>{ addItem(p,'boneclub',1); addItem(p,'marrow',rnd(1,3)); if(Math.random()<0.3){G_pending_combat={enemy:E('deinotherium'),reward:{}}; return 'A living matriarch charges from the trees!'} return 'You take a BONE CLUB and marrow.';}},
+  {lbl:'Pray and retreat', fn:p=>'You bow to the great bones and go.'}
+ ]},
+{id:'locust_swarm', terr:['savanna','plain'], weight:1, art:'plain', txt:'A hissing cloud - LOCUST SWARM! They eat everything.',
+ opts:[
+  {lbl:'Snatch them from air', fn:p=>{ addItem(p,'locust',rnd(3,6)); return 'You grab handfuls. Crunchy.';}},
+  {lbl:'Cover and wait', fn:p=>{ p.dist=Math.max(0,p.dist-1); return 'You wait till they pass.';}}
+ ]},
+];
+
+// ============================================================
+// GAME STATE
+// ============================================================
+let STATE = 'title';
+let FRAME = 0;
+let G_pending_combat = null;
+let G_msg = '';
+let G_msgQueue = [];
+let G_flash = 0;
+let G_shake = 0;
+
+const PLAYER = {
+  name:'', hp:60, hpmax:60, hu:80, th:80, en:100, skl:0,
+  day:1, dist:0, dest:180, inv:{}, equipped:'digstick',
+  karma:0, charmed:false, sick:0, alive:true, causeofdeath:'',
+};
+
+function E(k){ return Object.assign({},ENEMIES[k]); }
+function pickEnemy(keys){ return E(keys[(Math.random()*keys.length)|0]); }
+function rnd(a,b){ return (a + Math.random()*(b-a+1))|0; }
+function roll(d){ return 1 + (Math.random()*d)|0; }
+
+function addItem(p,k,n){
+  n = n==null?1:n;
+  p.inv[k] = (p.inv[k]||0) + n;
+  SFX.pickup();
+  pushMsg('+'+n+' '+ITEMS[k].n);
+}
+function hasItem(p,k,n){ return (p.inv[k]||0) >= (n||1); }
+function consumeItem(p,k,n){
+  n=n==null?1:n;
+  if(!hasItem(p,k,n)) return false;
+  p.inv[k]-=n;
+  if(p.inv[k]<=0) delete p.inv[k];
+  if(p.equipped===k && !p.inv[k]) p.equipped='digstick';
+  return true;
+}
+function totalWeight(p){
+  let w=0;
+  for(const k in p.inv){ if(ITEMS[k]) w += (ITEMS[k].w||0)*p.inv[k]; }
+  return w;
+}
+function pushMsg(m){ if(m) G_msgQueue.push(m); }
+
+// ============================================================
+// STAGES (journey progress)
+// ============================================================
+const STAGES = [
+  {kind:'savanna', name:'HOME SAVANNA',        end:25, desc:'Dry grass and thorn trees. Your band\'s old ground.'},
+  {kind:'wood',    name:'ACACIA WOODLAND',     end:55, desc:'Thorny canopy. Leopards in the branches.'},
+  {kind:'river',   name:'OMO RIVER CROSSING',  end:80, desc:'Fast water, muddy banks.'},
+  {kind:'plain',   name:'SERENGETI PLAIN',     end:115,desc:'Wide open ground. Lions, hyenas, wind.'},
+  {kind:'rock',    name:'LAVA HILLS',          end:145,desc:'Black stone, ochre seams, twisted ankles.'},
+  {kind:'lava',    name:'NGORORO ASHFIELDS',   end:170,desc:'White ash, no water, hard sky.'},
+  {kind:'gorge',   name:'OLDUVAI GORGE',       end:180,desc:'Red walls and bone shadows. The workshop of our kind.'},
+];
+function currentStage(){
+  for(const s of STAGES) if(PLAYER.dist<s.end) return s;
+  return STAGES[STAGES.length-1];
+}
+
+// ============================================================
+// INPUT
+// ============================================================
+const KEYS = {};
+const PRESSED = {};
+window.addEventListener('keydown',e=>{
+  audioInit();
+  const k=e.key.toLowerCase();
+  if(!KEYS[k]) PRESSED[k]=true;
+  KEYS[k]=true;
+  if(['arrowup','arrowdown','arrowleft','arrowright',' ','enter','escape','tab'].includes(k)) e.preventDefault();
+  if(k==='m'){ mute=!mute; if(mute)bgmStop(); else startStateBGM(); }
+});
+window.addEventListener('keyup',e=>{ KEYS[e.key.toLowerCase()]=false; });
+CV.addEventListener('click',()=>{ audioInit(); CV.focus(); });
+function anyKey(){ for(const k in PRESSED) if(PRESSED[k]) return k; return null; }
+function consumeKey(k){ delete PRESSED[k]; }
+function pollKey(){ const k=anyKey(); if(k) consumeKey(k); return k; }
+
+// ============================================================
+// SCENE BACKGROUNDS (scaled up to 640x480)
+// ============================================================
+function drawLandscape(kind){
+  clr(0);
+  switch(kind){
+    case 'savanna': drawSavanna(); break;
+    case 'wood':    drawWoodland(); break;
+    case 'river':   drawRiver(); break;
+    case 'plain':   drawPlain(); break;
+    case 'rock':    drawRock(); break;
+    case 'lava':    drawLava(); break;
+    case 'gorge':   drawGorge(); break;
+    case 'water':   drawRiver(); break;
+    case 'storm':   drawStorm(); break;
+    case 'stars':   drawStars(); break;
+    case 'baobab':  drawSavanna(); drawBaobab(380,180); break;
+    default:        drawSavanna();
+  }
+}
+
+function drawSavanna(){
+  // Sky
+  rect(0,0,W,270,1);
+  // Sun
+  rect(500,50,28,28,14); rect(494,56,40,16,14); rect(512,44,12,40,14);
+  // Far hills (dark)
+  for(let i=0;i<W;i++){
+    const h = 16 + ((Math.sin(i*0.015)*12+Math.cos(i*0.035)*8)|0);
+    rect(i,270-h,1,h,8);
+  }
+  // Mid hills
+  for(let i=0;i<W;i++){
+    const h = 12 + ((Math.sin(i*0.025+1)*16)|0);
+    rect(i,270-h+8,1,h,6);
+  }
+  // Ground
+  rect(0,270,W,H-270,6);
+  // Grass tussocks
+  for(let i=0;i<70;i++){
+    const x=(i*17)%W;
+    const y=285+((i*11)%140);
+    rect(x,y,2,4,2); rect(x+2,y+2,2,2,2);
+  }
+  drawAcacia(80,260);
+  drawAcacia(560,275);
+}
+function drawAcacia(x,y){
+  rect(x+6,y,4,40,6); // trunk
+  rect(x-16,y-10,48,10,2); // canopy
+  rect(x-12,y-20,40,12,2);
+  rect(x-4,y-25,24,6,2);
+}
+function drawBaobab(x,y){
+  rect(x+8,y,16,60,6);
+  rect(x+4,y+6,24,50,6);
+  rect(x-12,y-14,48,18,2);
+  rect(x-4,y-26,32,14,2);
+}
+function drawWoodland(){
+  rect(0,0,W,280,1);
+  rect(0,280,W,H-280,6);
+  // big canopy
+  for(let x=0;x<W;x+=32){
+    rect(x-8,240,40,28,2);
+    rect(x-4,228,32,18,2);
+  }
+  // trunks
+  for(let x=16;x<W;x+=64){ rect(x,280,6,28,6); }
+  // underbrush shadows
+  for(let x=0;x<W;x+=12){ pset2(x+((FRAME/8)|0)%12,300,8); }
+}
+function drawRiver(){
+  rect(0,0,W,160,1);
+  rect(0,160,W,24,6);
+  rect(0,184,W,140,3);
+  // waves
+  for(let i=0;i<W;i+=12){
+    const o=((FRAME/3)|0)%12;
+    pset2(i+o,210,11); pset2(i+4+o,230,11); pset2(i+8+o,250,11); pset2(i+o,270,11); pset2(i+4+o,290,11);
+  }
+  rect(0,324,W,H-324,6);
+  // reeds
+  for(let i=0;i<W;i+=16){
+    const h=rnd(10,24);
+    rect(i,160-h,2,h,2);
+  }
+}
+function drawPlain(){
+  rect(0,0,W,290,1);
+  rect(320,60,20,20,14);
+  rect(314,66,32,8,14); rect(328,54,8,32,14);
+  // horizon
+  for(let i=0;i<W;i++) pset2(i,290,8);
+  rect(0,290,W,H-290,14);
+  for(let i=0;i<120;i++){ const x=(i*13)%W; pset2(x,295+((i*7)%170),6); }
+  // a bone
+  rect(160,380,24,4,7); rect(164,376,4,4,7); rect(176,384,4,4,7);
+}
+function drawRock(){
+  rect(0,0,W,220,1);
+  for(let y=0;y<160;y++){
+    for(let x=0;x<W;x+=1){
+      const n=(Math.sin(x*0.05+y*0.04)+Math.cos(y*0.1)*0.5);
+      if(n>0.3) pset(x,y+90,8);
+      else if(n>0) pset(x,y+90,6);
+    }
+  }
+  rect(0,250,W,H-250,6);
+  for(let x=80;x<160;x++){ pset2(x,130+((x-80)%6),4); pset2(x,144+((x-80)%6),4); }
+}
+function drawLava(){
+  rect(0,0,W,290,1);
+  rect(0,90,W,40,14);
+  rect(0,290,W,H-290,7);
+  for(let i=0;i<4;i++){
+    const x=80+i*160, y=290;
+    for(let j=0;j<30;j++){
+      rect(x-j,y-j,j*2,2,8);
+    }
+    rect(x-6,y-30,12,4,4);
+  }
+  for(let i=0;i<80;i++){ pset2((i*21)%W,305+((i*13)%160),0); }
+}
+function drawGorge(){
+  rect(0,0,W,140,1);
+  rect(0,140,100,H-140,4);
+  rect(W-100,140,100,H-140,4);
+  rect(0,140,100,H-140,6);
+  for(let y=160;y<H;y+=16){ rect(0,y,100,4,8); rect(W-100,y,100,4,8); }
+  rect(100,320,W-200,H-320,6);
+  rect(240,400,8,6,8); rect(280,410,6,4,8); rect(340,404,10,4,8);
+  for(let i=100;i<W-100;i++){ pset2(i,420+((i*3)%18),8); }
+}
+function drawStorm(){
+  rect(0,0,W,320,8);
+  rect(0,0,W,150,0);
+  for(let x=0;x<W;x+=16){ rect(x,45+((x*3)%40),16,12,8); rect(x+4,35+((x*5)%30),12,10,7);}
+  rect(0,320,W,H-320,6);
+  if((FRAME/10|0)%8===0){
+    line((W/2)|0,0,(W/2)-20|0,130,15);
+    line((W/2)-20|0,130,(W/2)+10|0,260,15);
+    clr(15);
+  }
+  for(let i=0;i<150;i++){ const x=(i*13+FRAME*4)%W; const y=(i*19+FRAME*6)%H; pset2(x,y,11); pset2(x,y+2,11); }
+}
+function drawStars(){
+  rect(0,0,W,340,0);
+  rect(0,340,W,H-340,6);
+  for(let i=0;i<220;i++){ const x=(i*29+i*i)%W, y=(i*23)%340; if((i+(FRAME/20|0))%5!==0) pset2(x,y,15); }
+  rect(500,60,36,36,7); rect(508,52,20,52,7); rect(492,68,52,20,7);
+  rect(504,64,24,28,14);
+}
+
+// ============================================================
+// HUD (bottom 80 pixels)
+// ============================================================
+const HUD_H = 80;
+function drawBar(x,y,w,h,cur,max,col){
+  rect(x,y,w,h,0);
+  rect(x,y,w,h,8);
+  const fw = Math.max(0, (cur/max*w)|0);
+  rect(x,y,fw,h,col);
+  rect(x,y,w,1,7); rect(x,y+h-1,w,1,0);
+}
+function drawHud(){
+  rect(0,H-HUD_H,W,HUD_H,0);
+  rect(0,H-HUD_H,W,2,7);
+  // four bars in a neat grid
+  const by = H - HUD_H + 12;
+  text('HP',  10, by+2,  13, 16);  drawBar(46, by, 90, 12, PLAYER.hp, PLAYER.hpmax, 12);
+  text('HU', 160, by+2,  14, 16);  drawBar(196,by, 90, 12, PLAYER.hu,  100, 14);
+  text('TH', 310, by+2,  11, 16);  drawBar(346,by, 90, 12, PLAYER.th,  100, 11);
+  text('EN', 460, by+2,  10, 16);  drawBar(496,by, 90, 12, PLAYER.en,  100, 10);
+
+  const by2 = by + 22;
+  const st = currentStage();
+  text('DAY '+PLAYER.day, 10, by2, 15, 16);
+  text(st.name, 140, by2, 7, 16);
+  const pct = Math.min(100,(PLAYER.dist/PLAYER.dest*100)|0);
+  text(pct+'%  to  OLDUVAI', 440, by2, 14, 16);
+
+  // Weapon / pack line
+  const by3 = by + 42;
+  text('ARMS: '+ITEMS[PLAYER.equipped].n, 10, by3, 10, 14);
+  text('PACK: '+totalWeight(PLAYER)+' kg', 320, by3, 8, 14);
+  if(PLAYER.sick){ text('SICK '+PLAYER.sick, 500, by3, 13, 14); }
+  else if(PLAYER.charmed){ text('CHARMED', 500, by3, 14, 14); }
+}
+
+// ============================================================
+// TITLE
+// ============================================================
+function drawTitle(){
+  clr(0);
+  drawSavanna();
+  // darken
+  for(let i=0;i<W;i+=3) for(let j=0;j<H;j+=3) pset2(i,j,0);
+  rect(0,H-HUD_H,W,HUD_H,0);
+
+  textTitle('OLDOWAN', 60, 14);
+  textTitle('T R A I L', 130, 12);
+  textC('2.6 MILLION YEARS AGO', 215, 7, 18);
+  textC('A journey for a new hammer.', 245, 15, 18);
+
+  if(((FRAME/30)|0)%2===0){
+    textC('[ PRESS ENTER TO BEGIN ]', 310, 14, 22);
+  }
+  textC('(M) mute    (ESC) back', 360, 8, 14);
+  textC('v1.1 - CGA-16 mode, 640x480', 395, 8, 12);
+
+  // little hominid walking
+  drawSpr('player_walk', (FRAME*2)%(W+48)-48, H-HUD_H-72, 4, false);
+}
+
+// ============================================================
+// INTRO
+// ============================================================
+const INTRO_TEXT = [
+ "Long before memory, before the singing of names, there was STONE.",
+ "You are of the habiline band, children of east Africa. Your old hammerstone cracked in the marrow of a wildebeest.",
+ "Your grandfathers tell of the GORGE OF OLDUVAI, where the right cobbles lie in the riverbed and the makers of tools still gather.",
+ "You must travel there alone. The savanna is older than your kind, and hungry.",
+ "Go well. Carry sharp stones. Come home with a new hammer.",
+];
+let introIdx=0;
+function drawIntro(){
+  drawLandscape('stars');
+  box(40,60,W-80,H-160,15,0);
+  textC('THE STORY', 80, 14, 28);
+  textW(INTRO_TEXT[introIdx], 60, 140, W-120, 7, 20, 28);
+  textC('[ENTER] continue    ['+(introIdx+1)+'/'+INTRO_TEXT.length+']', H-100, 11, 18);
+}
+
+// ============================================================
+// NAME
+// ============================================================
+let nameBuf = '';
+function drawName(){
+  drawLandscape('savanna');
+  box(60,120,W-120,H-240,15,0);
+  textC('WHO ARE YOU?', 150, 14, 28);
+  textC('Type your hunter-name then press ENTER', 190, 7, 18);
+  textC('[ '+(nameBuf||'_')+' ]', 240, 15, 28);
+  textC('(A-Z, max 10)', 290, 8, 16);
+}
+
+// ============================================================
+// SETUP - starting band
+// ============================================================
+const SETUP_PACKS = [
+  {name:'THE YOUNG HUNTER', desc:'Strong and nimble, but low on tools.',
+   stats:{hp:70,hpmax:70,en:100,skl:1},
+   items:{digstick:1,flake:3,water:3,tuber:3,berries:3,thrownstone:6,tinder:1}},
+  {name:"THE ELDER'S APPRENTICE", desc:'Clever hands, careful heart.',
+   stats:{hp:55,hpmax:55,en:90,skl:3},
+   items:{hammerstone:1,chopper:1,flake:2,scraper:1,water:2,tuber:2,herb:2,cord:2,ember:1,tinder:2}},
+  {name:"THE SHAMAN'S SON", desc:'Blessed by the ancestors.',
+   stats:{hp:60,hpmax:60,en:95,skl:2},
+   items:{digstick:1,flake:2,ochre:1,charm:1,herb:2,water:2,tuber:2,baobab:2,ember:1}},
+  {name:'THE OUTCAST', desc:'Lean and scarred. You have less - but you have luck.',
+   stats:{hp:50,hpmax:50,en:110,skl:2},
+   items:{chopper:1,flake:4,thrownstone:8,water:2,rawmeat:1,cookedmeat:1,hide:1}},
+];
+let setupIdx = 0;
+function drawSetup(){
+  drawLandscape('savanna');
+  box(20,20,W-40,H-40,15,0);
+  textC('CHOOSE YOUR BAND', 40, 14, 32);
+  for(let i=0;i<SETUP_PACKS.length;i++){
+    const pk=SETUP_PACKS[i];
+    const y = 90 + i*80;
+    const sel = i===setupIdx;
+    if(sel) rect(30,y-6,W-60,76,1);
+    text((sel?'> ':'  ')+pk.name, 40, y, sel?14:15, 22);
+    text(pk.desc, 60, y+28, sel?15:7, 16);
+    const its=Object.keys(pk.items).map(k=>pk.items[k]+'x '+ITEMS[k].n.split(' ')[0]).join('  ');
+    text(its, 60, y+50, sel?11:8, 14);
+  }
+  textC('[UP/DOWN] select   [ENTER] begin journey', H-35, 11, 18);
+}
+
+// ============================================================
+// TRAVEL
+// ============================================================
+let travelPhase = 0; // 0=menu, 1=walk animation
+let walkTicks = 0;
+let parallax = 0;
+const TRAVEL_MENU = [
+  {k:'continue', lbl:'CONTINUE ON'},
+  {k:'rest',     lbl:'MAKE CAMP (rest)'},
+  {k:'forage',   lbl:'FORAGE FOR FOOD'},
+  {k:'craft',    lbl:'KNAP STONE (craft)'},
+  {k:'inv',      lbl:'PACK (inventory)'},
+  {k:'status',   lbl:'STATUS & LORE'},
+];
+let menuIdx = 0;
+
+function drawTravelBG(){
+  const st = currentStage();
+  drawLandscape(st.kind);
+  const off = -(parallax|0);
+  for(let i=0;i<4;i++){
+    const x = (i*160 + off) % (W+160);
+    const y = 330;
+    if(x>-40 && x<W){
+      if(st.kind==='wood' || st.kind==='savanna') drawAcacia(x,y);
+      else if(st.kind==='rock'||st.kind==='lava') { rect(x,y+16,24,16,8); rect(x+4,y+10,16,8,8); }
+      else if(st.kind==='river') { rect(x,y+20,12,16,6); rect(x+8,y+10,6,12,2); }
+      else { pset2(x,y+20,7); rect(x,y+24,8,4,7); }
+    }
+  }
+  // Walking hominid
+  const frame = ((FRAME/6)|0)%2;
+  drawSpr(frame===0?'player':'player_walk', 80, 300, 5);
+}
+
+function drawTravelMenu(){
+  drawTravelBG();
+  // right-side menu panel
+  const mx=W-260, my=20, mw=250, mh=H-HUD_H-40;
+  box(mx,my,mw,mh,15,1);
+  textC('- THE TRAIL -', my+14, 14, 22);
+  const st=currentStage();
+  text(st.name, mx+14, my+44, 11, 18);
+  textW(st.desc, mx+14, my+70, mw-28, 7, 14, 18);
+  for(let i=0;i<TRAVEL_MENU.length;i++){
+    const sel=i===menuIdx;
+    const y=my+140+i*30;
+    if(sel){ rect(mx+6,y-3,mw-12,26,1); text('>',mx+12,y+2,14,20); }
+    text((i+1)+'. '+TRAVEL_MENU[i].lbl, mx+30, y+2, sel?14:15, 18);
+  }
+  drawHud();
+  if(G_msgQueue.length){
+    const m=G_msgQueue[0];
+    rect(0,H-HUD_H-40,W-260,32,0);
+    rect(0,H-HUD_H-42,W-260,2,11);
+    text(m, 20, H-HUD_H-30, 11, 18);
+    if(FRAME%45===0) G_msgQueue.shift();
+  }
+}
+
+function doTravelMenu(){
+  drawTravelMenu();
+  const k=pollKey();
+  if(!k) return;
+  if(k==='arrowup'||k==='w'){ menuIdx=(menuIdx+TRAVEL_MENU.length-1)%TRAVEL_MENU.length; SFX.menu(); }
+  else if(k==='arrowdown'||k==='s'){ menuIdx=(menuIdx+1)%TRAVEL_MENU.length; SFX.menu(); }
+  else if(k>='1'&&k<='9'){ const i=+k-1; if(i<TRAVEL_MENU.length){menuIdx=i; pickTravelOption(TRAVEL_MENU[i].k);} }
+  else if(k==='enter'||k===' '){ pickTravelOption(TRAVEL_MENU[menuIdx].k); }
+}
+
+function pickTravelOption(k){
+  SFX.select();
+  if(k==='continue'){ travelPhase=1; walkTicks=0; parallax=0; }
+  else if(k==='rest'){ STATE='rest'; }
+  else if(k==='forage'){ STATE='forage'; }
+  else if(k==='craft'){ STATE='craft'; craftIdx=0; }
+  else if(k==='inv'){ STATE='inv'; invIdx=0; }
+  else if(k==='status'){ STATE='status'; }
+}
+
+function doTravelWalk(){
+  drawTravelBG();
+  drawHud();
+  textC('...  T R A V E L I N G  ...', 20, 15, 22);
+  parallax += 2.4;
+  walkTicks++;
+  if(walkTicks%10===0) SFX.step();
+  if(walkTicks>60){
+    const dd = rnd(3,6) - Math.max(0, (totalWeight(PLAYER)-14)/4 | 0);
+    PLAYER.dist = Math.min(PLAYER.dest, PLAYER.dist + Math.max(1,dd));
+    PLAYER.day++;
+    PLAYER.hu -= rnd(5,9);
+    PLAYER.th -= rnd(6,10);
+    PLAYER.en -= rnd(4,7);
+    if(PLAYER.sick>0){ PLAYER.hp -= Math.ceil(PLAYER.sick/6); PLAYER.sick--; }
+    if(PLAYER.hu<=0){ PLAYER.hu=0; PLAYER.hp-=3; }
+    if(PLAYER.th<=0){ PLAYER.th=0; PLAYER.hp-=4; }
+    if(PLAYER.en<=0){ PLAYER.en=0; PLAYER.hp-=2; }
+    checkDeath('the long miles');
+    if(!PLAYER.alive) return;
+    if(PLAYER.dist >= PLAYER.dest){ STATE='victory'; bgmStop(); SFX.win(); return; }
+    const r=Math.random();
+    if(r<0.72){ startEvent(); }
+    else{ travelPhase=0; pushMsg('A quiet day passes.'); }
+  }
+}
+
+let CUR_EVENT = null;
+let evtIdx=0;
+function startEvent(){
+  const st = currentStage();
+  const pool = EVENTS.filter(e => e.terr.includes(st.kind));
+  if(pool.length===0){ travelPhase=0; return; }
+  const total = pool.reduce((s,e)=>s+(e.weight||1),0);
+  let r = Math.random()*total;
+  let picked = pool[0];
+  for(const e of pool){ r -= (e.weight||1); if(r<=0){ picked=e; break; } }
+  CUR_EVENT = picked;
+  STATE = 'event';
+  evtIdx = 0;
+  SFX.menu();
+}
+
+// ============================================================
+// EVENT DISPLAY
+// ============================================================
+function doEvent(){
+  const e = CUR_EVENT;
+  const st = currentStage();
+  drawLandscape(e.art||st.kind);
+  box(30,30,W-60,H-HUD_H-60,15,0);
+  textC('- TRAIL EVENT -', 50, 14, 24);
+  const last = textW(e.txt, 50, 100, W-100, 15, 18, 24);
+  const optsY = Math.max(last+16, 230);
+  for(let i=0;i<e.opts.length;i++){
+    const o=e.opts[i];
+    const sel=i===evtIdx;
+    const y=optsY+i*34;
+    if(sel){ rect(40,y-4,W-80,30,1); text('>',48,y,14,22); }
+    text((i+1)+'. '+o.lbl, 72, y, sel?14:15, 20);
+  }
+  drawHud();
+  const k=pollKey();
+  if(!k) return;
+  if(k==='arrowup'||k==='w'){ evtIdx=(evtIdx+e.opts.length-1)%e.opts.length; SFX.menu(); }
+  else if(k==='arrowdown'||k==='s'){ evtIdx=(evtIdx+1)%e.opts.length; SFX.menu(); }
+  else if(k>='1'&&k<='9'){ const i=+k-1; if(i<e.opts.length){ evtIdx=i; resolveEvent(e.opts[i]); } }
+  else if(k==='enter'||k===' '){ resolveEvent(e.opts[evtIdx]); }
+}
+
+function resolveEvent(opt){
+  SFX.select();
+  const msg = opt.fn(PLAYER) || '';
+  if(msg) pushMsg(msg);
+  if(G_pending_combat){ startCombat(G_pending_combat.enemy, G_pending_combat.reward); G_pending_combat=null; return; }
+  checkDeath('the dangers of the trail');
+  if(!PLAYER.alive) return;
+  travelPhase=0;
+  STATE='travel';
+}
+
+// ============================================================
+// COMBAT
+// ============================================================
+let COMBAT = null;
+const COMBAT_MENU = [
+  {k:'attack', lbl:'ATTACK'},
+  {k:'throw',  lbl:'THROW STONE'},
+  {k:'defend', lbl:'DEFEND'},
+  {k:'item',   lbl:'USE ITEM'},
+  {k:'flee',   lbl:'FLEE'},
+];
+let cmbIdx = 0;
+let cmbItemIdx = 0;
+let cmbSubmenu = null;
+
+function startCombat(enemy, reward){
+  COMBAT = {
+    e: enemy, ehp: enemy.hp, ehpmax: enemy.hp,
+    log: [enemy.taunt||'A foe attacks!'],
+    defending: false, turn: 'choose', anim: 0,
+    reward: reward||{}, playerAnim: 0, enemyAnim: 0, fled: false,
+  };
+  STATE='combat';
+  cmbIdx=0; cmbSubmenu=null;
+  bgmStop(); bgmStart(BGM_COMBAT);
+  SFX.roar();
+}
+
+function drawCombat(){
+  drawLandscape(currentStage().kind);
+  for(let i=0;i<W;i+=3) for(let j=0;j<320;j+=3) pset2(i,j,0);
+  // player sprite
+  const px=80+Math.max(0,-COMBAT.playerAnim), py=180+COMBAT.playerAnim;
+  drawSpr('player_fight', px, py, 6);
+  // enemy
+  const ex=W-220+COMBAT.enemyAnim, ey=160+Math.max(0,COMBAT.enemyAnim);
+  drawSpr(COMBAT.e.art, ex, ey, 6, true);
+  // UI panel
+  rect(0,H-HUD_H-150,W,150,0);
+  rect(0,H-HUD_H-152,W,2,7);
+  // HP bars
+  text(PLAYER.name.toUpperCase().slice(0,10), 10, H-HUD_H-140, 11, 18);
+  drawBar(10, H-HUD_H-120, 220, 14, PLAYER.hp, PLAYER.hpmax, 12);
+  text(PLAYER.hp+'/'+PLAYER.hpmax, 240, H-HUD_H-122, 15, 16);
+  text(COMBAT.e.n, W-320, H-HUD_H-140, 13, 18);
+  drawBar(W-240, H-HUD_H-120, 220, 14, COMBAT.ehp, COMBAT.ehpmax, 12);
+  text(COMBAT.ehp+'/'+COMBAT.ehpmax, W-80, H-HUD_H-122, 15, 16);
+  // Log
+  rect(10,H-HUD_H-100,W-20,60,1);
+  box1(10,H-HUD_H-100,W-20,60,15);
+  const log=COMBAT.log;
+  for(let i=0;i<3;i++){
+    const m=log[log.length-1-(2-i)];
+    if(m) text(m, 20, H-HUD_H-94+i*18, 15, 16);
+  }
+  // Menu or submenu
+  if(cmbSubmenu==='item'){
+    drawItemSubmenu();
+  } else {
+    for(let i=0;i<COMBAT_MENU.length;i++){
+      const sel=i===cmbIdx;
+      const x=10+i*124;
+      const y=H-HUD_H-34;
+      if(sel) rect(x,y-4,120,28,4);
+      text((i+1)+'.'+COMBAT_MENU[i].lbl, x+6, y, sel?14:15, 16);
+    }
+  }
+}
+
+function drawItemSubmenu(){
+  rect(0,H-HUD_H-38,W,38,0);
+  rect(0,H-HUD_H-40,W,2,15);
+  const usable=[];
+  for(const k in PLAYER.inv){ const it=ITEMS[k]; if(it.heal||it.food||it.drink||it.throw||it.wep) usable.push(k); }
+  if(usable.length===0){ text('(nothing useful)', 10, H-HUD_H-30, 12, 16); text('[ESC] back', W-100, H-HUD_H-30, 7, 16); return; }
+  text('USE WHICH?', 10, H-HUD_H-30, 14, 14);
+  for(let i=0;i<usable.length && i<5;i++){
+    const k=usable[i]; const sel=i===cmbItemIdx;
+    const x = 110 + i*100;
+    if(sel) rect(x-2,H-HUD_H-34,98,30,1);
+    text((i+1)+'.'+ITEMS[k].n.slice(0,8), x, H-HUD_H-30, sel?14:15, 14);
+    text('x'+PLAYER.inv[k], x, H-HUD_H-14, 11, 12);
+  }
+}
+
+function doCombat(){
+  drawCombat();
+  if(COMBAT.playerAnim>0) COMBAT.playerAnim--;
+  if(COMBAT.playerAnim<0) COMBAT.playerAnim++;
+  if(COMBAT.enemyAnim>0) COMBAT.enemyAnim--;
+  if(COMBAT.enemyAnim<0) COMBAT.enemyAnim++;
+
+  if(COMBAT.turn==='enemy'){ enemyTurn(); return; }
+  if(COMBAT.turn==='end'){ endCombat(); return; }
+
+  const k = pollKey();
+  if(!k) return;
+  if(cmbSubmenu==='item'){
+    if(k==='escape'||k==='backspace'){ cmbSubmenu=null; SFX.back(); return; }
+    const usable=[];
+    for(const ik in PLAYER.inv){ const it=ITEMS[ik]; if(it.heal||it.food||it.drink||it.throw||it.wep) usable.push(ik); }
+    if(k==='arrowleft'||k==='a'){ cmbItemIdx=(cmbItemIdx+usable.length-1)%Math.max(1,usable.length); SFX.menu(); }
+    else if(k==='arrowright'||k==='d'){ cmbItemIdx=(cmbItemIdx+1)%Math.max(1,usable.length); SFX.menu(); }
+    else if(k>='1'&&k<='9'){ const i=+k-1; if(i<usable.length){cmbItemIdx=i; applyCombatItem(usable[i]); cmbSubmenu=null;} }
+    else if(k==='enter'||k===' '){ if(usable[cmbItemIdx]){ applyCombatItem(usable[cmbItemIdx]); cmbSubmenu=null;} }
+    return;
+  }
+  if(k==='arrowleft'||k==='a'){ cmbIdx=(cmbIdx+COMBAT_MENU.length-1)%COMBAT_MENU.length; SFX.menu(); }
+  else if(k==='arrowright'||k==='d'){ cmbIdx=(cmbIdx+1)%COMBAT_MENU.length; SFX.menu(); }
+  else if(k>='1'&&k<='9'){ const i=+k-1; if(i<COMBAT_MENU.length){ cmbIdx=i; pickCombat(COMBAT_MENU[i].k);} }
+  else if(k==='enter'||k===' '){ pickCombat(COMBAT_MENU[cmbIdx].k); }
+}
+
+function pickCombat(k){
+  SFX.select();
+  if(k==='attack'){ playerAttack(); }
+  else if(k==='throw'){ playerThrow(); }
+  else if(k==='defend'){ playerDefend(); }
+  else if(k==='item'){ cmbSubmenu='item'; cmbItemIdx=0; }
+  else if(k==='flee'){ playerFlee(); }
+}
+
+function addLog(m){ COMBAT.log.push(m); if(COMBAT.log.length>20) COMBAT.log.shift(); }
+function playerAttack(){
+  const wep = ITEMS[PLAYER.equipped] || {atk:[1,2], n:'fists'};
+  const hitRoll = roll(20) + PLAYER.skl + (PLAYER.charmed?2:0);
+  const dodge = 10 + COMBAT.e.def;
+  if(hitRoll >= dodge){
+    const dmg = rnd(wep.atk?wep.atk[0]:1, wep.atk?wep.atk[1]:2) + ((hitRoll===20)?3:0);
+    COMBAT.ehp -= dmg;
+    addLog('You strike with '+wep.n+' ('+dmg+')'+(hitRoll===20?' CRIT!':''));
+    SFX.hit(); if(hitRoll===20) SFX.crit();
+    COMBAT.enemyAnim = -10;
+    G_shake = 4;
+  } else { addLog('You miss!'); SFX.miss(); }
+  nextTurn();
+}
+function playerThrow(){
+  if(!consumeItem(PLAYER,'thrownstone',1) && !consumeItem(PLAYER,'flake',1) && !consumeItem(PLAYER,'obsidian',1) && !consumeItem(PLAYER,'shell_edge',1)){
+    addLog('Nothing to throw!');
+    return;
+  }
+  const hr = roll(20) + 2;
+  if(hr >= 10 + COMBAT.e.def){
+    const d = rnd(1,5) + PLAYER.skl;
+    COMBAT.ehp -= d;
+    addLog('Stone hits! ('+d+')');
+    SFX.stone();
+    COMBAT.enemyAnim = -8;
+  } else { addLog('Stone flies wide.'); SFX.miss(); }
+  nextTurn();
+}
+function playerDefend(){
+  COMBAT.defending = true;
+  addLog('You raise your guard.');
+  PLAYER.en = Math.min(100, PLAYER.en+3);
+  nextTurn();
+}
+function applyCombatItem(k){
+  const it=ITEMS[k];
+  if(it.heal){ PLAYER.hp=Math.min(PLAYER.hpmax,PLAYER.hp+it.heal); consumeItem(PLAYER,k,1); addLog('You eat '+it.n+'. +'+it.heal+' HP'); SFX.heal(); }
+  else if(it.food){ PLAYER.hu=Math.min(100,PLAYER.hu+it.food); consumeItem(PLAYER,k,1); addLog('You eat '+it.n); SFX.heal(); }
+  else if(it.drink){ PLAYER.th=Math.min(100,PLAYER.th+it.drink); consumeItem(PLAYER,k,1); addLog('You drink.'); SFX.heal(); }
+  else if(it.wep){ PLAYER.equipped = k; addLog('You wield '+it.n); SFX.select(); }
+  else if(it.throw){ consumeItem(PLAYER,k,1); const d=rnd(1,5); COMBAT.ehp-=d; addLog('You hurl '+it.n+'! ('+d+')'); SFX.stone(); COMBAT.enemyAnim=-8; }
+  nextTurn();
+}
+function playerFlee(){
+  const hr = roll(20) + Math.floor(PLAYER.en/15) - COMBAT.e.spd;
+  if(hr >= 8){
+    addLog('You flee!'); COMBAT.fled = true;
+    PLAYER.en = Math.max(0, PLAYER.en-15);
+    COMBAT.turn='end';
+  } else { addLog('Cannot escape!'); SFX.miss(); nextTurn(); }
+}
+function nextTurn(){
+  if(COMBAT.ehp<=0){ COMBAT.turn='end'; addLog('The '+COMBAT.e.n+' falls!'); return; }
+  COMBAT.turn='enemy'; COMBAT.enemyTimer = 40;
+}
+function enemyTurn(){
+  if(COMBAT.enemyTimer===undefined){ COMBAT.enemyTimer=40; return; }
+  COMBAT.enemyTimer--;
+  if(COMBAT.enemyTimer>0) return;
+  const e = COMBAT.e;
+  const hr = roll(20) + 4;
+  if(hr >= 12 - (PLAYER.skl)){
+    let dmg = rnd(e.atk[0], e.atk[1]);
+    if(hasItem(PLAYER,'cloak')) dmg=Math.max(1,dmg-2);
+    else if(hasItem(PLAYER,'hide')) dmg=Math.max(1,dmg-1);
+    if(COMBAT.defending) dmg=Math.max(1,(dmg/2)|0);
+    PLAYER.hp -= dmg;
+    addLog(e.n+' hits you! ('+dmg+')');
+    SFX.hit();
+    COMBAT.playerAnim = 10; G_shake = 4;
+    if(e.venom && Math.random()<0.5){ PLAYER.sick = (PLAYER.sick||0) + 6*e.venom; addLog('VENOM flows through your veins!'); }
+  } else { addLog(e.n+' misses.'); SFX.miss(); }
+  COMBAT.defending = false;
+  COMBAT.turn='choose';
+  COMBAT.enemyTimer=undefined;
+  if(PLAYER.hp<=0){ PLAYER.causeofdeath = 'the fangs of '+e.n; PLAYER.alive=false; STATE='dead'; bgmStop(); SFX.die(); }
+}
+function endCombat(){
+  if(!COMBAT.fled && COMBAT.ehp<=0){
+    const e = COMBAT.e;
+    const drops = Object.assign({}, COMBAT.reward);
+    if(e.art==='sabertoothcat'||e.art==='lion'||e.art==='leopard'){ drops.hide=(drops.hide||0)+1; drops.rawmeat=(drops.rawmeat||0)+2; drops.boneclub=(drops.boneclub||0)+(Math.random()<0.3?1:0); }
+    if(e.art==='hyena'||e.art==='dog'){ drops.hide=(drops.hide||0)+1; drops.boneclub=(drops.boneclub||0)+(Math.random()<0.2?1:0); }
+    if(e.art==='hippo'){ drops.rawmeat=(drops.rawmeat||0)+4; drops.hide=(drops.hide||0)+2; }
+    if(e.art==='croc'){ drops.rawmeat=(drops.rawmeat||0)+3; drops.hide=(drops.hide||0)+1; }
+    if(e.art==='elephant'){ drops.rawmeat=(drops.rawmeat||0)+6; drops.boneclub=(drops.boneclub||0)+1; drops.marrow=(drops.marrow||0)+3; }
+    if(e.art==='hominid'){ drops.flake=(drops.flake||0)+rnd(1,3); drops.chopper=(drops.chopper||0)+(Math.random()<0.5?1:0); drops.hammerstone=(drops.hammerstone||0)+(Math.random()<0.3?1:0); }
+    if(e.art==='snake'){ drops.rawmeat=(drops.rawmeat||0)+1; }
+    if(e.art==='baboon'){ drops.rawmeat=(drops.rawmeat||0)+1; drops.hide=(drops.hide||0)+(Math.random()<0.4?1:0); }
+    if(e.art==='bird'){ drops.rawmeat=(drops.rawmeat||0)+1; }
+    for(const k in drops){ if(drops[k]>0) addItem(PLAYER,k,drops[k]); }
+    PLAYER.skl += 1;
+    pushMsg('Victory! +1 skill.');
+  }
+  bgmStop(); bgmStart(BGM_TRAVEL);
+  COMBAT=null;
+  checkDeath('the trail');
+  if(!PLAYER.alive) return;
+  STATE='travel'; travelPhase=0;
+}
+
+// ============================================================
+// INVENTORY
+// ============================================================
+let invIdx = 0;
+function doInventory(){
+  drawLandscape(currentStage().kind);
+  for(let i=0;i<W;i+=3) for(let j=0;j<H;j+=3) pset2(i,j,0);
+  box(20,20,W-40,H-HUD_H-40,15,0);
+  textC('- THE PACK -', 40, 14, 28);
+  const keys = Object.keys(PLAYER.inv);
+  if(keys.length===0){ textC('Empty.', 110, 12, 22); }
+  else {
+    for(let i=0;i<keys.length && i<16;i++){
+      const k=keys[i]; const it=ITEMS[k]; const sel=i===invIdx;
+      const x = 40 + (i%2)*290;
+      const y = 90 + ((i/2)|0)*26;
+      if(sel) rect(x-4,y-3,285,22,1);
+      const c = PLAYER.equipped===k?14:(sel?14:15);
+      text((i<9?(i+1):'-')+'. '+it.n+' x'+PLAYER.inv[k], x, y, c, 18);
+    }
+    const sk = keys[invIdx];
+    if(sk){
+      const it = ITEMS[sk];
+      rect(30, H-HUD_H-110, W-60, 90, 1);
+      box1(30, H-HUD_H-110, W-60, 90, 15);
+      text(it.n.toUpperCase(), 50, H-HUD_H-100, 14, 22);
+      text(it.d, 50, H-HUD_H-72, 7, 16);
+      const actions=[];
+      if(it.wep||it.throw) actions.push('[E] equip');
+      if(it.food||it.drink||it.heal) actions.push('[U] use');
+      if(actions.length) text(actions.join('    '), 50, H-HUD_H-46, 11, 16);
+    }
+  }
+  textC('[ESC] back   [1-9] pick   [E] equip   [U] use', H-HUD_H-15, 7, 16);
+  drawHud();
+  const k=pollKey();
+  if(!k) return;
+  const keys2 = Object.keys(PLAYER.inv);
+  if(k==='escape'){ STATE='travel'; travelPhase=0; SFX.back(); }
+  else if(k==='arrowup'||k==='w'){ invIdx=(invIdx-2+keys2.length)%Math.max(1,keys2.length); SFX.menu(); }
+  else if(k==='arrowdown'||k==='s'){ invIdx=(invIdx+2)%Math.max(1,keys2.length); SFX.menu(); }
+  else if(k==='arrowleft'||k==='a'){ invIdx=(invIdx+keys2.length-1)%Math.max(1,keys2.length); SFX.menu(); }
+  else if(k==='arrowright'||k==='d'){ invIdx=(invIdx+1)%Math.max(1,keys2.length); SFX.menu(); }
+  else if(k>='1'&&k<='9'){ const i=+k-1; if(i<keys2.length){invIdx=i;} }
+  else if(k==='e'){ const sk=keys2[invIdx]; if(sk&&ITEMS[sk].wep){ PLAYER.equipped=sk; SFX.select(); pushMsg('Wielding '+ITEMS[sk].n);} }
+  else if(k==='u'){ const sk=keys2[invIdx]; if(sk){ const it=ITEMS[sk]; if(it.heal){PLAYER.hp=Math.min(PLAYER.hpmax,PLAYER.hp+it.heal);consumeItem(PLAYER,sk,1);SFX.heal();} else if(it.food){ if(it.risk&&Math.random()<it.risk){PLAYER.sick=(PLAYER.sick||0)+6;pushMsg('The meat was bad!');}PLAYER.hu=Math.min(100,PLAYER.hu+it.food);consumeItem(PLAYER,sk,1);SFX.heal();} else if(it.drink){PLAYER.th=Math.min(100,PLAYER.th+it.drink);consumeItem(PLAYER,sk,1);SFX.heal();} }}
+}
+
+// ============================================================
+// STATUS
+// ============================================================
+function doStatus(){
+  drawLandscape(currentStage().kind);
+  for(let i=0;i<W;i+=3) for(let j=0;j<H;j+=3) pset2(i,j,0);
+  box(30,30,W-60,H-HUD_H-60,15,0);
+  textC('- STATUS -', 50, 14, 28);
+  const lx = 60, ly = 100;
+  text('Name:     '+PLAYER.name,        lx, ly,    15, 18);
+  text('Day:      '+PLAYER.day,          lx, ly+28, 15, 18);
+  text('Skill:    '+PLAYER.skl+'  (toolmaker)', lx, ly+56, 15, 18);
+  text('Karma:    '+(PLAYER.karma>0?'+':'')+(PLAYER.karma||0), lx, ly+84, PLAYER.karma>=0?11:13, 18);
+  text('Sickness: '+(PLAYER.sick||0),    lx, ly+112, PLAYER.sick?13:11, 18);
+  text('Charmed:  '+(PLAYER.charmed?'YES (ochre)':'no'), lx, ly+140, PLAYER.charmed?14:7, 18);
+  text('Pack:     '+totalWeight(PLAYER)+' kg', lx, ly+168, 15, 18);
+  text('Weapon:   '+ITEMS[PLAYER.equipped].n, lx, ly+196, 14, 18);
+  const st = currentStage();
+  text('Region:   '+st.name, lx, ly+224, 11, 18);
+  const pct = (PLAYER.dist/PLAYER.dest*100)|0;
+  text('Progress: '+pct+'%  ('+PLAYER.dist+' of '+PLAYER.dest+')', lx, ly+252, 14, 18);
+  textC('THE OLDUVAI GORGE AWAITS.', H-HUD_H-70, 14, 20);
+  textC('[ESC] back', H-HUD_H-30, 7, 16);
+  drawHud();
+  const k=pollKey();
+  if(k==='escape'||k==='enter'||k===' '){ STATE='travel'; travelPhase=0; SFX.back(); }
+}
+
+// ============================================================
+// REST
+// ============================================================
+function doRest(){
+  drawLandscape(currentStage().kind);
+  for(let i=0;i<W;i+=3) for(let j=0;j<H;j+=3) pset2(i,j,0);
+  box(60,80,W-120,H-HUD_H-160,15,0);
+  textC('- MAKE CAMP -', 110, 14, 28);
+  text('You clear a hollow, arrange stones,', 90, 170, 7, 18);
+  text('and curl beneath the stars.',         90, 200, 7, 18);
+  text('Rest restores ENERGY and some HP',    90, 240, 11, 18);
+  text('but costs FOOD, WATER, and TIME.',    90, 268, 11, 18);
+  text('Night events can happen.',            90, 296, 13, 18);
+  textC('[1] Short rest   [2] Long rest   [ESC] back', H-HUD_H-50, 14, 20);
+  drawHud();
+  const k=pollKey();
+  if(!k) return;
+  if(k==='escape'){ STATE='travel'; SFX.back(); return; }
+  if(k==='1'){ doRestAction(false); }
+  else if(k==='2'){ doRestAction(true); }
+}
+function doRestAction(long){
+  SFX.heal();
+  PLAYER.day++;
+  PLAYER.en = Math.min(100, PLAYER.en + (long?45:25));
+  PLAYER.hp = Math.min(PLAYER.hpmax, PLAYER.hp + (long?8:4));
+  PLAYER.hu -= long?10:5;
+  PLAYER.th -= long?10:5;
+  if(PLAYER.sick>0) PLAYER.sick -= Math.min(PLAYER.sick, long?3:1);
+  if(Math.random() < (long?0.45:0.25)){
+    const opts = ['hyena','leopard','rival','wilddog','adder'];
+    const en = E(opts[(Math.random()*opts.length)|0]);
+    pushMsg('Night fell. Something came.');
+    startCombat(en, {}); return;
+  }
+  pushMsg('You rest well.');
+  STATE='travel'; travelPhase=0;
+}
+
+// ============================================================
+// FORAGE
+// ============================================================
+function doForage(){
+  drawLandscape(currentStage().kind);
+  for(let i=0;i<W;i+=3) for(let j=0;j<H;j+=3) pset2(i,j,0);
+  box(60,80,W-120,H-HUD_H-160,15,0);
+  textC('- FORAGE -', 110, 14, 28);
+  text('The land offers what it offers.',       90, 170, 7, 18);
+  text('Costs energy. Risk of small mishaps.',  90, 200, 7, 18);
+  textC('[1] Gather plants',          260, 11, 22);
+  textC('[2] Hunt small game',        300, 11, 22);
+  textC('[ESC] back', H-HUD_H-50, 7, 18);
+  drawHud();
+  const k=pollKey();
+  if(!k) return;
+  if(k==='escape'){ STATE='travel'; SFX.back(); return; }
+  if(k==='1'){ doGather(); }
+  else if(k==='2'){ doHunt(); }
+}
+function doGather(){
+  PLAYER.en -= 8; PLAYER.day++;
+  PLAYER.hu -= 4; PLAYER.th -= 4;
+  const st = currentStage();
+  const pool = st.kind==='river'?['shell_edge','cord','water']:
+               st.kind==='wood'?['figs','tuber','herb','cord','termite']:
+               st.kind==='savanna'||st.kind==='plain'?['tuber','berries','termite','locust']:
+               st.kind==='rock'||st.kind==='lava'?['ochre','obsidian','herb']:
+               ['tuber','berries'];
+  const k = pool[(Math.random()*pool.length)|0];
+  const n = rnd(1,3);
+  addItem(PLAYER,k,n);
+  if(Math.random()<0.15){
+    const opts = ['adder','hyena','baboon'];
+    const en = E(opts[(Math.random()*opts.length)|0]);
+    pushMsg('Foraging disturbed something!');
+    startCombat(en, {}); return;
+  }
+  pushMsg('Gathered '+n+' '+ITEMS[k].n);
+  STATE='travel'; travelPhase=0;
+}
+function doHunt(){
+  PLAYER.en -= 12; PLAYER.day++;
+  PLAYER.hu -= 6; PLAYER.th -= 6;
+  const st = currentStage();
+  const hr = roll(20) + PLAYER.skl + (hasItem(PLAYER,'boneclub')?2:0);
+  if(hr >= 14){
+    const n = rnd(1,3);
+    addItem(PLAYER,'rawmeat',n);
+    if(hasItem(PLAYER,'hammerstone')||hasItem(PLAYER,'chopper')) addItem(PLAYER,'marrow',1);
+    if(Math.random()<0.2) addItem(PLAYER,'hide',1);
+    pushMsg('Good hunt! Meat secured.');
+    STATE='travel'; travelPhase=0;
+  } else if(hr >= 8){
+    addItem(PLAYER,'rawmeat',1);
+    pushMsg('Small kill. A hare or rodent.');
+    STATE='travel'; travelPhase=0;
+  } else {
+    pushMsg('The hunt goes badly!');
+    const opts = st.kind==='river'?['croc','hippo']:
+                 st.kind==='rock'||st.kind==='lava'?['leopard','hyena']:
+                 ['hyena','leopard','lion','megantereon','wilddog'];
+    startCombat(E(opts[(Math.random()*opts.length)|0]), {});
+  }
+}
+
+// ============================================================
+// CRAFT (knapping)
+// ============================================================
+const CRAFT_RECIPES = [
+  {id:'flake', name:'STRIKE FLAKES',     req:{hammerstone:1,lomekwi:0},
+   fn:p=>{ if(hasItem(p,'hammerstone')&&hasItem(p,'lomekwi')){addItem(p,'flake',rnd(2,4)); p.skl++;return 'Sharp FLAKES made! +1 skill';}
+          return 'You need a HAMMERSTONE and a LOMEKWI CORE.';}},
+  {id:'chopper', name:'SHAPE A CHOPPER', req:{flake:1},
+   fn:p=>{ if(consumeItem(p,'flake',1)){ addItem(p,'chopper',1); p.skl++; return 'You shape an Oldowan CHOPPER. +1 skill';} return 'Needs a flake.';}},
+  {id:'scraper', name:'SHAPE A SCRAPER', req:{flake:1},
+   fn:p=>{ if(consumeItem(p,'flake',1)){ addItem(p,'scraper',1); p.skl++; return 'Made a SCRAPER. +1 skill';} return 'Needs a flake.';}},
+  {id:'digstick', name:'HARDEN DIG STICK', req:{ember:1},
+   fn:p=>{ if(consumeItem(p,'ember',1)){ addItem(p,'digstick',1); return 'Fire-hardened DIGGING STICK.';} return 'Needs embers.';}},
+  {id:'cloak', name:'STITCH A FUR CLOAK', req:{hide:2,cord:1},
+   fn:p=>{ if(consumeItem(p,'hide',2)&&consumeItem(p,'cord',1)){ addItem(p,'cloak',1); p.skl++; return 'A warm FUR CLOAK!';} return 'Needs 2 hides and 1 cord.';}},
+  {id:'boneclub', name:'SHAPE BONE CLUB', req:{scraper:1},
+   fn:p=>{ if(hasItem(p,'scraper')){ addItem(p,'boneclub',1); return 'You shape a BONE CLUB.';} return 'Needs a scraper.';}},
+  {id:'cookmeat', name:'COOK MEAT', req:{ember:1,rawmeat:1},
+   fn:p=>{ if(consumeItem(p,'ember',1)&&consumeItem(p,'rawmeat',1)){ addItem(p,'cookedmeat',1); addItem(p,'ember',1); return 'You cook the meat. Ember preserved.';} return 'Needs ember + raw meat.';}},
+  {id:'firestart', name:'KINDLE FIRE', req:{tinder:1},
+   fn:p=>{ if(consumeItem(p,'tinder',1)){ if(Math.random()<0.35+p.skl*0.05){ addItem(p,'ember',1); return 'Sparks catch! EMBERS born.';} return 'The tinder chars but dies.';} return 'Needs dry tinder.';}},
+  {id:'thrownstone', name:'GATHER THROWING STONES', req:{},
+   fn:p=>{ p.en-=2; const n=rnd(2,4); addItem(p,'thrownstone',n); return 'Gathered '+n+' throwing stones.';}},
+];
+let craftIdx = 0;
+function doCraft(){
+  drawLandscape(currentStage().kind);
+  for(let i=0;i<W;i+=3) for(let j=0;j<H;j+=3) pset2(i,j,0);
+  box(20,20,W-40,H-HUD_H-40,15,0);
+  textC('- KNAP  STONE -', 40, 14, 28);
+  text('Select a recipe. Costs materials.', 40, 80, 7, 16);
+  for(let i=0;i<CRAFT_RECIPES.length;i++){
+    const r = CRAFT_RECIPES[i]; const sel=i===craftIdx;
+    const x = 40 + (i%2)*290;
+    const y = 110 + ((i/2)|0)*30;
+    if(sel) rect(x-4,y-3,285,24,1);
+    text((i+1)+'.'+r.name, x, y, sel?14:15, 16);
+  }
+  const r = CRAFT_RECIPES[craftIdx];
+  rect(30,H-HUD_H-110,W-60,90,1);
+  box1(30,H-HUD_H-110,W-60,90,15);
+  text(r.name, 48, H-HUD_H-100, 14, 22);
+  const reqs = Object.keys(r.req).map(k=>(r.req[k]||1)+'x '+ITEMS[k].n).join(',  ');
+  text('Needs: '+(reqs||'nothing'), 48, H-HUD_H-70, 7, 16);
+  const have = Object.keys(r.req).every(k=>hasItem(PLAYER,k,r.req[k]||1));
+  text(have?'You have enough to try.':'You lack materials.', 48, H-HUD_H-46, have?11:13, 16);
+  textC('[ENTER] make     [ESC] back', H-HUD_H-20, 7, 16);
+  drawHud();
+  const k = pollKey();
+  if(!k) return;
+  if(k==='escape'){ STATE='travel'; SFX.back(); return; }
+  if(k==='arrowup'||k==='w'){ craftIdx=(craftIdx-2+CRAFT_RECIPES.length)%CRAFT_RECIPES.length; SFX.menu();}
+  else if(k==='arrowdown'||k==='s'){ craftIdx=(craftIdx+2)%CRAFT_RECIPES.length; SFX.menu();}
+  else if(k==='arrowleft'||k==='a'){ craftIdx=(craftIdx+CRAFT_RECIPES.length-1)%CRAFT_RECIPES.length; SFX.menu();}
+  else if(k==='arrowright'||k==='d'){ craftIdx=(craftIdx+1)%CRAFT_RECIPES.length; SFX.menu();}
+  else if(k>='1'&&k<='9'){ const i=+k-1; if(i<CRAFT_RECIPES.length){craftIdx=i;} }
+  else if(k==='enter'||k===' '){
+    const rr = CRAFT_RECIPES[craftIdx];
+    SFX.knap();
+    pushMsg(rr.fn(PLAYER));
+  }
+}
+
+// ============================================================
+// GAME OVER
+// ============================================================
+function drawDead(){
+  clr(0);
+  drawLandscape('stars');
+  for(let i=0;i<W;i+=3) for(let j=0;j<H;j+=3) pset2(i,j,0);
+  box(40,70,W-80,H-160,15,4);
+  textC('YOU HAVE DIED', 100, 12, 40);
+  textC(PLAYER.name.toUpperCase(), 160, 15, 26);
+  textC('killed by '+(PLAYER.causeofdeath||'the trail'), 200, 13, 20);
+  textC('Day '+PLAYER.day+',  '+PLAYER.dist+' of '+PLAYER.dest+' leagues', 240, 7, 18);
+  textC('Skill: '+PLAYER.skl, 270, 11, 18);
+  // bone pile
+  rect(W/2-48,310,96,8,7);
+  rect(W/2-36,300,72,10,7);
+  rect(W/2-24,286,48,10,7);
+  rect(W/2-8,274,16,12,7);
+  textC('Your bones will teach the next hunter.', 355, 8, 18);
+  if((FRAME/30|0)%2===0) textC('[ENTER] start again', 395, 11, 22);
+  const k=pollKey();
+  if(k==='enter'||k===' '||k==='escape'){ resetGame(); STATE='title'; startStateBGM(); }
+}
+
+// ============================================================
+// VICTORY
+// ============================================================
+let winTicks = 0;
+function drawWin(){
+  drawLandscape('gorge');
+  winTicks++;
+  if(winTicks<90 && winTicks%20===0) SFX.win();
+  box(50,60,W-100,H-130,15,0);
+  textC('THE OLDUVAI GORGE', 90, 14, 32);
+  textC('You have arrived.', 140, 15, 22);
+  textW('Makers of tools from every band sit in the red shade. Old women knap with blurring hands. Young ones run the cores up from the streambed.',
+        80, 190, W-160, 7, 18, 24);
+  textW('An elder places in your palm a fresh HAMMERSTONE, heavy and cool.',
+        80, 290, W-160, 11, 18, 24);
+  textC('"Go home. Make sharp things."', 355, 14, 22);
+  textC('Skill: '+PLAYER.skl+'    Day: '+PLAYER.day+'    Karma: '+(PLAYER.karma||0), 390, 11, 18);
+  if((FRAME/30|0)%2===0) textC('[ENTER] begin another journey', H-HUD_H+30, 11, 18);
+  const k=pollKey();
+  if(k==='enter'||k===' '||k==='escape'){ resetGame(); STATE='title'; startStateBGM(); }
+}
+
+// ============================================================
+// RESET / DEATH
+// ============================================================
+function resetGame(){
+  PLAYER.hp=60; PLAYER.hpmax=60;
+  PLAYER.hu=80; PLAYER.th=80; PLAYER.en=100;
+  PLAYER.skl=0; PLAYER.day=1; PLAYER.dist=0; PLAYER.dest=180;
+  PLAYER.inv={}; PLAYER.equipped='digstick';
+  PLAYER.karma=0; PLAYER.charmed=false; PLAYER.sick=0;
+  PLAYER.alive=true; PLAYER.name=''; PLAYER.causeofdeath='';
+  nameBuf=''; introIdx=0; setupIdx=0;
+  menuIdx=0; travelPhase=0; winTicks=0;
+}
+function applyPack(pk){
+  Object.assign(PLAYER, pk.stats);
+  for(const k in pk.items){ PLAYER.inv[k] = pk.items[k]; }
+  if(PLAYER.inv.chopper) PLAYER.equipped='chopper';
+  else if(PLAYER.inv.hammerstone) PLAYER.equipped='hammerstone';
+  else if(PLAYER.inv.digstick) PLAYER.equipped='digstick';
+  else if(PLAYER.inv.flake) PLAYER.equipped='flake';
+  else PLAYER.equipped='flake';
+}
+function checkDeath(cause){
+  if(PLAYER.hp<=0){
+    PLAYER.alive=false;
+    PLAYER.causeofdeath = PLAYER.causeofdeath || cause;
+    STATE='dead'; bgmStop(); SFX.die();
+  }
+}
+function startStateBGM(){
+  if(mute) return;
+  if(STATE==='title') bgmStart(BGM_TITLE);
+  else if(STATE==='combat') bgmStart(BGM_COMBAT);
+  else bgmStart(BGM_TRAVEL);
+}
+
+// ============================================================
+// MAIN LOOP
+// ============================================================
+function tick(){
+  FRAME++;
+  clr(0);
+  switch(STATE){
+    case 'title':
+      drawTitle();
+      { const k=pollKey();
+        if(k==='enter'||k===' '){ STATE='intro'; SFX.select(); }
+      } break;
+    case 'intro':
+      drawIntro();
+      { const k=pollKey();
+        if(k==='enter'||k===' '){ introIdx++; SFX.select(); if(introIdx>=INTRO_TEXT.length){ STATE='name'; nameBuf=''; } }
+        else if(k==='escape'){ STATE='title'; SFX.back(); }
+      } break;
+    case 'name':
+      drawName();
+      { const k=pollKey();
+        if(!k) break;
+        if(k==='enter'){ if(nameBuf.trim().length>0){ PLAYER.name=nameBuf.trim().toUpperCase(); STATE='setup'; SFX.select(); } }
+        else if(k==='escape'){ STATE='intro'; introIdx=INTRO_TEXT.length-1; SFX.back(); }
+        else if(k==='backspace'){ nameBuf=nameBuf.slice(0,-1); SFX.menu(); }
+        else if(k.length===1 && /[a-z ]/i.test(k) && nameBuf.length<10){ nameBuf += k.toUpperCase(); SFX.menu(); }
+      } break;
+    case 'setup':
+      drawSetup();
+      { const k=pollKey();
+        if(!k) break;
+        if(k==='arrowup'||k==='w'){ setupIdx=(setupIdx+SETUP_PACKS.length-1)%SETUP_PACKS.length; SFX.menu(); }
+        else if(k==='arrowdown'||k==='s'){ setupIdx=(setupIdx+1)%SETUP_PACKS.length; SFX.menu(); }
+        else if(k>='1'&&k<='9'){ const i=+k-1; if(i<SETUP_PACKS.length) setupIdx=i; }
+        else if(k==='enter'||k===' '){ applyPack(SETUP_PACKS[setupIdx]); STATE='travel'; travelPhase=0; bgmStop(); bgmStart(BGM_TRAVEL); SFX.select(); }
+        else if(k==='escape'){ STATE='name'; SFX.back(); }
+      } break;
+    case 'travel':
+      if(travelPhase===0) doTravelMenu(); else if(travelPhase===1) doTravelWalk();
+      break;
+    case 'event':   doEvent(); break;
+    case 'combat':  doCombat(); break;
+    case 'inv':     doInventory(); break;
+    case 'status':  doStatus(); break;
+    case 'rest':    doRest(); break;
+    case 'forage':  doForage(); break;
+    case 'craft':   doCraft(); break;
+    case 'dead':    drawDead(); break;
+    case 'victory': drawWin(); break;
+  }
+
+  // flash
+  if(G_flash>0){ for(let i=0;i<W*H/8;i++){ const x=(Math.random()*W)|0,y=(Math.random()*H)|0; pset2(x,y,15);} G_flash--; }
+
+  // present with optional shake
+  let sx=0, sy=0;
+  if(G_shake>0){ sx=(Math.random()*6-3)|0; sy=(Math.random()*6-3)|0; G_shake--; }
+  CTX.fillStyle='#000'; CTX.fillRect(0,0,W,H);
+  CTX.drawImage(BS, sx, sy);
+
+  for(const k in PRESSED) PRESSED[k]=false;
+  requestAnimationFrame(tick);
+}
+
+document.addEventListener('keydown',()=>{ audioInit(); if(!curBGM) startStateBGM(); },{once:true});
+document.addEventListener('click',()=>{ audioInit(); if(!curBGM) startStateBGM(); },{once:true});
+requestAnimationFrame(tick);
+
+})();
+</script>
+</body>
+</html>
