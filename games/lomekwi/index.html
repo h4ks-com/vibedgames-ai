@@ -1,0 +1,2137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>LOMEKWI TRAIL</title>
+<style>
+html,body{margin:0;padding:0;background:#000;height:100%;overflow:hidden;font-family:monospace;color:#ddd;}
+body{display:flex;align-items:center;justify-content:center;}
+canvas{display:block;width:min(100vw,133.33vh);aspect-ratio:4/3;image-rendering:pixelated;image-rendering:crisp-edges;background:#000;cursor:none;}
+</style>
+</head>
+<body>
+<canvas id="c" width="640" height="480"></canvas>
+<script>
+(function(){
+'use strict';
+const CV=document.getElementById('c');
+const G=CV.getContext('2d'); G.imageSmoothingEnabled=false;
+const W=640,H=480,HUD_H=100;
+const BC=document.createElement('canvas'); BC.width=W; BC.height=H;
+const BG=BC.getContext('2d'); BG.imageSmoothingEnabled=false;
+
+// === SNES-ERA PALETTE (96 colors) ===
+const PAL={
+' ':null,
+'0':'#000000','1':'#080810','2':'#101020','3':'#202030','4':'#303040','5':'#404858','6':'#586070','7':'#707888','8':'#8890a0','9':'#a0a8b8',
+'A':'#b8c0d0','B':'#d0d8e0','C':'#e0e8f0','D':'#f0f4fc','E':'#ffffff',
+'F':'#200808','G':'#3c1010','H':'#581818','I':'#742020','J':'#982828','K':'#bc3030','L':'#dc4038','M':'#f0583c','N':'#ff7048','O':'#ff9060','P':'#ffb080','Q':'#ffd0a0',
+'R':'#241404','S':'#3c2408','T':'#543010','U':'#6c4018','V':'#845420','W':'#9c6828','X':'#b47c38','Y':'#cc9048','Z':'#e4a858','a':'#f4c078','b':'#fcd898','c':'#ffe8b8',
+'d':'#0c1c0c','e':'#143418','f':'#1c4820','g':'#285c28','h':'#347030','i':'#448838','j':'#549c40','k':'#68b450','l':'#80c860','m':'#9cd878','n':'#b8e494','o':'#d4f0b0',
+'p':'#04142c','q':'#0c244c','r':'#143868','s':'#1c5088','t':'#2068a8','u':'#3088c8','v':'#48a4e0','w':'#70bcec','x':'#98d0f4','y':'#c0e4f8','z':'#e0f0fc',
+'!':'#180824','@':'#2c1040','#':'#401c5c','$':'#582c78','%':'#704098','&':'#8858b8','*':'#a070cc','(':'#b888dc',')':'#d0a0ec',
+'-':'#3c0820','_':'#58102c','+':'#74183c','=':'#94284c','[':'#b4385c',']':'#d44c78','{':'#ec6894','}':'#fc88b0',
+';':'#1c0c04','<':'#2c1808','>':'#3c240c','?':'#4c3014','/':'#5c3c1c','\\':'#6c4824','|':'#7c5830',
+':':'#f0e800','.':'#fcd000','\'':'#fca800','"':'#f07800','`':'#d44800','~':'#a82000',
+',':'#e8e8d0','^':'#d8d8b8','§':'#a8a890','°':'#787868',
+};
+
+// === DRAW HELPERS ===
+function clr(c){G.fillStyle=PAL[c]||'#000';G.fillRect(0,0,W,H);}
+function rect(x,y,w,h,c){const v=PAL[c];if(!v&&c!==0&&c!=='0')return;G.fillStyle=v||PAL['0'];G.fillRect(x|0,y|0,w|0,h|0);}
+function pxl(x,y,c){const v=PAL[c];if(v){G.fillStyle=v;G.fillRect(x|0,y|0,1,1);}}
+function frame(x,y,w,h,hi,lo,fill){if(fill)rect(x+2,y+2,w-4,h-4,fill);rect(x,y,w,1,hi);rect(x,y,1,h,hi);rect(x+1,y+1,w-2,1,lo);rect(x+1,y+1,1,h-2,lo);rect(x,y+h-1,w,1,lo);rect(x+w-1,y,1,h,lo);}
+function line(x0,y0,x1,y1,c){const dx=Math.abs(x1-x0),dy=Math.abs(y1-y0),sx=x0<x1?1:-1,sy=y0<y1?1:-1;let err=dx-dy,x=x0,y=y0;while(true){pxl(x,y,c);if(x===x1&&y===y1)break;const e2=err*2;if(e2>-dy){err-=dy;x+=sx;}if(e2<dx){err+=dx;y+=sy;}}}
+function sprT(s,x,y,sc){sc=sc||1;for(let r=0;r<s.length;r++){const row=s[r];for(let i=0;i<row.length;i++){const c=row[i];if(c===' ')continue;const v=PAL[c];if(!v)continue;G.fillStyle=v;G.fillRect((x+i*sc)|0,(y+r*sc)|0,sc,sc);}}}
+function sprFlip(s,x,y,sc){sc=sc||1;for(let r=0;r<s.length;r++){const row=s[r];const ww=row.length;for(let i=0;i<ww;i++){const c=row[ww-1-i];if(c===' ')continue;const v=PAL[c];if(!v)continue;G.fillStyle=v;G.fillRect((x+i*sc)|0,(y+r*sc)|0,sc,sc);}}}
+function dither(x,y,w,h,c1,c2){for(let j=0;j<h;j++){for(let i=0;i<w;i++){pxl(x+i,y+j,((i+j)&1)?c1:c2);}}}
+function gradV(x,y,w,h,colors){const n=colors.length;for(let j=0;j<h;j++){const t=j/(h-1);const idx=Math.min(n-2,Math.floor(t*(n-1)));const f=t*(n-1)-idx;const c=(f<.5)?colors[idx]:colors[idx+1];if((j&1)&&f>.25&&f<.75){rect(x,y+j,w,1,colors[idx]);}else{rect(x,y+j,w,1,c);}}}
+
+const FONT='"Courier New","DejaVu Sans Mono","Consolas",monospace';
+function text(s,x,y,c,sz,out){
+  const size=sz||16;
+  G.font='bold '+size+'px '+FONT;
+  G.textBaseline='top';
+  if(out!==false){
+    G.fillStyle=PAL['0'];
+    G.fillText(s,x+1,y);G.fillText(s,x-1,y);G.fillText(s,x,y+1);G.fillText(s,x,y-1);
+    G.fillText(s,x+1,y+1);G.fillText(s,x-1,y-1);
+  }
+  G.fillStyle=PAL[c==null?'E':c];
+  G.fillText(s,x,y);
+}
+function textC(s,y,c,sz){
+  const size=sz||16;G.font='bold '+size+'px '+FONT;G.textBaseline='top';
+  const w=G.measureText(s).width;text(s,(W-w)/2,y,c,size);
+}
+function textBig(s,x,y,c,sh,sz){
+  const size=sz||48;G.font='900 '+size+'px '+FONT;G.textBaseline='top';
+  G.fillStyle=PAL['0'];
+  for(let d=1;d<=4;d++){G.fillText(s,x+d,y+d);}
+  G.fillStyle=PAL[sh||'H'];
+  G.fillText(s,x+2,y+3);
+  G.fillStyle=PAL[c||':'];
+  G.fillText(s,x,y);
+}
+function textBigC(s,y,c,sh,sz){
+  const size=sz||48;G.font='900 '+size+'px '+FONT;G.textBaseline='top';
+  const w=G.measureText(s).width;textBig(s,(W-w)/2,y,c,sh,size);
+}
+function measureText(s,sz){G.font='bold '+(sz||16)+'px '+FONT;return G.measureText(s).width;}
+
+// === AUDIO (SNES-like multi-voice + effects) ===
+let AC=null;let MASTER=null;let REVERB=null;
+function ac(){if(!AC){try{AC=new(window.AudioContext||window.webkitAudioContext)();MASTER=AC.createGain();MASTER.gain.value=.7;MASTER.connect(AC.destination);}catch(e){}}return AC;}
+function beep(f,d,t,v,a,r,detune){
+  const a2=ac();if(!a2)return;
+  const o=a2.createOscillator(),g=a2.createGain();
+  o.type=t||'square';o.frequency.value=f;
+  if(detune)o.detune.value=detune;
+  const now=a2.currentTime;
+  g.gain.setValueAtTime(0,now);
+  g.gain.linearRampToValueAtTime(v==null?.14:v,now+(a||.008));
+  g.gain.exponentialRampToValueAtTime(.0001,now+d);
+  if(r)o.frequency.linearRampToValueAtTime(r,now+d);
+  o.connect(g);g.connect(MASTER||a2.destination);
+  o.start(now);o.stop(now+d+.05);
+}
+function chord(freqs,d,t,v){freqs.forEach((f,i)=>beep(f,d,t,(v||.1)*.8,.01+i*.002));}
+function fm(carrier,mod,modDepth,d,v){
+  const a2=ac();if(!a2)return;
+  const c=a2.createOscillator(),m=a2.createOscillator(),g=a2.createGain(),mg=a2.createGain();
+  c.frequency.value=carrier;m.frequency.value=mod;mg.gain.value=modDepth;
+  const now=a2.currentTime;
+  g.gain.setValueAtTime(0,now);
+  g.gain.linearRampToValueAtTime(v||.12,now+.01);
+  g.gain.exponentialRampToValueAtTime(.0001,now+d);
+  m.connect(mg);mg.connect(c.frequency);c.connect(g);g.connect(MASTER||a2.destination);
+  m.start(now);c.start(now);m.stop(now+d+.05);c.stop(now+d+.05);
+}
+function noise(d,v,f,q){
+  const a2=ac();if(!a2)return;
+  const sz=Math.max(1,(a2.sampleRate*d)|0);
+  const buf=a2.createBuffer(1,sz,a2.sampleRate);
+  const dt=buf.getChannelData(0);
+  for(let i=0;i<dt.length;i++){dt[i]=(Math.random()*2-1)*(1-i/dt.length);}
+  const src=a2.createBufferSource();src.buffer=buf;
+  const flt=a2.createBiquadFilter();flt.type='bandpass';flt.frequency.value=f||900;flt.Q.value=q||1.2;
+  const g=a2.createGain();g.gain.value=v||.22;
+  src.connect(flt);flt.connect(g);g.connect(MASTER||a2.destination);
+  src.start();src.stop(a2.currentTime+d);
+}
+function pluck(f,d,v){fm(f,f*2,f*.5,d||.3,v||.14);}
+const NT={C1:33,D1:37,E1:41,F1:44,G1:49,A1:55,B1:62,
+ C2:65,D2:73,E2:82,F2:87,G2:98,A2:110,B2:123,
+ C3:131,D3:147,E3:165,F3:175,G3:196,A3:220,B3:247,
+ C4:262,D4:294,E4:330,F4:349,G4:392,A4:440,B4:494,
+ C5:523,D5:587,E5:659,F5:698,G5:784,A5:880,B5:988,
+ C6:1047,D6:1175,E6:1319};
+const SFX={
+ step:()=>beep(160,.05,'square',.08),
+ walk:()=>beep(120,.06,'square',.08),
+ click:()=>beep(1400,.03,'square',.09),
+ blip:()=>beep(900,.04,'square',.1),
+ select:()=>{beep(700,.05,'square',.12);setTimeout(()=>beep(1400,.07,'square',.12),40);},
+ nope:()=>beep(200,.2,'sawtooth',.2,.005,80),
+ hit:()=>{noise(.1,.32,600,1.4);beep(120,.1,'square',.22,.002,50);},
+ miss:()=>beep(320,.09,'triangle',.1,.005,200),
+ swoosh:()=>noise(.16,.18,2500,1),
+ throw_:()=>{noise(.07,.16,2800,.8);beep(1600,.06,'triangle',.1,.002,600);},
+ hurt:()=>{beep(300,.14,'sawtooth',.24,.003,100);noise(.07,.14,800);},
+ die:()=>{beep(220,.4,'sawtooth',.22,.005,70);beep(140,.5,'sawtooth',.18,.005,40);},
+ heal:()=>{chord([NT.C5,NT.E5,NT.G5],.18,'triangle',.12);setTimeout(()=>chord([NT.E5,NT.G5,NT.C6],.2,'triangle',.12),90);},
+ eat:()=>{beep(420,.07,'square',.14);setTimeout(()=>beep(320,.08,'square',.14),60);},
+ drink:()=>{beep(600,.08,'sine',.12,.005,320);beep(900,.06,'sine',.1,.005,480);},
+ pluckStone:()=>{fm(1800,3600,900,.1,.18);setTimeout(()=>fm(900,1800,450,.15,.14),30);},
+ smash:()=>{noise(.12,.4,280,.6);beep(80,.14,'square',.26,.002,40);G_STATE.shake=8;},
+ crack:()=>{noise(.06,.36,2600,1.4);beep(1200,.05,'square',.2,.002,400);},
+ rain:()=>noise(.22,.08,4200,.6),
+ thunder:()=>{noise(.6,.45,100,.5);noise(.8,.32,50,.4);},
+ roar:()=>{noise(.45,.36,200,.6);beep(140,.45,'sawtooth',.28,.01,70);},
+ trumpet:()=>{beep(260,.2,'sawtooth',.24,.01,400);beep(360,.24,'sawtooth',.22,.01,300);beep(300,.32,'sawtooth',.2,.01,200);},
+ hiss:()=>noise(.4,.22,3200,1.4),
+ splash:()=>{noise(.22,.26,1600,.8);noise(.3,.18,400,.6);},
+ rustle:()=>noise(.12,.08,1800,.6),
+ bird:()=>{beep(1800,.04,'sine',.1,.002,2600);setTimeout(()=>beep(2100,.06,'sine',.1,.002,2700),40);},
+ day:()=>{chord([NT.C4,NT.E4,NT.G4],.16,'triangle',.14);setTimeout(()=>chord([NT.C5,NT.E5,NT.G5],.18,'triangle',.14),160);},
+ quake:()=>noise(.8,.32,80,.5),
+ baby:()=>{beep(800,.1,'sine',.1,.01,1200);setTimeout(()=>beep(600,.08,'sine',.1,.01,900),80);},
+ victory:()=>{['C4','E4','G4','C5','E5','G5','C5','G5','C6'].forEach((n,i)=>setTimeout(()=>chord([NT[n]],.18,'square',.14),i*90));},
+ wind:()=>noise(.6,.1,600,.4),
+ climb:()=>{beep(400,.04,'square',.1);setTimeout(()=>beep(500,.04,'square',.1),50);},
+ snarl:()=>beep(120,.25,'sawtooth',.22,.01,70),
+ chatter:()=>{for(let i=0;i<4;i++)setTimeout(()=>beep(1800+rnd(600),.04,'square',.08),i*35);},
+};
+
+// BGM (multi-voice chip music)
+let BGM_ID=0,BGM_ACT=null;
+function makeBgm(name,tempo,tracks){return{name,tempo,tracks};}
+const BGM_TITLE=makeBgm('title',92,[
+ {type:'triangle',vol:.12,notes:['C3','E3','G3','C4','E4','G4','A4','G4','E4','G4','C5','B4','A4','G4','E4','D4','F4','A4','C5','F5','E5','D5','C5','B4','A4','G4','E4','C4','G3','E3','C3','G2']},
+ {type:'square',vol:.08,notes:['G4','G4','C5','E5','G5','E5','C5','G4','A4','A4','D5','F5','A5','F5','D5','A4','F5','F5','A5','C6','A5','F5','D5','A4','G5','G5','E5','C5','G4','E4','C4','G3']},
+ {type:'sawtooth',vol:.05,notes:['C2','C2','C2','C2','A2','A2','A2','A2','F2','F2','F2','F2','G2','G2','G2','G2','C2','C2','C2','C2','F2','F2','F2','F2','G2','G2','G2','G2','C2','C2','C2','C2']},
+]);
+const BGM_WALK=makeBgm('walk',104,[
+ {type:'triangle',vol:.1,notes:['C4','E4','G4','C5','G4','E4','C4','G3','A3','C4','E4','A4','E4','C4','A3','E3','F3','A3','C4','F4','C4','A3','F3','C3','G3','B3','D4','G4','D4','B3','G3','D3']},
+ {type:'square',vol:.07,notes:['E4','E4','E4','G4','E4','E4','E4','G4','C4','C4','C4','E4','C4','C4','C4','E4','A4','A4','A4','C5','A4','A4','A4','C5','B4','B4','B4','D5','B4','B4','B4','D5']},
+ {type:'sine',vol:.05,notes:['C2','C2','G2','G2','A2','A2','E2','E2','F2','F2','C3','C3','G2','G2','D3','D3','C2','C2','G2','G2','F2','F2','C3','C3','G2','G2','D3','D3','C2','C2','G2','G2']},
+]);
+const BGM_HUNT=makeBgm('hunt',150,[
+ {type:'square',vol:.1,notes:['D4','F4','A4','D5','F5','D5','A4','F4','E4','G4','B4','E5','G5','E5','B4','G4','F4','A4','C5','F5','A5','F5','C5','A4','G4','B4','D5','G5','B5','G5','D5','B4']},
+ {type:'sawtooth',vol:.07,notes:['D3','D3','D3','A3','D3','D3','D3','A3','E3','E3','E3','B3','E3','E3','E3','B3','F3','F3','F3','C4','F3','F3','F3','C4','G3','G3','G3','D4','G3','G3','G3','D4']},
+ {type:'triangle',vol:.08,notes:['D2','D2','A2','A2','D2','D2','A2','A2','E2','E2','B2','B2','E2','E2','B2','B2','F2','F2','C3','C3','F2','F2','C3','C3','G2','G2','D3','D3','G2','G2','D3','D3']},
+]);
+const BGM_DAWN=makeBgm('dawn',74,[
+ {type:'sine',vol:.11,notes:['G4','A4','C5','D5','E5','D5','C5','A4','G4','A4','C5','D5','G5','E5','D5','C5','A4','G4','E4','G4','A4','C5','D5','E5','G5','E5','D5','C5','A4','G4','E4','D4']},
+ {type:'triangle',vol:.08,notes:['C3','C3','E3','E3','G3','G3','E3','E3','D3','D3','F3','F3','A3','A3','F3','F3','C3','C3','E3','E3','G3','G3','E3','E3','D3','D3','G3','G3','C3','C3','G2','G2']},
+ {type:'sine',vol:.04,notes:['C2','C2','C2','C2','F2','F2','F2','F2','G2','G2','G2','G2','C2','C2','C2','C2','C2','C2','C2','C2','F2','F2','F2','F2','G2','G2','G2','G2','C2','C2','C2','C2']},
+]);
+const BGM_TRIUMPH=makeBgm('triumph',110,[
+ {type:'square',vol:.12,notes:['C4','E4','G4','C5','E5','G5','C5','G4','C4','E4','G4','C5','C5','B4','A4','G4','F4','A4','C5','F5','E5','D5','C5','B4','A4','C5','E5','A5','G5','E5','C5','G4']},
+ {type:'triangle',vol:.1,notes:['C3','C3','C3','G3','E3','E3','E3','C4','F3','F3','F3','C4','G3','G3','G3','D4','A3','A3','A3','F4','F3','F3','F3','C4','C3','C3','C3','G3','C3','C3','C3','G3']},
+ {type:'sawtooth',vol:.06,notes:['C2','C2','C2','C2','E2','E2','E2','E2','F2','F2','F2','F2','G2','G2','G2','G2','A2','A2','A2','A2','F2','F2','F2','F2','C2','C2','C2','C2','G2','G2','G2','G2']},
+]);
+function bgmStart(b){
+  bgmStop();BGM_ACT=b;
+  const id=++BGM_ID;
+  const step=60/b.tempo/2;let idx=0,t0=Date.now()/1000;
+  const tick=()=>{
+    if(id!==BGM_ID||BGM_ACT!==b)return;
+    const a2=ac();if(!a2)return;
+    b.tracks.forEach(tr=>{
+      const n=tr.notes[idx%tr.notes.length];
+      if(n&&NT[n])beep(NT[n],step*.95,tr.type,tr.vol);
+    });
+    idx++;
+    const nxt=t0+idx*step;
+    setTimeout(tick,Math.max(10,(nxt-Date.now()/1000)*1000));
+  };
+  tick();
+}
+function bgmStop(){BGM_ID++;BGM_ACT=null;}
+
+function rnd(n){return Math.floor(Math.random()*n);}
+function d(n){return 1+rnd(n);}
+
+// === SPRITES ===
+const SPR={};
+// Protagonist — australopithecine male (hairy, upright but crouched)
+SPR.player=[
+'     <<<<<       ',
+'    <SSSSS<      ',
+'   <SSTUTTS<     ',
+'  <STTTWWTTT<    ',
+'  <TTWXYXYWTT<   ',
+'  <TWY0Y0YWTT<   ',
+'  <TWYZZYYWTT<   ',
+'  <TWY[YY[WTT<   ',
+'  <TWWYYYYWTT<   ',
+'   <STWWWWTST    ',
+'    <STTTTST<    ',
+'    <STUUTST<    ',
+'   <STTUVUTTS<   ',
+'  <SSTUVVVUTSS<  ',
+' <SSTUVWWWVUTSS< ',
+' <STTUVWXWVUTTS< ',
+' <STUVWXXXWVUTS< ',
+'  <TUVWXWXWVUTS  ',
+'  <TUWWWWWWWUT<  ',
+'   <TWX   XWT<   ',
+'   <TWX   XWT<   ',
+'   <SWX   XWS<   ',
+'   <STX   XTS<   ',
+'   <SST   TSS<   ',
+'   <<S<   <S<<   ',
+'    <<     <<    '
+];
+SPR.player_walk=[
+'     <<<<<       ',
+'    <SSSSS<      ',
+'   <SSTUTTS<     ',
+'  <STTTWWTTT<    ',
+'  <TTWXYXYWTT<   ',
+'  <TWY0Y0YWTT<   ',
+'  <TWYZZYYWTT<   ',
+'  <TWY[YY[WTT<   ',
+'  <TWWYYYYWTT<   ',
+'   <STWWWWTST    ',
+'    <STTTTST<    ',
+'    <STUUTST<    ',
+'   <STTUVUTTS<   ',
+'  <SSTUVVVUTSS<  ',
+' <SSTUVWWWVUTSS< ',
+' <STTUVWXWVUTTS< ',
+' <STUVWXXXWVUTS< ',
+'  <TUVWXWXWVUTS  ',
+'  <TUWWWWWWWUT<  ',
+'   <TWX    XWT<  ',
+'   <TWX     XT<  ',
+'   <SWX      T<  ',
+'   <STX       <  ',
+'    SST          ',
+'    <S<          ',
+'     <<          '
+];
+SPR.player_climb=[
+'    <<<<<        ',
+'   <SSSSS<       ',
+'  <SSTUTTS<      ',
+' <STTTWWTTT<     ',
+' <TTWXYXYWTT<    ',
+' <TWY0Y0YWTT<    ',
+' <TWYZZYYWTT<    ',
+' <TWY[YY[WTT<    ',
+' <TWWYYYYWTT<    ',
+'  <STWWWWTST<    ',
+'   <STTTTST<     ',
+'    STUUTS<      ',
+'   STTUVUTTS<    ',
+'  STUVVVVVUTS    ',
+' STUVWWWWWVUTS   ',
+'STUVWXXXXXWVUTS  ',
+'STUWWXWXWWXXWVT  ',
+' TUWX   WX       ',
+'  TWX   W        ',
+'   TX            ',
+'                 '
+];
+// Female with infant clinging to chest
+SPR.female=[
+'      <<<<<      ',
+'     <SSSSS<     ',
+'    <SSTUTTS<    ',
+'   <STTTWWTTT<   ',
+'   <TTWXYXYWTT<  ',
+'   <TWY0Y0YWTT<  ',
+'   <TWY{ZYYWTT   ',
+'   <TWWYYYYWTT   ',
+'    <STWWWWTST   ',
+'     <STTTTST<   ',
+'    <STUUTST<    ',
+'   <STTUVUTTS<   ',
+'   STUVWWWVUTS   ',
+'   STUVWXWVUTS   ',
+'   STUVWXWWWTS   ',
+'    TUWXWY0YTS   ',
+'    TUWWWYZYWT   ',
+'     TWWWYWWT    ',
+'    <TWX   XWT<  ',
+'    <SWX   XWS<  ',
+'    <STX   XTS<  ',
+'    <SST   TSS<  ',
+'    <<S<   <S<<  ',
+'     <<     <<   '
+];
+// Elder (gray, thinner)
+SPR.elder=[
+'     <<<<<       ',
+'    <CCCCC<      ',
+'   <CBBBBBC<     ',
+'  <BBB999BBB<    ',
+'  <BB99XY99BB<   ',
+'  <B9Y0Y0Y9BB<   ',
+'  <B9YZZYY9BB<   ',
+'  <B9Y[YY[9BB<   ',
+'  <B99YYYY9BB<   ',
+'   <BB9999BB<    ',
+'    <BB99BB<     ',
+'    <BTUTTB<     ',
+'   <STUUVUTS<    ',
+'  <STUVWWWVTS<   ',
+'  <STWX5XWVTS<   ',
+'   <TWXYYYXWT    ',
+'   <TWWWWWWWT    ',
+'   <TWX   XW<    ',
+'   <SWX   XS<    ',
+'   <ST     TS<   ',
+'   <<S     S<<   '
+];
+// Paranthropus boisei (robust)
+SPR.paranthropus=[
+'     <;;;;;<     ',
+'   <;;SSSSS;;<   ',
+'  <;SSTVVVTSS;<  ',
+' <;STTVWWWVTTT<  ',
+' <;TVWXXXXXWVT<  ',
+' <;TVWX0X0XWVT<  ',
+' <;TVWXZXZXWVT<  ',
+' <;TVWXXXXXWVT<  ',
+' <;TVWXXXXXWVT<  ',
+' <;TVVWWWWWVVT<  ',
+'  <;TTVWWWVTT<   ',
+'   <;TTVWVTT<    ',
+'    STVWWVTS     ',
+'   STVWXXWVTS    ',
+'   STVWXYXWVTS   ',
+'   STVWXXXWVTS   ',
+'   STVWXXXWVTS   ',
+'    TVWWWWWVT    ',
+'   <TWX   XWT<   ',
+'   <SWX   XWS<   ',
+'   <STX   XTS<   ',
+'   <SST   TSS<   '
+];
+// Australopithecus afarensis (slender)
+SPR.afarensis=[
+'     <<<<<       ',
+'    <SSSSS<      ',
+'   <SSTTTTS<     ',
+'   <TTTWWTT<     ',
+'   <TWXYXYWT<    ',
+'   <TWY0Y0YT<    ',
+'   <TWYZYYWT<    ',
+'   <TWWYYWT<     ',
+'    <STWTST<     ',
+'     <STST<      ',
+'    <STUTS<      ',
+'   <STUVUTS<     ',
+'  <STUVWVUTS<    ',
+'  <STVWXWVTS<    ',
+'   <TVWXWVT<     ',
+'   <TWWWWWT<     ',
+'   <TWX XWT<     ',
+'   <SWX XWS<     ',
+'   <ST   TS<     ',
+'   <<S   S<<     ',
+'    <<   <<      '
+];
+// Homotherium (scimitar-tooth)
+SPR.homotherium=[
+'                                              ',
+'          WWWWWWWWWWWWWWWWWWW                 ',
+'        WWWXXXXXXXXXXXXXXXXXWWW               ',
+'       WWXXYYYYXXXXXXXXXXXXXXXW               ',
+'      WWXYYYYYXXXXXXYYXXXYXXXXWW              ',
+'     WWXYYXXYXYXXXXXXYXXXYXXXXXW              ',
+'   WWWXYXXXYYYYYXXXYXYXYXYXYXYXWW             ',
+'  WWXXYYXYYEEEEYXXYXYXXXYXYXXXXWW             ',
+'  WXYYXYYXEEccEYXYXYXXYXYXXYXXXXW             ',
+' WXYXXYXYY00CCYXXYXYYXXYXYXYXXXXW             ',
+' WXYXXYXXYEEccYXYXYXYXXYXYXYXXXXW             ',
+' WXYCCDDDEEccYXYXXYXYXYXYXYXYXXXW             ',
+' WXYDDccCDDccYYXYXYXYXYXYXYXYXXXW             ',
+' WXYCCCDDCCYXYXYXYXYXXYXYXYXXXXW              ',
+' WXYXXCCCXYXYXYXYXYXXYXYXYXYXYXW              ',
+'  WXYXXYXXYXYXYXYXYXYXXYXYXYXYW               ',
+'   WWXYXYXYXYXYXYXYXYXYXYXYXW                 ',
+'     WWXXYXYXYXYXYXYXYXYXYWW                  ',
+'       W    W    W    W    W                  ',
+'       W    W    W    W    W                  ',
+'      WWW  WWW  WWW  WWW  WWW                 '
+];
+// Megantereon (saber-tooth, smaller)
+SPR.megantereon=[
+'                                        ',
+'          VWVWVWVWVWVWVWVW              ',
+'        WWWYYYYYYYYYYYYYWWW             ',
+'       WWYZZYZZYYZYZZYYYYWW             ',
+'      WWYZZYYYZZZYZZZYZYYW              ',
+'     WWYZZYYYYYYYYYYYYYYYWW             ',
+'   WWYYYYYZZYYYYYYYZZZYYYYWW            ',
+'  WYYYZYYYYYYYYYYYYYYYYYYYW             ',
+'  WYZYYYYYYYYZYYYZYYYYYZYYW             ',
+' WYZYYYYYY000EYYYZYYYYYYYYW             ',
+' WYZYYYYY000ccYYZYYYYYYYYYW             ',
+' WYZccccEE0cc0YYZYYYYYYYYYW             ',
+' WYZc00ccDDccYYYZYYYYYYYYYW             ',
+'  WYZYY00cYYYYYZYYYYYYYYW               ',
+'   WWYZYYYYYYYYZYYYYYYYW                ',
+'     WWYYYYYYYYYYYYYYW                  ',
+'       W    W     W                     ',
+'       W    W     W                     ',
+'      WWW  WWW   WWW                    '
+];
+// Dinofelis (false sabertooth)
+SPR.dinofelis=[
+'                                            ',
+'          TTTTUUUUUUUUUUUU                  ',
+'        TTUUVVVVVVVVVVVVVVUU                ',
+'       TUVVWWWWWWWWWWWWWWWVVU               ',
+'      TUVWWWWWWWWWWWWWWWWWVVU               ',
+'    TTUVWWXXWWWWWWWWWXXWWWWVU               ',
+'   TUVWWWXXXXWWWWWWXXXXWWWWWU               ',
+'  TUVWWXXYYYXXXWWXXYYYYXXWWWU               ',
+'  TUVWXXYY000YXXXY000YYYXXWWU               ',
+'  TUVWXYY008YXXYYY800YYYXXWWU               ',
+'  TUVWYY0088YXYYYY8800YYXXWWU               ',
+'  TUVWYY000YXYYYYYY000YYXXWWU               ',
+' TUVWWYYYYYXYYYYYYYYYYYXXWWWWU              ',
+' TUVWWXXYYXYYYYYYYYYYYYXXWWWWU              ',
+'  TUVWWXXYXYYYYYYYYYYYXXWWWWU               ',
+'   TUVWWXXYYYYYYYYYYXXXWWWWWU               ',
+'    TUVVWWXXXXXXXXXXWWWWWWU                 ',
+'      TUUVVWWWWWWWWWWWWUU                   ',
+'       UU U  UU  UU  UU  U                  ',
+'       UUWUWW UWW UWW UWW                   '
+];
+// Agriotherium (giant short-faced bear)
+SPR.agriotherium=[
+'                                         ',
+'           TTTTTTTTTTTTTTTTTTT           ',
+'         TTUUUUUUUUUUUUUUUUUUUTT         ',
+'       TTUUVVVVVVVVVVVVVVVVVVVVUTT       ',
+'      TUVVWWWWWWWWWWWWWWWWWWWWWVUT       ',
+'      TUVWWXXWWWWWWWWWWWWWWXXWWVUT       ',
+'     TUVWWXXXXWWWWWWWWWWWXXXXWWVUT       ',
+'     TUVWX000XXWWWWWWWWWXX000XWVUT       ',
+'     TUVWX008XXWWWWWWWWWXX800XWVUT       ',
+'     TUVWWXX0XWWWWWWWWWWWWX0XXWVUT       ',
+'     TUVWWWWWWWCCCCCCCCCCWWWWWWVUT       ',
+'     TUVWWWWWWWCCCCCCCCCCWWWWWWVUT       ',
+'     TUVWWWWWWWCC0CCCC0CCWWWWWWVUT       ',
+'     TUVWWWWWWCCC0CCCC0CCWWWWWWVUT       ',
+'      TUVWWWWWWCCCCCCCCCCWWWWWWVUT       ',
+'       TUVVWWWWWWWWWWWWWWWWWVVUT         ',
+'        TTUUVVVVVVVVVVVVVVVUUTT          ',
+'       TT   TT       TT    TT            ',
+'      TTT  TTT       TTT  TTT            '
+];
+// Theropithecus oswaldi (giant gelada baboon)
+SPR.theropith=[
+'                                  ',
+'     ;;;;;      ;;;;;             ',
+'   ;;TUUU;;   ;;TUUU;;            ',
+'  ;TUVVVVU;  ;TUVVVVU;            ',
+'  ;UVWWWWV;  ;UVWWWWV;            ',
+'  ;UVW00WV;  ;UVW00WV;            ',
+'  ;UVWZZWV;  ;UVWZZWV;            ',
+'  ;UVWXXWVJJJUVWXXWV;             ',
+'   ;UVVVVJJJJJUVVVVV;             ',
+'   ;;UUVVJJJ:JVVVUU;;             ',
+'    ;;VVVWWWWWVVVV;;              ',
+'     ;VWWXXXXXXWWV;               ',
+'     ;VWXJJJJJJXWV;               ',
+'      VWXJ;J;J;XWV                ',
+'       WWXXXXXXWW                 ',
+'        W      W                  ',
+'        W      W                  ',
+'       ;W      W;                 '
+];
+// Giant python
+SPR.python=[
+'                                               ',
+'   TTTTT                                       ',
+' TTYYYYYTT                                     ',
+'TYYXYYXXXT                                     ',
+'TYXX00X0XT              TTTT                   ',
+'TYXYYcccXT            TTYYYYTT                 ',
+'TTYXXXXXYTT         TYYXXXXYYT                 ',
+' TTYXYYXXYT        TYXXYYXXXYT                 ',
+'  TYYYXXXYT       TYXYYXXYYYTTT                ',
+'   TYYXXXYTT     TYYXXXYYXYT                   ',
+'    TTYXXXYT   TYYXXXYYXXXT                    ',
+'     TTYYYYYTTTYYYXXYYXXYT                     ',
+'       TTYYYYYYYYXXXYYXYT                      ',
+'         TTYXYYYYXXYXXYT                       ',
+'           TTYXXYXXYXYT                        ',
+'             TTYXYXYYT                         ',
+'               TTTTTT                          '
+];
+// Giant crocodile (primitive)
+SPR.croc=[
+'                                                ',
+'hiijjkh                                         ',
+'hiijjkkh                                        ',
+'hijjkklhijjkkh                                  ',
+'hijjkkkljjkklh                                  ',
+'hijjkkklkkkkllh                                 ',
+'hijjkkkkkkkkkklh                                ',
+'hijjkkkklkkkkkklh                               ',
+'hijjkkkkkkkkllkklh                              ',
+'hijjkkkkkkkkkkkkklh                             ',
+'hijjkk00lkkllkkkkkllh                           ',
+'hijjkk888lkkllkkkkkkllh                         ',
+'hijjkkkkllkkkkklllkkkklh                        ',
+'hijjkkkklklkkkklkklllkklh                       ',
+'hijjkkkklklkkklkklllkkkkklh                     ',
+'hijjkkkkkkllklkkllllkkkkkklh                    ',
+'hijjkkkkkkllllkkllllkkkkkkklh                   ',
+'hijjllllllllllllllllllllllllh                   ',
+' hkk hkk hkk hkk hkk hkk hkk                    ',
+' hkk hkk hkk hkk hkk hkk hkk                    '
+];
+// Hippo (primitive)
+SPR.hippo=[
+'                                  ',
+'     7789988778                   ',
+'   77998899889977                 ',
+'  79989889988899977               ',
+'  79988998998888977               ',
+'  7998800988009988797             ',
+'  7998088988988898977             ',
+'  9988888889988988977             ',
+'  9998877888877788977             ',
+'   99888778888788877              ',
+'    788888888888778               ',
+'   77  77  77  77                 ',
+'   77  77  77  77                 '
+];
+// Deinotherium (down-tusked proboscidean)
+SPR.deinotherium=[
+'         99999999999999999999          ',
+'       99AAAAAAAAAAAAAAAAAAAA99        ',
+'      9AAAA//////////////////AA9       ',
+'      9AA/0////////////0////////A      ',
+'      9A/////////////////////////A     ',
+'      9A//cc////////////cc///////A     ',
+'      9A///////////////////////AA9     ',
+'      9AA///////AAA////AAA//////A      ',
+'       9AAAA///AA//////AA///AAA        ',
+'          A9AA           9A            ',
+'         AA             AA             ',
+'         AA             AA             ',
+'          9              9             ',
+'          T              T             ',
+'       TTTT            TTTT            '
+];
+// Anancus (gomphothere, smaller than Deinotherium)
+SPR.anancus=[
+'         888888888888888               ',
+'       7778888888888887777             ',
+'      778///////////////77             ',
+'      78////00////00/////7             ',
+'      78///////////////877            .',
+'      78///////////////877             ',
+'      78///cc/////cc///877             ',
+'      78/77777///77777/877             ',
+'       7888/////////8887               ',
+'         77         77                 ',
+'         77         77                 ',
+'         88         88                 '
+];
+// Giant monitor lizard
+SPR.monitor=[
+'                                      ',
+'   iihhijjkh                          ',
+' iiklllkklkkh                         ',
+'hkl08lllll00kih                       ',
+'hkl00llkklllkkh                       ',
+' hkllkkkkkkkkkkkkh                    ',
+'  ikkkkkkklllllllkkh                  ',
+'   ikkkllllkkkkkllllkkh               ',
+'    ikklllkkklllkkkllllkkih           ',
+'    hlllkkkkkllllkkkkklllkkh          ',
+'     hkkllkkkkklllkkkkllllllkh        ',
+'      hlllllllllllllllllllllllh       ',
+'     hkk hkk hkk hkk hkk hkk          '
+];
+// Martial eagle (silhouette/striking)
+SPR.eagle=[
+'                                  ',
+'  AA                        AA    ',
+' AAAA                      AAAA   ',
+'AAAAAA                    AAAAAA  ',
+'AAAAAAA                  AAAAAAA  ',
+' AAAAAAAA              AAAAAAAA   ',
+'  AAAAAAAAA          AAAAAAAAA    ',
+'   AAAAAAAAAA88888888AAAAAAAAA    ',
+'    AAAAAAAAA88cc8cc88AAAAAAA     ',
+'     AAAAAAA800000000008AAAAA     ',
+'      AAAAAA8cccc:cccc8AAAAA      ',
+'       AAAAA88cc:cccc88AAAA       ',
+'        AAAA88888888888AAA        ',
+'         AAA00000000000AA         ',
+'          A8c   c   c08A          ',
+'           8c   c   c08           ',
+'           8c   c   c08           ',
+'            00   0   0            '
+];
+// Antelope / impala
+SPR.antelope=[
+'      ::         ::                     ',
+'     :::        :::                     ',
+'    ::::YYYYYYYY::::                    ',
+'   :::YYXXXYYXYY:::                     ',
+'   ::YX00XYYX00::                       ',
+'   ::YXXXYYXXYX::                       ',
+'   XXXYYYYYYYYXXXXXXXXXX                ',
+'   XYYYYYYYYYYYYYYYYYYYY                ',
+'   XYYYYYXYYYXYYYXYYYYYY                ',
+'   XYYYYYYYYYYYYYYYYYXX                 ',
+'    XYY Y  X  YYY  XY                   ',
+'    XXY X  Y  XYY  XY                   ',
+'     X  X  X  XY   X                    ',
+'     X  X  X  X    X                    '
+];
+// Zebra
+SPR.zebra=[
+'       7D7D7DDDDD                       ',
+'     DD7D7DDD7777                       ',
+'    77D7DD7DD7DD                        ',
+'   7DD7DD77DD77D                        ',
+'   DD700D7DD00D7                        ',
+'   DD7  D7DD  7D                        ',
+'   7D   DDDD   D                        ',
+'   7D   D  D   D                        ',
+'   7D   D  D   D                        '
+];
+// Giant warthog
+SPR.warthog=[
+'                                       ',
+'      YYYYYYYYYYYYY                     ',
+'    YYXXXXXXXXXXXXYY                    ',
+'   YYXYY00YXX00YYXY                     ',
+'   YYXY77YX77YYXY                       ',
+'   YYXX      XYYY                       ',
+'   YY :: X :: YYY                       ',
+'    YY  XXX  YY                         ',
+'       Y  Y                             '
+];
+// Vulture
+SPR.vulture=[
+'   ;;;;;;;                              ',
+'  ;;BBBBB;;                             ',
+'  ;B99999B;                             ',
+' ;B900900B;                             ',
+' ;B0XXXXX0;                             ',
+'  ;BXXYXXB;                             ',
+'   ;;BBB;;                              ',
+'     ;B;                                ',
+'     ;B;                                '
+];
+// Gallery tree (large, dense canopy)
+SPR.tree_gallery=[
+'         ddeeeffeeeddd                  ',
+'      ddeffgghhghhggfeedd               ',
+'    ddefghhhhiiihhhhggfedd              ',
+'   deffghhiijjjjiiihhggfedd             ',
+'  deffghiijjkkkkkjjiihhgfedd            ',
+' defghiijkkllllmlkkkjjihhgfed           ',
+' defghiijkllmmnmmllkkjjiihgfed          ',
+' defghiijkllmmnoomlkkjiihhgfed          ',
+' defghiijkkllmnnmlkkjjiihhggfd          ',
+' defghhiijjkkllmlllkkjjiihhggfd         ',
+' deeffghhiiijjjkkkkkjjjihhggfed         ',
+'  deefghhhiiijjjjjjjjiihhgffed          ',
+'   ddefghhhiiiiiiiiiihhgggfdd           ',
+'     ddefghhhhhhhhhhggfeedd             ',
+'       dddefghgghggfeedd                ',
+'           ddefffedd                    ',
+'             dRSR                       ',
+'             RSTS                       ',
+'             RSTS                       ',
+'            RRSTSR                      ',
+'           RRSTTSR                      ',
+'          RRSTTSRR                      ',
+'          RSTUUTSR                      ',
+'         RRSTUUTSR                      ',
+'         RSTUWUTSR                      ',
+'        RRSTUWUTSRR                     ',
+'       RRRSSTTTSSRRR                    '
+];
+// Palm tree (tropical)
+SPR.palm=[
+'          mlmlm                         ',
+'        llmkklmm                        ',
+'      lmkkllkkkmllm                     ',
+'    lmkklll  lllkkmm                    ',
+'   llkll        llkml                   ',
+'  lkll            llkl                  ',
+' lkl               llkl                 ',
+'lkl                 lkl                 ',
+'                    ST                  ',
+'                   RSTS                 ',
+'                   RSTS                 ',
+'                   RSTS                 ',
+'                   RSTS                 ',
+'                   RSTS                 ',
+'                  RRSTSR                ',
+'                  RRSTSR                ',
+'                  RSTUUS                ',
+'                  RSTUUS                ',
+'                  RSTUUS                ',
+'                  RSTUUS                '
+];
+// Tree fern (primitive)
+SPR.fern=[
+'      iii   iii                         ',
+'    ijjjji ijjjji                       ',
+'   ijkkkjj jkkkjji                      ',
+'  ijkklkjjjjkklkji                      ',
+'  ijklkllmmmllklkji                     ',
+'   ijklmmlklmmlkj                       ',
+'    ijjklljlljkji                       ',
+'     ijjjj jjjji                        ',
+'        jj jj                           ',
+'        VV VV                           ',
+'        VV VV                           ',
+'        VV VV                           '
+];
+// Volcano (smoking)
+SPR.volcano=[
+'                                           ',
+'         99 9 9 9                          ',
+'        9  9  9                            ',
+'         8888                              ',
+'        888:88                             ',
+'       88:.:88                             ',
+'       8:..:.8                             ',
+'     998:.:::88                            ',
+'    998888:::8899                          ',
+'   99888    :8999                          ',
+'  9988:.:    :8889                         ',
+' 988:.::      :8899                        ',
+'9988.::.       .8899                       ',
+'988:::..        :8889                      ',
+'988888888888888888889                      ',
+'8888888888888888888888                     ',
+'88888888888888888888888                    '
+];
+// Mountains
+SPR.mountain=[
+'             AAAA                    AAAA               ',
+'            AAAAAA                  AAAAAA              ',
+'           AAAAAAAA                AAAAAAAA             ',
+'          AAAAEEAAA               AAAAEEAAAA            ',
+'         AAAAEEEEAAA             AAAAEEEEAAAA           ',
+'        AAA7788AAAA             AAA7788AAAAA            ',
+'       AAA7888887AAA           AAA7888887AAA            ',
+'      AAA78888887AAA          AAA78888887AAAA           ',
+'     AAAA7888887AAAA         AAAA7888887AAAAA           ',
+'    AAAAAA88887AAAAA        AAAAAA88887AAAAAAA          ',
+'   AAAAAAAA777AAAAAAA      AAAAAAAA777AAAAAAAAA         ',
+'  AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA        '
+];
+// Small baobab
+SPR.baobab=[
+'           hhhhiiiii                      ',
+'       hhhiiiggihhiig                     ',
+'    hhiigghhiijgghhiigg                   ',
+'   hiiggjkkkkjjggjkkkigg                  ',
+'  higgjkkllmllkkjkllllkg                  ',
+' hggkkllmmnmmllkkllmmllk                  ',
+' hggkllmnonmllkkllmnmllk                  ',
+'  hgjkllmnmllkkkllmllkg                   ',
+'   hgkkllllllkkjjkkkkgg                   ',
+'    hggjjjkkkjjggjjgghh                   ',
+'      hggggjjggggghhh                     ',
+'         hgggghhhhhh                      ',
+'        RRSSTTTTSSRR                      ',
+'      RRSSTTUUUUTTSSRR                    ',
+'     RRSTTUUVVVVUUTTSSR                   ',
+'    RRSTUUVVWWWWVVUUTSR                   ',
+'    RSTUUVVWWXXWWVVUUTS                   ',
+'   RSTUUVWWXX00XXWWVUTS                   ',
+'   RSTUUVWWX0000XWWVUTS                   ',
+'   RSTUVVWWXX00XXWWVUTS                   ',
+'   RSTUVWWXXXXXXXXWWVTS                   ',
+'   RSTUVWWXXXXXXXXWWVTS                   ',
+'   RSTUVVWWXXXXXXWWVUTS                   ',
+'    RSTUUVVWWWWWWVVUTS                    ',
+'    RSTTUUUVVVVVVUUTTS                    ',
+'     RSSTTTUUUUUTTTSS                     ',
+'      RRSSTTTTTTTSSR                      '
+];
+// Reeds / papyrus cluster
+SPR.reeds=[
+'    j  k    j       k                   ',
+'    j  k    j       k                   ',
+'    j  k  j j     k k                   ',
+'    j  k  j j     k k                   ',
+'   jj  kk j j   k k k                   ',
+'   jj  kk j j   k k k                   ',
+'   jj  kk jj j  kk kk                   ',
+'   jj  kk jj jj k k k                   ',
+'   VVV VVV VV VV VVVV                   ',
+'   VVV VVV VV VV VVVV                   '
+];
+// Grass tuft
+SPR.tuft=[
+'  k j k j k j                           ',
+'  k j k j k j                           ',
+'  kkjjkkjjkkjj                          ',
+'  V V V V V V                           '
+];
+// Items: hammerstone (round cobble)
+SPR.hammerstone=[
+'   88889                               ',
+'  889999                               ',
+' 8999887                               ',
+' 8998877                               ',
+' 8988777                               ',
+'  887777                               ',
+'   77777                               '
+];
+// Anvil (flat rock)
+SPR.anvil=[
+'   7777777777                          ',
+'  788888888889                         ',
+' 7888888888889                         ',
+' 7899998889999                         ',
+'  7999777777                           ',
+'  7777777777                           '
+];
+// Flake (crude Lomekwian)
+SPR.flake=[
+'   8899                                ',
+'  899988                               ',
+'  8999987                              ',
+'  899989                               ',
+'   8999                                ',
+'    889                                '
+];
+// Sharp flake (better)
+SPR.sharpflake=[
+'    BB                                 ',
+'   BCCB                                ',
+'  BCDCCB                               ',
+'  CDDCB                                ',
+'  CDCB                                 ',
+'   CB                                  ',
+'   B                                   '
+];
+// Digging stick
+SPR.dstick=[
+'  TT                                   ',
+' TUTU                                  ',
+' TUUT                                  ',
+'  UT                                   ',
+'  UT                                   ',
+'   T                                   ',
+'   T                                   ',
+'   T                                   ',
+'   T                                   '
+];
+// Club
+SPR.club=[
+' SSSS                                  ',
+'STTSS                                  ',
+'STTSS                                  ',
+' SSS                                   ',
+'  SS                                   ',
+'  SS                                   ',
+'  SS                                   ',
+'  SS                                   '
+];
+// Gourd
+SPR.gourd=[
+'   jkj                                 ',
+'  jlkjj                                ',
+' jlllkj                                ',
+' klllkj                                ',
+'jkltttlj                               ',
+'jlttttlj                               ',
+'jltttllj                               ',
+'jllllkkj                               ',
+' jjjjjj                                ',
+'  ijji                                 '
+];
+// Tuber
+SPR.tuber=[
+'  kk kk                                ',
+' kjjjjj                                ',
+'jjjWWjjj                               ',
+'jWWWWWjj                               ',
+'jWWbbWjj                               ',
+'jWWWWjj                                ',
+' jjWjj                                 '
+];
+// Fruit (wild)
+SPR.fruit=[
+'    kk                                 ',
+'   jkk                                 ',
+'   j                                   ',
+'  LLLLL                                ',
+' LMMLLL                                ',
+' LMLLLL                                ',
+'  LLLL                                 '
+];
+// Egg (ostrich)
+SPR.egg=[
+'   cccc                                ',
+'  cccccc                               ',
+' cccbbcc                               ',
+' cbbbbcc                               ',
+' ccbbbcc                               ',
+'  cccbc                                ',
+'   ccc                                 '
+];
+// Meat chunk
+SPR.meat=[
+'   KKJJ                                ',
+'  KLLLKK                               ',
+'  LLMLLK                               ',
+' KLLMLLL                               ',
+' KKLLLLK                               ',
+'  KKKKK                                '
+];
+// Ochre
+SPR.ochre=[
+'   ```                                 ',
+'  ``~``                                ',
+' `~~~``                                ',
+' ~`~~`                                 ',
+' ``~`                                  ',
+'  ``                                   '
+];
+// Shell bead
+SPR.shell=[
+'   DEED                                ',
+'  DEcccD                               ',
+'  EccccE                               ',
+'  EcZcYE                               ',
+'  DccccE                               ',
+'   DEED                                '
+];
+// Nut
+SPR.nut=[
+'  VVV                                  ',
+' VWWVV                                 ',
+' WWWXV                                 ',
+' VWWV                                  ',
+'  VV                                   '
+];
+// Shark tooth / fish tooth charm
+SPR.tooth=[
+'  EEE                                  ',
+' ECCCE                                 ',
+' ECCCE                                 ',
+'  ECCE                                 ',
+'   EE                                  '
+];
+// Cursor
+SPR.cursor=[
+' 8   ',
+' 888 ',
+' 8888',
+' 888 ',
+' 8   '
+];
+// Campfire (not used but kept minimal)
+SPR.ember=[
+'    .   .                              ',
+'   .:. :                               ',
+'    ...                                ',
+'   ~~~~                                '
+];
+// Bird (small)
+SPR.bird=[
+'  AAA                                  ',
+' A999A                                 ',
+'A9jjj9A                                ',
+' A999A                                 ',
+'  A A                                  '
+];
+// Troop child
+SPR.child=[
+'   <<<<<                                ',
+'  <SSTTTS<                              ',
+'  <TTWXYTT<                             ',
+'  <TWY0YTT<                             ',
+'  <TWYZWT<                              ',
+'   <STWWT<                              ',
+'   <STTTS<                              ',
+'   <STUTS<                              ',
+'   <TWVTS<                              ',
+'   <WX XW<                              ',
+'   <SX XS<                              ',
+'   <S   S<                              '
+];
+
+// === ITEMS ===
+const ITEMS={};
+function defI(k,o){ITEMS[k]=Object.assign({n:k,d:'',w:.5,stack:1},o);}
+defI('HAMMERSTONE',{n:'HAMMERSTONE',d:'Round cobble. The first tool.',atk:5,wep:1,w:1.2,craft:1,tag:'stone'});
+defI('ANVIL',{n:'STONE ANVIL',d:'A flat stone. For bipolar percussion.',w:2.4,craft:1});
+defI('CRUDE_FLAKE',{n:'CRUDE FLAKE',d:'A sharp-ish chunk. Rough edge.',atk:3,wep:1,w:.3,tag:'flake'});
+defI('SHARP_FLAKE',{n:'SHARP FLAKE',d:'A lucky clean break. Cuts.',atk:5,wep:1,w:.3,tag:'flake'});
+defI('DIGGING_STICK',{n:'DIGGING STICK',d:'Fire-pointed stave... but no fire yet. Sharp tip.',atk:4,wep:1,w:.8,tag:'stick'});
+defI('CLUB',{n:'BRANCH CLUB',d:'A heavy, broken limb.',atk:6,wep:1,w:1.5,tag:'club'});
+defI('HEAVY_STONE',{n:'HEAVY STONE',d:'Good to throw.',atk:4,wep:1,w:.8,throw:1,stack:4,tag:'stone'});
+defI('QUARTZ',{n:'QUARTZ COBBLE',d:'Raw material. Heavy.',w:1.8,mat:1});
+defI('BASALT',{n:'BASALT BOULDER',d:'Volcanic. Dense.',w:2.2,mat:1});
+defI('PHONOLITE',{n:'PHONOLITE',d:'Ringing greenish rock.',w:1.6,mat:1});
+defI('BRANCH',{n:'STOUT BRANCH',d:'Usable for many things.',w:1,mat:1});
+defI('TUBERS',{n:'TUBERS',d:'Starchy roots. Eaten raw.',food:3,drink:1,w:.5,stack:8});
+defI('FIGS',{n:'WILD FIGS',d:'Sweet. Flies love them.',food:2,drink:2,w:.3,stack:8});
+defI('PALMFRUIT',{n:'PALM FRUIT',d:'Dense fruit clusters.',food:3,drink:1,w:.4,stack:6});
+defI('NUTS',{n:'HACKBERRY NUTS',d:'Cracked on anvil.',food:2,w:.3,stack:10});
+defI('SEEDS',{n:'GRASS SEEDS',d:'Tiny. Many.',food:2,w:.2,stack:10});
+defI('ROOTS',{n:'FIBROUS ROOTS',d:'Chewy, lean.',food:1,drink:1,w:.3,stack:8});
+defI('EGGS',{n:'BIRD EGGS',d:'Raw and precious.',food:3,w:.2,stack:4});
+defI('TERMITES',{n:'TERMITES',d:'Living protein.',food:2,w:.1,stack:6});
+defI('HONEY',{n:'HONEYCOMB',d:'Risks bee stings.',food:4,heal:2,risk:.12,w:.3,stack:3});
+defI('RAW_MEAT',{n:'RAW MEAT',d:'No fire. Real parasite risk.',food:3,risk:.45,w:.7,stack:5});
+defI('MARROW',{n:'MARROW',d:'Smashed from long bones.',food:4,heal:1,w:.3,stack:4});
+defI('FISH',{n:'RAW FISH',d:'Riverine. Bony.',food:2,drink:1,risk:.2,w:.3,stack:4});
+defI('SHELLFISH',{n:'FRESHWATER MUSSELS',d:'Cracked open with a stone.',food:3,risk:.12,w:.4,stack:4});
+defI('GOURD',{n:'WATER GOURD',d:'Holds a days water.',drink:4,w:1});
+defI('HIDE_RAW',{n:'WET HIDE',d:'Heavy, fly-blown.',w:1.8,mat:1});
+defI('HIDE',{n:'DRIED HIDE',d:'Cloak against night chill.',armor:1,w:1.2,mat:1});
+defI('SINEW',{n:'SINEW',d:'Tendons. Lashing.',w:.1,mat:1,stack:6});
+defI('BARK',{n:'BARK FIBER',d:'Twisted cord.',w:.1,mat:1,stack:6});
+defI('OCHRE',{n:'RED OCHRE',d:'Rust-colored earth.',charm:1,w:.3,stack:4});
+defI('SHELL_BEAD',{n:'SHELL NECKLACE',d:'Strung freshwater shells.',charm:1,w:.1});
+defI('EAGLE_TALON',{n:'EAGLE TALON',d:'From a stooping martial.',charm:2,w:.1});
+defI('CAT_TOOTH',{n:'SABER CANINE',d:'From a fallen cat.',charm:3,w:.1});
+defI('FEATHER',{n:'FEATHER CHARM',d:'A lucky feather.',charm:1,w:.05,stack:4});
+defI('PEBBLE',{n:'SMOOTH PEBBLE',d:'River-polished. Ancestors look through it.',charm:1,w:.2,stack:4});
+defI('LEAF_POULTICE',{n:'LEAF POULTICE',d:'Chewed leaves for wounds.',heal:5,w:.1,stack:4});
+defI('RESIN',{n:'PINE RESIN',d:'Sticky lash-gum.',w:.1,mat:1,stack:4});
+defI('SALT',{n:'SALT CRUST',d:'From salt licks.',heal:1,w:.2,stack:6});
+
+// === ENEMIES ===
+const ENEMIES={};
+function defE(k,o){ENEMIES[k]=Object.assign({n:k,hp:10,atk:5,def:10,spd:5,xp:2,drops:[]},o);}
+defE('DINOFELIS',{n:'DINOFELIS',hp:32,atk:10,def:13,spd:8,xp:10,art:'dinofelis',taunt:'False-saber fangs flash.',drops:['HIDE_RAW','HIDE_RAW','RAW_MEAT','RAW_MEAT','CAT_TOOTH','SINEW']});
+defE('MEGANTEREON',{n:'MEGANTEREON',hp:24,atk:9,def:13,spd:9,xp:7,art:'megantereon',taunt:'Ivory curves. A saber.',drops:['HIDE_RAW','RAW_MEAT','RAW_MEAT','CAT_TOOTH']});
+defE('HOMOTHERIUM',{n:'HOMOTHERIUM',hp:34,atk:11,def:12,spd:7,xp:11,art:'homotherium',taunt:'A long-limbed scimitar cat.',drops:['HIDE_RAW','HIDE_RAW','RAW_MEAT','RAW_MEAT','CAT_TOOTH','SINEW']});
+defE('AGRIOTHERIUM',{n:'AGRIOTHERIUM',hp:50,atk:13,def:11,spd:5,xp:16,art:'agriotherium',taunt:'A short-faced bear rears.',drops:['HIDE_RAW','HIDE_RAW','HIDE_RAW','RAW_MEAT','RAW_MEAT','MARROW','MARROW','CAT_TOOTH']});
+defE('GIANT_CROC',{n:'GIANT CROC',hp:40,atk:13,def:13,spd:4,xp:13,art:'croc',taunt:'A crocodile bigger than a log.',drops:['HIDE_RAW','HIDE_RAW','RAW_MEAT','RAW_MEAT','RAW_MEAT','CAT_TOOTH']});
+defE('CROC',{n:'NILE CROC',hp:26,atk:11,def:13,spd:4,xp:7,art:'croc',taunt:'Eyes part the green water.',drops:['HIDE_RAW','RAW_MEAT','RAW_MEAT']});
+defE('DEINOTHERIUM',{n:'DEINOTHERIUM',hp:58,atk:12,def:11,spd:5,xp:18,art:'deinotherium',taunt:'Chin-tusks sweep low.',drops:['HIDE_RAW','HIDE_RAW','HIDE_RAW','RAW_MEAT','RAW_MEAT','RAW_MEAT','BRANCH','BRANCH']});
+defE('ANANCUS',{n:'ANANCUS',hp:38,atk:10,def:11,spd:5,xp:10,art:'anancus',taunt:'A stiff-tusked proboscidean.',drops:['HIDE_RAW','HIDE_RAW','RAW_MEAT','RAW_MEAT','BRANCH']});
+defE('THEROPITH',{n:'GIANT GELADA',hp:20,atk:7,def:12,spd:9,xp:5,art:'theropith',taunt:'A huge gelada bares fangs.',drops:['RAW_MEAT','NUTS','SEEDS']});
+defE('THEROPITH_TROOP',{n:'GELADA TROOP',hp:30,atk:8,def:12,spd:9,xp:7,art:'theropith',taunt:'A troop screams on all sides.',drops:['RAW_MEAT','RAW_MEAT','NUTS','SEEDS','EAGLE_TALON']});
+defE('PYTHON',{n:'GIANT PYTHON',hp:24,atk:9,def:10,spd:3,xp:6,art:'python',taunt:'It drops from the fig tree.',drops:['HIDE_RAW','RAW_MEAT','RAW_MEAT']});
+defE('MONITOR',{n:'GIANT MONITOR',hp:18,atk:7,def:12,spd:6,xp:5,art:'monitor',taunt:'Tongue flicks. Yellow eye.',drops:['HIDE_RAW','RAW_MEAT','EGGS']});
+defE('EAGLE',{n:'MARTIAL EAGLE',hp:10,atk:11,def:15,spd:12,xp:7,art:'eagle',taunt:'A shadow falls fast.',drops:['EAGLE_TALON','FEATHER','FEATHER']});
+defE('HIPPO',{n:'HIPPO',hp:42,atk:12,def:9,spd:3,xp:10,art:'hippo',taunt:'A yawn of tusks.',drops:['HIDE_RAW','HIDE_RAW','RAW_MEAT','RAW_MEAT','RAW_MEAT']});
+defE('WARTHOG',{n:'GIANT HOG',hp:18,atk:7,def:11,spd:7,xp:4,art:'warthog',taunt:'Tusks curl skyward.',drops:['HIDE_RAW','RAW_MEAT','RAW_MEAT']});
+defE('LION',{n:'CAVE LION',hp:30,atk:10,def:12,spd:8,xp:9,art:'dinofelis',taunt:'A lion of the old kind.',drops:['HIDE_RAW','HIDE_RAW','RAW_MEAT','RAW_MEAT','CAT_TOOTH']});
+defE('HYENA_PACK',{n:'HYENA CLAN',hp:24,atk:7,def:12,spd:8,xp:6,art:'theropith',taunt:'Dogs of the night.',drops:['HIDE_RAW','RAW_MEAT','RAW_MEAT','MARROW']});
+defE('VULTURES',{n:'VULTURES',hp:10,atk:3,def:13,spd:9,xp:2,art:'vulture',taunt:'They dispute the carcass.',drops:['RAW_MEAT','FEATHER','FEATHER']});
+defE('ZEBRA',{n:'QUAGGA HERD',hp:22,atk:6,def:13,spd:10,xp:5,art:'zebra',taunt:'Black and white flanks.',drops:['HIDE_RAW','RAW_MEAT','RAW_MEAT']});
+defE('IMPALA',{n:'IMPALA',hp:14,atk:4,def:14,spd:11,xp:4,art:'antelope',taunt:'A bound over the grass.',drops:['HIDE_RAW','RAW_MEAT']});
+defE('PARANTHROPUS',{n:'PARANTHROPUS',hp:22,atk:7,def:12,spd:5,xp:5,art:'paranthropus',taunt:'A robust cousin. Sagittal crest.',drops:['TUBERS','TUBERS','NUTS','QUARTZ','HAMMERSTONE']});
+defE('AFARENSIS_BAND',{n:'AFARENSIS BAND',hp:20,atk:6,def:13,spd:8,xp:5,art:'afarensis',taunt:'A rival troop of cousins.',drops:['TUBERS','FIGS','HAMMERSTONE','QUARTZ','SHELL_BEAD']});
+defE('BABOON',{n:'BABOON',hp:12,atk:5,def:11,spd:9,xp:3,art:'theropith',taunt:'It flashes long canines.',drops:['RAW_MEAT','NUTS']});
+defE('JACKAL',{n:'JACKAL PAIR',hp:16,atk:5,def:12,spd:10,xp:3,art:'vulture',taunt:'Sharp noses at the edge.',drops:['HIDE_RAW','RAW_MEAT']});
+
+// === STAGES ===
+const STAGES=[
+ {n:'FOREST EDGE',kind:'forest',end:12,bg:'forest'},
+ {n:'GALLERY FOREST',kind:'gallery',end:24,bg:'gallery'},
+ {n:'MARSH OF THE OMO',kind:'marsh',end:36,bg:'marsh'},
+ {n:'TURKANA SHORE',kind:'lake',end:48,bg:'lake'},
+ {n:'LAHAR FLOW',kind:'lahar',end:58,bg:'lahar'},
+ {n:'OUTCROP RIDGE',kind:'ridge',end:70,bg:'ridge'},
+ {n:'LOMEKWI 3',kind:'outcrop',end:82,bg:'outcrop'},
+];
+
+// === PACKS (troop composition) ===
+const PACKS=[
+ {n:'PROVIDER',d:'Strong, steady.',stats:{atk:1,def:1,spd:0,kn:0,sp:0},hp:22,items:['HAMMERSTONE','CLUB','DIGGING_STICK','TUBERS','FIGS','GOURD','QUARTZ','BRANCH']},
+ {n:'CLIMBER',d:'Quick in trees.',stats:{atk:0,def:0,spd:2,kn:0,sp:1},hp:18,items:['HAMMERSTONE','DIGGING_STICK','HEAVY_STONE','HEAVY_STONE','FIGS','PALMFRUIT','NUTS','GOURD','BARK']},
+ {n:'FINDER',d:'Knows the earth.',stats:{atk:0,def:1,spd:1,kn:1,sp:1},hp:20,items:['HAMMERSTONE','ANVIL','DIGGING_STICK','QUARTZ','PHONOLITE','TUBERS','FIGS','NUTS','GOURD','LEAF_POULTICE']},
+ {n:'DREAMER',d:'The ancestors speak.',stats:{atk:0,def:0,spd:0,kn:0,sp:3},hp:18,items:['HAMMERSTONE','CLUB','OCHRE','OCHRE','SHELL_BEAD','PEBBLE','HONEY','FIGS','TUBERS','GOURD','LEAF_POULTICE','LEAF_POULTICE']},
+];
+
+// === CRAFT RECIPES (Lomekwian — hammer+anvil percussion) ===
+const RECIPES=[
+ {n:'STRIKE FLAKES',need:{QUARTZ:1,HAMMERSTONE:1},give:{CRUDE_FLAKE:2},keep:['HAMMERSTONE'],sp:1,txt:'Stone on stone. Crude flakes scatter.',check:'kn',diff:4},
+ {n:'BIPOLAR PERCUSSION',need:{PHONOLITE:1,HAMMERSTONE:1,ANVIL:1},give:{CRUDE_FLAKE:3},keep:['HAMMERSTONE','ANVIL'],sp:1,txt:'You wedge the core on anvil and strike hard.',check:'kn',diff:5},
+ {n:'SHAPE SHARP FLAKE',need:{CRUDE_FLAKE:2,HAMMERSTONE:1},give:{SHARP_FLAKE:1},keep:['HAMMERSTONE'],sp:2,txt:'A chance of fortune: a true cutting edge.',check:'kn',diff:8},
+ {n:'POINT A DIGGING STICK',need:{BRANCH:1},give:{DIGGING_STICK:1},sp:1,txt:'You gnaw and scrape a point.',check:'kn',diff:3},
+ {n:'HEFT A CLUB',need:{BRANCH:1},give:{CLUB:1},sp:1,txt:'A sturdy limb in hand.',check:'kn',diff:3},
+ {n:'GATHER THROWING STONES',need:{QUARTZ:1},give:{HEAVY_STONE:3},sp:1,txt:'You find and keep fist-sized stones.',check:'kn',diff:2},
+ {n:'SMASH NUTS',need:{NUTS:2,HAMMERSTONE:1,ANVIL:1},give:{NUTS:3,MARROW:1},keep:['HAMMERSTONE','ANVIL'],sp:1,txt:'Fats and oils run on the anvil.',check:'kn',diff:3},
+ {n:'CRACK BONES FOR MARROW',need:{HIDE_RAW:1,HAMMERSTONE:1},give:{MARROW:2},keep:['HAMMERSTONE'],sp:1,txt:'Rich marrow. Few rivals know this.',check:'kn',diff:4},
+ {n:'DRY HIDE',need:{HIDE_RAW:1},give:{HIDE:1},sp:2,txt:'You scrape the hide and leave it to sun.',check:'kn',diff:5},
+ {n:'TWIST BARK CORD',need:{BRANCH:1},give:{BARK:2},sp:1,txt:'Strips of inner bark twist to cord.',check:'kn',diff:2},
+ {n:'CHEW LEAF POULTICE',need:{BARK:1},give:{LEAF_POULTICE:1},sp:1,txt:'Bitter leaves. You spit a cool pack.',check:'sp',diff:4},
+ {n:'PAINT OCHRE WARD',need:{OCHRE:1},give:{},sp:2,txt:'Red lines on brow and palm.',charm:2,check:'sp',diff:3},
+ {n:'STRING SHELL BEADS',need:{SHELL_BEAD:1,BARK:1},give:{SHELL_BEAD:1},sp:1,txt:'You add shells to the string.',check:'sp',diff:3,charm:1},
+ {n:'CHEW SALT LICK',need:{SALT:1},give:{},sp:1,txt:'A mineral tang. You steady.',heal:2,check:'sp',diff:2},
+];
+
+// === EVENTS ===
+const EV=[];
+function defEv(o){EV.push(o);}
+function addI(st,k,n){n=n||1;const it=ITEMS[k];if(!it)return;const e=st.items.find(x=>x.k===k);if(e)e.n+=n;else st.items.push({k,n});if(it.wep){const cur=st.weapon?ITEMS[st.weapon]:null;if(!cur||(it.atk||0)>(cur.atk||0))st.weapon=k;}}
+function takeI(st,k,n){n=n||1;const e=st.items.find(x=>x.k===k);if(!e)return false;e.n-=n;if(e.n<=0)st.items=st.items.filter(x=>x!==e);if(st.weapon===k&&!st.items.find(x=>x.k===k)){st.weapon=null;st.items.forEach(x=>{const it=ITEMS[x.k];if(it&&it.wep){if(!st.weapon||(it.atk||0)>(ITEMS[st.weapon].atk||0))st.weapon=x.k;}});}return true;}
+function hasI(st,k){return !!st.items.find(x=>x.k===k);}
+function countI(st,k){const e=st.items.find(x=>x.k===k);return e?e.n:0;}
+function sk(st,s){return (st.pack?st.pack.stats[s]||0:0)+(st.statBonus&&st.statBonus[s]||0);}
+function hurtMsg(st,s){msg(st,s);}
+function hurt(st,n,target){
+  if(target==='mate'){st.mateHp-=n;if(st.mateHp<=0){st.mateHp=0;st.mateAlive=false;msg(st,st.mateName+' has fallen.');}}
+  else if(target==='child'){st.childHp-=n;if(st.childHp<=0){st.childHp=0;st.childAlive=false;msg(st,st.childName+' has fallen.');}}
+  else{st.hp-=n;if(st.hp<=0){st.hp=0;st.alive=false;G_STATE.screen='dead';}}
+  G_STATE.shake=10;
+}
+function msg(st,s){st.log=st.log||[];st.log.unshift(s);if(st.log.length>8)st.log.pop();G_STATE.msg=s;G_STATE.msgTime=200;}
+
+defEv({id:'fig_tree',terr:['forest','gallery'],wt:4,art:'tree_gallery',txt:'A fig tree hangs heavy with ripe red fruit.',
+ opts:[
+  {lbl:'Climb and eat',fn:g=>{const r=3+sk(g,'spd');if(rnd(8)<r){const n=3+rnd(3);addI(g,'FIGS',n);msg(g,'You feast in the canopy. '+n+' figs.');tick(g,.4);SFX.eat();}else{hurt(g,2);msg(g,'You slip on wet bark.');SFX.hurt();tick(g,.3);}}},
+  {lbl:'Shake branches',fn:g=>{addI(g,'FIGS',1+rnd(3));msg(g,'Figs drop. Some burst.');tick(g,.3);SFX.rustle();}},
+  {lbl:'Wait for birds',fn:g=>{tick(g,.6);if(rnd(5)===0){addI(g,'EGGS',1);msg(g,'You raid a nest.');}else{addI(g,'FIGS',1);msg(g,'You gather fallen fruit.');}}},
+  {lbl:'Move on',fn:g=>{tick(g,.2);}},
+ ]});
+defEv({id:'tubers',terr:['forest','gallery','marsh','lake','ridge','outcrop'],wt:4,art:'tuber',txt:'A patch of thick tubers. The earth is fat.',
+ opts:[
+  {lbl:'Dig with stick',fn:g=>{if(!hasI(g,'DIGGING_STICK')){msg(g,'Without a digging stick you can barely scrape.');addI(g,'TUBERS',1);tick(g,.5);return;}const r=3+sk(g,'kn');addI(g,'TUBERS',r);msg(g,'You pry up '+r+' tubers.');tick(g,.4);SFX.eat();}},
+  {lbl:'Claw at earth',fn:g=>{hurt(g,1);addI(g,'TUBERS',1+rnd(2));msg(g,'Fingernails break. A few tubers.');SFX.hurt();tick(g,.4);}},
+  {lbl:'Pass',fn:g=>{tick(g,.1);}},
+ ]});
+defEv({id:'termites',terr:['forest','gallery','ridge','outcrop'],wt:3,art:'tuber',txt:'A tall termite mound seethes.',
+ opts:[
+  {lbl:'Fish with stick',fn:g=>{if(hasI(g,'BRANCH')||hasI(g,'DIGGING_STICK')){addI(g,'TERMITES',3+rnd(3));msg(g,'Fat soldiers cling.');tick(g,.4);SFX.eat();}else{msg(g,'You need a stick.');tick(g,.1);}}},
+  {lbl:'Break it open',fn:g=>{hurt(g,1);addI(g,'TERMITES',5);msg(g,'Stings. Still worth it.');SFX.hurt();tick(g,.3);}},
+  {lbl:'Leave',fn:g=>{tick(g,.1);}},
+ ]});
+defEv({id:'honeycomb',terr:['forest','gallery','ridge'],wt:2,art:'fruit',txt:'A hollow tree buzzes with wild bees.',
+ opts:[
+  {lbl:'Smoke with embers',fn:g=>{msg(g,'You have no fire. Your kind has not tamed it.');tick(g,.1);SFX.nope();}},
+  {lbl:'Grab and run',fn:g=>{if(rnd(6)<sk(g,'spd')+2){addI(g,'HONEY',2);msg(g,'You outrun the swarm.');tick(g,.4);SFX.eat();}else{addI(g,'HONEY',1);hurt(g,3);msg(g,'Welts. Still, honey.');SFX.hurt();tick(g,.4);}}},
+  {lbl:'Leave',fn:g=>{tick(g,.1);}},
+ ]});
+defEv({id:'eagle_shadow',terr:['forest','gallery','marsh','lake','ridge','outcrop'],wt:2,art:'eagle',txt:'A shadow passes. A shadow that dives.',
+ opts:[
+  {lbl:'Hide under canopy',fn:g=>{if(rnd(6)<3+sk(g,'spd')){msg(g,'You press into brush. The shadow lifts.');tick(g,.2);}else{startCombat(g,'EAGLE','Talons snap shut on air beside you.');}}},
+  {lbl:'Shield child',fn:g=>{if(g.childAlive){if(rnd(4)<3){msg(g,'You cover the little one. Talons graze you.');hurt(g,3);tick(g,.3);SFX.hurt();}else{startCombat(g,'EAGLE','It binds to you.');}}else{msg(g,'No child to shield. You duck low.');tick(g,.1);}}},
+  {lbl:'Throw stones',fn:g=>{if(!hasI(g,'HEAVY_STONE')){msg(g,'No stones in reach.');hurt(g,4);tick(g,.2);SFX.hurt();return;}takeI(g,'HEAVY_STONE',1);if(rnd(6)<3+sk(g,'atk')){msg(g,'A stone cracks its wing. It wheels away.');tick(g,.2);SFX.throw_();}else{startCombat(g,'EAGLE','Your throw misses.');}}},
+ ]});
+defEv({id:'dinofelis_stalk',terr:['forest','gallery','ridge','outcrop'],wt:2,art:'dinofelis',txt:'Stripes move between the trunks. Dinofelis.',
+ opts:[
+  {lbl:'Climb fast',fn:g=>{if(rnd(6)<3+sk(g,'spd')){msg(g,'You reach a high fork. It circles below.');tick(g,.5);SFX.climb();}else{startCombat(g,'DINOFELIS','It catches the tree first.');}}},
+  {lbl:'Stand ground',fn:g=>{if(rnd(10)<sk(g,'sp')){msg(g,'Somehow your stillness turns it.');tick(g,.2);}else startCombat(g,'DINOFELIS','Its eyes lock on yours.');}},
+  {lbl:'Flee',fn:g=>{if(rnd(6)<2+sk(g,'spd')){msg(g,'You make it to reeds and vanish.');tick(g,.4);}else{startCombat(g,'DINOFELIS','It runs you down.');}}},
+ ]});
+defEv({id:'megantereon',terr:['forest','gallery','ridge'],wt:2,art:'megantereon',txt:'Long fangs. Short body. A saber-tooth cat.',
+ opts:[
+  {lbl:'Back away slow',fn:g=>{if(rnd(6)<2+sk(g,'sp'))msg(g,'It lets you go.');else startCombat(g,'MEGANTEREON','It pounces.');tick(g,.3);}},
+  {lbl:'Throw stones',fn:g=>{if(!hasI(g,'HEAVY_STONE')){msg(g,'No stones.');tick(g,.1);return;}takeI(g,'HEAVY_STONE',1);if(rnd(6)<3+sk(g,'atk'))msg(g,'It snarls and fades.');else startCombat(g,'MEGANTEREON','Your stones anger it.');}},
+  {lbl:'Fight',fn:g=>{startCombat(g,'MEGANTEREON','Face to face.');}},
+ ]});
+defEv({id:'python_drop',terr:['forest','gallery','marsh'],wt:2,art:'python',txt:'A rock python unwinds from a low branch.',
+ opts:[
+  {lbl:'Freeze',fn:g=>{if(rnd(6)<3+sk(g,'sp')){msg(g,'It glides past.');tick(g,.1);}else startCombat(g,'PYTHON','It drops and coils.');}},
+  {lbl:'Hunt it',fn:g=>{startCombat(g,'PYTHON','Strike first.');}},
+  {lbl:'Run',fn:g=>{if(rnd(6)<3+sk(g,'spd')){msg(g,'You escape.');tick(g,.3);}else startCombat(g,'PYTHON','It catches your leg.');}},
+ ]});
+defEv({id:'paranthropus',terr:['forest','gallery','ridge','outcrop'],wt:3,art:'paranthropus',txt:'A robust cousin crouches by an anvil, cracking nuts.',
+ opts:[
+  {lbl:'Offer figs',fn:g=>{if(countI(g,'FIGS')>0){takeI(g,'FIGS',1);addI(g,'NUTS',3);msg(g,'A slow nod. A handful of nuts.');tick(g,.4);}else{msg(g,'You have no figs.');tick(g,.1);}}},
+  {lbl:'Steal nuts',fn:g=>{startCombat(g,'PARANTHROPUS','It rises, jaw bulging.');}},
+  {lbl:'Pass',fn:g=>{tick(g,.1);}},
+ ]});
+defEv({id:'afarensis_band',terr:['forest','gallery','lake','ridge','outcrop'],wt:2,art:'afarensis',txt:'A small band of slender afarensis cousins.',
+ opts:[
+  {lbl:'Greet carefully',fn:g=>{if(rnd(6)<2+sk(g,'sp')){addI(g,'FIGS',2);addI(g,'SHELL_BEAD',1);msg(g,'They share. You feel less alone.');tick(g,.5);}else{msg(g,'They keep their distance.');tick(g,.2);}}},
+  {lbl:'Trade stones',fn:g=>{if(countI(g,'QUARTZ')>=1){takeI(g,'QUARTZ',1);addI(g,'SHARP_FLAKE',1);msg(g,'Their flake is finer than yours.');tick(g,.3);}else{msg(g,'Nothing to trade.');tick(g,.1);}}},
+  {lbl:'Threaten',fn:g=>{startCombat(g,'AFARENSIS_BAND','They bare teeth.');}},
+  {lbl:'Pass',fn:g=>{tick(g,.1);}},
+ ]});
+defEv({id:'theropith_troop',terr:['gallery','marsh','ridge'],wt:2,art:'theropith',txt:'A huge gelada troop. Their fangs are not grass-eaters fangs.',
+ opts:[
+  {lbl:'Give way',fn:g=>{tick(g,.5);msg(g,'You circle far.');}},
+  {lbl:'Fight',fn:g=>{startCombat(g,'THEROPITH_TROOP','They close in.');}},
+  {lbl:'Scatter with stones',fn:g=>{if(!hasI(g,'HEAVY_STONE')){startCombat(g,'THEROPITH_TROOP','You have no stones to scare them.');return;}takeI(g,'HEAVY_STONE',1);if(rnd(6)<3+sk(g,'atk')){msg(g,'They retreat, screaming.');tick(g,.3);}else startCombat(g,'THEROPITH_TROOP','They charge instead.');}},
+ ]});
+defEv({id:'river_cross',terr:['gallery','marsh','lake'],wt:4,art:'croc',txt:'The river runs wide and slow. Logs drift.',
+ opts:[
+  {lbl:'Wade',fn:g=>{if(rnd(10)<4)startCombat(g,'CROC','A log jaws.');else{g.thirst=Math.min(g.thirstMax,g.thirst+3);msg(g,'You cross.');tick(g,.5);SFX.splash();}}},
+  {lbl:'Throw stones first',fn:g=>{if(!hasI(g,'HEAVY_STONE')){msg(g,'No stones to test the water.');tick(g,.1);return;}takeI(g,'HEAVY_STONE',1);if(rnd(3)===0){msg(g,'A croc explodes from the shallows.');startCombat(g,'GIANT_CROC','It lunges up the bank.');}else{msg(g,'Nothing moves. You cross.');g.thirst=Math.min(g.thirstMax,g.thirst+3);tick(g,.5);}}},
+  {lbl:'Walk upstream',fn:g=>{tick(g,1);g.thirst=Math.min(g.thirstMax,g.thirst+2);msg(g,'You find a shallow bar.');}},
+ ]});
+defEv({id:'hippo_pool',terr:['gallery','marsh','lake'],wt:2,art:'hippo',txt:'A hippo heaves itself onto the bank.',
+ opts:[
+  {lbl:'Wait',fn:g=>{tick(g,.8);msg(g,'It plunges back in.');}},
+  {lbl:'Attack',fn:g=>{startCombat(g,'HIPPO','It yawns tusks.');}},
+  {lbl:'Throw stones',fn:g=>{if(!hasI(g,'HEAVY_STONE')){msg(g,'Nothing to throw.');tick(g,.1);return;}takeI(g,'HEAVY_STONE',1);if(rnd(4)===0)startCombat(g,'HIPPO','It charges.');else{msg(g,'It submerges.');tick(g,.3);}}},
+ ]});
+defEv({id:'shellfish',terr:['gallery','marsh','lake'],wt:3,art:'shell',txt:'A bed of freshwater mussels. Gray shells in the mud.',
+ opts:[
+  {lbl:'Crack open',fn:g=>{if(hasI(g,'HAMMERSTONE')){const n=2+rnd(3);addI(g,'SHELLFISH',n);msg(g,'You crack '+n+' open.');tick(g,.4);SFX.smash();}else{addI(g,'SHELLFISH',1);msg(g,'Hard to open without a stone.');tick(g,.4);}}},
+  {lbl:'Keep shells',fn:g=>{addI(g,'SHELL_BEAD',1);msg(g,'You string a necklace.');tick(g,.3);}},
+  {lbl:'Pass',fn:g=>{tick(g,.1);}},
+ ]});
+defEv({id:'birds_nest',terr:['gallery','marsh','lake'],wt:2,art:'bird',txt:'A low nest, warm eggs inside.',
+ opts:[
+  {lbl:'Take eggs',fn:g=>{if(rnd(5)===0){hurt(g,2);msg(g,'The mother attacks.');SFX.hurt();}else{addI(g,'EGGS',1+rnd(2));addI(g,'FEATHER',1);msg(g,'Warm eggs. A loose feather.');SFX.eat();}tick(g,.3);}},
+  {lbl:'Leave',fn:g=>{tick(g,.1);}},
+ ]});
+defEv({id:'waterhole',terr:['forest','gallery','marsh','lake','ridge'],wt:3,art:'gourd',txt:'A pool collects rain at the base of a tree.',
+ opts:[
+  {lbl:'Drink deep',fn:g=>{g.thirst=Math.min(g.thirstMax,g.thirst+6);msg(g,'Cool and sweet.');tick(g,.2);SFX.drink();}},
+  {lbl:'Fill gourd',fn:g=>{addI(g,'GOURD',1);g.thirst=Math.min(g.thirstMax,g.thirst+3);msg(g,'Full gourd for later.');tick(g,.3);SFX.drink();}},
+  {lbl:'Wait for prey',fn:g=>{tick(g,.8);if(rnd(3)===0)startCombat(g,'IMPALA','An impala steps to drink.');else if(rnd(5)===0)startCombat(g,'CROC','A log lunges.');else{addI(g,'RAW_MEAT',1);msg(g,'You catch a startled bird.');SFX.throw_();}}},
+  {lbl:'Pass',fn:g=>{tick(g,.1);}},
+ ]});
+defEv({id:'marsh_fever',terr:['marsh'],wt:2,art:'reeds',txt:'Stagnant water. Flies thick in the air.',
+ opts:[
+  {lbl:'Push through',fn:g=>{hurt(g,2);if(g.mateAlive)hurt(g,1,'mate');tick(g,.6);msg(g,'Itching welts. Something fevers.');SFX.hurt();}},
+  {lbl:'Burn leaves',fn:g=>{msg(g,'No fire. You can only cover with leaves.');hurt(g,1);tick(g,.5);SFX.nope();}},
+  {lbl:'Go around',fn:g=>{tick(g,1.2);msg(g,'A long slow detour.');}},
+ ]});
+defEv({id:'quartz_outcrop',terr:['ridge','outcrop','lahar'],wt:3,art:'hammerstone',txt:'A vein of quartz runs through the rock.',
+ opts:[
+  {lbl:'Quarry cobbles',fn:g=>{addI(g,'QUARTZ',2+rnd(2));if(rnd(4)===0)addI(g,'HAMMERSTONE',1);msg(g,'You pry loose heavy stones.');tick(g,.6);SFX.smash();}},
+  {lbl:'Search for flakes',fn:g=>{addI(g,'CRUDE_FLAKE',1+rnd(2));msg(g,'A few sharp splinters on the ground.');tick(g,.3);SFX.pluckStone();}},
+  {lbl:'Pass',fn:g=>{tick(g,.1);}},
+ ]});
+defEv({id:'phonolite_ridge',terr:['ridge','outcrop','lahar'],wt:3,art:'anvil',txt:'Greenish rock rings when struck. Phonolite.',
+ opts:[
+  {lbl:'Test-knap',fn:g=>{if(rnd(6)<3+sk(g,'kn')){addI(g,'PHONOLITE',2);addI(g,'CRUDE_FLAKE',1);msg(g,'It splits cleanly.');tick(g,.5);SFX.pluckStone();}else{hurt(g,1);msg(g,'Splinter in your palm.');SFX.hurt();tick(g,.3);}}},
+  {lbl:'Gather blanks',fn:g=>{addI(g,'PHONOLITE',2+rnd(2));msg(g,'Heavy green cobbles.');tick(g,.5);SFX.smash();}},
+  {lbl:'Make anvil',fn:g=>{if(!hasI(g,'ANVIL')){addI(g,'ANVIL',1);msg(g,'A flat block. Good surface.');tick(g,.4);SFX.smash();}else msg(g,'You have an anvil already.');}},
+ ]});
+defEv({id:'lava_tremor',terr:['lahar'],wt:2,art:'volcano',txt:'The earth shivers. Stones shake loose.',
+ opts:[
+  {lbl:'Run clear',fn:g=>{if(rnd(6)<2+sk(g,'spd'))msg(g,'You clear the slide.');else{hurt(g,4);if(g.mateAlive)hurt(g,2,'mate');msg(g,'Rocks crush.');SFX.hurt();}tick(g,.3);SFX.quake();}},
+  {lbl:'Shelter',fn:g=>{hurt(g,1);tick(g,.3);msg(g,'Dust fills your lungs.');}},
+ ]});
+defEv({id:'sulfur_spring',terr:['lahar','ridge'],wt:1,art:'volcano',txt:'Hot water steams from the earth. Strange smell.',
+ opts:[
+  {lbl:'Soak wounds',fn:g=>{g.hp=Math.min(g.hpMax,g.hp+4);if(g.mateAlive)g.mateHp=Math.min(g.mateHpMax,g.mateHp+4);msg(g,'Aches fade. Skin stings.');tick(g,.6);SFX.heal();}},
+  {lbl:'Drink',fn:g=>{hurt(g,2);msg(g,'The water is poison-bitter.');SFX.hurt();tick(g,.1);}},
+  {lbl:'Pass',fn:g=>{tick(g,.1);}},
+ ]});
+defEv({id:'salt_lick',terr:['lake','lahar'],wt:2,art:'ochre',txt:'A salt lick. Animal prints crowd the edges.',
+ opts:[
+  {lbl:'Gather salt',fn:g=>{addI(g,'SALT',2+rnd(2));msg(g,'Salt crusts in folds of your hand.');tick(g,.3);}},
+  {lbl:'Wait for prey',fn:g=>{tick(g,.8);if(rnd(3)<2)startCombat(g,'IMPALA','An impala licks. You creep.');else{msg(g,'Nothing comes.');}}},
+  {lbl:'Pass',fn:g=>{tick(g,.1);}},
+ ]});
+defEv({id:'flamingo_rookery',terr:['lake'],wt:2,art:'bird',txt:'Pink birds crowd an island. Eggs everywhere.',
+ opts:[
+  {lbl:'Wade and take',fn:g=>{if(rnd(4)===0)startCombat(g,'CROC','A shape in the shallows.');else{addI(g,'EGGS',2+rnd(2));addI(g,'FEATHER',2);msg(g,'You feast.');SFX.eat();tick(g,.5);}}},
+  {lbl:'Catch one',fn:g=>{if(rnd(5)<2+sk(g,'spd')){addI(g,'RAW_MEAT',2);addI(g,'FEATHER',2);msg(g,'A startled bird is yours.');tick(g,.4);}else{msg(g,'They take wing.');tick(g,.2);}}},
+  {lbl:'Watch',fn:g=>{g.charm=(g.charm||0)+1;tick(g,.3);msg(g,'Pink cloud, reflected.');}},
+ ]});
+defEv({id:'carcass',terr:['forest','gallery','marsh','lake','ridge','outcrop'],wt:3,art:'vulture',txt:'Vultures squabble over a fresh kill.',
+ opts:[
+  {lbl:'Crack bones',fn:g=>{if(!hasI(g,'HAMMERSTONE')){msg(g,'Without a hammer, you get little.');addI(g,'RAW_MEAT',1);tick(g,.3);return;}if(rnd(5)===0)startCombat(g,'HYENA_PACK','Laughter. Then teeth.');else{addI(g,'MARROW',2);addI(g,'RAW_MEAT',2);msg(g,'Marrow and meat.');SFX.smash();tick(g,.4);}}},
+  {lbl:'Scare vultures',fn:g=>{if(rnd(5)<2+sk(g,'sp')){addI(g,'FEATHER',1+rnd(2));msg(g,'They flap away.');tick(g,.2);}else{hurt(g,2);msg(g,'A vulture slashes you.');SFX.hurt();}}},
+  {lbl:'Leave',fn:g=>{tick(g,.1);}},
+ ]});
+defEv({id:'wildfire_distant',terr:['ridge','outcrop','lake','marsh'],wt:1,art:'volcano',txt:'Distant smoke. Grass burns. Soon the wind may bring it.',
+ opts:[
+  {lbl:'Flee crosswind',fn:g=>{if(rnd(6)<3+sk(g,'spd'))msg(g,'You stay clear.');else{hurt(g,3);if(g.mateAlive)hurt(g,2,'mate');msg(g,'Cinders burn.');SFX.hurt();}tick(g,.6);}},
+  {lbl:'Study the line',fn:g=>{g.xp=(g.xp||0)+1;msg(g,'You learn where the fire goes.');tick(g,.5);}},
+ ]});
+defEv({id:'bear_den',terr:['ridge','outcrop','lahar'],wt:1,art:'agriotherium',txt:'A low cave. Dry bones. A bears smell.',
+ opts:[
+  {lbl:'Sneak in',fn:g=>{if(rnd(6)<2+sk(g,'spd')){addI(g,'HIDE',1);addI(g,'MARROW',1);msg(g,'You take what you can and leave.');tick(g,.4);}else startCombat(g,'AGRIOTHERIUM','The bear is home.');}},
+  {lbl:'Wait out',fn:g=>{tick(g,1);msg(g,'You creep past in dawn.');}},
+  {lbl:'Leave',fn:g=>{tick(g,.1);}},
+ ]});
+defEv({id:'shelter_cave',terr:['ridge','outcrop','lahar','forest','gallery'],wt:2,art:'mountain',txt:'A high overhang. Dry leaves heaped inside.',
+ opts:[
+  {lbl:'Rest',fn:g=>{g.hp=Math.min(g.hpMax,g.hp+6);if(g.mateAlive)g.mateHp=Math.min(g.mateHpMax,g.mateHp+6);if(g.childAlive)g.childHp=Math.min(g.childHpMax,g.childHp+4);g.energy=Math.min(g.energyMax,g.energy+5);tick(g,1);msg(g,'Deep sleep.');SFX.day();}},
+  {lbl:'Keep watch',fn:g=>{tick(g,1);if(rnd(5)<2)startCombat(g,'DINOFELIS','A shape slides in.');else msg(g,'All quiet.');}},
+  {lbl:'Pass',fn:g=>{tick(g,.1);}},
+ ]});
+defEv({id:'steep_climb',terr:['ridge','outcrop'],wt:3,art:'mountain',txt:'The ridge rises sharp. Loose scree.',
+ opts:[
+  {lbl:'Climb fast',fn:g=>{if(rnd(6)<2+sk(g,'spd'))msg(g,'You haul yourself up.');else{hurt(g,3);if(g.mateAlive)hurt(g,1,'mate');msg(g,'You fall.');SFX.hurt();}tick(g,.5);SFX.climb();}},
+  {lbl:'Careful pace',fn:g=>{tick(g,.9);g.energy=Math.max(0,g.energy-2);msg(g,'Slow but sure.');}},
+  {lbl:'Find another way',fn:g=>{tick(g,1.2);msg(g,'A longer path.');}},
+ ]});
+defEv({id:'monitor_lizard',terr:['marsh','lake','gallery'],wt:1,art:'monitor',txt:'A huge monitor lizard sunbathes.',
+ opts:[
+  {lbl:'Hunt it',fn:g=>{startCombat(g,'MONITOR','It whips at you.');}},
+  {lbl:'Raid its nest',fn:g=>{if(rnd(4)===0)startCombat(g,'MONITOR','It rushes, tongue flicking.');else{addI(g,'EGGS',2);msg(g,'Leathery eggs.');tick(g,.3);}}},
+  {lbl:'Leave',fn:g=>{tick(g,.1);}},
+ ]});
+defEv({id:'zebra_herd',terr:['lake','lahar','ridge'],wt:2,art:'zebra',txt:'Striped flanks flash. A quagga-like herd.',
+ opts:[
+  {lbl:'Stone chase',fn:g=>{if(!hasI(g,'HEAVY_STONE')){msg(g,'Nothing to throw.');tick(g,.2);return;}takeI(g,'HEAVY_STONE',1);if(rnd(8)<2+sk(g,'atk'))startCombat(g,'ZEBRA','Your stone knocks one down.');else{msg(g,'They wheel away.');tick(g,.3);}}},
+  {lbl:'Hunt',fn:g=>{startCombat(g,'ZEBRA','Tail switches. One bolts at you.');}},
+  {lbl:'Pass',fn:g=>{tick(g,.2);}},
+ ]});
+defEv({id:'warthog_burrow',terr:['forest','gallery','lahar'],wt:2,art:'warthog',txt:'A giant hog bristles in a burrow.',
+ opts:[
+  {lbl:'Dig it out',fn:g=>{startCombat(g,'WARTHOG','It bursts with tusks.');}},
+  {lbl:'Leave',fn:g=>{tick(g,.1);}},
+ ]});
+defEv({id:'deinotherium_herd',terr:['lake','marsh','gallery'],wt:1,art:'deinotherium',txt:'Huge shapes. Hook-tusked giants.',
+ opts:[
+  {lbl:'Give wide berth',fn:g=>{tick(g,.7);msg(g,'You skirt the herd.');}},
+  {lbl:'Hunt a calf',fn:g=>{startCombat(g,'DEINOTHERIUM','A mother charges.');}},
+  {lbl:'Scavenge trail',fn:g=>{addI(g,'HIDE_RAW',1);msg(g,'A torn hide in the dust.');tick(g,.3);}},
+ ]});
+defEv({id:'anancus_lone',terr:['lake','gallery'],wt:1,art:'anancus',txt:'A lone gomphothere, tusks heavy and straight.',
+ opts:[
+  {lbl:'Hunt it',fn:g=>{startCombat(g,'ANANCUS','It huffs and lowers tusks.');}},
+  {lbl:'Pass',fn:g=>{tick(g,.3);}},
+ ]});
+defEv({id:'lost_kin',terr:['forest','gallery','marsh','ridge'],wt:1,art:'female',txt:g=>{return (g.mateAlive?g.mateName:g.childName||'your child')+' has fallen behind. Cries in the distance.';},
+ opts:[
+  {lbl:'Go back',fn:g=>{if(rnd(4)<3){if(g.mateAlive)g.mateHp=Math.min(g.mateHpMax,g.mateHp+4);if(g.childAlive)g.childHp=Math.min(g.childHpMax,g.childHp+4);msg(g,'You find them. Safe.');tick(g,1);}else{if(rnd(2))startCombat(g,'DINOFELIS','You find stripes circling.');else{hurt(g,2,'mate');msg(g,'You find them wounded.');}}}},
+  {lbl:'Call out',fn:g=>{tick(g,.4);if(rnd(3)===0){startCombat(g,'DINOFELIS','Something answers your call.');}else msg(g,'They catch up, panting.');}},
+  {lbl:'Push on',fn:g=>{if(g.mateAlive){hurt(g,1,'mate');msg(g,g.mateName+' limps forward, bitter.');}tick(g,.3);}},
+ ]});
+defEv({id:'ancestor_dream',terr:['forest','gallery','marsh','lake','lahar','ridge','outcrop'],wt:1,art:'elder',txt:'You dream of an old one cupping a stone. Striking it with another. The flake is a promise.',
+ opts:[
+  {lbl:'Watch carefully',fn:g=>{g.xp=(g.xp||0)+2;g.charm=(g.charm||0)+1;msg(g,'The ancestors show you the angle.');tick(g,.6);SFX.heal();}},
+  {lbl:'Wake',fn:g=>{tick(g,.4);}},
+ ]});
+defEv({id:'ochre_seam',terr:['ridge','outcrop','lahar'],wt:1,art:'ochre',txt:'A red streak bleeds from a ledge.',
+ opts:[
+  {lbl:'Gather ochre',fn:g=>{addI(g,'OCHRE',1+rnd(2));msg(g,'Earth-blood in handfuls.');tick(g,.3);}},
+  {lbl:'Mark the troop',fn:g=>{if(countI(g,'OCHRE')){takeI(g,'OCHRE',1);g.charm=(g.charm||0)+2;msg(g,'You paint faces. Courage.');tick(g,.4);SFX.heal();}else{msg(g,'You have no ochre.');tick(g,.1);}}},
+  {lbl:'Pass',fn:g=>{tick(g,.1);}},
+ ]});
+defEv({id:'jackal_pair',terr:['lake','marsh','ridge'],wt:1,art:'vulture',txt:'Two jackals trot alongside, just out of reach.',
+ opts:[
+  {lbl:'Ignore',fn:g=>{tick(g,.4);if(rnd(5)<2)startCombat(g,'JACKAL','They close when your back turns.');else msg(g,'They drift away.');}},
+  {lbl:'Throw stones',fn:g=>{if(!hasI(g,'HEAVY_STONE')){msg(g,'No stones.');tick(g,.2);return;}takeI(g,'HEAVY_STONE',1);if(rnd(6)<3+sk(g,'atk'))msg(g,'They yip and flee.');else startCombat(g,'JACKAL','They rush in.');}},
+ ]});
+defEv({id:'dust_devil',terr:['lake','lahar','ridge','outcrop'],wt:1,art:'volcano',txt:'A thin twister of red dust.',
+ opts:[
+  {lbl:'Cover face',fn:g=>{if(hasI(g,'HIDE')||hasI(g,'BARK'))msg(g,'You huddle under hide.');else{hurt(g,1);msg(g,'Dust claws your eyes.');SFX.hurt();}tick(g,.4);}},
+  {lbl:'Push through',fn:g=>{hurt(g,1);tick(g,.3);}},
+ ]});
+defEv({id:'giant_croc',terr:['gallery','marsh','lake'],wt:1,art:'croc',txt:'A crocodile the size of three men. Still as a log.',
+ opts:[
+  {lbl:'Give wide berth',fn:g=>{tick(g,1);msg(g,'You circle far.');}},
+  {lbl:'Attack',fn:g=>{startCombat(g,'GIANT_CROC','It explodes up the bank.');}},
+ ]});
+defEv({id:'lion',terr:['ridge','outcrop','lake'],wt:1,art:'dinofelis',txt:'A lion of the old kind. Heavy mane.',
+ opts:[
+  {lbl:'Back away',fn:g=>{if(rnd(8)<2+sk(g,'sp'))msg(g,'It loses interest.');else startCombat(g,'LION','It turns.');tick(g,.4);}},
+  {lbl:'Fight',fn:g=>{startCombat(g,'LION','A roar.');}},
+ ]});
+defEv({id:'lomekwi_practice',terr:['outcrop'],wt:4,art:'anvil',txt:'A ring of flaked stones. Someone has knapped here.',
+ opts:[
+  {lbl:'Study the debris',fn:g=>{g.xp=(g.xp||0)+3;msg(g,'You learn from the scars.');tick(g,.4);SFX.pluckStone();}},
+  {lbl:'Try bipolar strike',fn:g=>{if(hasI(g,'HAMMERSTONE')&&hasI(g,'ANVIL')&&hasI(g,'PHONOLITE')){takeI(g,'PHONOLITE',1);addI(g,'CRUDE_FLAKE',3);if(rnd(4)===0){addI(g,'SHARP_FLAKE',1);msg(g,'A fine flake. You smile.');}else msg(g,'Crude flakes scatter.');tick(g,.5);SFX.smash();}else{msg(g,'You need hammer, anvil, and stone.');tick(g,.1);}}},
+  {lbl:'Move on',fn:g=>{tick(g,.1);}},
+ ]});
+defEv({id:'elder_teaches',terr:['outcrop','ridge'],wt:2,art:'elder',txt:'An elder sits cross-legged, turning a core in his hands.',
+ opts:[
+  {lbl:'Listen',fn:g=>{g.xp=(g.xp||0)+3;g.statBonus.kn=(g.statBonus.kn||0)+1;msg(g,'He teaches you the angle.');tick(g,.6);SFX.heal();}},
+  {lbl:'Offer figs',fn:g=>{if(countI(g,'FIGS')>0){takeI(g,'FIGS',2);addI(g,'SHARP_FLAKE',2);msg(g,'Fruit for flakes.');tick(g,.4);}else{msg(g,'You have no figs.');tick(g,.1);}}},
+  {lbl:'Move on',fn:g=>{tick(g,.1);}},
+ ]});
+defEv({id:'child_carried',terr:['forest','gallery','marsh','lake','lahar','ridge','outcrop'],wt:1,art:'child',txt:g=>{return (g.childName||'The little one')+' is tired from the walk.';},
+ opts:[
+  {lbl:'Carry them',fn:g=>{g.energy=Math.max(0,g.energy-3);if(g.childAlive)g.childHp=Math.min(g.childHpMax,g.childHp+3);msg(g,'You shoulder the weight.');tick(g,.4);}},
+  {lbl:'Rest briefly',fn:g=>{g.energy=Math.min(g.energyMax,g.energy+2);if(g.childAlive)g.childHp=Math.min(g.childHpMax,g.childHp+4);tick(g,.5);msg(g,'A short rest.');}},
+  {lbl:'Push on',fn:g=>{if(g.childAlive)hurt(g,1,'child');tick(g,.3);msg(g,'They whimper.');}},
+ ]});
+defEv({id:'wasp_nest',terr:['forest','gallery'],wt:1,art:'fruit',txt:'A paper wasp nest hangs low.',
+ opts:[
+  {lbl:'Avoid',fn:g=>{tick(g,.2);}},
+  {lbl:'Knock it down',fn:g=>{hurt(g,3);msg(g,'Stings all over. A wasp is not a bee.');SFX.hurt();tick(g,.3);}},
+ ]});
+defEv({id:'otter_pair',terr:['gallery','marsh','lake'],wt:1,art:'monitor',txt:'Giant otters fish in the shallows.',
+ opts:[
+  {lbl:'Watch and learn',fn:g=>{g.xp=(g.xp||0)+1;addI(g,'FISH',1);msg(g,'You study their method and snatch a fish.');tick(g,.4);SFX.splash();}},
+  {lbl:'Steal their catch',fn:g=>{if(rnd(4)===0){hurt(g,2);msg(g,'They bite.');SFX.hurt();}else{addI(g,'FISH',2);msg(g,'They scatter, snorting.');tick(g,.3);}}},
+  {lbl:'Pass',fn:g=>{tick(g,.1);}},
+ ]});
+defEv({id:'impala_herd',terr:['forest','gallery','lake','ridge'],wt:3,art:'antelope',txt:'Impalas browse the edge of the grass.',
+ opts:[
+  {lbl:'Stalk',fn:g=>{if(rnd(6)<2+sk(g,'spd'))startCombat(g,'IMPALA','You are close enough.');else{msg(g,'They bound away.');tick(g,.3);}}},
+  {lbl:'Throw stones',fn:g=>{if(!hasI(g,'HEAVY_STONE')){msg(g,'No stones.');tick(g,.1);return;}takeI(g,'HEAVY_STONE',1);if(rnd(8)<2+sk(g,'atk'))startCombat(g,'IMPALA','Your stone bruises one.');else msg(g,'Miss.');}},
+  {lbl:'Pass',fn:g=>{tick(g,.1);}},
+ ]});
+defEv({id:'strange_print',terr:['forest','gallery','marsh','lahar','ridge','outcrop'],wt:1,art:'ochre',txt:'A footprint like yours in the mud. Someone passed here.',
+ opts:[
+  {lbl:'Follow',fn:g=>{if(rnd(3)===0){triggerEvent(EV.find(e=>e.id==='afarensis_band'));return;}tick(g,.5);msg(g,'The track fades.');}},
+  {lbl:'Move on',fn:g=>{tick(g,.1);}},
+ ]});
+defEv({id:'storm',terr:['forest','gallery','marsh','lake','ridge'],wt:2,art:'mountain',txt:'Clouds darken the sun. Rain sheets down.',
+ opts:[
+  {lbl:'Shelter',fn:g=>{if(rnd(4)<3){g.thirst=Math.min(g.thirstMax,g.thirst+4);msg(g,'You drink rainwater.');tick(g,.6);SFX.rain();}else{hurt(g,2);msg(g,'Lightning nearby.');SFX.thunder();tick(g,.6);}}},
+  {lbl:'Push through',fn:g=>{hurt(g,3);if(g.childAlive)hurt(g,2,'child');tick(g,.4);msg(g,'Cold and shivering.');SFX.rain();}},
+ ]});
+
+// === GLOBAL STATE ===
+const G_STATE={
+  screen:'title', msg:'', msgTime:0, shake:0, t:0,
+  titleBlink:0, menuIdx:0, nameBuf:'', nameIdx:0,
+  packIdx:0, introLine:0, introTimer:0,
+  player:null, event:null, eventIdx:0, combat:null,
+  invIdx:0, invTab:0, craftIdx:0, travelAnim:0,
+  restHours:0, victory:false, stars:[],
+};
+for(let i=0;i<80;i++)G_STATE.stars.push({x:rnd(W),y:rnd(H-120),b:1+rnd(3)});
+
+const NAMES_M=['KAMAU','ODONGO','LEMI','NGAI','TIKO','BARAKA','KITO','SANI','ORENGO','KAMO'];
+const NAMES_F=['AKINYI','NAIYA','SALA','TEMBE','LEKI','NAMI','JOMO','AWA','ZURI','KENA'];
+const NAMES_C=['TITI','PIPI','LULU','KIKO','SOSO','MIMI','NINI','KOKO'];
+
+const INTRO_LINES=[
+ 'Three and a third million years ago.',
+ 'Before fire. Before the hand-axe.',
+ 'Before our kind had even a name.',
+ '',
+ 'On the shores of an old lake that will become',
+ 'Turkana, a small troop walks the shore.',
+ '',
+ 'Their hands are not yet practiced at the craft,',
+ 'but they know: stone on stone makes edge.',
+ 'Edge cuts meat. Meat feeds child. Child lives.',
+ '',
+ 'You walk toward Lomekwi 3, where the ancestors',
+ 'keep a place of knapping — a ring of anvils',
+ 'older than memory. There, the edge waits.',
+];
+
+// === INPUT ===
+const KEY={};
+addEventListener('keydown',e=>{
+  KEY[e.key]=1; KEY[e.code]=1;
+  handleKey(e);
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' ','Enter'].includes(e.key))e.preventDefault();
+});
+addEventListener('keyup',e=>{KEY[e.key]=0;KEY[e.code]=0;});
+addEventListener('click',()=>{ac();});
+
+// === GAME STATE FACTORY ===
+function newGame(name,packIdx){
+  const pack=PACKS[packIdx];
+  const mateName=NAMES_F[rnd(NAMES_F.length)];
+  const childName=NAMES_C[rnd(NAMES_C.length)];
+  const st={
+    name:name||'NGAI',
+    pack:pack, packIdx:packIdx,
+    hp:30+pack.hp*0+pack.hp,  hpMax:0,
+    mateName, mateHp:0, mateHpMax:0, mateAlive:true,
+    childName, childHp:0, childHpMax:0, childAlive:true,
+    hunger:12, hungerMax:12,
+    thirst:10, thirstMax:10,
+    energy:10, energyMax:10,
+    day:1, stage:0, progress:0, distance:0,
+    items:[], weapon:null,
+    xp:0, charm:0, statBonus:{atk:0,def:0,spd:0,kn:0,sp:0},
+    log:[], alive:true,
+    fever:0, parasite:0,
+  };
+  st.hpMax=pack.hp; st.hp=pack.hp;
+  st.mateHpMax=Math.floor(pack.hp*.85); st.mateHp=st.mateHpMax;
+  st.childHpMax=Math.floor(pack.hp*.55); st.childHp=st.childHpMax;
+  pack.items.forEach(k=>addI(st,k,1));
+  st.log.push('You set out from the forest edge.');
+  return st;
+}
+
+// === TICK (advance state) ===
+function tick(st,days){
+  days=days||.5;
+  st.distance+=days*2;
+  st.progress+=days*2;
+  const stDef=STAGES[st.stage];
+  while(stDef && st.progress>=stDef.end){
+    st.stage++;
+    if(st.stage>=STAGES.length){G_STATE.screen='victory';st.victory=true;return;}
+    msg(st,'You enter '+STAGES[st.stage].n+'.');
+    break;
+  }
+  const td=st.day+days;
+  st.day=td;
+  st.hunger-=days*1.2;
+  st.thirst-=days*1.5;
+  st.energy-=days*.6;
+  if(st.hunger<0){hurt(st,2);msg(st,'Hunger bites.');st.hunger=0;}
+  if(st.thirst<0){hurt(st,3);msg(st,'Tongue dry.');st.thirst=0;}
+  if(st.energy<0){hurt(st,1);st.energy=0;}
+  if(st.mateAlive){st.mateHp=Math.min(st.mateHpMax,st.mateHp+.4);if(st.thirst<2)st.mateHp-=1;}
+  if(st.childAlive){st.childHp=Math.min(st.childHpMax,st.childHp+.3);if(st.hunger<2)st.childHp-=1;if(st.mateHp<=0)st.childAlive=false;}
+  if(st.fever>0){hurt(st,1);st.fever--;if(rnd(3)===0)msg(st,'Fever shakes you.');}
+  if(st.parasite>0){st.hunger=Math.max(0,st.hunger-.5);st.parasite--;}
+}
+
+// === LANDSCAPE / BIOME RENDER ===
+function skyOf(kind,t){
+  const hour=((G_STATE.player?G_STATE.player.day:0)%1);
+  if(kind==='marsh')return ['p','q','r','s','t','u','v'];
+  if(kind==='lake')return ['p','r','t','u','v','w','x'];
+  if(kind==='lahar')return ['G','I','K','M','N','O','P'];
+  if(kind==='ridge')return ['4','6','7','v','w','x','y'];
+  if(kind==='outcrop')return ['@','#','$','%','(',')','w'];
+  if(kind==='gallery')return ['r','s','t','u','v','w','x'];
+  return ['q','r','s','u','v','w','x'];
+}
+function drawLandscape(kind){
+  const sky=skyOf(kind);
+  gradV(0,0,W,240,sky);
+  if(kind==='outcrop'||kind==='ridge'){
+    const t=(G_STATE.t*.03)%(W*2);
+    for(let i=0;i<30;i++){
+      const sx=(i*53+t*.2)%(W+40)-20,sy=30+(i%4)*15;
+      rect(sx,sy,20,1,'A');rect(sx+4,sy+3,14,1,'9');
+    }
+  }
+  if(kind==='marsh'||kind==='lake'||kind==='gallery'){
+    for(let i=0;i<8;i++){
+      const cx=((i*97+G_STATE.t*.15)%(W+80))-40,cy=30+(i%3)*25;
+      rect(cx,cy,40,10,'B');rect(cx+4,cy-4,32,8,'B');rect(cx+10,cy-8,22,6,'C');
+    }
+  }
+  const far=220;
+  if(kind==='lahar'){
+    sprT(SPR.volcano,W/2-40,80,2);
+    for(let i=0;i<4;i++)sprT(SPR.mountain,-20+i*180,far-40,2);
+  }else if(kind==='ridge'||kind==='outcrop'){
+    for(let i=0;i<5;i++)sprT(SPR.mountain,-20+i*150,far-50,2);
+  }else{
+    for(let i=0;i<6;i++)sprT(SPR.mountain,-40+i*130,far-30,1);
+  }
+  dither(0,far-6,W,6,'6','5');
+  rect(0,far,W,140,fgColor(kind));
+  for(let j=0;j<8;j++){rect(0,far+j*3,W,1,fgTint(kind,j));}
+  if(kind==='forest'||kind==='gallery'){
+    for(let i=0;i<6;i++){sprT(SPR.tree_gallery,-20+i*110+(i%2)*20,far-120,2);}
+    for(let i=0;i<4;i++){sprT(SPR.tree_gallery,-40+i*180,far-160,3);}
+  }
+  if(kind==='marsh'){
+    for(let i=0;i<10;i++){sprT(SPR.reeds,i*64,far-40,2);}
+    for(let i=0;i<5;i++){sprT(SPR.palm,i*130+(i%2)*30,far-140,2);}
+  }
+  if(kind==='lake'){
+    rect(0,far,W,40,'u');
+    for(let j=0;j<5;j++)rect(0,far+j*3,W,1,((j+G_STATE.t/10|0)&1)?'v':'u');
+    for(let i=0;i<4;i++)sprT(SPR.palm,i*170+30,far-130,2);
+    for(let i=0;i<6;i++)sprT(SPR.reeds,i*100+40,far-30,2);
+  }
+  if(kind==='lahar'){
+    for(let i=0;i<8;i++)sprT(SPR.baobab,i*90-20,far-80,1);
+  }
+  if(kind==='ridge'||kind==='outcrop'){
+    for(let i=0;i<5;i++){sprT(SPR.baobab,-30+i*140,far-90,2);}
+    for(let i=0;i<10;i++){const x=(i*61+G_STATE.t*.1)%W;rect(x|0,far+30+(i%3)*10,8,4,'W');}
+  }
+  // ground foreground
+  for(let i=0;i<20;i++){
+    const x=(i*37+(G_STATE.t*.6))%W;
+    sprT(SPR.tuft,x|0,far+80+(i%3)*15,2);
+  }
+}
+function fgColor(kind){
+  if(kind==='marsh')return 'f';
+  if(kind==='lake')return 'a';
+  if(kind==='lahar')return '<';
+  if(kind==='ridge')return 'W';
+  if(kind==='outcrop')return '?';
+  if(kind==='gallery')return 'g';
+  return 'h';
+}
+function fgTint(kind,j){
+  const base=fgColor(kind);
+  const tints={f:['e','f','g','f'],a:['Z','a','b','a'],'<':[';','<','>','<'],W:['V','W','X','W'],'?':['>','?','/','?'],g:['f','g','h','g'],h:['g','h','i','h']};
+  const arr=tints[base]||['h','i','h','g'];
+  return arr[j%arr.length];
+}
+function drawTroop(st,bx,by){
+  const bob=Math.sin(G_STATE.t*.12)*2|0;
+  const walk=(G_STATE.t/8|0)%2;
+  if(st.childAlive)sprT(SPR.child,bx-22,by+14+bob,2);
+  if(st.mateAlive)sprT(SPR.female,bx-52,by+6+bob,2);
+  sprT(walk?SPR.player_walk:SPR.player,bx,by+bob,2);
+}
+
+// === HUD ===
+function drawHUD(st){
+  rect(0,H-HUD_H,W,HUD_H,'2');
+  rect(0,H-HUD_H,W,1,'6');
+  rect(0,H-HUD_H+1,W,1,'4');
+  // troop bars (left)
+  const bx=12,by=H-HUD_H+8;
+  bar(bx,by,120,8,st.hp/st.hpMax,'j','J',st.name+' '+Math.ceil(st.hp)+'/'+st.hpMax);
+  if(st.mateAlive)bar(bx,by+22,120,7,st.mateHp/st.mateHpMax,'{','=',st.mateName+' '+Math.ceil(st.mateHp));
+  else text(st.mateName+' +',bx,by+22,'7',12);
+  if(st.childAlive)bar(bx,by+42,120,6,st.childHp/st.childHpMax,'*','#',st.childName+' '+Math.ceil(st.childHp));
+  else text((st.childName||'child')+' +',bx,by+42,'7',12);
+  text('DAY '+Math.floor(st.day)+' XP '+st.xp+' '+STAGES[st.stage].n.slice(0,12),bx,by+60,':',11);
+  // needs (middle)
+  const mx=188;
+  bar(mx,by,80,6,st.hunger/st.hungerMax,'.','T','HUNGER '+Math.ceil(st.hunger));
+  bar(mx,by+18,80,6,st.thirst/st.thirstMax,'v','r','THIRST '+Math.ceil(st.thirst));
+  bar(mx,by+36,80,6,st.energy/st.energyMax,'l','f','ENERGY '+Math.ceil(st.energy));
+  const progPct=Math.min(1,st.progress/STAGES[STAGES.length-1].end);
+  bar(mx,by+54,80,5,progPct,':','T','PROGRESS '+Math.floor(progPct*100)+'%');
+  // weapon / items (right)
+  const rx=388;
+  text('WEAPON:',rx,by,'9',11);
+  text((st.weapon?ITEMS[st.weapon].n:'(fists)').slice(0,12),rx,by+12,':',11);
+  const it0=st.items.slice(0,4);
+  it0.forEach((e,i)=>{text((ITEMS[e.k]?.n||e.k).slice(0,10)+' x'+e.n,rx,by+26+i*10,'9',10);});
+  // log (far right, word-wrapped)
+  const lx=508, maxW=W-lx-6;
+  text('LOG',lx,by,'9',11);
+  const lines=[];
+  G.font='bold 10px '+FONT;
+  for(const s of (st.log||[])){
+    const words=s.split(' ');let cur='';
+    for(const w of words){
+      const trial=cur?cur+' '+w:w;
+      if(G.measureText(trial).width>maxW){if(cur)lines.push(cur);cur=w;}else cur=trial;
+    }
+    if(cur)lines.push(cur);
+    if(lines.length>=6)break;
+  }
+  lines.slice(0,6).forEach((l,i)=>text(l,lx,by+12+i*10,'B',10));
+  // hotkeys (just above the very bottom of the HUD)
+  rect(0,H-12,W,12,'1');
+  text('[E]VENT  [I]NV  [C]RAFT  [R]EST  [ENTER]WALK',8,H-12,'9',10);
+}
+function bar(x,y,w,h,pct,hi,lo,lbl){
+  rect(x,y,w,h,'4');
+  rect(x,y,Math.max(0,(w*pct)|0),h,hi);
+  frame(x,y,w,h,'6','2');
+  if(lbl)text(lbl,x+w+6,y-2,'B',11);
+}
+
+// === EVENT / COMBAT ===
+function pickEvent(st){
+  const terr=STAGES[st.stage].kind;
+  const pool=EV.filter(e=>e.terr.includes(terr));
+  if(!pool.length)return null;
+  let total=0;pool.forEach(e=>total+=e.wt||1);
+  let r=Math.random()*total;
+  for(const e of pool){r-=e.wt||1;if(r<=0)return e;}
+  return pool[0];
+}
+function triggerEvent(ev){
+  if(!ev)return;
+  G_STATE.event=ev;G_STATE.eventIdx=0;G_STATE.screen='event';SFX.blip();
+}
+function chooseOption(i){
+  const ev=G_STATE.event;if(!ev||!ev.opts[i])return;
+  const st=G_STATE.player;
+  try{ev.opts[i].fn(st);}catch(e){console.error(e);}
+  if(G_STATE.screen==='event')G_STATE.screen='travel';
+}
+
+function startCombat(st,enemyKey,intro){
+  const e=ENEMIES[enemyKey];if(!e)return;
+  G_STATE.combat={
+    enemy:Object.assign({},e,{hp:e.hp,hpMax:e.hp}),
+    turn:'player',
+    log:[intro||(e.taunt||'A threat.')],
+    round:0, fled:false, escapeChance:0,
+    actionIdx:0,
+  };
+  G_STATE.screen='combat';bgmStart(BGM_HUNT);SFX.roar();
+}
+function endCombat(win){
+  const c=G_STATE.combat;const st=G_STATE.player;
+  if(win&&c){
+    msg(st,'You defeat the '+c.enemy.n+'.');
+    st.xp+=c.enemy.xp;
+    (c.enemy.drops||[]).forEach(k=>{if(rnd(3)<2)addI(st,k,1);});
+    SFX.victory();
+  }else if(!win){
+    msg(st,'You escaped.');
+  }
+  G_STATE.combat=null;
+  G_STATE.screen='travel';bgmStart(BGM_WALK);
+}
+function playerAttack(){
+  const c=G_STATE.combat;if(!c||c.turn!=='player')return;
+  const st=G_STATE.player;
+  const atk=d(20)+sk(st,'atk')+(st.weapon?ITEMS[st.weapon].atk||0:1);
+  const hit=atk>=c.enemy.def;
+  if(hit){
+    const dmg=d(6)+sk(st,'atk')+(st.weapon?Math.floor((ITEMS[st.weapon].atk||0)/2):1);
+    c.enemy.hp-=dmg;
+    c.log.unshift('You hit for '+dmg+'.');
+    SFX.hit();G_STATE.shake=8;
+  }else{c.log.unshift('You miss.');SFX.miss();}
+  if(c.enemy.hp<=0){endCombat(true);return;}
+  c.turn='enemy';setTimeout(enemyTurn,500);
+}
+function playerThrow(){
+  const c=G_STATE.combat;if(!c||c.turn!=='player')return;
+  const st=G_STATE.player;
+  if(!hasI(st,'HEAVY_STONE')){c.log.unshift('No stones to throw.');return;}
+  takeI(st,'HEAVY_STONE',1);
+  const atk=d(20)+sk(st,'atk')+2;
+  if(atk>=c.enemy.def){
+    const dmg=d(4)+3;c.enemy.hp-=dmg;c.log.unshift('Stone strikes: '+dmg+'.');SFX.throw_();SFX.hit();
+  }else{c.log.unshift('Stone flies wide.');SFX.throw_();}
+  if(c.enemy.hp<=0){endCombat(true);return;}
+  c.turn='enemy';setTimeout(enemyTurn,500);
+}
+function playerFlee(){
+  const c=G_STATE.combat;if(!c)return;
+  const st=G_STATE.player;
+  const r=d(20)+sk(st,'spd');
+  if(r>=c.enemy.spd+8){c.log.unshift('You slip away.');SFX.swoosh();endCombat(false);return;}
+  c.log.unshift('No escape!');SFX.nope();
+  c.turn='enemy';setTimeout(enemyTurn,500);
+}
+function playerMatePush(){
+  const c=G_STATE.combat;if(!c||!G_STATE.player.mateAlive)return;
+  const st=G_STATE.player;
+  const atk=d(20)+sk(st,'atk')+1;
+  if(atk>=c.enemy.def){
+    const dmg=d(4)+1;c.enemy.hp-=dmg;
+    c.log.unshift(st.mateName+' strikes: '+dmg+'.');SFX.hit();
+  }else{
+    c.log.unshift(st.mateName+' is batted aside.');hurt(st,2,'mate');SFX.hurt();
+  }
+  if(c.enemy.hp<=0){endCombat(true);return;}
+  c.turn='enemy';setTimeout(enemyTurn,500);
+}
+function enemyTurn(){
+  const c=G_STATE.combat;if(!c)return;
+  const st=G_STATE.player;
+  const atk=d(20)+c.enemy.atk/2;
+  const def=10+sk(st,'def')+(hasI(st,'HIDE')?1:0);
+  if(atk>=def){
+    const dmg=Math.max(1,d(6)+Math.floor(c.enemy.atk/3));
+    let tgt='player';
+    if(st.childAlive&&rnd(6)===0)tgt='child';
+    else if(st.mateAlive&&rnd(4)===0)tgt='mate';
+    hurt(st,dmg,tgt==='player'?null:tgt);
+    c.log.unshift((tgt==='player'?'You':(tgt==='mate'?st.mateName:st.childName))+' hit: '+dmg+'.');
+    SFX.hit();G_STATE.shake=10;
+  }else{c.log.unshift('It misses.');SFX.miss();}
+  c.round++;
+  if(!st.alive){G_STATE.screen='dead';G_STATE.combat=null;return;}
+  c.turn='player';c.actionIdx=0;
+}
+
+// === SCREENS ===
+function drawTitle(){
+  gradV(0,0,W,H,['0','2','F','H','M']);
+  for(const s of G_STATE.stars){const b=s.b+((G_STATE.t+s.x)&15)/40;pxl(s.x,s.y,b>2?'E':(b>1.5?'C':'9'));}
+  // volcano silhouette
+  sprT(SPR.volcano,W/2-60,180,3);
+  for(let i=0;i<4;i++)sprT(SPR.mountain,-20+i*200,340,3);
+  textBigC('LOMEKWI',60,':','~',72);
+  textBigC('TRAIL',130,'.','~',56);
+  textC('— a prequel of stone —',200,'Q',16);
+  const blink=(G_STATE.t/30|0)%2;
+  if(blink)textC('[ PRESS ENTER TO BEGIN ]',H-70,'E',18);
+  textC('3.3 million years ago, West Turkana',H-44,'8',12);
+  textC('(C) 2026 — single-file SNES pastiche',H-22,'6',11);
+}
+function drawIntro(){
+  gradV(0,0,W,H,['0','1','2','G','I','K']);
+  for(const s of G_STATE.stars){pxl(s.x,s.y,(s.b+G_STATE.t)&7?'8':'C');}
+  sprT(SPR.volcano,W-160,20,2);
+  sprT(SPR.mountain,20,120,2);
+  textBigC('THE JOURNEY',20,'T','~',32);
+  G.fillStyle='rgba(0,0,0,.6)';G.fillRect(30,68,W-60,H-112);
+  frame(30,68,W-60,H-112,'6','4',null);
+  const n=Math.min(G_STATE.introLine+1,INTRO_LINES.length);
+  for(let i=0;i<n;i++){
+    text(INTRO_LINES[i],50,82+i*18,'c',15);
+  }
+  textC('[ENTER] CONTINUE    [ESC] SKIP',H-28,'8',13);
+}
+function drawName(){
+  gradV(0,0,W,H,['0','2','5','q','r']);
+  textBigC('NAME THE WALKER',40,':','~',36);
+  sprT(SPR.player,W/2-16,100,4);
+  const buf=G_STATE.nameBuf||'';
+  rect(W/2-120,200,240,36,'2');
+  frame(W/2-120,200,240,36,'8','4');
+  text(buf+((G_STATE.t/20|0)%2?'_':' '),W/2-112,208,'E',22);
+  textC('TYPE A NAME   [ENTER] CONFIRM   [BACKSPACE]',260,'B',14);
+  textC('(UP / DOWN for a suggested name)',285,'7',12);
+  textC('OR [ENTER] BLANK TO USE: '+NAMES_M[G_STATE.nameIdx%NAMES_M.length],310,'a',14);
+}
+function drawSetup(){
+  gradV(0,0,W,H,['0','2','4','g','h']);
+  textBigC('CHOOSE YOUR PACK',20,':','~',30);
+  PACKS.forEach((p,i)=>{
+    const y=70+i*72, sel=(G_STATE.packIdx===i);
+    rect(40,y,W-80,62,sel?'3':'2');
+    frame(40,y,W-80,62,sel?':':'7',sel?'"':'4');
+    sprT([SPR.player,SPR.player_walk,SPR.player_climb,SPR.player][i],56,y+8,2);
+    text(p.n,110,y+8,sel?':':'E',20);
+    text(p.d,110,y+30,'B',14);
+    const ss=p.stats;
+    text('ATK+'+ss.atk+' DEF+'+ss.def+' SPD+'+ss.spd+' KNAP+'+ss.kn+' SPIRIT+'+ss.sp+'  HP '+p.hp,110,y+46,'a',12);
+  });
+  textC('[UP/DOWN] CHOOSE   [ENTER] BEGIN',H-28,':',14);
+}
+function drawTravel(){
+  const st=G_STATE.player;if(!st)return;
+  drawLandscape(STAGES[st.stage].kind);
+  drawTroop(st,W/2-16,180);
+  // sun/moon
+  const h=(st.day%1);
+  const sx=60+h*(W-120), sy=30+Math.sin(h*Math.PI)*-20+20;
+  rect(sx-6,sy-6,12,12,'.');rect(sx-8,sy-2,16,4,'.');rect(sx-2,sy-8,4,16,'.');
+  drawHUD(st);
+  if(G_STATE.msgTime>0){
+    rect(20,40,W-40,30,'2');frame(20,40,W-40,30,':','4');
+    text(G_STATE.msg,34,48,'E',15);
+  }
+}
+function drawEvent(){
+  const st=G_STATE.player,ev=G_STATE.event;if(!ev)return;
+  drawLandscape(STAGES[st.stage].kind);
+  G.fillStyle='rgba(0,0,0,.55)';G.fillRect(0,0,W,H-HUD_H);
+  rect(30,30,W-60,H-HUD_H-60,'2');
+  frame(30,30,W-60,H-HUD_H-60,':','4');
+  const art=SPR[ev.art]||SPR.mountain;
+  sprT(art,46,46,3);
+  const txt=typeof ev.txt==='function'?ev.txt(st):ev.txt;
+  // wrap
+  const words=txt.split(' ');let lines=[],cur='';
+  for(const w of words){if((cur+' '+w).length>42){lines.push(cur);cur=w;}else cur=cur?cur+' '+w:w;}
+  if(cur)lines.push(cur);
+  lines.forEach((l,i)=>text(l,180,50+i*20,'E',15));
+  ev.opts.forEach((op,i)=>{
+    const y=180+i*28, sel=(G_STATE.eventIdx===i);
+    rect(46,y,W-92,24,sel?'5':'3');
+    frame(46,y,W-92,24,sel?':':'7',sel?'"':'4');
+    text((sel?'> ':'  ')+op.lbl,58,y+4,sel?':':'E',15);
+  });
+  drawHUD(st);
+  textC('[UP/DOWN] SELECT   [ENTER] CHOOSE',H-HUD_H-14,'a',12);
+}
+function drawCombat(){
+  const st=G_STATE.player,c=G_STATE.combat;if(!c)return;
+  drawLandscape(STAGES[st.stage].kind);
+  G.fillStyle='rgba(0,0,0,.4)';G.fillRect(0,0,W,H-HUD_H);
+  const art=SPR[c.enemy.art]||SPR.mountain;
+  sprT(art,W-160,60,4);
+  text(c.enemy.n,W-260,40,':',20);
+  bar(W-260,68,180,8,c.enemy.hp/c.enemy.hpMax,'L','J',Math.max(0,Math.ceil(c.enemy.hp))+'/'+c.enemy.hpMax);
+  drawTroop(st,60,180);
+  // actions
+  const acts=['ATTACK','THROW STONE','MATE ASSIST','FLEE'];
+  acts.forEach((a,i)=>{
+    const y=40+i*26, sel=(c.actionIdx===i);
+    rect(40,y,160,22,sel?'5':'3');frame(40,y,160,22,sel?':':'7',sel?'"':'4');
+    text((sel?'> ':'  ')+a,50,y+3,sel?':':'E',14);
+  });
+  // log
+  (c.log||[]).slice(0,5).forEach((l,i)=>{text(l,40,170+i*16,'B',13);});
+  drawHUD(st);
+  textC('[UP/DOWN] SELECT   [ENTER] ACT',H-HUD_H-14,'a',12);
+}
+function drawInventory(){
+  const st=G_STATE.player;if(!st)return;
+  drawLandscape(STAGES[st.stage].kind);
+  G.fillStyle='rgba(0,0,0,.7)';G.fillRect(0,0,W,H-HUD_H);
+  textBigC('INVENTORY',10,':','~',28);
+  const cols=2, maxRows=9;
+  const total=st.items.length;
+  const selRow=Math.floor(G_STATE.invIdx/cols);
+  const scroll=Math.max(0,Math.min(selRow-maxRows+1,Math.ceil(total/cols)-maxRows));
+  const offset=Math.max(0,scroll)*cols;
+  for(let i=offset;i<Math.min(total,offset+maxRows*cols);i++){
+    const e=st.items[i];
+    const r=Math.floor((i-offset)/cols);
+    const cx=40+(i%cols)*290, cy=60+r*22, sel=(G_STATE.invIdx===i);
+    rect(cx,cy,280,20,sel?'5':'3');frame(cx,cy,280,20,sel?':':'7',sel?'"':'4');
+    const it=ITEMS[e.k]||{n:e.k};
+    text((sel?'>':' ')+it.n+' x'+e.n,cx+6,cy+3,sel?':':'E',13);
+    if(st.weapon===e.k)text('[WEAPON]',cx+200,cy+3,'.',11);
+  }
+  if(st.items.length===0)textC('— empty —',200,'7',16);
+  const sel=st.items[G_STATE.invIdx];
+  if(sel){
+    const it=ITEMS[sel.k];
+    rect(20,H-HUD_H-90,W-40,80,'2');frame(20,H-HUD_H-90,W-40,80,':','4');
+    text(it.n,30,H-HUD_H-82,':',16);
+    text(it.d,30,H-HUD_H-62,'B',13);
+    let hints=[];
+    if(it.food)hints.push('[E]AT (+'+it.food+' food)');
+    if(it.drink&&!it.food)hints.push('[D]RINK (+'+it.drink+' drink)');
+    if(it.heal)hints.push('[H]EAL (+'+it.heal+' hp)');
+    if(it.wep)hints.push('[W]IELD');
+    if(it.risk)hints.push('RISK '+Math.floor(it.risk*100)+'%');
+    text(hints.join('   '),30,H-HUD_H-42,'a',12);
+  }
+  drawHUD(st);
+  textC('[UP/DOWN] [E]AT [D]RINK [H]EAL [W]IELD [ESC] BACK',H-HUD_H-14,'a',12);
+}
+function drawCraft(){
+  const st=G_STATE.player;if(!st)return;
+  drawLandscape(STAGES[st.stage].kind);
+  G.fillStyle='rgba(0,0,0,.75)';G.fillRect(0,0,W,H-HUD_H);
+  textBigC('CRAFT (PERCUSSION)',10,':','~',24);
+  RECIPES.forEach((r,i)=>{
+    const y=50+i*17, sel=(G_STATE.craftIdx===i);
+    const can=canCraft(st,r);
+    rect(20,y,W-40,16,sel?'5':'3');frame(20,y,W-40,16,sel?':':'7',sel?'"':'4');
+    text((sel?'>':' ')+r.n,26,y+1,sel?':':(can?'E':'7'),12);
+    const needs=Object.keys(r.need).map(k=>k+' x'+r.need[k]).join(', ');
+    text(needs,280,y+1,can?'a':'6',11);
+  });
+  const sel=RECIPES[G_STATE.craftIdx];
+  if(sel){
+    rect(20,H-HUD_H-60,W-40,52,'2');frame(20,H-HUD_H-60,W-40,52,':','4');
+    text(sel.txt,30,H-HUD_H-52,'B',13);
+    const gives=Object.keys(sel.give).map(k=>k+' x'+sel.give[k]).join(', ');
+    text('YIELDS: '+(gives||'(effect)'),30,H-HUD_H-34,'.',12);
+    text('CHECK: '+(sel.check||'kn')+' vs '+sel.diff,30,H-HUD_H-20,'a',11);
+  }
+  drawHUD(st);
+  textC('[UP/DOWN] [ENTER] KNAP  [ESC] BACK',H-HUD_H-14,'a',12);
+}
+function canCraft(st,r){
+  for(const k in r.need)if(countI(st,k)<r.need[k])return false;
+  return true;
+}
+function doCraft(){
+  const st=G_STATE.player, r=RECIPES[G_STATE.craftIdx];
+  if(!r||!canCraft(st,r)){SFX.nope();return;}
+  const keep=r.keep||[];
+  for(const k in r.need){if(!keep.includes(k))takeI(st,k,r.need[k]);}
+  const roll=d(20)+sk(st,r.check||'kn');
+  if(roll>=r.diff){
+    for(const k in r.give)addI(st,k,r.give[k]);
+    if(r.charm)st.charm+=r.charm;
+    if(r.heal)st.hp=Math.min(st.hpMax,st.hp+r.heal);
+    msg(st,r.txt);SFX.pluckStone();
+  }else{
+    msg(st,'The stone cracks wrong.');SFX.nope();
+    if(rnd(3)===0)hurt(st,1);
+  }
+  tick(st,.3);
+}
+function useItem(k,how){
+  const st=G_STATE.player;const it=ITEMS[k];if(!it)return;
+  if(how==='eat'&&it.food){
+    if(it.risk&&Math.random()<it.risk){st.parasite+=4;msg(st,'Something writhes in your gut.');SFX.hurt();}
+    st.hunger=Math.min(st.hungerMax,st.hunger+it.food);
+    if(it.drink)st.thirst=Math.min(st.thirstMax,st.thirst+it.drink);
+    if(it.heal)st.hp=Math.min(st.hpMax,st.hp+it.heal);
+    takeI(st,k,1);SFX.eat();msg(st,'Eaten.');
+  }else if(how==='drink'&&it.drink){
+    st.thirst=Math.min(st.thirstMax,st.thirst+it.drink);
+    if(k!=='GOURD')takeI(st,k,1);
+    SFX.drink();msg(st,'You drink.');
+  }else if(how==='heal'&&it.heal){
+    st.hp=Math.min(st.hpMax,st.hp+it.heal);
+    if(st.mateAlive)st.mateHp=Math.min(st.mateHpMax,st.mateHp+Math.floor(it.heal/2));
+    takeI(st,k,1);SFX.heal();msg(st,'Tended.');
+  }else if(how==='wield'&&it.wep){
+    st.weapon=k;msg(st,'Wielding '+it.n);SFX.click();
+  }else SFX.nope();
+}
+function drawDead(){
+  gradV(0,0,W,H,['0','F','G','I','K']);
+  const st=G_STATE.player;
+  textBigC('YOU HAVE FALLEN',50,'L','~',36);
+  sprT(SPR.vulture,W/2-30,120,4);
+  text('Day '+Math.floor(st.day||0)+' — '+(STAGES[st.stage]||{n:''}).n,W/2-120,240,'E',16);
+  text('The troop walks on without you.',W/2-160,270,'B',15);
+  text('Your stones scatter. The wind takes their edge.',W/2-200,290,'9',14);
+  textC('[ENTER] NEW WALKER',H-50,':',18);
+  bgmStop();
+}
+function drawVictory(){
+  gradV(0,0,W,H,[':','.','\'','"','T','`','~']);
+  textBigC('LOMEKWI 3',40,'E','~',60);
+  textBigC('— THE RING OF ANVILS —',110,'.','~',24);
+  const st=G_STATE.player;
+  sprT(SPR.anvil,W/2-32,160,8);
+  text('You reach the ring where ancestors knapped.',W/2-220,260,'E',16);
+  text('The stone remembers your hand. The flake is a promise.',W/2-260,284,'c',15);
+  if(st.mateAlive)text('Beside you: '+st.mateName,W/2-80,310,'E',14);
+  if(st.childAlive)text('Beside you: '+st.childName,W/2-80,326,'E',14);
+  text('Day '+Math.floor(st.day)+'   XP '+st.xp+'   Charm '+st.charm,W/2-120,356,'a',14);
+  textC('[ENTER] NEW WALKER',H-50,':',18);
+  if((G_STATE.t|0)===1)bgmStart(BGM_TRIUMPH);
+}
+
+// === INPUT HANDLING ===
+function handleKey(e){
+  const k=e.key;
+  const s=G_STATE.screen;
+  if(s==='title'){
+    if(k==='Enter'){G_STATE.screen='intro';G_STATE.introLine=0;G_STATE.introTimer=0;bgmStart(BGM_DAWN);SFX.select();}
+  }else if(s==='intro'){
+    if(k==='Enter'){
+      if(G_STATE.introLine<INTRO_LINES.length-1){G_STATE.introLine++;SFX.blip();}
+      else{G_STATE.screen='name';SFX.select();}
+    }else if(k==='Escape'){G_STATE.screen='name';SFX.select();}
+  }else if(s==='name'){
+    if(k==='Enter'){
+      if(!G_STATE.nameBuf)G_STATE.nameBuf=NAMES_M[G_STATE.nameIdx%NAMES_M.length];
+      G_STATE.screen='setup';G_STATE.packIdx=0;SFX.select();
+    }else if(k==='Backspace'){G_STATE.nameBuf=G_STATE.nameBuf.slice(0,-1);SFX.click();}
+    else if(k==='ArrowUp'){G_STATE.nameIdx=(G_STATE.nameIdx+1)%NAMES_M.length;SFX.blip();}
+    else if(k==='ArrowDown'){G_STATE.nameIdx=(G_STATE.nameIdx-1+NAMES_M.length)%NAMES_M.length;SFX.blip();}
+    else if(k.length===1&&/[a-zA-Z ]/.test(k)&&G_STATE.nameBuf.length<12){G_STATE.nameBuf+=k.toUpperCase();SFX.click();}
+  }else if(s==='setup'){
+    if(k==='ArrowUp'){G_STATE.packIdx=(G_STATE.packIdx-1+PACKS.length)%PACKS.length;SFX.blip();}
+    else if(k==='ArrowDown'){G_STATE.packIdx=(G_STATE.packIdx+1)%PACKS.length;SFX.blip();}
+    else if(k==='Enter'){
+      G_STATE.player=newGame(G_STATE.nameBuf,G_STATE.packIdx);
+      G_STATE.screen='travel';bgmStart(BGM_WALK);SFX.select();
+    }
+  }else if(s==='travel'){
+    if(k==='Enter'||k===' '){
+      const st=G_STATE.player;
+      tick(st,.4);
+      if(G_STATE.screen!=='travel')return;
+      SFX.step();
+      if(Math.random()<.5){const ev=pickEvent(st);if(ev)triggerEvent(ev);}
+    }else if(k==='i'||k==='I'){G_STATE.screen='inventory';G_STATE.invIdx=0;SFX.select();}
+    else if(k==='c'||k==='C'){G_STATE.screen='craft';G_STATE.craftIdx=0;SFX.select();}
+    else if(k==='e'||k==='E'){const ev=pickEvent(G_STATE.player);if(ev)triggerEvent(ev);}
+    else if(k==='r'||k==='R'){restCamp();}
+  }else if(s==='event'){
+    const ev=G_STATE.event;if(!ev)return;
+    if(k==='ArrowUp'){G_STATE.eventIdx=(G_STATE.eventIdx-1+ev.opts.length)%ev.opts.length;SFX.blip();}
+    else if(k==='ArrowDown'){G_STATE.eventIdx=(G_STATE.eventIdx+1)%ev.opts.length;SFX.blip();}
+    else if(k==='Enter'){chooseOption(G_STATE.eventIdx);SFX.select();}
+    else if(k==='Escape'){G_STATE.screen='travel';}
+  }else if(s==='combat'){
+    const c=G_STATE.combat;if(!c)return;
+    if(c.turn!=='player')return;
+    if(k==='ArrowUp'){c.actionIdx=(c.actionIdx-1+4)%4;SFX.blip();}
+    else if(k==='ArrowDown'){c.actionIdx=(c.actionIdx+1)%4;SFX.blip();}
+    else if(k==='Enter'){
+      if(c.actionIdx===0)playerAttack();
+      else if(c.actionIdx===1)playerThrow();
+      else if(c.actionIdx===2)playerMatePush();
+      else if(c.actionIdx===3)playerFlee();
+    }
+  }else if(s==='inventory'){
+    const st=G_STATE.player;const item=st.items[G_STATE.invIdx];
+    if(k==='ArrowUp'){G_STATE.invIdx=Math.max(0,G_STATE.invIdx-1);SFX.blip();}
+    else if(k==='ArrowDown'){G_STATE.invIdx=Math.min(st.items.length-1,G_STATE.invIdx+1);SFX.blip();}
+    else if(k==='Escape'){G_STATE.screen='travel';SFX.select();}
+    else if(item&&(k==='e'||k==='E'))useItem(item.k,'eat');
+    else if(item&&(k==='d'||k==='D'))useItem(item.k,'drink');
+    else if(item&&(k==='h'||k==='H'))useItem(item.k,'heal');
+    else if(item&&(k==='w'||k==='W'))useItem(item.k,'wield');
+  }else if(s==='craft'){
+    if(k==='ArrowUp'){G_STATE.craftIdx=(G_STATE.craftIdx-1+RECIPES.length)%RECIPES.length;SFX.blip();}
+    else if(k==='ArrowDown'){G_STATE.craftIdx=(G_STATE.craftIdx+1)%RECIPES.length;SFX.blip();}
+    else if(k==='Enter'){doCraft();SFX.select();}
+    else if(k==='Escape'){G_STATE.screen='travel';SFX.select();}
+  }else if(s==='dead'||s==='victory'){
+    if(k==='Enter'){G_STATE.screen='title';G_STATE.player=null;G_STATE.nameBuf='';bgmStart(BGM_TITLE);SFX.select();}
+  }
+}
+function restCamp(){
+  const st=G_STATE.player;
+  st.hp=Math.min(st.hpMax,st.hp+6);
+  if(st.mateAlive)st.mateHp=Math.min(st.mateHpMax,st.mateHp+6);
+  if(st.childAlive)st.childHp=Math.min(st.childHpMax,st.childHp+4);
+  st.energy=Math.min(st.energyMax,st.energy+5);
+  tick(st,1);
+  if(rnd(4)===0){const ev=pickEvent(st);if(ev){triggerEvent(ev);return;}}
+  msg(st,'You camp. Dreams of stone.');SFX.day();
+}
+
+// === MAIN LOOP ===
+function loop(){
+  G_STATE.t++;
+  if(G_STATE.msgTime>0)G_STATE.msgTime--;
+  const shake=G_STATE.shake;
+  if(shake>0)G_STATE.shake--;
+  const s=G_STATE.screen;
+  if(s==='title')drawTitle();
+  else if(s==='intro')drawIntro();
+  else if(s==='name')drawName();
+  else if(s==='setup')drawSetup();
+  else if(s==='travel')drawTravel();
+  else if(s==='event')drawEvent();
+  else if(s==='combat')drawCombat();
+  else if(s==='inventory')drawInventory();
+  else if(s==='craft')drawCraft();
+  else if(s==='dead')drawDead();
+  else if(s==='victory')drawVictory();
+  if(shake>0){
+    BG.clearRect(0,0,W,H);BG.drawImage(CV,0,0);
+    G.clearRect(0,0,W,H);
+    G.drawImage(BC,(rnd(shake)-shake/2)|0,(rnd(shake)-shake/2)|0);
+  }
+  requestAnimationFrame(loop);
+}
+bgmStart(BGM_TITLE);
+loop();
+})();
+</script>
+</body>
+</html>
