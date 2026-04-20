@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Beyblade Combat</title>
+    <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: #1a1a1a;
+            font-family: Arial, sans-serif;
+            color: white;
+        }
+        #container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+        }
+        #gameContainer {
+            position: relative;
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, #333, #111);
+            border: 3px solid #fff;
+            border-radius: 50%;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        #ui {
+            display: flex;
+            gap: 40px;
+            font-size: 18px;
+        }
+        .player-info {
+            text-align: center;
+        }
+        .momentum-bar {
+            width: 200px;
+            height: 30px;
+            background: #333;
+            border: 2px solid #fff;
+            margin-top: 10px;
+            position: relative;
+            overflow: hidden;
+        }
+        .momentum-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #ff0000, #ffff00);
+            transition: width 0.1s;
+        }
+        #controls {
+            text-align: center;
+            font-size: 14px;
+        }
+        #networkUI {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        input {
+            padding: 8px;
+            border: none;
+            border-radius: 4px;
+        }
+        button {
+            padding: 10px 20px;
+            background: #0066ff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover {
+            background: #0052cc;
+        }
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+        #status {
+            color: #00ff00;
+            font-size: 14px;
+            min-height: 20px;
+            font-weight: bold;
+        }
+        #countdownOverlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 120px;
+            font-weight: bold;
+            color: #ffff00;
+            text-shadow: 0 0 20px #ffff00;
+            z-index: 100;
+        }
+        #readyUI {
+            text-align: center;
+        }
+        #readyUI button {
+            padding: 15px 40px;
+            font-size: 16px;
+            margin-top: 10px;
+        }
+        #gameTime {
+            font-size: 24px;
+            font-weight: bold;
+            color: #00ff00;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <h1>⚡ BEYBLADE COMBAT ⚡</h1>
+        
+        <div id="networkUI">
+            <div>
+                <input type="text" id="peerId" placeholder="Your Peer ID" readonly>
+                <button onclick="copyPeerId()">Copy ID</button>
+            </div>
+            <div>
+                <input type="text" id="opponentId" placeholder="Opponent's Peer ID">
+                <button onclick="connectToPeer()">Connect</button>
+            </div>
+            <div id="status">Initializing...</div>
+        </div>
+
+        <div id="readyUI" style="display: none;">
+            <div>Opponent Connected!</div>
+            <button onclick="readyUp()" id="readyBtn">Ready</button>
+            <div id="readyStatus"></div>
+        </div>
+
+        <div id="gameContainer">
+            <canvas id="gameCanvas"></canvas>
+            <div id="countdownOverlay" style="display: none;"></div>
+        </div>
+
+        <div id="ui">
+            <div class="player-info">
+                <div>Player 1</div>
+                <div class="momentum-bar">
+                    <div class="momentum-fill" id="p1Momentum" style="width: 100%"></div>
+                </div>
+                <div id="p1MomentumText">100</div>
+                <div id="p1Status"></div>
+            </div>
+            <div class="player-info">
+                <div>Player 2</div>
+                <div class="momentum-bar">
+                    <div class="momentum-fill" id="p2Momentum" style="width: 100%"></div>
+                </div>
+                <div id="p2MomentumText">100</div>
+                <div id="p2Status"></div>
+            </div>
+        </div>
+
+        <div id="gameTime" style="display: none;">Time: 0s</div>
+
+        <div id="controls">
+            <p>Player 1: [Q] Spin | [W] Drift</p>
+            <p>Player 2: [O] Spin | [P] Drift</p>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = 600;
+        canvas.height = 600;
+
+        const ARENA_CENTER = { x: 300, y: 300 };
+        const ARENA_RADIUS = 280;
+        const MAX_MOMENTUM = 100;
+        const MOMENTUM_DRAIN = 0.3;
+        const SPIN_SPEED_MULT = 0.3;
+        const DRIFT_SPEED_MULT = 0.15;
+        const FRICTION = 0.98;
+        const GAME_DURATION = 300000; // 5 minutes in milliseconds
+        const COUNTDOWN_DURATION = 3;
+
+        class Blade {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.color = color;
+                this.momentum = MAX_MOMENTUM;
+                this.vx = 0;
+                this.vy = 0;
+                this.angle = 0;
+                this.lastAction = null;
+                this.spinning = false;
+            }
+
+            update() {
+                if (this.momentum > 0) {
+                    this.momentum = Math.max(0, this.momentum - MOMENTUM_DRAIN);
+                }
+
+                if (this.momentum === 0) {
+                    this.spinning = false;
+                    this.vx *= 0.9;
+                    this.vy *= 0.9;
+                }
+
+                this.x += this.vx;
+                this.y += this.vy;
+                this.vx *= FRICTION;
+                this.vy *= FRICTION;
+
+                // Push towards center
+                const dx = ARENA_CENTER.x - this.x;
+                const dy = ARENA_CENTER.y - this.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+
+                if (dist > ARENA_RADIUS - 30) {
+                    const angle = Math.atan2(dy, dx);
+                    const pushForce = 0.3;
+                    this.vx += Math.cos(angle) * pushForce;
+                    this.vy += Math.sin(angle) * pushForce;
+                }
+
+                // Clamp to arena
+                const distFromCenter = Math.sqrt((this.x - ARENA_CENTER.x) ** 2 + (this.y - ARENA_CENTER.y) ** 2);
+                if (distFromCenter > ARENA_RADIUS - 20) {
+                    const angle = Math.atan2(this.y - ARENA_CENTER.y, this.x - ARENA_CENTER.x);
+                    this.x = ARENA_CENTER.x + Math.cos(angle) * (ARENA_RADIUS - 20);
+                    this.y = ARENA_CENTER.y + Math.sin(angle) * (ARENA_RADIUS - 20);
+                }
+
+                this.angle += this.momentum * 0.05;
+            }
+
+            spin() {
+                if (this.momentum > 0) {
+                    const angle = Math.atan2(this.vy, this.vx) || 0;
+                    const speed = Math.sqrt(this.vx ** 2 + this.vy ** 2) + SPIN_SPEED_MULT * this.momentum;
+                    this.vx = Math.cos(angle) * speed;
+                    this.vy = Math.sin(angle) * speed;
+                    this.spinning = true;
+                    this.lastAction = 'spin';
+                }
+            }
+
+            drift(dirX, dirY) {
+                if (this.momentum > 0) {
+                    const speed = DRIFT_SPEED_MULT * this.momentum;
+                    const len = Math.sqrt(dirX ** 2 + dirY ** 2) || 1;
+                    this.vx = (dirX / len) * speed;
+                    this.vy = (dirY / len) * speed;
+                    this.lastAction = 'drift';
+                    this.momentum -= 5;
+                }
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.angle);
+
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(0, 0, 15, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.strokeStyle = 'white';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.lineTo(15, 0);
+                ctx.stroke();
+
+                ctx.restore();
+            }
+        }
+
+        let blade1 = new Blade(150, 300, '#ff0000');
+        let blade2 = new Blade(450, 300, '#0000ff');
+
+        let peer = null;
+        let conn = null;
+        let isHost = false;
+        let gameRunning = false;
+        let gameStartTime = null;
+        let countdownActive = false;
+        let countdownValue = COUNTDOWN_DURATION;
+        let bothReady = false;
+        let localReady = false;
+        let remoteReady = false;
+
+        function initPeer() {
+            peer = new Peer();
+            peer.on('open', (id) => {
+                document.getElementById('peerId').value = id;
+                document.getElementById('status').textContent = 'Peer ID set. Waiting for opponent...';
+            });
+            peer.on('connection', (connection) => {
+                conn = connection;
+                setupConnection();
+                isHost = false;
+                showReadyUI();
+                document.getElementById('status').textContent = 'Opponent connected!';
+            });
+        }
+
+        function connectToPeer() {
+            const opponentId = document.getElementById('opponentId').value;
+            if (!opponentId) return;
+            conn = peer.connect(opponentId);
+            setupConnection();
+            isHost = true;
+            document.getElementById('status').textContent = 'Connecting to opponent...';
+        }
+
+        function setupConnection() {
+            conn.on('open', () => {
+                showReadyUI();
+                document.getElementById('status').textContent = 'Opponent connected!';
+            });
+            conn.on('data', (data) => {
+                if (data.type === 'ready') {
+                    remoteReady = true;
+                    updateReadyStatus();
+                    if (localReady && remoteReady && isHost) {
+                        setTimeout(() => {
+                            conn.send({ type: 'startCountdown' });
+                            startCountdown();
+                        }, 500);
+                    }
+                } else if (data.type === 'startCountdown') {
+                    startCountdown();
+                } else if (gameRunning) {
+                    if (data.action === 'spin') {
+                        blade2.spin();
+                    } else if (data.action === 'drift') {
+                        blade2.drift(data.dirX, data.dirY);
+                    }
+                    blade2.momentum = Math.max(0, data.momentum);
+                }
+            });
+            conn.on('close', () => {
+                document.getElementById('status').textContent = 'Opponent disconnected';
+                gameRunning = false;
+                resetGame();
+            });
+        }
+
+        function showReadyUI() {
+            document.getElementById('readyUI').style.display = 'block';
+        }
+
+        function hideReadyUI() {
+            document.getElementById('readyUI').style.display = 'none';
+        }
+
+        function readyUp() {
+            localReady = true;
+            document.getElementById('readyBtn').disabled = true;
+            document.getElementById('readyBtn').textContent = 'Waiting...';
+            updateReadyStatus();
+            if (conn) {
+                conn.send({ type: 'ready' });
+            }
+        }
+
+        function updateReadyStatus() {
+            let status = '';
+            status += localReady ? '✓ You Ready' : '✗ Not Ready';
+            status += ' | ';
+            status += remoteReady ? '✓ Opponent Ready' : '✗ Opponent Not Ready';
+            document.getElementById('readyStatus').textContent = status;
+        }
+
+        function startCountdown() {
+            countdownActive = true;
+            hideReadyUI();
+            countdownValue = COUNTDOWN_DURATION;
+            const overlay = document.getElementById('countdownOverlay');
+            overlay.style.display = 'flex';
+            
+            const countdownInterval = setInterval(() => {
+                if (countdownValue > 0) {
+                    overlay.textContent = countdownValue;
+                    countdownValue--;
+                } else {
+                    clearInterval(countdownInterval);
+                    overlay.style.display = 'none';
+                    countdownActive = false;
+                    gameRunning = true;
+                    gameStartTime = Date.now();
+                    document.getElementById('gameTime').style.display = 'block';
+                    document.getElementById('controls').style.display = 'block';
+                    document.getElementById('status').textContent = 'BATTLE START!';
+                }
+            }, 1000);
+        }
+
+        function copyPeerId() {
+            const peerId = document.getElementById('peerId').value;
+            if (peerId) {
+                navigator.clipboard.writeText(peerId);
+                alert('Peer ID copied: ' + peerId);
+            }
+        }
+
+        const keys = {};
+        window.addEventListener('keydown', (e) => {
+            if (!gameRunning) return;
+            
+            keys[e.key.toLowerCase()] = true;
+
+            if (e.key.toLowerCase() === 'q') {
+                blade1.spin();
+                if (conn) conn.send({ action: 'spin', momentum: blade1.momentum });
+            }
+            if (e.key.toLowerCase() === 'w') {
+                const dirX = blade1.vx || 1;
+                const dirY = blade1.vy || 0;
+                blade1.drift(dirX, dirY);
+                if (conn) conn.send({ action: 'drift', dirX, dirY, momentum: blade1.momentum });
+            }
+
+            if (e.key.toLowerCase() === 'o') {
+                blade2.spin();
+                if (conn) conn.send({ action: 'spin', momentum: blade2.momentum });
+            }
+            if (e.key.toLowerCase() === 'p') {
+                const dirX = blade2.vx || 1;
+                const dirY = blade2.vy || 0;
+                blade2.drift(dirX, dirY);
+                if (conn) conn.send({ action: 'drift', dirX, dirY, momentum: blade2.momentum });
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            keys[e.key.toLowerCase()] = false;
+        });
+
+        function checkCollision() {
+            const dx = blade2.x - blade1.x;
+            const dy = blade2.y - blade1.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist < 30) {
+                const angle = Math.atan2(dy, dx);
+                const b1Action = blade1.lastAction;
+                const b2Action = blade2.lastAction;
+
+                if (b1Action === 'spin' && b2Action === 'spin') {
+                    blade1.momentum += 5;
+                    blade2.momentum += 5;
+                } else if (b1Action === 'spin' && b2Action === 'drift') {
+                    blade2.momentum -= 10;
+                } else if (b1Action === 'drift' && b2Action === 'spin') {
+                    blade1.momentum -= 10;
+                } else if (b1Action === null && b2Action === null) {
+                    blade1.momentum -= 5;
+                    blade2.momentum -= 5;
+                }
+
+                blade1.vx += Math.cos(angle) * 2;
+                blade1.vy += Math.sin(angle) * 2;
+                blade2.vx -= Math.cos(angle) * 2;
+                blade2.vy -= Math.sin(angle) * 2;
+            }
+        }
+
+        function draw() {
+            ctx.fillStyle = '#1a1a1a';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.strokeStyle = '#666';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(ARENA_CENTER.x, ARENA_CENTER.y, ARENA_RADIUS, 0, Math.PI * 2);
+            ctx.stroke();
+
+            blade1.draw();
+            blade2.draw();
+
+            // Update UI
+            const p1Percent = (blade1.momentum / MAX_MOMENTUM) * 100;
+            const p2Percent = (blade2.momentum / MAX_MOMENTUM) * 100;
+
+            document.getElementById('p1Momentum').style.width = p1Percent + '%';
+            document.getElementById('p2Momentum').style.width = p2Percent + '%';
+            document.getElementById('p1MomentumText').textContent = Math.floor(blade1.momentum);
+            document.getElementById('p2MomentumText').textContent = Math.floor(blade2.momentum);
+
+            document.getElementById('p1Status').textContent = blade1.momentum === 0 ? 'DEFEATED' : (blade1.spinning ? 'SPINNING' : '');
+            document.getElementById('p2Status').textContent = blade2.momentum === 0 ? 'DEFEATED' : (blade2.spinning ? 'SPINNING' : '');
+
+            if (gameRunning && gameStartTime) {
+                const elapsed = Math.floor((Date.now() - gameStartTime) / 1000);
+                document.getElementById('gameTime').textContent = `Time: ${elapsed}s`;
+                
+                if (Date.now() - gameStartTime > GAME_DURATION) {
+                    gameRunning = false;
+                    document.getElementById('status').textContent = 'BATTLE END!';
+                    resetGame();
+                }
+            }
+        }
+
+        function resetGame() {
+            blade1 = new Blade(150, 300, '#ff0000');
+            blade2 = new Blade(450, 300, '#0000ff');
+            localReady = false;
+            remoteReady = false;
+            document.getElementById('readyBtn').disabled = false;
+            document.getElementById('readyBtn').textContent = 'Ready';
+            document.getElementById('gameTime').style.display = 'none';
+            showReadyUI();
+        }
+
+        function update() {
+            if (gameRunning) {
+                blade1.update();
+                blade2.update();
+                checkCollision();
+            }
+            draw();
+            requestAnimationFrame(update);
+        }
+
+        initPeer();
+        update();
+    </script>
+</body>
+</html>
