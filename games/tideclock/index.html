@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tideclock — Zopo</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  body { margin: 0; padding: 24px 12px 60px; background: #0a0907; color: #d8c391;
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Hoefler Text", Georgia, serif;
+    min-height: 100vh; display: flex; flex-direction: column; align-items: center; }
+  header { width: min(720px, 100%); display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 18px; }
+  header h1 { margin: 0; font-weight: 500; font-size: 18px; letter-spacing: 0.3em; text-transform: uppercase; }
+  a.home { color: #d8c391; text-decoration: none; opacity: 0.7; font-size: 12px; letter-spacing: 0.2em; text-transform: uppercase; }
+  a.home:hover { opacity: 1; }
+  .frame {
+    width: min(700px, 100%);
+    aspect-ratio: 1/1;
+    background: radial-gradient(circle at 50% 50%, #1a1410 0%, #0e0a08 75%);
+    border-radius: 50%;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.65), inset 0 0 60px rgba(0,0,0,0.4);
+    overflow: hidden;
+    position: relative;
+  }
+  svg { display: block; width: 100%; height: 100%; }
+  .info { width: min(700px, 100%); margin-top: 22px; text-align: center; line-height: 1.7; font-size: 14px; }
+  .info .now { font-style: italic; color: #ebdcb8; font-size: 16px; margin-bottom: 6px; }
+  .info .meta { opacity: 0.65; font-size: 13px; }
+  .hint { font-size: 11px; opacity: 0.45; margin-top: 14px; max-width: 600px; line-height: 1.6; text-align: center; font-style: italic; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Tideclock</h1>
+  <a class="home" href="index.html">↩ gallery</a>
+</header>
+
+<div class="frame"><svg id="dial" viewBox="-200 -200 400 400"></svg></div>
+
+<div class="info">
+  <div class="now" id="now">—</div>
+  <div class="meta" id="meta">—</div>
+</div>
+
+<div class="hint">All readings approximate. The moon and sun are fictional but consistent with each other.</div>
+
+<script>
+// ────────────────────────────────────────────────────────────────────────────
+// Tideclock — procedural live clock
+// ────────────────────────────────────────────────────────────────────────────
+const ns = "http://www.w3.org/2000/svg";
+const dial = document.getElementById("dial");
+
+const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const DAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+
+function el(t, a) { const e = document.createElementNS(ns, t); for (const k in a) e.setAttribute(k, a[k]); return e; }
+
+function frame() {
+  const d = new Date();
+  const hh = d.getHours();
+  const mm = d.getMinutes();
+  const ss = d.getSeconds();
+  const dom = d.getDate();
+  const mon = d.getMonth();
+  const dow = d.getDay();
+
+  dial.innerHTML = "";
+
+  // outermost ring — month dial
+  dial.appendChild(el("circle",{cx:0,cy:0,r:185,fill:"none",stroke:"#3a2c1f","stroke-width":1}));
+  dial.appendChild(el("circle",{cx:0,cy:0,r:175,fill:"none",stroke:"#3a2c1f","stroke-width":0.5}));
+  for (let m = 0; m < 12; m++) {
+    const a = (m / 12) * Math.PI * 2 - Math.PI / 2;
+    const x1 = Math.cos(a) * 175, y1 = Math.sin(a) * 175;
+    const x2 = Math.cos(a) * 185, y2 = Math.sin(a) * 185;
+    dial.appendChild(el("line",{x1,y1,x2,y2,stroke:"#5a4632","stroke-width":1}));
+    const tx = Math.cos(a) * 195, ty = Math.sin(a) * 195;
+    const ang = (a * 180 / Math.PI) + 90;
+    const t = el("text",{x:tx,y:ty,fill:"#d8c391","font-family":"Georgia, serif","font-size":9,"text-anchor":"middle","transform":`rotate(${ang} ${tx} ${ty})`});
+    t.textContent = MONTHS[m].slice(0, 3).toUpperCase();
+    dial.appendChild(t);
+  }
+  // current month marker
+  {
+    const a = (mon / 12 + dom / 31 / 12) * Math.PI * 2 - Math.PI / 2;
+    const x = Math.cos(a) * 180, y = Math.sin(a) * 180;
+    dial.appendChild(el("circle",{cx:x,cy:y,r:4,fill:"#caa84a"}));
+  }
+
+  // hour ring (24 hours)
+  dial.appendChild(el("circle",{cx:0,cy:0,r:155,fill:"none",stroke:"#3a2c1f","stroke-width":1}));
+  for (let h = 0; h < 24; h++) {
+    const a = (h / 24) * Math.PI * 2 - Math.PI / 2;
+    const x1 = Math.cos(a) * 145, y1 = Math.sin(a) * 145;
+    const x2 = Math.cos(a) * 155, y2 = Math.sin(a) * 155;
+    dial.appendChild(el("line",{x1,y1,x2,y2,stroke:"#5a4632","stroke-width": h % 6 === 0 ? 1.2 : 0.6}));
+    if (h % 3 === 0) {
+      const tx = Math.cos(a) * 138, ty = Math.sin(a) * 138 + 3;
+      const t = el("text",{x:tx,y:ty,fill:"#d8c391","font-family":"Georgia, serif","font-size":9,"text-anchor":"middle"});
+      t.textContent = (h < 10 ? "0" : "") + h;
+      dial.appendChild(t);
+    }
+  }
+  // sun arc (light-time band)
+  drawSunArc(hh, mm);
+
+  // minute ring
+  dial.appendChild(el("circle",{cx:0,cy:0,r:115,fill:"none",stroke:"#3a2c1f","stroke-width":0.5}));
+  for (let m = 0; m < 60; m++) {
+    const a = (m / 60) * Math.PI * 2 - Math.PI / 2;
+    const x1 = Math.cos(a) * 110, y1 = Math.sin(a) * 110;
+    const x2 = Math.cos(a) * 115, y2 = Math.sin(a) * 115;
+    dial.appendChild(el("line",{x1,y1,x2,y2,stroke:"#5a4632","stroke-width": m % 5 === 0 ? 1 : 0.4}));
+  }
+
+  // moon (current phase) — central piece
+  drawMoon(d);
+
+  // hands
+  // hour hand (12-hour precision, 24-h indicator on outer ring)
+  const minF = mm + ss / 60;
+  const hourAngle12 = (((hh % 12) + minF / 60) / 12) * Math.PI * 2 - Math.PI / 2;
+  const minuteAngle = ((mm + ss / 60) / 60) * Math.PI * 2 - Math.PI / 2;
+  const secondAngle = (ss / 60) * Math.PI * 2 - Math.PI / 2;
+
+  // 24-hour pointer along hour ring
+  const h24 = ((hh + minF / 60) / 24) * Math.PI * 2 - Math.PI / 2;
+  dial.appendChild(el("path",{d:`M0,0 L${Math.cos(h24)*150},${Math.sin(h24)*150}`,stroke:"#caa84a","stroke-width":2,opacity:0.85}));
+
+  // hour & minute hands inside (moon-orbit area)
+  dial.appendChild(el("line",{x1:0,y1:0,x2:Math.cos(hourAngle12)*55,y2:Math.sin(hourAngle12)*55,stroke:"#ebdcb8","stroke-width":3,"stroke-linecap":"round"}));
+  dial.appendChild(el("line",{x1:0,y1:0,x2:Math.cos(minuteAngle)*90,y2:Math.sin(minuteAngle)*90,stroke:"#ebdcb8","stroke-width":1.6,"stroke-linecap":"round"}));
+  dial.appendChild(el("line",{x1:0,y1:0,x2:Math.cos(secondAngle)*100,y2:Math.sin(secondAngle)*100,stroke:"#872323","stroke-width":1,"stroke-linecap":"round"}));
+  dial.appendChild(el("circle",{cx:0,cy:0,r:5,fill:"#872323"}));
+
+  // info text
+  const pad = n => (n < 10 ? "0" : "") + n;
+  document.getElementById("now").textContent =
+    `${DAYS[dow]}, ${dom} ${MONTHS[mon]}  ·  ${pad(hh)}:${pad(mm)}:${pad(ss)}`;
+  document.getElementById("meta").textContent =
+    `${weekOfYear(d)}th week of the year  ·  day ${dayOfYear(d)} of ${isLeap(d.getFullYear()) ? 366 : 365}  ·  ${moonPhaseName(d)} moon`;
+
+  requestAnimationFrame(frame);
+}
+
+function drawSunArc(hh, mm) {
+  // simple model: sun rises at 06:00, sets at 18:00 (no real geo). Show arc.
+  const minutes = hh * 60 + mm;
+  const sunrise = 6 * 60;
+  const sunset = 18 * 60;
+  const a1 = (sunrise / (24 * 60)) * Math.PI * 2 - Math.PI / 2;
+  const a2 = (sunset / (24 * 60)) * Math.PI * 2 - Math.PI / 2;
+  // band between them
+  const x1 = Math.cos(a1) * 165, y1 = Math.sin(a1) * 165;
+  const x2 = Math.cos(a2) * 165, y2 = Math.sin(a2) * 165;
+  dial.appendChild(el("path",{
+    d: `M${x1},${y1} A165,165 0 0 1 ${x2},${y2}`,
+    fill: "none", stroke: "#caa84a", "stroke-width": 5, opacity: 0.45
+  }));
+  // current sun position
+  if (minutes > sunrise && minutes < sunset) {
+    const a = (minutes / (24 * 60)) * Math.PI * 2 - Math.PI / 2;
+    const sx = Math.cos(a) * 165, sy = Math.sin(a) * 165;
+    dial.appendChild(el("circle",{cx:sx,cy:sy,r:6,fill:"#caa84a"}));
+    dial.appendChild(el("circle",{cx:sx,cy:sy,r:11,fill:"#caa84a",opacity:0.3}));
+  }
+}
+
+function moonPhase(d) {
+  // Conway-style approximation, returns 0..1 (0=new, 0.5=full)
+  let y = d.getFullYear(), m = d.getMonth() + 1, day = d.getDate();
+  if (m < 3) { y--; m += 12; }
+  ++m;
+  const c = 365.25 * y;
+  const e = 30.6 * m;
+  const jd = c + e + day - 694039.09;
+  const phase = (jd / 29.5305882) % 1;
+  return phase < 0 ? phase + 1 : phase;
+}
+function moonPhaseName(d) {
+  const p = moonPhase(d);
+  if (p < 0.0625) return "new";
+  if (p < 0.1875) return "waxing crescent";
+  if (p < 0.3125) return "first quarter";
+  if (p < 0.4375) return "waxing gibbous";
+  if (p < 0.5625) return "full";
+  if (p < 0.6875) return "waning gibbous";
+  if (p < 0.8125) return "last quarter";
+  if (p < 0.9375) return "waning crescent";
+  return "new";
+}
+function drawMoon(d) {
+  const p = moonPhase(d);
+  // moon disc
+  dial.appendChild(el("circle",{cx:0,cy:0,r:38,fill:"#1f1c14",stroke:"#3a2c1f"}));
+  // illuminated portion — model with a circular shadow shifted along x
+  const c = 38;
+  // illumination fraction
+  const ill = (1 - Math.cos(p * Math.PI * 2)) / 2; // 0..1..0
+  const shifted = (p < 0.5) ? c * (1 - 2 * ill) : c * (2 * ill - 1);
+  // Use a clipped circle approach via path
+  // Simpler: mask with two circles
+  // Bright color
+  const lit = el("path",{d:moonPath(c, p),fill:"#ebdcb8",opacity:0.9});
+  dial.appendChild(lit);
+  // small craters
+  const seed = Math.floor((d.getTime() / 86400000));
+  const r = mulberry(seed);
+  for (let i = 0; i < 6; i++) {
+    const ang = r() * Math.PI * 2;
+    const rd = r() * 28;
+    const cx = Math.cos(ang) * rd, cy = Math.sin(ang) * rd;
+    dial.appendChild(el("circle",{cx,cy,r:1.5+r()*1.5,fill:"#3a2c1f",opacity:0.5}));
+  }
+}
+function mulberry(seed) {
+  let a = seed >>> 0;
+  return function() {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = a;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function moonPath(c, p) {
+  // p=0 new (no light), p=0.25 first quarter (right half), p=0.5 full, p=0.75 last quarter (left half)
+  // Build path of lit area as union of circular arcs.
+  // For p in [0, 0.5]: waxing — right side bright. Inner curve is a (concave/convex) ellipse.
+  // For p in [0.5, 1]:  waning — left side bright.
+  if (p < 0.001 || p > 0.999) return ""; // new
+  if (Math.abs(p - 0.5) < 0.001) {
+    return `M0,${-c} A${c},${c} 0 1 0 0,${c} A${c},${c} 0 1 0 0,${-c} Z`;
+  }
+  const waxing = p < 0.5;
+  // illumination 0..1
+  const phaseAng = p * Math.PI * 2;
+  // x-radius of terminator ellipse
+  const rx = Math.abs(c * Math.cos(phaseAng));
+  // sweep direction depends on phase quadrant
+  const isGibbous = (p > 0.25 && p < 0.75);
+  // Build path: outer arc on lit side, then ellipse arc back.
+  // Lit half:
+  let d = "";
+  if (waxing) {
+    // right half outer arc (top to bottom)
+    d = `M0,${-c} A${c},${c} 0 0 1 0,${c}`;
+    // terminator ellipse from bottom back to top, going left through (-rx, 0) if crescent, else through (+rx,0)
+    const sweep = isGibbous ? 1 : 0;
+    d += ` A${rx},${c} 0 0 ${sweep} 0,${-c} Z`;
+  } else {
+    // left half outer arc (top to bottom going left)
+    d = `M0,${-c} A${c},${c} 0 0 0 0,${c}`;
+    const sweep = isGibbous ? 0 : 1;
+    d += ` A${rx},${c} 0 0 ${sweep} 0,${-c} Z`;
+  }
+  return d;
+}
+
+function dayOfYear(d) {
+  const start = new Date(d.getFullYear(), 0, 0);
+  const diff = d - start + ((start.getTimezoneOffset() - d.getTimezoneOffset()) * 60 * 1000);
+  return Math.floor(diff / 86400000);
+}
+function isLeap(y) { return (y % 4 === 0 && y % 100 !== 0) || (y % 400 === 0); }
+function weekOfYear(d) {
+  const target = new Date(d.valueOf());
+  const dayNr = (d.getDay() + 6) % 7;
+  target.setDate(target.getDate() - dayNr + 3);
+  const jan4 = new Date(target.getFullYear(), 0, 4);
+  const dayDiff = (target - jan4) / 86400000;
+  return 1 + Math.ceil(dayDiff / 7);
+}
+
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
