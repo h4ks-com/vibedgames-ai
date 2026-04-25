@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Murmuration — Zopo</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  body { margin: 0; padding: 24px 12px 60px; background: #1b1410; color: #d8c391;
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Hoefler Text", Georgia, serif;
+    min-height: 100vh; display: flex; flex-direction: column; align-items: center; }
+  header { width: min(960px, 100%); display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 18px; }
+  header h1 { margin: 0; font-weight: 500; font-size: 18px; letter-spacing: 0.3em; text-transform: uppercase; }
+  a.home { color: #d8c391; text-decoration: none; opacity: 0.7; font-size: 12px; letter-spacing: 0.2em; text-transform: uppercase; }
+  a.home:hover { opacity: 1; }
+  .frame {
+    width: min(960px, 100%);
+    aspect-ratio: 4 / 3;
+    background: #f1e6cc;
+    background-image:
+      radial-gradient(ellipse at center, #f5ebd4, #e6d4af 70%, #cdb888 110%);
+    box-shadow: inset 0 0 100px rgba(80, 50, 20, 0.35), 0 30px 80px rgba(0,0,0,0.55);
+    border-radius: 4px;
+    overflow: hidden;
+    position: relative;
+  }
+  canvas { display: block; width: 100%; height: 100%; }
+  .controls { width: min(960px, 100%); display: flex; gap: 12px; margin-top: 18px; flex-wrap: wrap; }
+  button {
+    background: transparent; color: #d8c391;
+    border: 1px solid #5a4632;
+    padding: 6px 12px;
+    font-family: inherit;
+    font-size: 12px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+  button:hover { border-color: #d8c391; }
+  label { font-size: 12px; opacity: 0.8; display: flex; align-items: center; gap: 8px; letter-spacing: 0.1em; text-transform: uppercase; }
+  input[type=range] { accent-color: #872323; }
+  .hint { font-size: 12px; opacity: 0.6; margin-top: 14px; max-width: 700px; line-height: 1.5; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Murmuration</h1>
+  <a class="home" href="index.html">↩ gallery</a>
+</header>
+
+<div class="frame" id="frame">
+  <canvas id="bg"></canvas>
+  <canvas id="fg" style="position:absolute;inset:0"></canvas>
+</div>
+
+<div class="controls">
+  <button id="clear">clear ink</button>
+  <button id="reseed">reseed flock</button>
+  <label>flock <input id="count" type="range" min="40" max="500" value="200"></label>
+  <label>ink <input id="ink" type="range" min="0" max="100" value="30"></label>
+  <label>cohere <input id="coh" type="range" min="0" max="200" value="80"></label>
+</div>
+
+<div class="hint">
+  Move the mouse to draw the flock; <em>click</em> to scatter them. The ink remains.
+</div>
+
+<script>
+// ────────────────────────────────────────────────────────────────────────────
+// Murmuration — boids leaving ink
+// ────────────────────────────────────────────────────────────────────────────
+const bg = document.getElementById("bg");
+const fg = document.getElementById("fg");
+const bctx = bg.getContext("2d");
+const fctx = fg.getContext("2d");
+
+let W, H, dpr;
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  const r = bg.parentElement.getBoundingClientRect();
+  W = r.width; H = r.height;
+  for (const c of [bg, fg]) {
+    c.width  = Math.floor(W * dpr);
+    c.height = Math.floor(H * dpr);
+    c.style.width = W + "px"; c.style.height = H + "px";
+    c.getContext("2d").setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  bctx.fillStyle = "rgba(0,0,0,0)";
+  bctx.clearRect(0, 0, W, H);
+}
+window.addEventListener("resize", () => { resize(); seed(boids.length || 200); });
+
+let boids = [];
+let mouse = { x: -1000, y: -1000, active: false, scatter: 0 };
+
+function seed(n) {
+  boids = [];
+  for (let i = 0; i < n; i++) {
+    boids.push({
+      x: Math.random() * W,
+      y: Math.random() * H,
+      vx: (Math.random() - 0.5) * 1.2,
+      vy: (Math.random() - 0.5) * 1.2,
+      px: 0, py: 0,
+    });
+  }
+}
+
+function step() {
+  const inkA = parseFloat(document.getElementById("ink").value) / 100;
+  const cohW = parseFloat(document.getElementById("coh").value) / 100;
+  const N = boids.length;
+
+  // grid bins for neighbourhood
+  const cs = 40;
+  const cw = Math.ceil(W / cs), ch = Math.ceil(H / cs);
+  const grid = new Array(cw * ch);
+  for (let i = 0; i < grid.length; i++) grid[i] = [];
+  for (const b of boids) {
+    const cx = Math.max(0, Math.min(cw - 1, Math.floor(b.x / cs)));
+    const cy = Math.max(0, Math.min(ch - 1, Math.floor(b.y / cs)));
+    grid[cy * cw + cx].push(b);
+  }
+
+  for (const b of boids) {
+    b.px = b.x; b.py = b.y;
+    let ax = 0, ay = 0;     // alignment
+    let cx2 = 0, cy2 = 0;   // cohesion sum
+    let sx = 0, sy = 0;     // separation
+    let count = 0;
+    const cx = Math.max(0, Math.min(cw - 1, Math.floor(b.x / cs)));
+    const cy = Math.max(0, Math.min(ch - 1, Math.floor(b.y / cs)));
+    for (let oy = -1; oy <= 1; oy++) {
+      for (let ox = -1; ox <= 1; ox++) {
+        const gx = cx + ox, gy = cy + oy;
+        if (gx < 0 || gy < 0 || gx >= cw || gy >= ch) continue;
+        const cell = grid[gy * cw + gx];
+        for (const o of cell) {
+          if (o === b) continue;
+          const dx = o.x - b.x, dy = o.y - b.y;
+          const d2 = dx*dx + dy*dy;
+          if (d2 > 40 * 40) continue;
+          ax += o.vx; ay += o.vy;
+          cx2 += o.x; cy2 += o.y;
+          if (d2 < 12 * 12 && d2 > 0) {
+            const f = 1 / d2;
+            sx -= dx * f * 200; sy -= dy * f * 200;
+          }
+          count++;
+        }
+      }
+    }
+    if (count > 0) {
+      ax /= count; ay /= count;
+      cx2 = cx2 / count - b.x; cy2 = cy2 / count - b.y;
+      b.vx += (ax - b.vx) * 0.05;
+      b.vy += (ay - b.vy) * 0.05;
+      b.vx += cx2 * 0.0008 * cohW;
+      b.vy += cy2 * 0.0008 * cohW;
+      b.vx += sx * 0.01;
+      b.vy += sy * 0.01;
+    }
+
+    // mouse attraction (subtle)
+    if (mouse.active) {
+      const dx = mouse.x - b.x, dy = mouse.y - b.y;
+      const d = Math.hypot(dx, dy) + 1;
+      const force = mouse.scatter > 0 ? -1 : 1;
+      const reach = mouse.scatter > 0 ? 320 : 220;
+      if (d < reach) {
+        b.vx += (dx / d) * 0.18 * force;
+        b.vy += (dy / d) * 0.18 * force;
+      }
+    }
+
+    // jitter
+    b.vx += (Math.random() - 0.5) * 0.04;
+    b.vy += (Math.random() - 0.5) * 0.04;
+
+    // limit speed
+    const sp = Math.hypot(b.vx, b.vy);
+    const maxS = 2.6, minS = 1.0;
+    if (sp > maxS) { b.vx *= maxS / sp; b.vy *= maxS / sp; }
+    if (sp < minS && sp > 0) { b.vx *= minS / sp; b.vy *= minS / sp; }
+
+    b.x += b.vx; b.y += b.vy;
+    // soft wrap with margin
+    const m = 30;
+    if (b.x < -m) b.x = W + m; if (b.x > W + m) b.x = -m;
+    if (b.y < -m) b.y = H + m; if (b.y > H + m) b.y = -m;
+  }
+  if (mouse.scatter > 0) mouse.scatter--;
+
+  // ink trails on bg
+  if (inkA > 0) {
+    bctx.lineWidth = 0.6;
+    bctx.lineCap = "round";
+    bctx.strokeStyle = `rgba(28, 18, 12, ${inkA * 0.18})`;
+    bctx.beginPath();
+    for (const b of boids) {
+      // skip wrap discontinuities
+      if (Math.abs(b.x - b.px) > 50 || Math.abs(b.y - b.py) > 50) continue;
+      bctx.moveTo(b.px, b.py); bctx.lineTo(b.x, b.y);
+    }
+    bctx.stroke();
+  }
+
+  // foreground: birds (small triangles)
+  fctx.clearRect(0, 0, W, H);
+  fctx.fillStyle = "rgba(28, 18, 12, 0.92)";
+  for (const b of boids) {
+    const a = Math.atan2(b.vy, b.vx);
+    const s = 2.4;
+    fctx.beginPath();
+    fctx.moveTo(b.x + Math.cos(a) * s * 1.6, b.y + Math.sin(a) * s * 1.6);
+    fctx.lineTo(b.x + Math.cos(a + 2.5) * s, b.y + Math.sin(a + 2.5) * s);
+    fctx.lineTo(b.x + Math.cos(a - 2.5) * s, b.y + Math.sin(a - 2.5) * s);
+    fctx.closePath();
+    fctx.fill();
+  }
+
+  requestAnimationFrame(step);
+}
+
+bg.parentElement.addEventListener("mousemove", e => {
+  const r = bg.parentElement.getBoundingClientRect();
+  mouse.x = e.clientX - r.left; mouse.y = e.clientY - r.top;
+  mouse.active = true;
+});
+bg.parentElement.addEventListener("mouseleave", () => { mouse.active = false; });
+bg.parentElement.addEventListener("mousedown", () => { mouse.scatter = 30; });
+
+document.getElementById("clear").addEventListener("click", () => {
+  bctx.clearRect(0, 0, W, H);
+});
+document.getElementById("reseed").addEventListener("click", () => {
+  seed(parseInt(document.getElementById("count").value, 10));
+  bctx.clearRect(0, 0, W, H);
+});
+document.getElementById("count").addEventListener("change", e => {
+  const n = parseInt(e.target.value, 10);
+  if (n > boids.length) {
+    while (boids.length < n) boids.push({
+      x: Math.random() * W, y: Math.random() * H,
+      vx: (Math.random() - 0.5), vy: (Math.random() - 0.5),
+      px: 0, py: 0,
+    });
+  } else boids.length = n;
+});
+
+resize();
+seed(200);
+step();
+</script>
+</body>
+</html>
