@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Botanica — Zopo</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  body { margin: 0; padding: 24px 12px 60px; background: #0e0a08; color: #d8c391;
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Hoefler Text", Georgia, serif;
+    min-height: 100vh; display: flex; flex-direction: column; align-items: center; }
+  header { width: min(1000px, 100%); display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 18px; }
+  header h1 { margin: 0; font-weight: 500; font-size: 18px; letter-spacing: 0.3em; text-transform: uppercase; }
+  a.home { color: #d8c391; text-decoration: none; opacity: 0.7; font-size: 12px; letter-spacing: 0.2em; text-transform: uppercase; }
+  a.home:hover { opacity: 1; }
+  .frame {
+    width: min(1000px, 100%);
+    aspect-ratio: 16/9;
+    background:
+      linear-gradient(180deg, #1a1410 0%, #1a1612 70%, #2a1f15 100%);
+    border-radius: 4px;
+    overflow: hidden;
+    position: relative;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.65);
+    cursor: crosshair;
+  }
+  canvas { display: block; width: 100%; height: 100%; }
+  .controls { width: min(1000px, 100%); display: flex; gap: 12px; margin-top: 18px; flex-wrap: wrap; align-items: center; }
+  button, select { background: transparent; color: #d8c391; border: 1px solid #5a4632;
+    padding: 6px 12px; font-family: inherit; font-size: 12px;
+    letter-spacing: 0.2em; text-transform: uppercase; cursor: pointer; }
+  button:hover, select:hover { border-color: #d8c391; }
+  .seed { font-style: italic; opacity: 0.6; font-size: 12px; letter-spacing: 0.05em; }
+  .hint { font-size: 12px; opacity: 0.55; margin-top: 14px; max-width: 700px; line-height: 1.6; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Botanica</h1>
+  <a class="home" href="index.html">↩ gallery</a>
+</header>
+
+<div class="frame" id="frame">
+  <canvas id="g"></canvas>
+</div>
+
+<div class="controls">
+  <button id="grow">grow one here</button>
+  <button id="garden">garden</button>
+  <button id="clear">clear</button>
+  <span class="seed" id="seedInfo">—</span>
+</div>
+
+<div class="hint">
+  Click on the soil to plant a seed. Each plant has its own DNA — slightly different from any other plant ever grown here.
+</div>
+
+<script>
+// ────────────────────────────────────────────────────────────────────────────
+// Botanica — L-system plant grower
+// ────────────────────────────────────────────────────────────────────────────
+const cv = document.getElementById("g");
+const ctx = cv.getContext("2d");
+const frame = document.getElementById("frame");
+
+let W, H, dpr;
+function fit() {
+  dpr = window.devicePixelRatio || 1;
+  const r = frame.getBoundingClientRect();
+  W = r.width; H = r.height;
+  cv.width = Math.floor(W * dpr); cv.height = Math.floor(H * dpr);
+  cv.style.width = W + "px"; cv.style.height = H + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawSky();
+}
+window.addEventListener("resize", fit);
+
+function drawSky() {
+  // background gets a subtle dusk gradient
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, "#1f1814");
+  g.addColorStop(0.6, "#241a14");
+  g.addColorStop(1, "#3a2a1c");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+  // ground line
+  ctx.strokeStyle = "rgba(216,195,145,0.15)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, H * 0.85);
+  ctx.lineTo(W, H * 0.85);
+  ctx.stroke();
+}
+
+function rng(seed) {
+  let a = seed >>> 0;
+  return function() {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = a;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function pick(a, r) { return a[Math.floor(r() * a.length)]; }
+
+// ────────────────────────────────────────────────────────────────────────────
+// L-system DNA
+// ────────────────────────────────────────────────────────────────────────────
+function makeDNA(seed) {
+  const r = rng(seed);
+  // axiom + production rules
+  const axiomChoices = ["F", "FX", "X", "FFX"];
+  const axiom = pick(axiomChoices, r);
+  // F-rule (forward growth)
+  const fChoices = [
+    "F[+F]F[-F]F",
+    "FF-[-F+F+F]+[+F-F-F]",
+    "F[+F]F[-F][F]",
+    "FF+[+F-F-F]-[-F+F+F]",
+    "F[/+F][\\-F]F",
+  ];
+  const fRule = pick(fChoices, r);
+  const xChoices = [
+    "F+[[X]-X]-F[-FX]+X",
+    "F[+X][-X]FX",
+    "F-[[X]+X]+F[+FX]-X",
+    "FX",
+  ];
+  const xRule = pick(xChoices, r);
+
+  const angle = 18 + r() * 14;        // turn degrees
+  const startAngle = -90 + (r() - 0.5) * 18;
+  const segLen = 4 + r() * 4;
+  const segShrink = 0.86 + r() * 0.08;
+  const iters = 3 + Math.floor(r() * 3);
+  const branchThick = 1 + r() * 1.6;
+
+  // Botanic palette
+  const PALETTES = [
+    { stem: "#3a4a2a", leaf: "#7d8a5d", flower: "#c46a2a" },
+    { stem: "#4a3a2a", leaf: "#9aa066", flower: "#a02828" },
+    { stem: "#3a3a2a", leaf: "#6a7a4a", flower: "#caa84a" },
+    { stem: "#2a3a3a", leaf: "#5a8a7a", flower: "#d8c391" },
+    { stem: "#5a4a3a", leaf: "#a09a5a", flower: "#7a3a3a" },
+    { stem: "#3a3a4a", leaf: "#6a7a6a", flower: "#5a3a6a" },
+  ];
+  const palette = pick(PALETTES, r);
+
+  // Latin-ish name
+  const PRE = ["Vir","Aur","Chrys","Lyr","Niv","Pal","Aeg","Sol","Lun","Stell","Umbr","Sil"];
+  const MID = ["a","ea","i","y","io","u","oe"];
+  const SUF = ["lia","arta","esia","aria","oria","ona","alia","unda"];
+  const SP1 = ["alba","nigra","minor","major","sylvestris","aurata","caerulea","muta","palustris","occulta","chrysantha","longifolia"];
+  const name = pick(PRE,r) + pick(MID,r) + pick(SUF,r) + " " + pick(SP1,r);
+
+  // flower symbol probability
+  const flowerEvery = 1 + Math.floor(r() * 4);
+
+  return { axiom, fRule, xRule, angle, startAngle, segLen, segShrink, iters, branchThick, palette, name, flowerEvery, r };
+}
+
+function expand(dna) {
+  let s = dna.axiom;
+  for (let i = 0; i < dna.iters; i++) {
+    let out = "";
+    for (const ch of s) {
+      if (ch === "F") out += dna.fRule;
+      else if (ch === "X") out += dna.xRule;
+      else out += ch;
+    }
+    s = out;
+  }
+  return s;
+}
+
+function turtleDraw(s, dna, originX, groundY, progress) {
+  const total = s.length;
+  const upTo = Math.floor(total * progress);
+  let x = originX, y = groundY;
+  let ang = dna.startAngle * Math.PI / 180;
+  let len = dna.segLen;
+  let depth = 0;
+  const stack = [];
+  ctx.lineCap = "round";
+  ctx.lineWidth = dna.branchThick;
+  ctx.strokeStyle = dna.palette.stem;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  let segCount = 0;
+  for (let i = 0; i < upTo; i++) {
+    const ch = s[i];
+    if (ch === "F" || ch === "G") {
+      const nx = x + Math.cos(ang) * len;
+      const ny = y + Math.sin(ang) * len;
+      ctx.lineTo(nx, ny);
+      x = nx; y = ny;
+      segCount++;
+      // periodically render leaves/flowers as we draw
+      if (depth > 0 && (segCount % 6 === 0)) {
+        ctx.stroke();
+        // leaf
+        ctx.fillStyle = dna.palette.leaf + "cc";
+        ctx.beginPath();
+        ctx.ellipse(x, y, 4, 2.4, ang + Math.PI/2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.strokeStyle = dna.palette.stem;
+        ctx.lineWidth = Math.max(0.4, dna.branchThick * Math.pow(0.85, depth));
+      }
+    } else if (ch === "+") ang += dna.angle * Math.PI / 180;
+    else if (ch === "-") ang -= dna.angle * Math.PI / 180;
+    else if (ch === "/") ang += (dna.angle * 0.5) * Math.PI / 180;
+    else if (ch === "\\") ang -= (dna.angle * 0.5) * Math.PI / 180;
+    else if (ch === "[") {
+      stack.push({ x, y, ang, len, w: ctx.lineWidth });
+      depth++;
+      len *= dna.segShrink;
+      ctx.stroke();
+      ctx.lineWidth = Math.max(0.4, dna.branchThick * Math.pow(0.85, depth));
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+    } else if (ch === "]") {
+      const p = stack.pop();
+      // tip flower / leaf cluster occasionally
+      if (depth > 1 && i % dna.flowerEvery === 0) {
+        ctx.stroke();
+        ctx.fillStyle = dna.palette.flower;
+        ctx.beginPath();
+        ctx.arc(x, y, 1.8 + Math.random() * 1.6, 0, Math.PI * 2);
+        ctx.fill();
+        // tiny petals
+        for (let k = 0; k < 5; k++) {
+          const a = (k / 5) * Math.PI * 2;
+          ctx.beginPath();
+          ctx.ellipse(x + Math.cos(a) * 2, y + Math.sin(a) * 2, 1.4, 0.8, a, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      x = p.x; y = p.y; ang = p.ang; len = p.len;
+      depth--;
+      ctx.stroke();
+      ctx.lineWidth = p.w;
+      ctx.strokeStyle = dna.palette.stem;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+    }
+  }
+  ctx.stroke();
+}
+
+let plants = []; // { dna, expanded, x, y, progress, growSpeed }
+
+frame.addEventListener("click", e => {
+  const r = frame.getBoundingClientRect();
+  const x = e.clientX - r.left;
+  const y = e.clientY - r.top;
+  // only plant near ground
+  const ground = H * 0.85;
+  if (Math.abs(y - ground) > H * 0.3) return;
+  plantSeed(x, ground);
+});
+
+function plantSeed(x, y) {
+  const seed = Math.floor(Math.random() * 1e9);
+  const dna = makeDNA(seed);
+  const expanded = expand(dna);
+  plants.push({ dna, expanded, x, y, progress: 0, growSpeed: 0.008 + Math.random() * 0.012 });
+  document.getElementById("seedInfo").textContent = "lately planted: " + dna.name;
+}
+
+document.getElementById("grow").addEventListener("click", () => {
+  plantSeed(80 + Math.random() * (W - 160), H * 0.85);
+});
+document.getElementById("garden").addEventListener("click", () => {
+  for (let i = 0; i < 7; i++) {
+    setTimeout(() => plantSeed(80 + Math.random() * (W - 160), H * 0.85), i * 200);
+  }
+});
+document.getElementById("clear").addEventListener("click", () => {
+  plants = [];
+  drawSky();
+});
+
+function tick() {
+  drawSky();
+  for (const p of plants) {
+    if (p.progress < 1) p.progress = Math.min(1, p.progress + p.growSpeed);
+    turtleDraw(p.expanded, p.dna, p.x, p.y, p.progress);
+  }
+  requestAnimationFrame(tick);
+}
+
+fit();
+plantSeed(W * 0.3, H * 0.85);
+plantSeed(W * 0.55, H * 0.85);
+plantSeed(W * 0.78, H * 0.85);
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
