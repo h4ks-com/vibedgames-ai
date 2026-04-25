@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sumi — Zopo</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  body { margin: 0; padding: 24px 12px 60px; background: #1b1410; color: #d8c391;
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Hoefler Text", Georgia, serif;
+    min-height: 100vh; display: flex; flex-direction: column; align-items: center; }
+  header { width: min(900px, 100%); display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 18px; }
+  header h1 { margin: 0; font-weight: 500; font-size: 18px; letter-spacing: 0.3em; text-transform: uppercase; }
+  a.home { color: #d8c391; text-decoration: none; opacity: 0.7; font-size: 12px; letter-spacing: 0.2em; text-transform: uppercase; }
+  a.home:hover { opacity: 1; }
+  .frame {
+    width: min(900px, 100%);
+    aspect-ratio: 4/3;
+    background: #ebd9af;
+    background-image: radial-gradient(ellipse at center, #f1e3b8, #e6d4af 70%, #cdb888 110%);
+    border-radius: 4px;
+    overflow: hidden;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.65), inset 0 0 80px rgba(80,50,20,0.25);
+    position: relative;
+    cursor: crosshair;
+  }
+  canvas { display: block; width: 100%; height: 100%; }
+  .controls { width: min(900px, 100%); display: flex; gap: 12px; margin-top: 18px; flex-wrap: wrap; align-items: center; }
+  button { background: transparent; color: #d8c391; border: 1px solid #5a4632;
+    padding: 6px 14px; font-family: inherit; font-size: 12px;
+    letter-spacing: 0.2em; text-transform: uppercase; cursor: pointer; }
+  button:hover { border-color: #d8c391; }
+  label { font-size: 11px; opacity: 0.7; letter-spacing: 0.2em; text-transform: uppercase; display: flex; align-items: center; gap: 8px; }
+  input[type=range] { accent-color: #1b1410; }
+  .hint { font-size: 12px; opacity: 0.55; margin-top: 14px; max-width: 700px; line-height: 1.6; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Sumi</h1>
+  <a class="home" href="index.html">↩ gallery</a>
+</header>
+
+<div class="frame" id="frame">
+  <canvas id="paper"></canvas>
+  <canvas id="seal" style="position:absolute;inset:0;pointer-events:none"></canvas>
+</div>
+
+<div class="controls">
+  <button id="undo">undo</button>
+  <button id="clear">fresh paper</button>
+  <button id="stamp">apply seal</button>
+  <label>brush <input id="size" type="range" min="6" max="40" value="20"></label>
+  <label>ink <input id="ink" type="range" min="20" max="100" value="65"></label>
+</div>
+
+<div class="hint">
+  Drag to paint. Faster strokes are thinner; slower, broader. Lift to begin a new stroke.
+</div>
+
+<script>
+// ────────────────────────────────────────────────────────────────────────────
+// Sumi — ink brush
+// ────────────────────────────────────────────────────────────────────────────
+const frame = document.getElementById("frame");
+const paper = document.getElementById("paper");
+const seal  = document.getElementById("seal");
+const pctx  = paper.getContext("2d");
+const sctx  = seal.getContext("2d");
+
+let W, H, dpr;
+function fit() {
+  dpr = window.devicePixelRatio || 1;
+  const r = frame.getBoundingClientRect();
+  W = r.width; H = r.height;
+  for (const c of [paper, seal]) {
+    const old = c === paper ? captureCanvas(paper) : null;
+    c.width = Math.floor(W * dpr); c.height = Math.floor(H * dpr);
+    c.style.width = W + "px"; c.style.height = H + "px";
+    c.getContext("2d").setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (old) pctx.putImageData(old, 0, 0);
+  }
+}
+function captureCanvas(c) {
+  if (c.width === 0) return null;
+  const tmp = document.createElement("canvas");
+  tmp.width = c.width; tmp.height = c.height;
+  tmp.getContext("2d").drawImage(c, 0, 0);
+  return null; // skipping replay to keep things simple; clear-on-resize is fine
+}
+window.addEventListener("resize", fit);
+
+let strokes = []; // each stroke = array of {x,y,t,pressure}
+let cur = null;
+let dragging = false;
+
+frame.addEventListener("mousedown", e => {
+  dragging = true;
+  cur = [];
+  strokes.push(cur);
+  pushPoint(e);
+});
+frame.addEventListener("mousemove", e => {
+  if (!dragging) return;
+  pushPoint(e);
+});
+window.addEventListener("mouseup", () => { dragging = false; cur = null; });
+frame.addEventListener("touchstart", e => { e.preventDefault(); dragging = true; cur = []; strokes.push(cur); pushPoint(e.touches[0]); }, {passive:false});
+frame.addEventListener("touchmove",  e => { e.preventDefault(); if (!dragging) return; pushPoint(e.touches[0]); }, {passive:false});
+window.addEventListener("touchend",  () => { dragging = false; cur = null; });
+
+function pushPoint(e) {
+  const r = frame.getBoundingClientRect();
+  const x = e.clientX - r.left;
+  const y = e.clientY - r.top;
+  const t = performance.now();
+  let speed = 0;
+  if (cur.length) {
+    const p = cur[cur.length - 1];
+    const dt = Math.max(1, t - p.t);
+    speed = Math.hypot(x - p.x, y - p.y) / dt;
+  }
+  // pressure: slow speed = high pressure; capped
+  const pressure = Math.max(0.18, Math.min(1.0, 1.0 - speed * 0.7));
+  const pt = { x, y, t, pressure };
+  cur.push(pt);
+  // draw the latest segment
+  if (cur.length >= 2) drawSeg(cur[cur.length - 2], pt);
+}
+
+function drawSeg(a, b) {
+  const baseSize = parseFloat(document.getElementById("size").value);
+  const inkOp    = parseFloat(document.getElementById("ink").value) / 100;
+  // multiple passes: bristle effect
+  const w0 = baseSize * a.pressure;
+  const w1 = baseSize * b.pressure;
+  // perpendicular for splaying
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const len = Math.hypot(dx, dy) + 0.001;
+  const nx = -dy / len, ny = dx / len;
+  const passes = 5;
+  for (let i = 0; i < passes; i++) {
+    const off = (i / (passes - 1) - 0.5) * Math.max(w0, w1) * 0.7;
+    const ax = a.x + nx * off;
+    const ay = a.y + ny * off;
+    const bx = b.x + nx * off;
+    const by = b.y + ny * off;
+    // softer & thinner toward edges
+    const edgeFade = 1 - Math.abs(off / (Math.max(w0, w1) * 0.5));
+    const lw = Math.max(0.4, w0 * 0.18 * edgeFade);
+    pctx.strokeStyle = `rgba(20, 14, 10, ${0.06 * inkOp * (0.5 + 0.5 * edgeFade)})`;
+    pctx.lineCap = "round";
+    pctx.lineJoin = "round";
+    pctx.lineWidth = lw;
+    pctx.beginPath();
+    pctx.moveTo(ax, ay);
+    pctx.lineTo(bx, by);
+    pctx.stroke();
+  }
+  // central pass — concentrated dark line
+  pctx.strokeStyle = `rgba(20, 14, 10, ${0.45 * inkOp})`;
+  pctx.lineCap = "round";
+  pctx.lineWidth = (w0 + w1) * 0.5 * 0.45;
+  pctx.beginPath();
+  pctx.moveTo(a.x, a.y); pctx.lineTo(b.x, b.y);
+  pctx.stroke();
+  // mid wash
+  pctx.strokeStyle = `rgba(20, 14, 10, ${0.18 * inkOp})`;
+  pctx.lineWidth = (w0 + w1) * 0.5 * 0.85;
+  pctx.beginPath();
+  pctx.moveTo(a.x, a.y); pctx.lineTo(b.x, b.y);
+  pctx.stroke();
+}
+
+document.getElementById("clear").addEventListener("click", () => {
+  pctx.clearRect(0, 0, W, H);
+  sctx.clearRect(0, 0, W, H);
+  strokes = [];
+});
+document.getElementById("undo").addEventListener("click", () => {
+  if (strokes.length === 0) return;
+  strokes.pop();
+  pctx.clearRect(0, 0, W, H);
+  // redraw all strokes
+  for (const s of strokes) {
+    for (let i = 1; i < s.length; i++) drawSeg(s[i-1], s[i]);
+  }
+});
+document.getElementById("stamp").addEventListener("click", () => {
+  const sz = Math.min(W, H) * 0.08;
+  const x = W - sz - 18, y = H - sz - 18;
+  drawSeal(x, y, sz);
+});
+
+function drawSeal(x, y, sz) {
+  sctx.save();
+  sctx.translate(x, y);
+  sctx.fillStyle = "rgba(140, 30, 30, 0.92)";
+  sctx.fillRect(0, 0, sz, sz);
+  // texture: random scratches removing color
+  sctx.globalCompositeOperation = "destination-out";
+  for (let i = 0; i < 80; i++) {
+    sctx.fillStyle = `rgba(0,0,0,${Math.random() * 0.35})`;
+    const px = Math.random() * sz, py = Math.random() * sz;
+    const r = Math.random() * 1.6 + 0.4;
+    sctx.beginPath(); sctx.arc(px, py, r, 0, Math.PI * 2); sctx.fill();
+  }
+  sctx.globalCompositeOperation = "source-over";
+  // a fake glyph (white knockout)
+  sctx.strokeStyle = "rgba(245, 230, 200, 0.95)";
+  sctx.lineWidth = sz * 0.06;
+  sctx.lineCap = "round";
+  // composed of a few strokes
+  const pad = sz * 0.18;
+  sctx.beginPath();
+  sctx.moveTo(pad, pad); sctx.lineTo(sz - pad, pad);
+  sctx.moveTo(sz/2, pad); sctx.lineTo(sz/2, sz - pad);
+  sctx.moveTo(pad, sz/2); sctx.lineTo(sz - pad, sz/2);
+  sctx.moveTo(pad, sz - pad); sctx.lineTo(sz - pad, sz - pad);
+  sctx.stroke();
+  sctx.restore();
+}
+
+fit();
+</script>
+</body>
+</html>
