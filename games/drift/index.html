@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Drift — Zopo</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  body { margin: 0; padding: 24px 12px 60px; background: #03030a; color: #d8c391;
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Hoefler Text", Georgia, serif;
+    min-height: 100vh; display: flex; flex-direction: column; align-items: center; }
+  header { width: min(820px, 100%); display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 18px; }
+  header h1 { margin: 0; font-weight: 500; font-size: 18px; letter-spacing: 0.3em; text-transform: uppercase; }
+  a.home { color: #d8c391; text-decoration: none; opacity: 0.7; font-size: 12px; letter-spacing: 0.2em; text-transform: uppercase; }
+  a.home:hover { opacity: 1; }
+  .frame { width: min(820px, 100%); aspect-ratio: 1/1; max-width: 600px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 50% 50%, #1a1830 0%, #03030a 75%);
+    overflow: hidden; position: relative;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.65), inset 0 0 100px rgba(0,0,0,0.4); }
+  canvas { display: block; width: 100%; height: 100%; }
+  .label {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    font-size: 12px; letter-spacing: 0.4em; text-transform: uppercase;
+    color: rgba(216, 195, 145, 0.5); pointer-events: none;
+    text-align: center;
+    transition: opacity 2s ease;
+  }
+  .label .chord { display: block; font-size: 24px; letter-spacing: 0.25em; color: #ebdcb8; opacity: 0.7; margin-bottom: 6px; }
+  .controls { width: min(820px, 100%); display: flex; gap: 12px; margin-top: 22px; flex-wrap: wrap; align-items: center; justify-content: center; }
+  button { background: transparent; color: #d8c391; border: 1px solid #5a4632;
+    padding: 8px 18px; font-family: inherit; font-size: 12px;
+    letter-spacing: 0.3em; text-transform: uppercase; cursor: pointer; }
+  button.on { color: #872323; border-color: #872323; }
+  button:hover { border-color: #d8c391; }
+  label { font-size: 11px; opacity: 0.7; letter-spacing: 0.2em; text-transform: uppercase; display: flex; align-items: center; gap: 8px; }
+  input[type=range] { accent-color: #872323; }
+  .hint { font-size: 12px; opacity: 0.45; margin-top: 14px; max-width: 700px; line-height: 1.6; text-align: center; font-style: italic; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Drift</h1>
+  <a class="home" href="index.html">↩ gallery</a>
+</header>
+
+<div class="frame">
+  <canvas id="c"></canvas>
+  <div class="label" id="lbl"><span class="chord" id="ch">—</span><span id="mode"></span></div>
+</div>
+
+<div class="controls">
+  <button id="pwr">begin</button>
+  <label>volume <input id="vol" type="range" min="0" max="100" value="55"></label>
+  <label>pace <input id="pace" type="range" min="6" max="30" value="14"></label>
+</div>
+
+<div class="hint">A piece that does not end. Leave it on while you do other things.</div>
+
+<script>
+// ────────────────────────────────────────────────────────────────────────────
+// Drift — generative ambient
+// ────────────────────────────────────────────────────────────────────────────
+const cv = document.getElementById("c");
+const ctx = cv.getContext("2d");
+let W, H, dpr;
+function fit() {
+  dpr = window.devicePixelRatio || 1;
+  const r = cv.parentElement.getBoundingClientRect();
+  W = r.width; H = r.height;
+  cv.width = Math.floor(W * dpr); cv.height = Math.floor(H * dpr);
+  cv.style.width = W + "px"; cv.style.height = H + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener("resize", fit);
+
+// ────────────────────────────────────────────────────────────────────────────
+// Audio engine
+// ────────────────────────────────────────────────────────────────────────────
+let audio = null, master = null, reverb = null, on = false;
+
+function ensureAudio() {
+  if (audio) return audio;
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  audio = new Ctx();
+  master = audio.createGain();
+  master.gain.value = 0.55;
+  master.connect(audio.destination);
+  // simple feedback delay as faux reverb
+  reverb = makeReverb(audio);
+  master.connect(reverb.input);
+  reverb.output.connect(audio.destination);
+  return audio;
+}
+
+function makeReverb(ac) {
+  const input = ac.createGain();
+  const output = ac.createGain();
+  output.gain.value = 0.45;
+  // 3-tap delay network
+  const delays = [0.31, 0.47, 0.71].map(t => {
+    const d = ac.createDelay(2.0);
+    d.delayTime.value = t;
+    return d;
+  });
+  const fb = ac.createGain(); fb.gain.value = 0.45;
+  const lp = ac.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 2500;
+  for (const d of delays) {
+    input.connect(d);
+    d.connect(lp); lp.connect(output);
+    d.connect(fb); fb.connect(d);
+  }
+  return { input, output };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Harmony
+// ────────────────────────────────────────────────────────────────────────────
+const SCALES = {
+  ionian: [0,2,4,5,7,9,11],
+  dorian: [0,2,3,5,7,9,10],
+  lydian: [0,2,4,6,7,9,11],
+  mixolydian: [0,2,4,5,7,9,10],
+  aeolian: [0,2,3,5,7,8,10],
+};
+const SCALE_NAMES = Object.keys(SCALES);
+const KEY_NAMES = ["C","D♭","D","E♭","E","F","G♭","G","A♭","A","B♭","B"];
+let key = 0;       // 0..11
+let scaleName = "dorian";
+let scale = SCALES[scaleName];
+
+function chordVoicing(degree) {
+  // degree 1..7. Build a 4-note chord stacking thirds, then voice across octaves
+  const root = scale[degree % scale.length];
+  const third = scale[(degree + 2) % scale.length];
+  const fifth = scale[(degree + 4) % scale.length];
+  const seventh = scale[(degree + 6) % scale.length];
+  // Voice: bass (-2 oct), root, third (mid), fifth (mid), seventh (mid-high)
+  return [root - 24, root, third + 12, fifth, seventh + 12];
+}
+
+function midi(note) { return 60 + key + note; }
+function freq(m) { return 440 * Math.pow(2, (m - 69) / 12); }
+
+// pad voice: 3 detuned saw + LP filter + slow envelope
+function pad(noteMidi, time, dur, gainAmp = 0.06) {
+  const ac = audio;
+  const out = ac.createGain();
+  out.gain.value = 0;
+  out.connect(master);
+  const lp = ac.createBiquadFilter();
+  lp.type = "lowpass";
+  lp.frequency.setValueAtTime(800, time);
+  lp.frequency.linearRampToValueAtTime(2200, time + dur * 0.4);
+  lp.frequency.linearRampToValueAtTime(900, time + dur);
+  lp.Q.value = 2;
+  lp.connect(out);
+  for (const det of [-7, 0, 7]) {
+    const o = ac.createOscillator();
+    o.type = "sawtooth";
+    o.frequency.value = freq(noteMidi);
+    o.detune.value = det;
+    const g = ac.createGain(); g.gain.value = 0.6;
+    o.connect(g); g.connect(lp);
+    o.start(time);
+    o.stop(time + dur + 0.5);
+  }
+  // envelope
+  const att = Math.min(2.5, dur * 0.35);
+  const rel = Math.min(4.0, dur * 0.5);
+  out.gain.setValueAtTime(0, time);
+  out.gain.linearRampToValueAtTime(gainAmp, time + att);
+  out.gain.setValueAtTime(gainAmp, time + dur - rel);
+  out.gain.linearRampToValueAtTime(0, time + dur);
+  return out;
+}
+
+// Bell voice: sine + soft sine higher
+function bell(noteMidi, time) {
+  const ac = audio;
+  const out = ac.createGain();
+  out.connect(master);
+  const o1 = ac.createOscillator(); o1.type = "sine"; o1.frequency.value = freq(noteMidi);
+  const o2 = ac.createOscillator(); o2.type = "sine"; o2.frequency.value = freq(noteMidi + 12) * 1.002;
+  const g1 = ac.createGain(); g1.gain.value = 0.16;
+  const g2 = ac.createGain(); g2.gain.value = 0.06;
+  o1.connect(g1); g1.connect(out);
+  o2.connect(g2); g2.connect(out);
+  o1.start(time); o2.start(time);
+  out.gain.setValueAtTime(0, time);
+  out.gain.linearRampToValueAtTime(1, time + 0.04);
+  out.gain.exponentialRampToValueAtTime(0.001, time + 4.5);
+  o1.stop(time + 4.6); o2.stop(time + 4.6);
+}
+
+// chord changes
+let nextChordTime = 0;
+let lastDegree = 0;
+let activeNotes = []; // for visualization
+
+function scheduleNextChord() {
+  const t = audio.currentTime;
+  const pace = parseFloat(document.getElementById("pace").value); // seconds per chord
+  const dur = pace + (Math.random() - 0.5) * 4;
+
+  // pick a degree, occasional modulation
+  const moves = [1, 4, 5, 6, 2, 3];
+  const degree = moves[Math.floor(Math.random() * moves.length)] - 1;
+  lastDegree = degree;
+  const voicing = chordVoicing(degree);
+
+  // start pads (slight stagger for swell)
+  voicing.forEach((n, i) => {
+    pad(midi(n), t + i * 0.25, dur, 0.05 + Math.random() * 0.03);
+    activeNotes.push({ midi: midi(n), born: t + i * 0.25, life: dur, hue: hueFor(n) });
+  });
+
+  // occasional bell
+  if (Math.random() < 0.55) {
+    const upper = scale[Math.floor(Math.random() * scale.length)] + 12;
+    const tBell = t + Math.random() * dur * 0.6;
+    bell(midi(upper), tBell);
+    activeNotes.push({ midi: midi(upper), born: tBell, life: 4.5, hue: hueFor(upper), bell: true });
+  }
+
+  // occasional gentle key/mode shift between chords
+  if (Math.random() < 0.18) {
+    if (Math.random() < 0.5) {
+      key = (key + (Math.random() < 0.5 ? 5 : 7)) % 12; // P4 or P5
+    } else {
+      scaleName = SCALE_NAMES[Math.floor(Math.random() * SCALE_NAMES.length)];
+      scale = SCALES[scaleName];
+    }
+  }
+
+  nextChordTime = t + dur;
+  // label
+  const chordName = KEY_NAMES[(key + chordVoicing(degree)[1] % 12 + 12) % 12];
+  document.getElementById("ch").textContent = chordName;
+  document.getElementById("mode").textContent = scaleName;
+}
+
+function hueFor(n) {
+  return (((n + 12) * 25) % 360);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Visualization
+// ────────────────────────────────────────────────────────────────────────────
+function viz(now) {
+  // slowly fade canvas
+  ctx.fillStyle = "rgba(3,3,10,0.04)";
+  ctx.fillRect(0, 0, W, H);
+
+  if (audio && on) {
+    const t = audio.currentTime;
+    for (let i = activeNotes.length - 1; i >= 0; i--) {
+      const n = activeNotes[i];
+      const age = t - n.born;
+      if (age < 0) continue;
+      if (age > n.life) { activeNotes.splice(i, 1); continue; }
+      const p = age / n.life;
+
+      // note position around the circle by pitch class
+      const pc = (n.midi % 12);
+      const ang = (pc / 12) * Math.PI * 2 - Math.PI / 2;
+      const baseR = (n.midi - 36) / 60 * Math.min(W, H) * 0.4;
+      const r2 = Math.max(20, baseR);
+
+      const cx = W/2 + Math.cos(ang) * r2 * 0.4;
+      const cy = H/2 + Math.sin(ang) * r2 * 0.4;
+
+      const radius = r2 * (n.bell ? 0.3 : 0.6) * (0.4 + (1 - Math.abs(p - 0.5) * 2) * 0.6);
+      const alpha = (n.bell ? 0.22 : 0.07) * (1 - p);
+
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+      g.addColorStop(0, `hsla(${n.hue}, 60%, 70%, ${alpha})`);
+      g.addColorStop(1, `hsla(${n.hue}, 60%, 50%, 0)`);
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // schedule next chord
+  if (audio && on && audio.currentTime >= nextChordTime - 0.25) {
+    scheduleNextChord();
+  }
+  requestAnimationFrame(viz);
+}
+
+document.getElementById("pwr").addEventListener("click", e => {
+  if (!on) {
+    ensureAudio();
+    if (audio.state === "suspended") audio.resume();
+    on = true;
+    e.target.textContent = "pause";
+    e.target.classList.add("on");
+    nextChordTime = audio.currentTime;
+  } else {
+    on = false;
+    e.target.textContent = "resume";
+    e.target.classList.remove("on");
+  }
+});
+document.getElementById("vol").addEventListener("input", e => {
+  if (master) master.gain.value = parseFloat(e.target.value) / 100;
+});
+
+fit();
+requestAnimationFrame(viz);
+</script>
+</body>
+</html>
