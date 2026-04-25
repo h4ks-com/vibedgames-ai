@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Glossolalia — Zopo</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  body { margin: 0; padding: 24px 12px 60px; background: #1b1410; color: #d8c391;
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Hoefler Text", Georgia, serif;
+    min-height: 100vh; display: flex; flex-direction: column; align-items: center; }
+  header { width: min(900px, 100%); display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 18px; }
+  header h1 { margin: 0; font-weight: 500; font-size: 18px; letter-spacing: 0.3em; text-transform: uppercase; }
+  a.home { color: #d8c391; text-decoration: none; opacity: 0.7; font-size: 12px; letter-spacing: 0.2em; text-transform: uppercase; }
+  a.home:hover { opacity: 1; }
+  .stage { width: min(900px, 100%); display: flex; flex-direction: column; gap: 28px; }
+  .panel {
+    background: rgba(20,14,10,0.6);
+    border: 1px solid #3a2c1f;
+    padding: 22px 26px;
+  }
+  .panel h2 {
+    margin: 0 0 16px; font-size: 12px; letter-spacing: 0.3em; text-transform: uppercase;
+    opacity: 0.65; font-weight: 500;
+  }
+  .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 30px; font-size: 14px; line-height: 1.6; }
+  .meta b { color: #ebdcb8; font-weight: 500; }
+  .alphabet { display: grid; grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); gap: 14px; }
+  .glyph {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    padding: 10px 4px;
+    background: rgba(216, 195, 145, 0.05);
+    border: 1px solid #2c1d12;
+  }
+  .glyph svg { width: 40px; height: 40px; }
+  .glyph .roman { font-size: 11px; opacity: 0.7; letter-spacing: 0.1em; }
+  .lex { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 14px; }
+  .word {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px;
+    background: rgba(216, 195, 145, 0.04);
+    border: 1px solid #2c1d12;
+  }
+  .word svg { height: 32px; flex-shrink: 0; }
+  .word .info { display: flex; flex-direction: column; }
+  .word .roman { font-size: 13px; color: #ebdcb8; letter-spacing: 0.05em; }
+  .word .gloss { font-size: 11px; opacity: 0.6; font-style: italic; }
+  .translate { display: flex; flex-direction: column; gap: 14px; }
+  .translate input {
+    background: transparent; color: #ebdcb8; border: none; border-bottom: 1px solid #5a4632;
+    font-family: inherit; font-size: 16px; padding: 8px 4px; outline: none;
+  }
+  .translate input:focus { border-color: #872323; }
+  .translate .out {
+    min-height: 80px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px;
+  }
+  .out .tword { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  .out .tword svg { height: 36px; }
+  .out .tword .ro { font-size: 11px; opacity: 0.7; letter-spacing: 0.05em; }
+  .out .tword.miss .ro { color: #872323; font-style: italic; }
+  .controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+  button {
+    background: transparent; color: #d8c391; border: 1px solid #5a4632;
+    padding: 6px 14px; font-family: inherit; font-size: 12px;
+    letter-spacing: 0.2em; text-transform: uppercase; cursor: pointer;
+  }
+  button:hover { border-color: #d8c391; }
+  .langname { font-style: italic; color: #ebdcb8; font-size: 18px; letter-spacing: 0.05em; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Glossolalia</h1>
+  <a class="home" href="index.html">↩ gallery</a>
+</header>
+
+<div class="stage">
+
+<div class="panel">
+  <div class="controls">
+    <button id="gen">new tongue</button>
+    <span style="opacity:0.6; font-size:13px;">Today's language: <span class="langname" id="langname"></span></span>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Phonemes &amp; script</h2>
+  <div class="alphabet" id="alphabet"></div>
+</div>
+
+<div class="panel">
+  <h2>Lexicon (essentials)</h2>
+  <div class="lex" id="lex"></div>
+</div>
+
+<div class="panel translate">
+  <h2 style="margin-bottom: 0">Translate</h2>
+  <input id="src" type="text" placeholder="say something in English…" value="the sun rises and the river is cold" />
+  <div class="out" id="out"></div>
+  <div style="font-size: 11px; opacity: 0.5;">Words in red sit outside the lexicon — sounded out best the language can.</div>
+</div>
+
+</div>
+
+<script>
+// ────────────────────────────────────────────────────────────────────────────
+// Glossolalia — generates a small fictional language and its script
+// ────────────────────────────────────────────────────────────────────────────
+function rng(seed) {
+  let a = seed >>> 0;
+  return function() {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = a;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function pick(a, r) { return a[Math.floor(r() * a.length)]; }
+function sample(arr, n, r) {
+  const out = []; const pool = [...arr];
+  for (let i = 0; i < n && pool.length; i++) {
+    const j = Math.floor(r() * pool.length);
+    out.push(pool.splice(j, 1)[0]);
+  }
+  return out;
+}
+
+const C_POOL = ["p","t","k","b","d","g","m","n","ny","s","sh","h","f","v","l","r","w","y","th","ch","z","kh"];
+const V_POOL = ["a","e","i","o","u","ai","ei","ou","ae","io"];
+
+const CONCEPTS = [
+  ["i","pron"], ["you","pron"], ["we","pron"], ["they","pron"],
+  ["sun","noun"], ["moon","noun"], ["star","noun"], ["sky","noun"],
+  ["water","noun"], ["river","noun"], ["sea","noun"], ["fire","noun"],
+  ["stone","noun"], ["tree","noun"], ["house","noun"], ["road","noun"],
+  ["bird","noun"], ["dog","noun"], ["fish","noun"], ["child","noun"],
+  ["mother","noun"], ["father","noun"], ["friend","noun"], ["stranger","noun"],
+  ["name","noun"], ["word","noun"], ["song","noun"], ["dream","noun"],
+  ["go","verb"], ["come","verb"], ["see","verb"], ["hear","verb"],
+  ["eat","verb"], ["drink","verb"], ["sleep","verb"], ["sing","verb"],
+  ["love","verb"], ["fear","verb"], ["know","verb"], ["forget","verb"],
+  ["give","verb"], ["take","verb"], ["speak","verb"], ["wait","verb"],
+  ["rises","verb"], ["sets","verb"], ["falls","verb"], ["burns","verb"],
+  ["big","adj"], ["small","adj"], ["cold","adj"], ["warm","adj"],
+  ["dark","adj"], ["bright","adj"], ["old","adj"], ["new","adj"],
+  ["far","adj"], ["near","adj"], ["red","adj"], ["green","adj"],
+  ["the","gram"], ["a","gram"], ["and","gram"], ["of","gram"],
+  ["in","gram"], ["on","gram"], ["with","gram"], ["not","gram"],
+  ["is","gram"], ["was","gram"],
+];
+
+let LANG = null;
+
+function generateLanguage(seedStr) {
+  const seed = hashStr(seedStr);
+  const r = rng(seed);
+
+  // Pick phoneme inventory
+  const consonants = sample(C_POOL, 8 + Math.floor(r() * 6), r);
+  const vowels = sample(V_POOL, 4 + Math.floor(r() * 3), r);
+
+  // Decide if codas allowed
+  const allowCoda = r() < 0.7;
+  const codaSet = allowCoda ? sample(consonants, Math.max(2, Math.floor(consonants.length * 0.4)), r) : [];
+  const maxSyl = 1 + Math.floor(r() * 3); // 1-3
+
+  function makeWord() {
+    const n = 1 + Math.floor(r() * maxSyl);
+    let w = "";
+    for (let i = 0; i < n; i++) {
+      // optional onset
+      if (i === 0 || r() < 0.85) w += pick(consonants, r);
+      w += pick(vowels, r);
+      if (allowCoda && r() < 0.4) w += pick(codaSet, r);
+    }
+    return w.replace(/(.)\1\1/g, "$1$1");
+  }
+
+  // Build lexicon — unique words for each concept
+  const used = new Set();
+  const lex = [];
+  for (const [eng, kind] of CONCEPTS) {
+    let w;
+    let tries = 0;
+    do { w = makeWord(); tries++; } while (used.has(w) && tries < 50);
+    used.add(w);
+    lex.push({ eng, kind, native: w });
+  }
+
+  // Generate per-phoneme glyphs
+  const phonemeGlyphs = {};
+  for (const p of [...consonants, ...vowels]) {
+    phonemeGlyphs[p] = makeGlyph(rng(hashStr(seedStr + ":" + p)));
+  }
+
+  // Language name
+  const langName = capitalize(makeWord()) + (r() < 0.5 ? "" : ("-" + makeWord()));
+
+  LANG = { seed: seedStr, consonants, vowels, allowCoda, codaSet, maxSyl, lex, phonemeGlyphs, langName, makeWord };
+  render();
+}
+function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+function hashStr(s) {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Glyph generator: composes 2-4 strokes within a 40×40 box
+// ────────────────────────────────────────────────────────────────────────────
+function makeGlyph(r) {
+  const strokes = [];
+  const n = 2 + Math.floor(r() * 3);
+  for (let i = 0; i < n; i++) {
+    const kind = pick(["line", "arc", "vert", "horiz", "diag", "dot", "hook", "circle"], r);
+    const x = 8 + r() * 24;
+    const y = 8 + r() * 24;
+    const len = 8 + r() * 18;
+    const ang = r() * Math.PI * 2;
+    strokes.push({ kind, x, y, len, ang, sweep: r() < 0.5 ? 0 : 1 });
+  }
+  return strokes;
+}
+
+function glyphSVG(strokes, opts = {}) {
+  const sz = opts.size || 40;
+  const stroke = opts.color || "#ebdcb8";
+  const sw = opts.strokeWidth || 2;
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 40 40");
+  svg.setAttribute("width", sz); svg.setAttribute("height", sz);
+  for (const s of strokes) {
+    let el;
+    if (s.kind === "line" || s.kind === "diag") {
+      el = document.createElementNS(ns, "line");
+      const dx = Math.cos(s.ang) * s.len / 2;
+      const dy = Math.sin(s.ang) * s.len / 2;
+      el.setAttribute("x1", s.x - dx); el.setAttribute("y1", s.y - dy);
+      el.setAttribute("x2", s.x + dx); el.setAttribute("y2", s.y + dy);
+    } else if (s.kind === "vert") {
+      el = document.createElementNS(ns, "line");
+      el.setAttribute("x1", s.x); el.setAttribute("y1", s.y - s.len / 2);
+      el.setAttribute("x2", s.x); el.setAttribute("y2", s.y + s.len / 2);
+    } else if (s.kind === "horiz") {
+      el = document.createElementNS(ns, "line");
+      el.setAttribute("x1", s.x - s.len / 2); el.setAttribute("y1", s.y);
+      el.setAttribute("x2", s.x + s.len / 2); el.setAttribute("y2", s.y);
+    } else if (s.kind === "arc") {
+      el = document.createElementNS(ns, "path");
+      const r = s.len / 2;
+      const x1 = s.x - r * Math.cos(s.ang);
+      const y1 = s.y - r * Math.sin(s.ang);
+      const x2 = s.x + r * Math.cos(s.ang);
+      const y2 = s.y + r * Math.sin(s.ang);
+      el.setAttribute("d", `M${x1.toFixed(1)},${y1.toFixed(1)} A${r.toFixed(1)},${r.toFixed(1)} 0 0 ${s.sweep} ${x2.toFixed(1)},${y2.toFixed(1)}`);
+      el.setAttribute("fill", "none");
+    } else if (s.kind === "circle") {
+      el = document.createElementNS(ns, "circle");
+      el.setAttribute("cx", s.x); el.setAttribute("cy", s.y); el.setAttribute("r", Math.min(8, s.len / 2));
+      el.setAttribute("fill", "none");
+    } else if (s.kind === "dot") {
+      el = document.createElementNS(ns, "circle");
+      el.setAttribute("cx", s.x); el.setAttribute("cy", s.y); el.setAttribute("r", 2);
+      el.setAttribute("fill", stroke); // filled
+    } else if (s.kind === "hook") {
+      el = document.createElementNS(ns, "path");
+      const r = s.len / 3;
+      el.setAttribute("d", `M${s.x},${s.y} q${r * Math.cos(s.ang)},${r * Math.sin(s.ang)} ${r * 2 * Math.cos(s.ang + 0.6)},${r * 2 * Math.sin(s.ang + 0.6)}`);
+      el.setAttribute("fill", "none");
+    }
+    if (el) {
+      if (!el.hasAttribute("fill") || el.getAttribute("fill") === "none") {
+        el.setAttribute("stroke", stroke);
+        el.setAttribute("stroke-width", sw);
+        el.setAttribute("stroke-linecap", "round");
+      }
+      svg.appendChild(el);
+    }
+  }
+  return svg;
+}
+
+function wordSVG(word, opts = {}) {
+  // tokenize into phonemes (greedy: 2-letter ones first)
+  const tokens = tokenizeWord(word);
+  const sz = opts.size || 36;
+  const gap = opts.gap || 4;
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("height", sz);
+  const W = tokens.length * (sz + gap) - gap;
+  svg.setAttribute("width", Math.max(1, W));
+  svg.setAttribute("viewBox", `0 0 ${Math.max(1, W)} ${sz}`);
+  let x = 0;
+  for (const tk of tokens) {
+    const strokes = LANG.phonemeGlyphs[tk];
+    if (!strokes) { x += sz + gap; continue; }
+    const g = document.createElementNS(ns, "g");
+    g.setAttribute("transform", `translate(${x} 0) scale(${sz/40})`);
+    const sub = glyphSVG(strokes, { size: 40, color: opts.color || "#ebdcb8", strokeWidth: 2 });
+    const kids = Array.from(sub.children);
+    for (const child of kids) g.appendChild(child);
+    svg.appendChild(g);
+    x += sz + gap;
+  }
+  return svg;
+}
+
+function tokenizeWord(word) {
+  const all = [...LANG.consonants, ...LANG.vowels].sort((a, b) => b.length - a.length);
+  const out = [];
+  let i = 0;
+  while (i < word.length) {
+    let matched = null;
+    for (const p of all) {
+      if (word.startsWith(p, i)) { matched = p; break; }
+    }
+    if (matched) { out.push(matched); i += matched.length; }
+    else i++;
+  }
+  return out;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Translation
+// ────────────────────────────────────────────────────────────────────────────
+function translateSentence(text) {
+  const out = document.getElementById("out");
+  out.innerHTML = "";
+  const words = text.toLowerCase().split(/[\s,.;:?!]+/).filter(Boolean);
+  const dict = new Map(LANG.lex.map(e => [e.eng, e.native]));
+  for (const w of words) {
+    let native = dict.get(w);
+    let miss = false;
+    if (!native) {
+      // sound it out: produce a word seeded by the English word
+      const r = rng(hashStr(LANG.seed + ":miss:" + w));
+      native = "";
+      const target = Math.max(1, Math.min(3, Math.ceil(w.length / 3)));
+      for (let i = 0; i < target; i++) {
+        if (i > 0 || r() < 0.8) native += pick(LANG.consonants, r);
+        native += pick(LANG.vowels, r);
+        if (LANG.allowCoda && r() < 0.3) native += pick(LANG.codaSet, r);
+      }
+      miss = true;
+    }
+    const div = document.createElement("div");
+    div.className = "tword" + (miss ? " miss" : "");
+    div.appendChild(wordSVG(native));
+    const ro = document.createElement("div");
+    ro.className = "ro";
+    ro.textContent = native;
+    div.appendChild(ro);
+    out.appendChild(div);
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Render
+// ────────────────────────────────────────────────────────────────────────────
+function render() {
+  document.getElementById("langname").textContent = LANG.langName;
+  // alphabet panel
+  const ab = document.getElementById("alphabet");
+  ab.innerHTML = "";
+  for (const p of [...LANG.consonants, ...LANG.vowels]) {
+    const div = document.createElement("div");
+    div.className = "glyph";
+    div.appendChild(glyphSVG(LANG.phonemeGlyphs[p]));
+    const ro = document.createElement("div"); ro.className = "roman"; ro.textContent = p;
+    div.appendChild(ro);
+    ab.appendChild(div);
+  }
+  // lexicon panel
+  const lx = document.getElementById("lex");
+  lx.innerHTML = "";
+  for (const e of LANG.lex) {
+    const w = document.createElement("div");
+    w.className = "word";
+    w.appendChild(wordSVG(e.native));
+    const info = document.createElement("div"); info.className = "info";
+    const ro = document.createElement("div"); ro.className = "roman"; ro.textContent = e.native;
+    const gl = document.createElement("div"); gl.className = "gloss"; gl.textContent = e.eng;
+    info.appendChild(ro); info.appendChild(gl);
+    w.appendChild(info);
+    lx.appendChild(w);
+  }
+  // re-translate
+  translateSentence(document.getElementById("src").value);
+}
+
+document.getElementById("gen").addEventListener("click", () => {
+  generateLanguage("zopo-" + Math.random().toString(36).slice(2));
+});
+document.getElementById("src").addEventListener("input", e => {
+  if (LANG) translateSentence(e.target.value);
+});
+
+generateLanguage("aelig");
+</script>
+</body>
+</html>
