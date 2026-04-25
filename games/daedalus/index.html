@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Daedalus — Zopo</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  body { margin: 0; padding: 24px 12px 60px; background: #0e0a08; color: #d8c391;
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Hoefler Text", Georgia, serif;
+    min-height: 100vh; display: flex; flex-direction: column; align-items: center; }
+  header { width: min(960px, 100%); display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 18px; }
+  header h1 { margin: 0; font-weight: 500; font-size: 18px; letter-spacing: 0.3em; text-transform: uppercase; }
+  a.home { color: #d8c391; text-decoration: none; opacity: 0.7; font-size: 12px; letter-spacing: 0.2em; text-transform: uppercase; }
+  a.home:hover { opacity: 1; }
+  .frame {
+    width: min(960px, 100%);
+    aspect-ratio: 3 / 2;
+    background: #1b1410;
+    border-radius: 4px;
+    overflow: hidden;
+    position: relative;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.65);
+  }
+  canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+  .controls { width: min(960px, 100%); display: flex; gap: 12px; margin-top: 18px; flex-wrap: wrap; align-items: center; }
+  button, select, label {
+    background: transparent; color: #d8c391; border: 1px solid #5a4632;
+    padding: 6px 12px; font-family: inherit; font-size: 12px;
+    letter-spacing: 0.2em; text-transform: uppercase; cursor: pointer;
+  }
+  label { border: none; padding-right: 0; }
+  button:hover, select:hover { border-color: #d8c391; }
+  input[type=range] { vertical-align: middle; }
+  .hint { font-size: 12px; opacity: 0.5; margin-top: 14px; max-width: 700px; line-height: 1.6; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Daedalus</h1>
+  <a class="home" href="index.html">↩ gallery</a>
+</header>
+
+<div class="frame">
+  <canvas id="m" width="900" height="600"></canvas>
+</div>
+
+<div class="controls">
+  <button id="rebuild">new maze</button>
+  <button id="solve">drop marble</button>
+  <select id="size">
+    <option value="36">small</option>
+    <option value="60" selected>medium</option>
+    <option value="90">large</option>
+    <option value="140">huge</option>
+  </select>
+  <select id="algo">
+    <option value="rb">recursive backtracker</option>
+    <option value="prim">prim</option>
+    <option value="kruskal">kruskal</option>
+  </select>
+  <label>speed <input id="speed" type="range" min="1" max="80" value="20"></label>
+</div>
+
+<div class="hint">
+  Watch the labyrinth carve itself. Drop a marble and the shortest path lights up behind it.
+</div>
+
+<script>
+// ────────────────────────────────────────────────────────────────────────────
+// Daedalus — animated maze + solver
+// ────────────────────────────────────────────────────────────────────────────
+const cv = document.getElementById("m");
+const ctx = cv.getContext("2d");
+
+let COLS = 60, ROWS = 40, CELL;
+let grid;       // walls per cell: bit flags N/E/S/W
+let visited;
+let buildSteps; // queue of carve actions
+let mode = "build"; // build | done | solve | done2
+let solvePath = null;
+let solveIdx = 0;
+let speed = 20;
+
+const N = 1, E = 2, S = 4, W_ = 8;
+const OPP = { 1: 4, 2: 8, 4: 1, 8: 2 };
+const DX = { 1: 0, 2: 1, 4: 0, 8: -1 };
+const DY = { 1: -1, 2: 0, 4: 1, 8: 0 };
+
+function fitGrid() {
+  COLS = parseInt(document.getElementById("size").value, 10);
+  ROWS = Math.floor(COLS * 2 / 3);
+  CELL = Math.min(cv.width / COLS, cv.height / ROWS);
+}
+
+function indexAt(x, y) { return y * COLS + x; }
+
+function newMaze() {
+  fitGrid();
+  grid = new Uint8Array(COLS * ROWS); // 0 = all walls present (no openings recorded). We'll OR in directions cleared.
+  visited = new Uint8Array(COLS * ROWS);
+  buildSteps = [];
+  const algo = document.getElementById("algo").value;
+  if (algo === "rb") buildRecursiveBacktracker();
+  else if (algo === "prim") buildPrim();
+  else buildKruskal();
+  mode = "build";
+  solvePath = null;
+}
+
+function buildRecursiveBacktracker() {
+  const stack = [];
+  const sx = 0, sy = 0;
+  visited[indexAt(sx, sy)] = 1;
+  stack.push([sx, sy]);
+  while (stack.length) {
+    const [x, y] = stack[stack.length - 1];
+    const dirs = [];
+    for (const d of [N, E, S, W_]) {
+      const nx = x + DX[d], ny = y + DY[d];
+      if (nx >= 0 && ny >= 0 && nx < COLS && ny < ROWS && !visited[indexAt(nx, ny)]) dirs.push(d);
+    }
+    if (!dirs.length) { stack.pop(); continue; }
+    const d = dirs[Math.floor(Math.random() * dirs.length)];
+    const nx = x + DX[d], ny = y + DY[d];
+    visited[indexAt(nx, ny)] = 1;
+    grid[indexAt(x, y)] |= d;
+    grid[indexAt(nx, ny)] |= OPP[d];
+    buildSteps.push([x, y, nx, ny]);
+    stack.push([nx, ny]);
+  }
+  // reset visited for subsequent solving
+  visited = new Uint8Array(COLS * ROWS);
+}
+
+function buildPrim() {
+  const sx = 0, sy = 0;
+  visited[indexAt(sx, sy)] = 1;
+  const frontier = [];
+  function pushFrontiers(x, y) {
+    for (const d of [N, E, S, W_]) {
+      const nx = x + DX[d], ny = y + DY[d];
+      if (nx >= 0 && ny >= 0 && nx < COLS && ny < ROWS && !visited[indexAt(nx, ny)]) {
+        frontier.push([nx, ny, x, y, d]);
+      }
+    }
+  }
+  pushFrontiers(sx, sy);
+  while (frontier.length) {
+    const i = Math.floor(Math.random() * frontier.length);
+    const [x, y, fx, fy, d] = frontier.splice(i, 1)[0];
+    if (visited[indexAt(x, y)]) continue;
+    visited[indexAt(x, y)] = 1;
+    grid[indexAt(fx, fy)] |= d;
+    grid[indexAt(x, y)] |= OPP[d];
+    buildSteps.push([fx, fy, x, y]);
+    pushFrontiers(x, y);
+  }
+  visited = new Uint8Array(COLS * ROWS);
+}
+
+function buildKruskal() {
+  // disjoint set
+  const parent = new Int32Array(COLS * ROWS);
+  for (let i = 0; i < parent.length; i++) parent[i] = i;
+  function find(a) { while (parent[a] !== a) { parent[a] = parent[parent[a]]; a = parent[a]; } return a; }
+  const edges = [];
+  for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < COLS; x++) {
+      if (x + 1 < COLS) edges.push([x, y, x + 1, y, E]);
+      if (y + 1 < ROWS) edges.push([x, y, x, y + 1, S]);
+    }
+  }
+  // shuffle
+  for (let i = edges.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [edges[i], edges[j]] = [edges[j], edges[i]];
+  }
+  for (const [x, y, x2, y2, d] of edges) {
+    const a = indexAt(x, y), b = indexAt(x2, y2);
+    const ra = find(a), rb = find(b);
+    if (ra === rb) continue;
+    parent[ra] = rb;
+    grid[a] |= d;
+    grid[b] |= OPP[d];
+    buildSteps.push([x, y, x2, y2]);
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Render
+// ────────────────────────────────────────────────────────────────────────────
+function clearCanvas() {
+  ctx.fillStyle = "#1b1410";
+  ctx.fillRect(0, 0, cv.width, cv.height);
+}
+
+function drawWalls(highlightCells) {
+  ctx.strokeStyle = "#d8c391";
+  ctx.lineWidth = Math.max(1, CELL * 0.08);
+  ctx.lineCap = "square";
+  for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < COLS; x++) {
+      if (highlightCells && !highlightCells.has(indexAt(x, y))) continue;
+      const px = x * CELL, py = y * CELL;
+      const w = grid[indexAt(x, y)];
+      ctx.beginPath();
+      if (!(w & N)) { ctx.moveTo(px, py); ctx.lineTo(px + CELL, py); }
+      if (!(w & E)) { ctx.moveTo(px + CELL, py); ctx.lineTo(px + CELL, py + CELL); }
+      if (!(w & S)) { ctx.moveTo(px, py + CELL); ctx.lineTo(px + CELL, py + CELL); }
+      if (!(w & W_)) { ctx.moveTo(px, py); ctx.lineTo(px, py + CELL); }
+      ctx.stroke();
+    }
+  }
+}
+
+function drawCarvedPath(stepsTaken) {
+  // tint cells already opened
+  const opened = new Set();
+  for (let i = 0; i < stepsTaken; i++) {
+    const [x1, y1, x2, y2] = buildSteps[i];
+    opened.add(indexAt(x1, y1));
+    opened.add(indexAt(x2, y2));
+  }
+  ctx.fillStyle = "#2a1f15";
+  for (const idx of opened) {
+    const x = idx % COLS, y = Math.floor(idx / COLS);
+    ctx.fillRect(x * CELL + 1, y * CELL + 1, CELL - 2, CELL - 2);
+  }
+}
+
+function drawHead(stepsTaken) {
+  // current carving frontier glowing
+  if (stepsTaken === 0 || stepsTaken > buildSteps.length) return;
+  const [, , x2, y2] = buildSteps[stepsTaken - 1];
+  ctx.fillStyle = "#872323";
+  ctx.beginPath();
+  ctx.arc(x2 * CELL + CELL / 2, y2 * CELL + CELL / 2, CELL * 0.3, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawStartEnd() {
+  ctx.fillStyle = "#7d8a5d";
+  ctx.fillRect(2, 2, CELL - 4, CELL - 4);
+  ctx.fillStyle = "#a05a3a";
+  ctx.fillRect((COLS - 1) * CELL + 2, (ROWS - 1) * CELL + 2, CELL - 4, CELL - 4);
+}
+
+function drawSolveTrail(idx) {
+  if (!solvePath) return;
+  ctx.lineCap = "round";
+  ctx.lineWidth = Math.max(2, CELL * 0.45);
+  // gradient feel: trailing alpha
+  for (let i = 0; i < idx - 1; i++) {
+    const a = solvePath[i], b = solvePath[i + 1];
+    const ax = (a % COLS) * CELL + CELL / 2, ay = Math.floor(a / COLS) * CELL + CELL / 2;
+    const bx = (b % COLS) * CELL + CELL / 2, by = Math.floor(b / COLS) * CELL + CELL / 2;
+    const t = i / Math.max(1, idx - 1);
+    ctx.strokeStyle = `rgba(216, 195, 145, ${0.25 + t * 0.7})`;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay); ctx.lineTo(bx, by);
+    ctx.stroke();
+  }
+  // marble
+  const cur = solvePath[Math.min(idx, solvePath.length - 1)];
+  const cx = (cur % COLS) * CELL + CELL / 2, cy = Math.floor(cur / COLS) * CELL + CELL / 2;
+  ctx.fillStyle = "#fffbe8";
+  ctx.beginPath();
+  ctx.arc(cx, cy, CELL * 0.32, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "rgba(135, 35, 35, 0.5)";
+  ctx.beginPath();
+  ctx.arc(cx + CELL * 0.08, cy + CELL * 0.08, CELL * 0.12, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function bfsSolve() {
+  const start = 0, end = COLS * ROWS - 1;
+  const prev = new Int32Array(COLS * ROWS).fill(-1);
+  const seen = new Uint8Array(COLS * ROWS);
+  const queue = [start];
+  seen[start] = 1;
+  while (queue.length) {
+    const cur = queue.shift();
+    if (cur === end) break;
+    const x = cur % COLS, y = Math.floor(cur / COLS);
+    for (const d of [N, E, S, W_]) {
+      if (!(grid[cur] & d)) continue;
+      const nx = x + DX[d], ny = y + DY[d];
+      const ni = ny * COLS + nx;
+      if (seen[ni]) continue;
+      seen[ni] = 1; prev[ni] = cur; queue.push(ni);
+    }
+  }
+  const path = [];
+  for (let c = end; c !== -1; c = prev[c]) path.unshift(c);
+  return path;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Animation loop
+// ────────────────────────────────────────────────────────────────────────────
+let buildProgress = 0;
+
+function frame() {
+  speed = parseInt(document.getElementById("speed").value, 10);
+  clearCanvas();
+  if (mode === "build") {
+    buildProgress = Math.min(buildSteps.length, buildProgress + speed);
+    drawCarvedPath(buildProgress);
+    drawWalls();
+    drawHead(buildProgress);
+    drawStartEnd();
+    if (buildProgress >= buildSteps.length) mode = "done";
+  } else if (mode === "done") {
+    drawCarvedPath(buildSteps.length);
+    drawWalls();
+    drawStartEnd();
+  } else if (mode === "solve") {
+    drawCarvedPath(buildSteps.length);
+    drawWalls();
+    drawStartEnd();
+    solveIdx += Math.max(1, Math.floor(speed / 6));
+    drawSolveTrail(solveIdx);
+    if (solveIdx >= solvePath.length) mode = "done2";
+  } else if (mode === "done2") {
+    drawCarvedPath(buildSteps.length);
+    drawWalls();
+    drawStartEnd();
+    drawSolveTrail(solvePath.length);
+  }
+  requestAnimationFrame(frame);
+}
+
+document.getElementById("rebuild").addEventListener("click", () => {
+  newMaze();
+  buildProgress = 0;
+});
+document.getElementById("size").addEventListener("change", () => {
+  newMaze(); buildProgress = 0;
+});
+document.getElementById("algo").addEventListener("change", () => {
+  newMaze(); buildProgress = 0;
+});
+document.getElementById("solve").addEventListener("click", () => {
+  if (mode === "build") return;
+  solvePath = bfsSolve();
+  solveIdx = 0;
+  mode = "solve";
+});
+
+newMaze();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
