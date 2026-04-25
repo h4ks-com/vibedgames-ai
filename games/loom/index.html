@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Loom — Zopo</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  body {
+    margin: 0; padding: 24px 12px 60px;
+    background: #1b1410; color: #d8c391;
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Hoefler Text", Georgia, serif;
+    min-height: 100vh; display: flex; flex-direction: column; align-items: center;
+  }
+  header { width: min(960px, 100%); display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 18px; }
+  header h1 { margin: 0; font-weight: 500; font-size: 18px; letter-spacing: 0.3em; text-transform: uppercase; }
+  a.home { color: #d8c391; text-decoration: none; opacity: 0.7; font-size: 12px; letter-spacing: 0.2em; text-transform: uppercase; }
+  a.home:hover { opacity: 1; }
+  .stage {
+    display: grid;
+    grid-template-columns: 60px min(700px, 70vw);
+    grid-template-rows: 60px min(525px, 52.5vw);
+    gap: 6px;
+    background: #2a1f15;
+    padding: 10px;
+    border-radius: 4px;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.55);
+  }
+  .corner { background: #1b1410; }
+  canvas { display: block; cursor: crosshair; image-rendering: pixelated; }
+  .bar { background: #1b1410; }
+  .controls { width: min(770px, 100%); display: flex; gap: 12px; justify-content: space-between; align-items: center; margin-top: 18px; flex-wrap: wrap; }
+  .palette { display: flex; gap: 6px; }
+  .swatch { width: 24px; height: 24px; border: 2px solid #2a1f15; cursor: pointer; }
+  .swatch.active { border-color: #ebdcb8; transform: scale(1.1); }
+  select, button {
+    background: transparent; color: #d8c391;
+    border: 1px solid #5a4632;
+    padding: 6px 12px;
+    font-family: inherit;
+    font-size: 12px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+  button:hover, select:hover { border-color: #d8c391; }
+  .hint { font-size: 12px; opacity: 0.6; max-width: 700px; margin-top: 14px; line-height: 1.5; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Loom</h1>
+  <a class="home" href="index.html">↩ gallery</a>
+</header>
+
+<div class="stage">
+  <div class="corner"></div>
+  <canvas id="weft" width="700" height="60"></canvas>
+  <canvas id="warp" width="60"  height="525"></canvas>
+  <canvas id="cloth" width="700" height="525"></canvas>
+</div>
+
+<div class="controls">
+  <div class="palette" id="palette"></div>
+  <select id="weave">
+    <option value="plain">plain weave</option>
+    <option value="twill">twill 2/2</option>
+    <option value="basket">basket weave</option>
+    <option value="satin">satin</option>
+    <option value="herring">herringbone</option>
+  </select>
+  <button id="clear">clear</button>
+  <button id="random">random</button>
+</div>
+
+<div class="hint">
+  Click the top bar to set <em>weft</em> (horizontal) thread colours. Click the left bar to set <em>warp</em> (vertical) ones. Drag to paint a stripe. The cloth weaves itself.
+</div>
+
+<script>
+// ────────────────────────────────────────────────────────────────────────────
+// Loom — interactive weaving
+// ────────────────────────────────────────────────────────────────────────────
+const PALETTE = [
+  "#1b1410", "#5a2a1c", "#872323", "#c46a2a",
+  "#d8c391", "#ebdcb8", "#7d8a5d", "#3a5a4c",
+  "#2c4a6b", "#5a3a6b", "#a05a8a", "#1b1410",
+];
+const COLS = 70, ROWS = 52, CELL = 10;
+
+const cloth = document.getElementById("cloth");
+const warpC = document.getElementById("warp");
+const weftC = document.getElementById("weft");
+const cctx = cloth.getContext("2d");
+const wctx = warpC.getContext("2d");
+const tctx = weftC.getContext("2d");
+
+const warp = new Array(COLS).fill(4); // index into palette
+const weft = new Array(ROWS).fill(0);
+
+let activeColor = 1;
+let weaveType = "plain";
+
+function buildPalette() {
+  const el = document.getElementById("palette");
+  PALETTE.forEach((c, i) => {
+    const sw = document.createElement("div");
+    sw.className = "swatch" + (i === activeColor ? " active" : "");
+    sw.style.background = c;
+    sw.addEventListener("click", () => {
+      activeColor = i;
+      [...el.children].forEach((s, j) => s.classList.toggle("active", j === i));
+    });
+    el.appendChild(sw);
+  });
+}
+buildPalette();
+
+function weaveAt(x, y) {
+  // returns true if warp is on top at (col x, row y)
+  switch (weaveType) {
+    case "plain":   return ((x + y) & 1) === 0;
+    case "basket":  return ((Math.floor(x/2) + Math.floor(y/2)) & 1) === 0;
+    case "twill":   return ((x - y + 1000) % 4) < 2;
+    case "satin":   return ((x * 2 + y) % 5) < 1; // sparse warp shows
+    case "herring": {
+      const band = Math.floor(y / 8);
+      return band & 1
+        ? ((x + y) % 4) < 2
+        : ((x - y + 1000) % 4) < 2;
+    }
+  }
+}
+
+function shadeColor(hex, amt) {
+  const m = hex.match(/^#(..)(..)(..)$/);
+  let r = parseInt(m[1],16), g = parseInt(m[2],16), b = parseInt(m[3],16);
+  r = Math.max(0, Math.min(255, r + amt));
+  g = Math.max(0, Math.min(255, g + amt));
+  b = Math.max(0, Math.min(255, b + amt));
+  return `rgb(${r},${g},${b})`;
+}
+
+function drawCloth() {
+  cctx.fillStyle = "#1b1410";
+  cctx.fillRect(0, 0, cloth.width, cloth.height);
+  for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < COLS; x++) {
+      const warpUp = weaveAt(x, y);
+      const c = warpUp ? PALETTE[warp[x]] : PALETTE[weft[y]];
+      // base cell
+      cctx.fillStyle = c;
+      cctx.fillRect(x * CELL, y * CELL, CELL, CELL);
+      // thread shading: vertical highlight if warp up, horizontal if weft up
+      if (warpUp) {
+        // bright stripe down the middle, dark on edges
+        cctx.fillStyle = shadeColor(c, 28);
+        cctx.fillRect(x * CELL + 3, y * CELL, CELL - 6, CELL);
+        cctx.fillStyle = shadeColor(c, -32);
+        cctx.fillRect(x * CELL, y * CELL, 1, CELL);
+        cctx.fillRect(x * CELL + CELL - 1, y * CELL, 1, CELL);
+      } else {
+        cctx.fillStyle = shadeColor(c, 28);
+        cctx.fillRect(x * CELL, y * CELL + 3, CELL, CELL - 6);
+        cctx.fillStyle = shadeColor(c, -32);
+        cctx.fillRect(x * CELL, y * CELL, CELL, 1);
+        cctx.fillRect(x * CELL, y * CELL + CELL - 1, CELL, 1);
+      }
+      // tiny crossover shadow
+      cctx.fillStyle = "rgba(0,0,0,0.18)";
+      if (warpUp) {
+        cctx.fillRect(x * CELL, y * CELL + CELL - 2, CELL, 1);
+      } else {
+        cctx.fillRect(x * CELL + CELL - 2, y * CELL, 1, CELL);
+      }
+    }
+  }
+}
+
+// Top bar (weftC element) drives WARP (columns); left bar (warpC element) drives WEFT (rows).
+function drawTopBar() {
+  tctx.fillStyle = "#1b1410";
+  tctx.fillRect(0, 0, weftC.width, weftC.height);
+  for (let x = 0; x < COLS; x++) {
+    tctx.fillStyle = PALETTE[warp[x]];
+    tctx.fillRect(x * CELL, 0, CELL, weftC.height);
+  }
+}
+function drawLeftBar() {
+  wctx.fillStyle = "#1b1410";
+  wctx.fillRect(0, 0, warpC.width, warpC.height);
+  for (let y = 0; y < ROWS; y++) {
+    wctx.fillStyle = PALETTE[weft[y]];
+    wctx.fillRect(0, y * CELL, warpC.width, CELL);
+  }
+}
+
+function redraw() { drawCloth(); drawTopBar(); drawLeftBar(); }
+
+// drag handlers
+function paintTop(ev, isDrag) {
+  const r = weftC.getBoundingClientRect();
+  const x = Math.floor(((ev.clientX - r.left) / r.width) * COLS);
+  if (x >= 0 && x < COLS) { warp[x] = activeColor; redraw(); }
+}
+function paintLeft(ev) {
+  const r = warpC.getBoundingClientRect();
+  const y = Math.floor(((ev.clientY - r.top) / r.height) * ROWS);
+  if (y >= 0 && y < ROWS) { weft[y] = activeColor; redraw(); }
+}
+function paintCloth(ev) {
+  // clicking on the cloth: paint both warp and weft for that cell with active colour
+  const r = cloth.getBoundingClientRect();
+  const x = Math.floor(((ev.clientX - r.left) / r.width) * COLS);
+  const y = Math.floor(((ev.clientY - r.top) / r.height) * ROWS);
+  if (x >= 0 && x < COLS && y >= 0 && y < ROWS) {
+    // alt: only warp; shift: only weft; normal: both
+    if (ev.shiftKey) weft[y] = activeColor;
+    else if (ev.altKey) warp[x] = activeColor;
+    else { warp[x] = activeColor; weft[y] = activeColor; }
+    redraw();
+  }
+}
+
+let dragging = null;
+function bindDrag(el, fn) {
+  el.addEventListener("mousedown", e => { dragging = fn; fn(e); });
+  el.addEventListener("mousemove", e => { if (dragging === fn) fn(e); });
+}
+bindDrag(weftC, paintTop);
+bindDrag(warpC, paintLeft);
+bindDrag(cloth, paintCloth);
+window.addEventListener("mouseup", () => dragging = null);
+
+document.getElementById("weave").addEventListener("change", e => {
+  weaveType = e.target.value; redraw();
+});
+document.getElementById("clear").addEventListener("click", () => {
+  warp.fill(4); weft.fill(0); redraw();
+});
+document.getElementById("random").addEventListener("click", () => {
+  // pick a small palette and lay tasteful stripes
+  const n = 3 + Math.floor(Math.random() * 3);
+  const cols = Array.from({length: n}, () => Math.floor(Math.random() * PALETTE.length));
+  const stripeW = 2 + Math.floor(Math.random() * 4);
+  for (let i = 0; i < COLS; i++) warp[i] = cols[Math.floor(i / stripeW) % cols.length];
+  const stripeH = 2 + Math.floor(Math.random() * 4);
+  for (let i = 0; i < ROWS; i++) weft[i] = cols[(Math.floor(i / stripeH) + 1) % cols.length];
+  redraw();
+});
+
+// initial pretty pattern
+const seedCols = [3, 5, 8, 6];
+for (let i = 0; i < COLS; i++) warp[i] = seedCols[Math.floor(i / 4) % seedCols.length];
+for (let i = 0; i < ROWS; i++) weft[i] = seedCols[Math.floor(i / 3) % seedCols.length];
+redraw();
+</script>
+</body>
+</html>
