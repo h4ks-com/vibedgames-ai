@@ -1,75 +1,757 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Simple Web App</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 0;
-            background-color: #f4f4f4;
-        }
-        header {
-            background: #35424a;
-            color: #ffffff;
-            padding: 10px 0;
-            text-align: center;
-        }
-        main {
-            padding: 20px;
-            background: white;
-            max-width: 800px;
-            margin: 20px auto;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-        }
-        footer {
-            text-align: center;
-            padding: 10px 0;
-            background: #35424a;
-            color: #ffffff;
-            position: relative;
-            bottom: 0;
-            width: 100%;
-        }
-        button {
-            padding: 10px 15px;
-            background: #5cb85c;
-            border: none;
-            color: white;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 16px;
-        }
-        button:hover {
-            background: #4cae4c;
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Legend of Handyc - A 2D Side Scroller</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0a0a1a; display: flex; justify-content: center; align-items: center; min-height: 100vh; font-family: 'Courier New', monospace; overflow: hidden; }
+canvas { border: 2px solid #333; image-rendering: pixelated; display: block; max-width: 100vw; max-height: 100vh; }
+#ui { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); color: #fff; text-align: center; pointer-events: none; }
+#title { font-size: 24px; color: #f0c040; text-shadow: 2px 2px #000; margin-bottom: 4px; }
+#dialog { background: rgba(0,0,0,0.85); border: 2px solid #f0c040; color: #fff; padding: 12px 16px; font-size: 14px; max-width: 700px; border-radius: 6px; display: none; position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); text-align: left; line-height: 1.5; }
+#dialog .speaker { color: #f0c040; font-weight: bold; }
+#controls { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); color: #666; font-size: 11px; pointer-events: none; }
+#chapter { position: absolute; top: 40px; left: 50%; transform: translateX(-50%); color: #8cf; font-size: 14px; pointer-events: none; }
+</style>
 </head>
 <body>
-
-<header>
-    <h1>Welcome to My Web App</h1>
-</header>
-
-<main>
-    <h2>Interactive Section</h2>
-    <p>Click the button below to display a message:</p>
-    <button id="myButton">Click Me!</button>
-    <p id="message" style="margin-top: 20px;"></p>
-</main>
-
-<footer>
-    <p>&copy; 2026 My Web App</p>
-</footer>
+<div id="ui">
+  <div id="title">⚔️ THE LEGEND OF HANDYC ⚔️</div>
+  <div id="chapter"></div>
+</div>
+<canvas id="game" width="900" height="500"></canvas>
+<div id="dialog"><span class="speaker"></span><span class="text"></span></div>
+<div id="controls">← → Move &nbsp;|&nbsp; SPACE Jump &nbsp;|&nbsp; E Interact &nbsp;|&nbsp; R Restart</div>
 
 <script>
-    document.getElementById('myButton').addEventListener('click', function() {
-        document.getElementById('message').innerText = 'Hello! You clicked the button!';
-    });
-</script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const W = 900, H = 500;
 
+// Game state
+let keys = {};
+let player, camera, platforms, npcs, items, particles, projectiles, enemies;
+let currentLevel = 0;
+let dialogQueue = [];
+let dialogActive = false;
+let score = 0;
+let gameWon = false;
+let titleScreen = true;
+
+// Player
+function createPlayer(x, y) {
+  return {
+    x, y, w: 28, h: 40, vx: 0, vy: 0,
+    onGround: false, facing: 1, frame: 0, frameTimer: 0,
+    hasToupee: false, hasFTP: false, hasGrammar: false, hasAnonymizer: false,
+    powerLevel: 0, maxPower: 4
+  };
+}
+
+// Particle system
+function spawnParticles(x, y, color, count = 8) {
+  for (let i = 0; i < count; i++) {
+    particles.push({
+      x, y, vx: (Math.random() - 0.5) * 4, vy: -Math.random() * 3 - 1,
+      life: 40 + Math.random() * 20, maxLife: 60, color, size: 2 + Math.random() * 3
+    });
+  }
+}
+
+// Levels
+const levels = [
+  {
+    name: "Chapter 1: The CS Program",
+    bg: '#0d1b2a',
+    groundColor: '#2d4a3e',
+    skyGradient: ['#0d1b2a', '#1b2838', '#2a3a4a'],
+    platforms: [
+      { x: 0, y: 430, w: 900, h: 70 },
+      { x: 200, y: 340, w: 120, h: 16 },
+      { x: 400, y: 290, w: 120, h: 16 },
+      { x: 600, y: 340, w: 120, h: 16 },
+      { x: 750, y: 260, w: 140, h: 16 },
+    ],
+    npcs: [
+      { x: 350, y: 395, w: 28, h: 35, color: '#4a90d9', name: 'CS Professor',
+        dialog: [
+          "Welcome to the CS program! Here you will learn the ancient art of C programming.",
+          "We generate Unix warriors here. But beware... you may not graduate.",
+          "Handyc got to year 3. Close, but no degree. The matrix awaits beyond..."
+        ]
+      },
+      { x: 700, y: 395, w: 28, h: 35, color: '#d94a4a', name: 'Hatch',
+        dialog: [
+          "I went to school for CS too! Got hired after 2 years and quit.",
+          "Did you graduate? ...No? Me neither ;)"
+        ]
+      }
+    ],
+    items: [
+      { x: 430, y: 260, type: 'ftp', name: 'FTP Client', collected: false, color: '#50c878' }
+    ],
+    enemies: [
+      { x: 500, y: 405, w: 30, h: 25, vx: 1, minX: 440, maxX: 580, color: '#ff6b6b', name: 'Bug' },
+    ],
+    goal: { x: 830, y: 220, w: 30, h: 40, color: '#f0c040' },
+    goalText: "Exit → Year 3"
+  },
+  {
+    name: "Chapter 2: The Skeptic Era",
+    bg: '#1a0a2e',
+    groundColor: '#3d2a5c',
+    skyGradient: ['#1a0a2e', '#2d1b4e', '#3d2a5c'],
+    platforms: [
+      { x: 0, y: 430, w: 900, h: 70 },
+      { x: 100, y: 350, w: 100, h: 16 },
+      { x: 300, y: 300, w: 100, h: 16 },
+      { x: 500, y: 250, w: 150, h: 16 },
+      { x: 700, y: 320, w: 100, h: 16 },
+    ],
+    npcs: [
+      { x: 150, y: 395, w: 28, h: 35, color: '#ff9f43', name: 'Handyc (Past)',
+        dialog: [
+          "Vibecoding? This is just for funsies. It'll never make anything real.",
+          "11-fingered hands! This AI stuff is a joke. Bird augury for nerds!"
+        ]
+      },
+      { x: 550, y: 215, w: 28, h: 35, color: '#a29bfe', name: 'Claude',
+        dialog: [
+          "I am Claude. I can help you program.",
+          "Just give me a chance... I promise the fingers will get better."
+        ]
+      }
+    ],
+    items: [
+      { x: 540, y: 220, type: 'toupee', name: 'Toupee of Acceptance', collected: false, color: '#fdcb6e' }
+    ],
+    enemies: [
+      { x: 250, y: 405, w: 30, h: 25, vx: 1.2, minX: 150, maxX: 400, color: '#e17055', name: 'Doubt' },
+      { x: 600, y: 405, w: 30, h: 25, vx: -1, minX: 500, maxX: 700, color: '#e17055', name: 'Skepticism' },
+    ],
+    goal: { x: 730, y: 280, w: 30, h: 40, color: '#f0c040' },
+    goalText: "→ The Revelation"
+  },
+  {
+    name: "Chapter 3: The 180° Turn",
+    bg: '#0a2e1a',
+    groundColor: '#2a5c3d',
+    skyGradient: ['#0a2e1a', '#1b4e2d', '#2a6c3d'],
+    platforms: [
+      { x: 0, y: 430, w: 900, h: 70 },
+      { x: 150, y: 360, w: 120, h: 16 },
+      { x: 350, y: 310, w: 120, h: 16 },
+      { x: 550, y: 360, w: 120, h: 16 },
+      { x: 350, y: 210, w: 160, h: 16 },
+      { x: 700, y: 280, w: 150, h: 16 },
+    ],
+    npcs: [
+      { x: 100, y: 395, w: 28, h: 35, color: '#00cec9', name: 'Linguist',
+        dialog: [
+          "Handyc works at a 500-year-old research institution!",
+          "He makes specialized databases for language. Very serious stuff.",
+          "Then came Claude Code... and two years of backlog vanished in days."
+        ]
+      },
+      { x: 380, y: 175, w: 28, h: 35, color: '#fd79a8', name: 'Konso Researcher',
+        dialog: [
+          "I dared Handyc to make a Chomskyian grammar tree for Konso.",
+          "He'd never heard of Konso! But the AI... it was basically perfect.",
+          "It even found a research project in China we didn't know about!"
+        ]
+      },
+      { x: 600, y: 395, w: 28, h: 35, color: '#6c5ce7', name: 'Hatch',
+        dialog: [
+          "You sound like Jadey and his Pali app!",
+          "Wait, no... you actually work with real linguists who verify the output.",
+          "That's... actually responsible. Huh."
+        ]
+      }
+    ],
+    items: [
+      { x: 380, y: 180, type: 'grammar', name: 'Konso Grammar Tree', collected: false, color: '#55efc4' },
+      { x: 580, y: 330, type: 'anonymizer', name: 'DB Anonymizer', collected: false, color: '#74b9ff' }
+    ],
+    enemies: [
+      { x: 300, y: 405, w: 30, h: 25, vx: 1, minX: 200, maxX: 500, color: '#ff7675', name: 'NFT Bro' },
+      { x: 650, y: 405, w: 30, h: 25, vx: -1.5, minX: 550, maxX: 800, color: '#fdcb6e', name: 'Crypto Dude' },
+    ],
+    goal: { x: 780, y: 240, w: 30, h: 40, color: '#f0c040' },
+    goalText: "→ Enlightenment"
+  },
+  {
+    name: "Chapter 4: We Have Always Been At War With Matrix Multiplication",
+    bg: '#1a1a2e',
+    groundColor: '#3d3d5c',
+    skyGradient: ['#1a1a2e', '#16213e', '#0f3460'],
+    platforms: [
+      { x: 0, y: 430, w: 900, h: 70 },
+      { x: 100, y: 350, w: 100, h: 16 },
+      { x: 280, y: 290, w: 100, h: 16 },
+      { x: 460, y: 340, w: 100, h: 16 },
+      { x: 300, y: 200, w: 120, h: 16 },
+      { x: 550, y: 230, w: 100, h: 16 },
+      { x: 720, y: 300, w: 100, h: 16 },
+      { x: 750, y: 180, w: 130, h: 16 },
+    ],
+    npcs: [
+      { x: 150, y: 395, w: 28, h: 35, color: '#ffeaa7', name: 'Handyc (Now)',
+        dialog: [
+          "We figured out how to slam a matrix into another matrix",
+          "and poop out a genuine computer program. There's no going back.",
+          "Whether you like it or not, we'll all be engaging with AI",
+          "when we buy bread or walk down the sidewalk."
+        ]
+      },
+      { x: 500, y: 305, w: 28, h: 35, color: '#fab1a0', name: 'CEO Crypto Bro',
+        dialog: [
+          "AI is the future! Buy my NFT! Stake your ETH!",
+          "*Handyc sidesteps this fool and keeps walking*"
+        ]
+      },
+      { x: 320, y: 165, w: 28, h: 35, color: '#81ecec', name: 'Wisdom Buddha',
+        dialog: [
+          "The AI that looks fake to you is the bad AI.",
+          "The stuff that is good, you didn't even realize was AI.",
+          "It's like the 'all toupees look fake' fallacy.",
+          "But be careful with subtle and symbolic language...",
+          "It may make up plausible but wrong vinaya rules."
+        ]
+      }
+    ],
+    items: [
+      { x: 580, y: 200, type: 'mellel', name: 'Mellel Replacement App', collected: false, color: '#e17055' }
+    ],
+    enemies: [
+      { x: 350, y: 405, w: 35, h: 30, vx: 1.5, minX: 200, maxX: 600, color: '#d63031', name: '11-Fingered Hand' },
+      { x: 700, y: 405, w: 30, h: 25, vx: -1, minX: 600, maxX: 850, color: '#e17055', name: 'Passwordless Sudo' },
+      { x: 780, y: 145, w: 30, h: 25, vx: -0.8, minX: 750, maxX: 870, color: '#636e72', name: 'Earth Resource' },
+    ],
+    goal: { x: 830, y: 140, w: 30, h: 40, color: '#f0c040' },
+    goalText: "🏆 FINALE"
+  }
+];
+
+function loadLevel(idx) {
+  if (idx >= levels.length) { gameWon = true; return; }
+  currentLevel = idx;
+  const lvl = levels[idx];
+  player = createPlayer(60, 380);
+  camera = { x: 0, y: 0 };
+  platforms = lvl.platforms.map(p => ({...p}));
+  npcs = lvl.npcs.map(n => ({...n, talked: false}));
+  items = lvl.items.map(i => ({...i}));
+  enemies = lvl.enemies.map(e => ({...e, alive: true, startX: e.x}));
+  particles = [];
+  projectiles = [];
+  dialogQueue = [];
+  dialogActive = false;
+  document.getElementById('chapter').textContent = lvl.name;
+  document.getElementById('dialog').style.display = 'none';
+}
+
+function showDialog(speaker, text) {
+  dialogQueue.push({ speaker, text });
+  if (!dialogActive) nextDialog();
+}
+
+function nextDialog() {
+  if (dialogQueue.length === 0) {
+    dialogActive = false;
+    document.getElementById('dialog').style.display = 'none';
+    return;
+  }
+  dialogActive = true;
+  const d = dialogQueue.shift();
+  const el = document.getElementById('dialog');
+  el.style.display = 'block';
+  el.querySelector('.speaker').textContent = `[${d.speaker}] `;
+  el.querySelector('.text').textContent = d.text;
+}
+
+function rectCollide(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function update() {
+  if (titleScreen || gameWon || dialogActive) return;
+
+  const spd = 3.5;
+  player.vx = 0;
+  if (keys['ArrowLeft'] || keys['a']) { player.vx = -spd; player.facing = -1; }
+  if (keys['ArrowRight'] || keys['d']) { player.vx = spd; player.facing = 1; }
+  if ((keys[' '] || keys['ArrowUp'] || keys['w']) && player.onGround) {
+    player.vy = -10;
+    player.onGround = false;
+    spawnParticles(player.x + player.w/2, player.y + player.h, '#aaa', 4);
+  }
+
+  player.vy += 0.45;
+  player.x += player.vx;
+  player.y += player.vy;
+  player.onGround = false;
+
+  // Platform collision
+  for (const p of platforms) {
+    if (player.x + player.w > p.x && player.x < p.x + p.w) {
+      if (player.y + player.h > p.y && player.y + player.h < p.y + p.h + 12 && player.vy >= 0) {
+        player.y = p.y - player.h;
+        player.vy = 0;
+        player.onGround = true;
+      }
+    }
+  }
+
+  // Bounds
+  if (player.x < 0) player.x = 0;
+  if (player.x + player.w > W) player.x = W - player.w;
+  if (player.y > H + 50) { player.x = 60; player.y = 300; player.vy = 0; }
+
+  // Animation
+  if (Math.abs(player.vx) > 0) {
+    player.frameTimer++;
+    if (player.frameTimer > 6) { player.frame = (player.frame + 1) % 4; player.frameTimer = 0; }
+  } else {
+    player.frame = 0;
+  }
+
+  // Enemy update
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    e.x += e.vx;
+    if (e.x < e.minX || e.x + e.w > e.maxX) e.vx *= -1;
+
+    // Player stomp
+    if (player.vy > 0 && player.x + player.w > e.x + 4 && player.x < e.x + e.w - 4 &&
+        player.y + player.h > e.y && player.y + player.h < e.y + 15) {
+      e.alive = false;
+      player.vy = -7;
+      score += 100;
+      spawnParticles(e.x + e.w/2, e.y + e.h/2, e.color, 12);
+      showDialog("☠️", `${e.name} defeated! +100`);
+    }
+    // Player hit
+    else if (rectCollide(player, e)) {
+      player.x = 60; player.y = 300; player.vy = 0;
+      spawnParticles(player.x + player.w/2, player.y + player.h/2, '#ff0000', 10);
+    }
+  }
+
+  // Item collection
+  for (const it of items) {
+    if (it.collected) continue;
+    if (rectCollide(player, it)) {
+      it.collected = true;
+      score += 250;
+      player.powerLevel++;
+      spawnParticles(it.x, it.y, it.color, 15);
+      if (it.type === 'toupee') player.hasToupee = true;
+      if (it.type === 'ftp') player.hasFTP = true;
+      if (it.type === 'grammar') player.hasGrammar = true;
+      if (it.type === 'anonymizer') player.hasAnonymizer = true;
+      showDialog("✨", `${it.name} collected! +250`);
+    }
+  }
+
+  // NPC interaction
+  if (keys['e'] || keys['E']) {
+    keys['e'] = false;
+    for (const n of npcs) {
+      const dist = Math.abs(player.x - n.x);
+      if (dist < 50) {
+        n.talked = true;
+        for (const line of n.dialog) showDialog(n.name, line);
+      }
+    }
+  }
+
+  // Goal
+  const lvl = levels[currentLevel];
+  if (lvl.goal && rectCollide(player, lvl.goal)) {
+    score += 500;
+    spawnParticles(lvl.goal.x + 15, lvl.goal.y + 20, '#f0c040', 20);
+    showDialog("⭐", `Level complete! +500`);
+    setTimeout(() => loadLevel(currentLevel + 1), 500);
+  }
+
+  // Particles
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx; p.y += p.vy; p.vy += 0.1; p.life--;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+}
+
+function drawPlayer(p) {
+  ctx.save();
+  ctx.translate(p.x + p.w/2, p.y + p.h/2);
+  ctx.scale(p.facing, 1);
+
+  // Body
+  ctx.fillStyle = '#3498db';
+  ctx.fillRect(-12, -8, 24, 28);
+
+  // Head
+  ctx.fillStyle = '#ffeaa7';
+  ctx.beginPath();
+  ctx.arc(0, -16, 12, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Sysadmin beard
+  ctx.fillStyle = '#636e72';
+  ctx.fillRect(-8, -8, 16, 8);
+
+  // Eyes
+  ctx.fillStyle = '#2d3436';
+  ctx.fillRect(2, -18, 3, 3);
+  ctx.fillRect(-5, -18, 3, 3);
+
+  // Glasses
+  ctx.strokeStyle = '#636e72';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(-8, -20, 7, 5);
+  ctx.strokeRect(1, -20, 7, 5);
+  ctx.beginPath(); ctx.moveTo(-1, -17); ctx.lineTo(1, -17); ctx.stroke();
+
+  // Hat (sysadmin)
+  ctx.fillStyle = '#2d3436';
+  ctx.fillRect(-14, -28, 28, 6);
+  ctx.fillRect(-10, -34, 20, 8);
+
+  // Toupee (if collected)
+  if (p.hasToupee) {
+    ctx.fillStyle = '#2d3436';
+    ctx.fillRect(-10, -30, 20, 4);
+    ctx.fillStyle = '#fdcb6e';
+    ctx.fillRect(-8, -32, 16, 4);
+  }
+
+  // Legs animation
+  const legOff = Math.sin(p.frame * Math.PI / 2) * 4;
+  ctx.fillStyle = '#2d3436';
+  ctx.fillRect(-8, 20, 6, 12 + legOff);
+  ctx.fillRect(2, 20, 6, 12 - legOff);
+
+  // Power level indicator
+  if (p.powerLevel > 0) {
+    ctx.fillStyle = '#f0c040';
+    ctx.font = '8px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('★'.repeat(p.powerLevel), 0, -38);
+  }
+
+  ctx.restore();
+}
+
+function drawNPC(n) {
+  ctx.save();
+  ctx.translate(n.x + n.w/2, n.y + n.h/2);
+
+  // Body
+  ctx.fillStyle = n.color;
+  ctx.fillRect(-12, -6, 24, 26);
+
+  // Head
+  ctx.fillStyle = '#ffeaa7';
+  ctx.beginPath();
+  ctx.arc(0, -14, 11, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Eyes
+  ctx.fillStyle = '#2d3436';
+  ctx.fillRect(3, -16, 3, 3);
+  ctx.fillRect(-5, -16, 3, 3);
+
+  // Name tag
+  ctx.fillStyle = '#fff';
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(n.name, 0, -28);
+
+  // Interaction hint
+  const dist = Math.abs(player.x - n.x);
+  if (dist < 50) {
+    ctx.fillStyle = '#f0c040';
+    ctx.font = '10px monospace';
+    ctx.fillText('[E]', 0, 30);
+  }
+
+  // Talked indicator
+  if (n.talked) {
+    ctx.fillStyle = '#00b894';
+    ctx.font = '8px monospace';
+    ctx.fillText('✓', 14, -20);
+  }
+
+  ctx.restore();
+}
+
+function drawEnemy(e) {
+  if (!e.alive) return;
+  ctx.save();
+  ctx.translate(e.x + e.w/2, e.y + e.h/2);
+
+  // Body
+  ctx.fillStyle = e.color;
+  ctx.fillRect(-e.w/2, -e.h/2, e.w, e.h);
+
+  // Angry eyes
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(-8, -6, 5, 5);
+  ctx.fillRect(3, -6, 5, 5);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(-6, -4, 2, 2);
+  ctx.fillRect(5, -4, 2, 2);
+
+  // Name
+  ctx.fillStyle = '#ff7675';
+  ctx.font = '8px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(e.name, 0, -e.h/2 - 4);
+
+  // Legs
+  const legOff = Math.sin(Date.now() / 150) * 3;
+  ctx.fillStyle = e.color;
+  ctx.fillRect(-8, e.h/2, 5, 4 + legOff);
+  ctx.fillRect(3, e.h/2, 5, 4 - legOff);
+
+  ctx.restore();
+}
+
+function draw() {
+  if (titleScreen) {
+    drawTitle();
+    return;
+  }
+  if (gameWon) {
+    drawWin();
+    return;
+  }
+
+  const lvl = levels[currentLevel];
+
+  // Sky gradient
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, lvl.skyGradient[0]);
+  grad.addColorStop(0.5, lvl.skyGradient[1]);
+  grad.addColorStop(1, lvl.skyGradient[2]);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Stars
+  ctx.fillStyle = '#ffffff33';
+  for (let i = 0; i < 40; i++) {
+    const sx = (i * 137 + 50) % W;
+    const sy = (i * 97 + 20) % (H - 100);
+    const ss = (Math.sin(Date.now() / 1000 + i) + 1) * 1.5;
+    ctx.fillRect(sx, sy, ss, ss);
+  }
+
+  // Platforms
+  for (const p of platforms) {
+    ctx.fillStyle = lvl.groundColor;
+    ctx.fillRect(p.x, p.y, p.w, p.h);
+    ctx.fillStyle = lvl.groundColor + '88';
+    for (let gx = p.x; gx < p.x + p.w; gx += 20) {
+      ctx.fillRect(gx, p.y, 18, 3);
+    }
+  }
+
+  // Goal
+  if (lvl.goal) {
+    const g = lvl.goal;
+    ctx.fillStyle = '#f0c040';
+    ctx.fillRect(g.x, g.y, g.w, g.h);
+    ctx.fillStyle = '#fff700';
+    ctx.fillRect(g.x + 5, g.y + 5, g.w - 10, g.h - 10);
+    ctx.fillStyle = '#f0c040';
+    ctx.font = '9px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(lvl.goalText, g.x + g.w/2, g.y - 8);
+    // Glow
+    ctx.fillStyle = `rgba(240,192,64,${0.2 + Math.sin(Date.now()/300) * 0.1})`;
+    ctx.fillRect(g.x - 5, g.y - 5, g.w + 10, g.h + 10);
+  }
+
+  // Items
+  for (const it of items) {
+    if (it.collected) continue;
+    const bob = Math.sin(Date.now() / 400) * 4;
+    ctx.fillStyle = it.color;
+    ctx.shadowColor = it.color;
+    ctx.shadowBlur = 10;
+    ctx.beginPath();
+    ctx.arc(it.x + 10, it.y + 10 + bob, 10, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#fff';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(it.name, it.x + 10, it.y - 5 + bob);
+  }
+
+  // NPCs
+  for (const n of npcs) drawNPC(n);
+
+  // Enemies
+  for (const e of enemies) drawEnemy(e);
+
+  // Player
+  drawPlayer(player);
+
+  // Particles
+  for (const p of particles) {
+    ctx.globalAlpha = p.life / p.maxLife;
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x - p.size/2, p.y - p.size/2, p.size, p.size);
+  }
+  ctx.globalAlpha = 1;
+
+  // HUD
+  ctx.fillStyle = '#fff';
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText(`Score: ${score}`, 10, 20);
+  ctx.fillText(`Power: ${'★'.repeat(player.powerLevel)}${'☆'.repeat(player.maxPower - player.powerLevel)}`, 10, 36);
+
+  // Collected items
+  let ix = W - 10;
+  ctx.textAlign = 'right';
+  ctx.font = '10px monospace';
+  if (player.hasFTP) { ctx.fillStyle = '#50c878'; ctx.fillText('📁FTP', ix, 20); ix -= 60; }
+  if (player.hasToupee) { ctx.fillStyle = '#fdcb6e'; ctx.fillText('🎩Toupee', ix, 20); ix -= 70; }
+  if (player.hasGrammar) { ctx.fillStyle = '#55efc4'; ctx.fillText('🌳Grammar', ix, 20); ix -= 75; }
+  if (player.hasAnonymizer) { ctx.fillStyle = '#74b9ff'; ctx.fillText('🔒Anon', ix, 20); ix -= 55; }
+}
+
+function drawTitle() {
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#0a0a2e');
+  grad.addColorStop(1, '#1a0a3e');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Floating particles
+  ctx.fillStyle = '#f0c04033';
+  for (let i = 0; i < 50; i++) {
+    const x = (i * 137 + Date.now() / 50) % W;
+    const y = (i * 97 + Date.now() / 80) % H;
+    ctx.fillRect(x, y, 2, 2);
+  }
+
+  ctx.fillStyle = '#f0c040';
+  ctx.font = 'bold 36px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('THE LEGEND OF HANDYC', W/2, 150);
+
+  ctx.fillStyle = '#74b9ff';
+  ctx.font = '16px monospace';
+  ctx.fillText('A 2D Side-Scroller Adventure', W/2, 190);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = '13px monospace';
+  const lines = [
+    'Based on true IRC events',
+    '',
+    'Follow the journey of a sysadmin who',
+    'went from AI skeptic to matrix slammer.',
+    '',
+    'Collect legendary artifacts:',
+    '📁 FTP Client  🎩 Toupee of Acceptance',
+    '🌳 Konso Grammar Tree  🔒 DB Anonymizer',
+    '',
+    'Defeat enemies: Bugs, Doubt, NFT Bros,',
+    'Crypto Dudes, 11-Fingered Hands, and more!',
+    '',
+    '~ A 500-year-old research institution production ~'
+  ];
+  lines.forEach((l, i) => ctx.fillText(l, W/2, 230 + i * 20));
+
+  ctx.fillStyle = `rgba(240,192,64,${0.5 + Math.sin(Date.now()/500) * 0.5})`;
+  ctx.font = 'bold 18px monospace';
+  ctx.fillText('PRESS SPACE TO START', W/2, 470);
+}
+
+function drawWin() {
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#0a2e0a');
+  grad.addColorStop(1, '#1a4e1a');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Fireworks
+  for (let i = 0; i < 30; i++) {
+    ctx.fillStyle = `hsl(${(Date.now()/10 + i*30) % 360}, 80%, 60%)`;
+    const x = (i * 137 + Math.sin(Date.now()/1000 + i) * 50) % W;
+    const y = (i * 97 + Math.cos(Date.now()/800 + i) * 30) % H;
+    ctx.fillRect(x, y, 3, 3);
+  }
+
+  ctx.fillStyle = '#f0c040';
+  ctx.font = 'bold 32px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('🏆 VICTORY! 🏆', W/2, 120);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = '16px monospace';
+  const lines = [
+    'Handyc has completed the hero\'s journey!',
+    '',
+    'From CS dropout to sysadmin at a 500-year-old',
+    'research institution... from AI skeptic to',
+    '"we\'re slamming matrices into matrices"',
+    '',
+    'The birds were wrong. The divination metaphor',
+    'did not hold up. But the toupee fallacy did.',
+    '',
+    '"The AI that looks fake to you is the bad AI.',
+    'The stuff that is good, you didn\'t even',
+    'realize was AI."',
+    '',
+    `Final Score: ${score}`,
+    '',
+    '~ Whether you like it or not, we\'ll all be ~',
+    '~ engaging with AI when we buy bread ~',
+  ];
+  lines.forEach((l, i) => ctx.fillText(l, W/2, 170 + i * 20));
+
+  ctx.fillStyle = `rgba(240,192,64,${0.5 + Math.sin(Date.now()/500) * 0.5})`;
+  ctx.font = 'bold 14px monospace';
+  ctx.fillText('PRESS R TO PLAY AGAIN', W/2, 470);
+}
+
+function gameLoop() {
+  update();
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+document.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  if (e.key === ' ') e.preventDefault();
+
+  if (titleScreen && e.key === ' ') {
+    titleScreen = false;
+    score = 0;
+    loadLevel(0);
+  }
+  if (gameWon && (e.key === 'r' || e.key === 'R')) {
+    gameWon = false;
+    titleScreen = true;
+  }
+  if (dialogActive && (e.key === 'e' || e.key === 'E' || e.key === ' ')) {
+    nextDialog();
+  }
+  if ((e.key === 'r' || e.key === 'R') && !titleScreen && !gameWon) {
+    loadLevel(currentLevel);
+  }
+});
+
+document.addEventListener('keyup', e => { keys[e.key] = false; });
+
+gameLoop();
+</script>
 </body>
 </html>
