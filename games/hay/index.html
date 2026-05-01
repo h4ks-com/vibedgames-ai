@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🌈 RAINBOW WARRIOR 2026 🌈</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+  
+  * { margin:0; padding:0; box-sizing:border-box; }
+  
+  body {
+    background: #000;
+    overflow: hidden;
+    font-family: 'Press Start 2P', monospace;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    user-select: none;
+  }
+
+  canvas {
+    display: block;
+    image-rendering: pixelated;
+    border: 4px solid #fff;
+    box-shadow: 0 0 30px rgba(255,255,255,0.3), 0 0 60px rgba(255,0,255,0.2), 0 0 90px rgba(0,255,255,0.2);
+  }
+
+  #scanlines {
+    position: fixed;
+    top:0; left:0; width:100%; height:100%;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      0deg,
+      rgba(0,0,0,0.15) 0px,
+      rgba(0,0,0,0.15) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+    z-index: 10;
+  }
+
+  #vignette {
+    position: fixed;
+    top:0; left:0; width:100%; height:100%;
+    pointer-events: none;
+    background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.7) 100%);
+    z-index: 11;
+  }
+</style>
+</head>
+<body>
+<div id="scanlines"></div>
+<div id="vignette"></div>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+const W = 800, H = 600;
+canvas.width = W; canvas.height = H;
+
+// Scale canvas to fit screen
+function resize() {
+  const scale = Math.min(window.innerWidth / W, window.innerHeight / H) * 0.95;
+  canvas.style.width = (W * scale) + 'px';
+  canvas.style.height = (H * scale) + 'px';
+}
+resize();
+window.addEventListener('resize', resize);
+
+// Rainbow colors
+const RAINBOW = ['#FF0000','#FF7700','#FFFF00','#00FF00','#0088FF','#4400FF','#8800FF','#FF00FF'];
+let rainbowT = 0;
+
+function getRainbow(offset = 0) {
+  const i = Math.floor((rainbowT + offset) % RAINBOW.length);
+  return RAINBOW[Math.abs(i)];
+}
+
+function getRainbowSmooth(t) {
+  const i = t % RAINBOW.length;
+  const idx = Math.floor(i);
+  const frac = i - idx;
+  const c1 = hexToRgb(RAINBOW[idx]);
+  const c2 = hexToRgb(RAINBOW[(idx+1) % RAINBOW.length]);
+  const r = Math.round(c1.r + (c2.r - c1.r) * frac);
+  const g = Math.round(c1.g + (c2.g - c1.g) * frac);
+  const b = Math.round(c1.b + (c2.b - c1.b) * frac);
+  return `rgb(${r},${g},${b})`;
+}
+
+function hexToRgb(hex) {
+  const r = parseInt(hex.slice(1,3),16);
+  const g = parseInt(hex.slice(3,5),16);
+  const b = parseInt(hex.slice(5,7),16);
+  return {r,g,b};
+}
+
+// Game state
+let state = 'menu'; // menu, playing, gameover
+let score = 0;
+let lives = 3;
+let level = 1;
+let combo = 1;
+let comboTimer = 0;
+let shakeX = 0, shakeY = 0;
+let shakeTimer = 0;
+let particles = [];
+let texts = [];
+let player, orbs, enemies, powerups;
+let stars = [];
+let frameCount = 0;
+let highScore = parseInt(localStorage.getItem('rbw2026_hs') || '0');
+
+// Stars background
+for (let i = 0; i < 200; i++) {
+  stars.push({
+    x: Math.random() * W,
+    y: Math.random() * H,
+    speed: 0.2 + Math.random() * 1.5,
+    size: Math.random() * 2.5,
+    twinkle: Math.random() * Math.PI * 2
+  });
+}
+
+// The absurd items to collect
+const ITEMS = [
+  { emoji: '🌍', name: 'EARTH', points: 10, color: '#00FF88' },
+  { emoji: '🕊️', name: 'PEACE', points: 15, color: '#88CCFF' },
+  { emoji: '❤️', name: 'LOVE', points: 10, color: '#FF4488' },
+  { emoji: '✊', name: 'JUSTICE', points: 20, color: '#FFAA00' },
+  { emoji: '⚡', name: 'ENERGY', points: 15, color: '#FFFF00' },
+  { emoji: '🌊', name: 'OCEAN', points: 10, color: '#00AAFF' },
+  { emoji: '🌳', name: 'NATURE', points: 10, color: '#00CC44' },
+  { emoji: '🌈', name: 'PRIDE', points: 25, color: '#FF00FF' },
+  { emoji: '💡', name: 'SCIENCE', points: 20, color: '#FFFF88' },
+  { emoji: '✨', name: 'MAGIC', points: 30, color: '#FFFFFF' },
+  { emoji: '🎵', name: 'MUSIC', points: 10, color: '#FF88FF' },
+  { emoji: '🔬', name: 'MEDICINE', points: 20, color: '#88FF88' },
+  { emoji: '📚', name: 'KNOWLEDGE', points: 15, color: '#AA88FF' },
+  { emoji: '🌻', name: 'GROWTH', points: 10, color: '#FFDD00' },
+  { emoji: '🦋', name: 'FREEDOM', points: 25, color: '#FF88AA' },
+];
+
+// Enemies (things to dodge)
+const ENEMIES = [
+  { emoji: '💀', name: 'DESPAIR', speed: 1.5, size: 18 },
+  { emoji: '☢️', name: 'TOXICITY', speed: 2, size: 16 },
+  { emoji: '👹', name: 'HATE', speed: 1.8, size: 20 },
+  { emoji: '🖤', name: 'DOOM', speed: 2.5, size: 14 },
+  { emoji: '🌪️', name: 'CHAOS', speed: 1.2, size: 22 },
+  { emoji: '💣', name: 'IGNORANCE', speed: 2.2, size: 15 },
+];
+
+// Power-ups
+const POWERUP_TYPES = [
+  { emoji: '🛡️', name: 'SHIELD', duration: 180, color: '#00FFFF' },
+  { emoji: '🚀', name: 'HYPER', duration: 150, color: '#FF4400' },
+  { emoji: '💎', name: '2X SCORE', duration: 300, color: '#FF00FF' },
+  { emoji: '❤️‍🔥', name: 'EXTRA LIFE', duration: 0, color: '#FF0044' },
+];
+
+function initGame() {
+  player = {
+    x: W / 2, y: H - 80,
+    w: 32, h: 32,
+    vx: 0, vy: 0,
+    trail: [],
+    shield: 0,
+    hyper: 0,
+    doubleScore: 0,
+    invincible: 0,
+    angle: 0
+  };
+  orbs = [];
+  enemies = [];
+  powerups = [];
+  particles = [];
+  texts = [];
+  score = 0;
+  lives = 3;
+  level = 1;
+  combo = 1;
+  comboTimer = 0;
+  
+  for (let i = 0; i < 8; i++) spawnOrb();
+  for (let i = 0; i < 2 + level; i++) spawnEnemy();
+}
+
+function spawnOrb() {
+  const item = ITEMS[Math.floor(Math.random() * ITEMS.length)];
+  orbs.push({
+    x: 40 + Math.random() * (W - 80),
+    y: -20 - Math.random() * 200,
+    vy: 0.5 + Math.random() * 1.5 + level * 0.1,
+    vx: (Math.random() - 0.5) * 1.5,
+    ...item,
+    angle: 0,
+    pulse: Math.random() * Math.PI * 2,
+    alive: true
+  });
+}
+
+function spawnEnemy() {
+  const type = ENEMIES[Math.floor(Math.random() * ENEMIES.length)];
+  const fromSide = Math.random() > 0.5;
+  enemies.push({
+    x: fromSide ? (Math.random() > 0.5 ? -20 : W + 20) : 40 + Math.random() * (W - 80),
+    y: fromSide ? 40 + Math.random() * (H - 200) : -30,
+    vx: fromSide ? (Math.random() > 0.5 ? 1 : -1) * type.speed * (1 + level * 0.08) : (Math.random() - 0.5) * 1.5,
+    vy: fromSide ? (Math.random() - 0.5) * 0.8 : type.speed * (1 + level * 0.08),
+    ...type,
+    angle: 0,
+    alive: true,
+    sinOffset: Math.random() * Math.PI * 2
+  });
+}
+
+function spawnPowerup() {
+  const type = POWERUP_TYPES[Math.floor(Math.random() * POWERUP_TYPES.length)];
+  powerups.push({
+    x: 60 + Math.random() * (W - 120),
+    y: -30,
+    vy: 0.8,
+    ...type,
+    pulse: 0,
+    alive: true
+  });
+}
+
+function addParticles(x, y, color, count = 12) {
+  for (let i = 0; i < count; i++) {
+    const angle = (Math.PI * 2 / count) * i + Math.random() * 0.5;
+    const speed = 1 + Math.random() * 4;
+    particles.push({
+      x, y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      life: 40 + Math.random() * 30,
+      maxLife: 40 + Math.random() * 30,
+      color,
+      size: 2 + Math.random() * 4
+    });
+  }
+}
+
+function addText(x, y, text, color, size = 16) {
+  texts.push({ x, y, text, color, size, life: 60, vy: -1.5, alpha: 1 });
+}
+
+function shake(intensity = 5, duration = 15) {
+  shakeTimer = duration;
+  shakeX = intensity;
+  shakeY = intensity;
+}
+
+// Input
+const keys = {};
+window.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  if (state === 'menu' && (e.key === ' ' || e.key === 'Enter')) {
+    state = 'playing';
+    initGame();
+  }
+  if (state === 'gameover' && (e.key === ' ' || e.key === 'Enter')) {
+    state = 'menu';
+  }
+});
+window.addEventListener('keyup', e => keys[e.key] = false);
+
+// Touch controls
+let touchX = null;
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  touchX = (e.touches[0].clientX - rect.left) / rect.width * W;
+  if (state === 'menu' || state === 'gameover') {
+    if (state === 'menu') { state = 'playing'; initGame(); }
+    else state = 'menu';
+  }
+});
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  touchX = (e.touches[0].clientX - rect.left) / rect.width * W;
+});
+canvas.addEventListener('touchend', () => touchX = null);
+
+// Mouse
+canvas.addEventListener('mousemove', e => {
+  if (state !== 'playing') return;
+  const rect = canvas.getBoundingClientRect();
+  touchX = (e.clientX - rect.left) / rect.width * W;
+});
+canvas.addEventListener('click', e => {
+  if (state === 'menu') { state = 'playing'; initGame(); }
+  else if (state === 'gameover') state = 'menu';
+});
+
+function update() {
+  frameCount++;
+  rainbowT += 0.02;
+  
+  // Update stars
+  stars.forEach(s => {
+    s.y += s.speed;
+    s.twinkle += 0.05;
+    if (s.y > H) { s.y = 0; s.x = Math.random() * W; }
+  });
+
+  if (state !== 'playing') return;
+
+  const speed = player.hyper > 0 ? 7 : 5;
+  
+  // Player movement
+  if (touchX !== null) {
+    const dx = touchX - player.x;
+    player.vx = Math.sign(dx) * Math.min(Math.abs(dx) * 0.15, speed);
+  } else {
+    player.vx *= 0.85;
+    if (keys['ArrowLeft'] || keys['a']) player.vx = -speed;
+    if (keys['ArrowRight'] || keys['d']) player.vx = speed;
+  }
+  if (keys['ArrowUp'] || keys['w']) player.vy = Math.max(player.vy - 0.5, -speed);
+  else if (keys['ArrowDown'] || keys['s']) player.vy = Math.min(player.vy + 0.5, speed);
+  else player.vy *= 0.9;
+
+  player.x += player.vx;
+  player.y += player.vy;
+  player.x = Math.max(16, Math.min(W - 16, player.x));
+  player.y = Math.max(16, Math.min(H - 16, player.y));
+  player.angle += 0.05;
+
+  // Trail
+  player.trail.push({ x: player.x, y: player.y + 16, alpha: 1 });
+  if (player.trail.length > 20) player.trail.shift();
+  player.trail.forEach(t => t.alpha -= 0.05);
+
+  // Timers
+  if (player.shield > 0) player.shield--;
+  if (player.hyper > 0) player.hyper--;
+  if (player.doubleScore > 0) player.doubleScore--;
+  if (player.invincible > 0) player.invincible--;
+  if (comboTimer > 0) { comboTimer--; if (comboTimer <= 0) combo = 1; }
+  if (shakeTimer > 0) shakeTimer--;
+
+  // Spawn orbs
+  if (frameCount % Math.max(20, 60 - level * 3) === 0) spawnOrb();
+  
+  // Spawn enemies
+  if (frameCount % Math.max(30, 90 - level * 5) === 0) spawnEnemy();
+  
+  // Spawn powerups
+  if (frameCount % 600 === 0) spawnPowerup();
+
+  // Update orbs
+  orbs.forEach(o => {
+    o.y += o.vy;
+    o.x += o.vx + Math.sin(frameCount * 0.02 + o.pulse) * 0.3;
+    o.angle += 0.03;
+    o.pulse += 0.05;
+    if (o.y > H + 30) o.alive = false;
+  });
+
+  // Update enemies
+  enemies.forEach(e => {
+    e.x += e.vx + Math.sin(frameCount * 0.03 + e.sinOffset) * 0.8;
+    e.y += e.vy;
+    e.angle += 0.04;
+    if (e.y > H + 40 || e.x < -60 || e.x > W + 60) e.alive = false;
+  });
+
+  // Update powerups
+  powerups.forEach(p => {
+    p.y += p.vy;
+    p.pulse += 0.08;
+    if (p.y > H + 30) p.alive = false;
+  });
+
+  // Collision: player vs orbs
+  orbs.forEach(o => {
+    if (!o.alive) return;
+    const dx = player.x - o.x, dy = player.y - o.y;
+    if (Math.abs(dx) < 28 && Math.abs(dy) < 28) {
+      o.alive = false;
+      const pts = o.points * combo * (player.doubleScore > 0 ? 2 : 1);
+      score += pts;
+      combo = Math.min(combo + 1, 20);
+      comboTimer = 120;
+      addParticles(o.x, o.y, o.color, 15);
+      addText(o.x, o.y - 20, `+${pts} ${o.name}`, o.color);
+      if (combo > 3) addText(o.x, o.y - 45, `${combo}x COMBO!`, '#FFFF00', 14);
+      shake(2, 5);
+      
+      // Level up every 500 pts
+      const newLevel = Math.floor(score / 500) + 1;
+      if (newLevel > level) {
+        level = newLevel;
+        addText(W/2, H/2, `⭐ LEVEL ${level}! ⭐`, '#FFFFFF', 24);
+        shake(6, 20);
+        for (let i = 0; i < 30; i++) addParticles(W/2 + (Math.random()-0.5)*200, H/2 + (Math.random()-0.5)*100, RAINBOW[i%8], 5);
+      }
+    }
+  });
+
+  // Collision: player vs enemies
+  enemies.forEach(e => {
+    if (!e.alive || player.invincible > 0) return;
+    const dx = player.x - e.x, dy = player.y - e.y;
+    if (Math.abs(dx) < 24 && Math.abs(dy) < 24) {
+      if (player.shield > 0) {
+        player.shield = 0;
+        e.alive = false;
+        addParticles(e.x, e.y, '#00FFFF', 20);
+        addText(e.x, e.y, 'BLOCKED!', '#00FFFF', 18);
+        score += 50;
+        shake(4, 10);
+      } else {
+        lives--;
+        player.invincible = 120;
+        combo = 1;
+        addParticles(player.x, player.y, '#FF0000', 30);
+        addText(player.x, player.y - 30, '-1 ❤️', '#FF0000', 20);
+        shake(8, 20);
+        e.alive = false;
+        if (lives <= 0) {
+          state = 'gameover';
+          if (score > highScore) {
+            highScore = score;
+            localStorage.setItem('rbw2026_hs', highScore);
+          }
+          for (let i = 0; i < 50; i++) addParticles(player.x, player.y, RAINBOW[i%8], 8);
+        }
+      }
+    }
+  });
+
+  // Collision: player vs powerups
+  powerups.forEach(p => {
+    if (!p.alive) return;
+    const dx = player.x - p.x, dy = player.y - p.y;
+    if (Math.abs(dx) < 28 && Math.abs(dy) < 28) {
+      p.alive = false;
+      addParticles(p.x, p.y, p.color, 20);
+      addText(p.x, p.y - 20, p.name + '!', p.color, 16);
+      shake(3, 8);
+      if (p.name === 'SHIELD') player.shield = p.duration;
+      else if (p.name === 'HYPER') player.hyper = p.duration;
+      else if (p.name === '2X SCORE') player.doubleScore = p.duration;
+      else if (p.name === 'EXTRA LIFE') { lives = Math.min(lives + 1, 5); }
+    }
+  });
+
+  // Update particles
+  particles.forEach(p => {
+    p.x += p.vx; p.y += p.vy;
+    p.vx *= 0.97; p.vy *= 0.97;
+    p.vy += 0.02;
+    p.life--;
+  });
+  particles = particles.filter(p => p.life > 0);
+
+  // Update texts
+  texts.forEach(t => {
+    t.y += t.vy;
+    t.life--;
+    t.alpha = t.life / 60;
+  });
+  texts = texts.filter(t => t.life > 0);
+
+  // Cleanup
+  orbs = orbs.filter(o => o.alive);
+  enemies = enemies.filter(e => e.alive);
+  powerups = powerups.filter(p => p.alive);
+}
+
+function draw() {
+  ctx.save();
+  
+  // Screen shake
+  if (shakeTimer > 0) {
+    ctx.translate(
+      (Math.random() - 0.5) * shakeX * (shakeTimer / 15),
+      (Math.random() - 0.5) * shakeY * (shakeTimer / 15)
+    );
+  }
+
+  // Background
+  const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+  bgGrad.addColorStop(0, '#0a0015');
+  bgGrad.addColorStop(0.5, '#0d0020');
+  bgGrad.addColorStop(1, '#050010');
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(-10, -10, W + 20, H + 20);
+
+  // Stars
+  stars.forEach(s => {
+    const alpha = 0.3 + Math.sin(s.twinkle) * 0.3;
+    ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+    ctx.fillRect(Math.floor(s.x), Math.floor(s.y), Math.ceil(s.size), Math.ceil(s.size));
+  });
+
+  // Subtle rainbow grid lines
+  ctx.globalAlpha = 0.03;
+  for (let i = 0; i < 20; i++) {
+    ctx.strokeStyle = getRainbowSmooth(rainbowT + i * 0.5);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, i * 30 + Math.sin(rainbowT + i) * 10);
+    ctx.lineTo(W, i * 30 + Math.cos(rainbowT + i) * 10);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  if (state === 'menu') {
+    drawMenu();
+  } else if (state === 'playing') {
+    drawGame();
+  } else if (state === 'gameover') {
+    drawGame();
+    drawGameOver();
+  }
+
+  ctx.restore();
+}
+
+function drawMenu() {
+  // Title
+  const titleY = 140;
+  
+  // Glow
+  ctx.shadowBlur = 30;
+  ctx.shadowColor = getRainbowSmooth(rainbowT * 2);
+  
+  // Rainbow title
+  ctx.font = '36px "Press Start 2P"';
+  ctx.textAlign = 'center';
+  
+  const title = 'RAINBOW WARRIOR';
+  for (let i = 0; i < title.length; i++) {
+    ctx.fillStyle = getRainbowSmooth(rainbowT + i * 0.3);
+    const x = W/2 - (title.length * 11) + i * 22;
+    const y = titleY + Math.sin(rainbowT * 3 + i * 0.4) * 8;
+    ctx.fillText(title[i], x, y);
+  }
+  
+  ctx.font = '20px "Press Start 2P"';
+  ctx.fillStyle = getRainbowSmooth(rainbowT * 1.5);
+  ctx.fillText('2026', W/2, titleY + 50);
+  
+  ctx.shadowBlur = 0;
+
+  // Subtitle
+  ctx.font = '10px "Press Start 2P"';
+  ctx.fillStyle = '#aaa';
+  ctx.fillText('PRO EARTH • PRO HUMAN • PRO LOVE • PRO AWESOME', W/2, titleY + 90);
+
+  // Floating emojis
+  const floatEmojis = ['🌍','✊','❤️','🌈','🌊','🕊️','🔬','🎵','✨','🌱','⚡','💎'];
+  floatEmojis.forEach((e, i) => {
+    const angle = rainbowT * 0.5 + (Math.PI * 2 / floatEmojis.length) * i;
+    const x = W/2 + Math.cos(angle) * 180;
+    const y = 300 + Math.sin(angle * 2) * 40;
+    ctx.font = '24px serif';
+    ctx.fillText(e, x, y);
+  });
+
+  // Instructions
+  const blink = Math.sin(rainbowT * 5) > 0;
+  if (blink) {
+    ctx.font = '14px "Press Start 2P"';
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillText('CLICK OR PRESS SPACE TO START', W/2, 430);
+  }
+
+  ctx.font = '9px "Press Start 2P"';
+  ctx.fillStyle = '#666';
+  ctx.fillText('ARROW KEYS / WASD / MOUSE TO MOVE', W/2, 470);
+  ctx.fillText('COLLECT GOOD STUFF • DODGE BAD STUFF', W/2, 490);
+
+  if (highScore > 0) {
+    ctx.font = '10px "Press Start 2P"';
+    ctx.fillStyle = getRainbowSmooth(rainbowT);
+    ctx.fillText(`HIGH SCORE: ${highScore}`, W/2, 540);
+  }
+
+  // Bottom tagline
+  ctx.font = '7px "Press Start 2P"';
+  ctx.fillStyle = '#444';
+  ctx.fillText('THE MOST PROGRESSIVE GAME OF 2026', W/2, 575);
+}
+
+function drawGame() {
+  // Player trail
+  player.trail.forEach((t, i) => {
+    if (t.alpha <= 0) return;
+    ctx.globalAlpha = t.alpha * 0.5;
+    const color = player.hyper > 0 ? '#FF4400' : player.shield > 0 ? '#00FFFF' : getRainbowSmooth(rainbowT + i * 0.3);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(t.x, t.y, 6 - i * 0.2, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+
+  // Orbs
+  orbs.forEach(o => {
+    ctx.save();
+    const pulse = 1 + Math.sin(o.pulse) * 0.15;
+    ctx.translate(o.x, o.y);
+    ctx.rotate(Math.sin(o.angle) * 0.2);
+    ctx.scale(pulse, pulse);
+    
+    // Glow
+    ctx.shadowBlur = 15;
+    ctx.shadowColor = o.color;
+    
+    ctx.font = '26px serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(o.emoji, 0, 0);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+  });
+
+  // Enemies
+  enemies.forEach(e => {
+    ctx.save();
+    ctx.translate(e.x, e.y);
+    
+    // Danger glow
+    ctx.shadowBlur = 12;
+    ctx.shadowColor = '#FF0000';
+    
+    ctx.font = `${e.size + Math.sin(frameCount * 0.1) * 2}px serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(e.emoji, 0, 0);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+  });
+
+  // Powerups
+  powerups.forEach(p => {
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    
+    const pulse = 1 + Math.sin(p.pulse) * 0.2;
+    ctx.scale(pulse, pulse);
+    
+    ctx.shadowBlur = 20;
+    ctx.shadowColor = p.color;
+    
+    // Rotating ring
+    ctx.strokeStyle = p.color;
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.4 + Math.sin(p.pulse) * 0.3;
+    ctx.beginPath();
+    ctx.arc(0, 0, 22, frameCount * 0.05, frameCount * 0.05 + Math.PI * 1.5);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    
+    ctx.font = '24px serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(p.emoji, 0, 0);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+  });
+
+  // Player
+  ctx.save();
+  ctx.translate(player.x, player.y);
+  
+  if (player.invincible > 0 && Math.floor(player.invincible / 4) % 2 === 0) {
+    ctx.globalAlpha = 0.3;
+  }
+  
+  // Player glow
+  ctx.shadowBlur = player.hyper > 0 ? 30 : 15;
+  ctx.shadowColor = player.hyper > 0 ? '#FF4400' : player.shield > 0 ? '#00FFFF' : getRainbowSmooth(rainbowT);
+  
+  // Shield ring
+  if (player.shield > 0) {
+    ctx.strokeStyle = '#00FFFF';
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.5 + Math.sin(frameCount * 0.1) * 0.3;
+    ctx.beginPath();
+    ctx.arc(0, 0, 22, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = player.invincible > 0 && Math.floor(player.invincible / 4) % 2 === 0 ? 0.3 : 1;
+  }
+  
+  // The player: a spinning rainbow star
+  ctx.rotate(player.angle);
+  ctx.font = '32px serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(player.hyper > 0 ? '🚀' : '⭐', 0, 0);
+  
+  ctx.shadowBlur = 0;
+  ctx.restore();
+
+  // Particles
+  particles.forEach(p => {
+    ctx.globalAlpha = p.life / p.maxLife;
+    ctx.fillStyle = p.color;
+    ctx.shadowBlur = 5;
+    ctx.shadowColor = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size * (p.life / p.maxLife), 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+  ctx.shadowBlur = 0;
+
+  // Floating texts
+  texts.forEach(t => {
+    ctx.globalAlpha = t.alpha;
+    ctx.font = `${t.size}px "Press Start 2P"`;
+    ctx.fillStyle = t.color;
+    ctx.textAlign = 'center';
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = t.color;
+    ctx.fillText(t.text, t.x, t.y);
+  });
+  ctx.globalAlpha = 1;
+  ctx.shadowBlur = 0;
+
+  // HUD
+  drawHUD();
+}
+
+function drawHUD() {
+  // Top bar background
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0, 0, W, 44);
+  ctx.fillStyle = getRainbowSmooth(rainbowT);
+  ctx.fillRect(0, 43, W, 2);
+
+  // Score
+  ctx.font = '12px "Press Start 2P"';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillText(`SCORE: ${score}`, 15, 28);
+
+  // Level
+  ctx.textAlign = 'center';
+  ctx.fillStyle = getRainbowSmooth(rainbowT * 2);
+  ctx.fillText(`LVL ${level}`, W/2, 28);
+
+  // Combo
+  if (combo > 1) {
+    ctx.font = '10px "Press Start 2P"';
+    ctx.fillStyle = '#FFFF00';
+    ctx.fillText(`${combo}x COMBO`, W/2, 42 + 20);
+  }
+
+  // Lives
+  ctx.textAlign = 'right';
+  ctx.font = '16px serif';
+  let livesStr = '';
+  for (let i = 0; i < lives; i++) livesStr += '❤️';
+  for (let i = lives; i < 5; i++) livesStr += '🖤';
+  ctx.fillText(livesStr, W - 15, 30);
+
+  // Active powerups
+  let py = 60;
+  ctx.font = '8px "Press Start 2P"';
+  ctx.textAlign = 'right';
+  if (player.shield > 0) {
+    ctx.fillStyle = '#00FFFF';
+    ctx.fillText(`🛡️ SHIELD ${Math.ceil(player.shield/60)}s`, W - 15, py);
+    py += 16;
+  }
+  if (player.hyper > 0) {
+    ctx.fillStyle = '#FF4400';
+    ctx.fillText(`🚀 HYPER ${Math.ceil(player.hyper/60)}s`, W - 15, py);
+    py += 16;
+  }
+  if (player.doubleScore > 0) {
+    ctx.fillStyle = '#FF00FF';
+    ctx.fillText(`💎 2X ${Math.ceil(player.doubleScore/60)}s`, W - 15, py);
+  }
+}
+
+function drawGameOver() {
+  ctx.fillStyle = 'rgba(0,0,0,0.7)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.shadowBlur = 30;
+  ctx.shadowColor = '#FF0000';
+  ctx.font = '32px "Press Start 2P"';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#FF0000';
+  ctx.fillText('GAME OVER', W/2, 220);
+  ctx.shadowBlur = 0;
+
+  ctx.font = '16px "Press Start 2P"';
+  ctx.fillStyle = getRainbowSmooth(rainbowT);
+  ctx.fillText(`FINAL SCORE: ${score}`, W/2, 280);
+
+  ctx.font = '12px "Press Start 2P"';
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillText(`LEVEL REACHED: ${level}`, W/2, 320);
+
+  if (score >= highScore && score > 0) {
+    ctx.font = '14px "Press Start 2P"';
+    ctx.fillStyle = getRainbowSmooth(rainbowT * 3);
+    ctx.fillText('⭐ NEW HIGH SCORE! ⭐', W/2, 360);
+  }
+
+  const blink = Math.sin(rainbowT * 5) > 0;
+  if (blink) {
+    ctx.font = '12px "Press Start 2P"';
+    ctx.fillStyle = '#AAAAAA';
+    ctx.fillText('CLICK OR PRESS SPACE TO CONTINUE', W/2, 430);
+  }
+
+  // Pro tips
+  ctx.font = '8px "Press Start 2P"';
+  ctx.fillStyle = '#666';
+  const tips = [
+    'REMEMBER: EARTH IS GOOD',
+    'BE EXCELLENT TO EACH OTHER',
+    'SCIENCE RULES',
+    'LOVE IS THE ANSWER',
+    'SAVE THE WHALES',
+    'READING IS FUNDAMENTAL'
+  ];
+  ctx.fillText(tips[Math.floor(frameCount / 300) % tips.length], W/2, 520);
+}
+
+function loop() {
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>
