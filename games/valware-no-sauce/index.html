@@ -131,6 +131,48 @@
     text-shadow: 0 1px 4px rgba(0,0,0,0.8);
     backdrop-filter: blur(4px);
   }
+  .audio-controls {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 10;
+    display: flex;
+    gap: 10px;
+  }
+  .audio-btn {
+    background: rgba(255,255,255,0.12);
+    border: 1px solid rgba(255,255,255,0.2);
+    color: white;
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    backdrop-filter: blur(4px);
+  }
+  .audio-btn:hover { background: rgba(255,255,255,0.25); transform: scale(1.1); }
+  .audio-btn.off { opacity: 0.4; }
+  .speech-indicator {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10;
+    background: rgba(0,0,0,0.7);
+    border: 1px solid rgba(255,107,107,0.5);
+    border-radius: 25px;
+    padding: 8px 20px;
+    font-size: 0.85rem;
+    color: #ff6b6b;
+    opacity: 0;
+    transition: opacity 0.3s;
+    pointer-events: none;
+  }
+  .speech-indicator.show { opacity: 1; }
 </style>
 </head>
 <body>
@@ -140,6 +182,12 @@
     <img src="https://raw.githubusercontent.com/h4ks-com/vibedgames-ai/main/games/valware-no-sauce/bg3-neon.jpg">
   </div>
   <div class="bg-overlay"></div>
+
+  <div class="audio-controls">
+    <button class="audio-btn" id="musicBtn" title="Toggle Music" onclick="toggleMusic()">🎵</button>
+    <button class="audio-btn" id="sfxBtn" title="Toggle SFX" onclick="toggleSfx()">🔊</button>
+    <button class="audio-btn" id="voiceBtn" title="Toggle Voice" onclick="toggleVoice()">🗣️</button>
+  </div>
 
   <div class="container">
     <div class="burger">🍔</div>
@@ -155,6 +203,9 @@
       <span class="banned-tag">✅ Plain Burgers OK</span>
     </div>
   </div>
+
+  <div class="speech-indicator" id="speechIndicator">🗣️ Valware is speaking...</div>
+
   <script>
     // Background slideshow
     const images = document.querySelectorAll('.bg-slider img');
@@ -165,21 +216,241 @@
       images[current].classList.add('active');
     }, 6000);
 
-    // Sauce game
+    // ============ AUDIO ENGINE ============
+    let audioCtx = null;
+    let musicEnabled = true;
+    let sfxEnabled = true;
+    let voiceEnabled = true;
+    let musicPlaying = false;
+    let musicNodes = [];
+
+    function getAudioCtx() {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      return audioCtx;
+    }
+
+    // Background music - sad/dramatic looping melody
+    function startMusic() {
+      if (musicPlaying || !musicEnabled) return;
+      const ctx = getAudioCtx();
+      musicPlaying = true;
+
+      const notes = [261.6, 293.7, 329.6, 293.7, 261.6, 220.0, 246.9, 261.6, 293.7, 261.6, 246.9, 220.0];
+      const noteLen = 0.6;
+      let noteIndex = 0;
+
+      function playNote() {
+        if (!musicPlaying) return;
+        const ctx = getAudioCtx();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        const filter = ctx.createBiquadFilter();
+
+        osc.type = 'sine';
+        osc.frequency.value = notes[noteIndex % notes.length];
+        filter.type = 'lowpass';
+        filter.frequency.value = 800;
+        gain.gain.setValueAtTime(0, ctx.currentTime);
+        gain.gain.linearRampToValueAtTime(0.08, ctx.currentTime + 0.05);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + noteLen * 0.9);
+
+        osc.connect(filter);
+        filter.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + noteLen);
+
+        musicNodes.push(osc);
+        noteIndex++;
+
+        // Add a bass note every 4 beats
+        if (noteIndex % 4 === 0) {
+          const bass = ctx.createOscillator();
+          const bg = ctx.createGain();
+          bass.type = 'triangle';
+          bass.frequency.value = notes[(noteIndex - 1) % notes.length] / 2;
+          bg.gain.setValueAtTime(0, ctx.currentTime);
+          bg.gain.linearRampToValueAtTime(0.06, ctx.currentTime + 0.05);
+          bg.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + noteLen * 1.8);
+          bass.connect(bg);
+          bg.connect(ctx.destination);
+          bass.start(ctx.currentTime);
+          bass.stop(ctx.currentTime + noteLen * 2);
+        }
+
+        if (musicPlaying && musicEnabled) {
+          setTimeout(playNote, noteLen * 1000);
+        } else {
+          musicPlaying = false;
+        }
+      }
+      playNote();
+    }
+
+    function stopMusic() {
+      musicPlaying = false;
+      musicNodes.forEach(n => { try { n.stop(); } catch(e) {} });
+      musicNodes = [];
+    }
+
+    // SFX - rejection buzzer
+    function playRejectSound() {
+      if (!sfxEnabled) return;
+      const ctx = getAudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(200, ctx.currentTime);
+      osc.frequency.linearRampToValueAtTime(80, ctx.currentTime + 0.4);
+      gain.gain.setValueAtTime(0.15, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.4);
+    }
+
+    // SFX - gagging
+    function playGagSound() {
+      if (!sfxEnabled) return;
+      const ctx = getAudioCtx();
+      // Rapid frequency modulation for gag effect
+      for (let i = 0; i < 6; i++) {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        const t = ctx.currentTime + i * 0.08;
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(120 + Math.random() * 200, t);
+        osc.frequency.linearRampToValueAtTime(80 + Math.random() * 100, t + 0.06);
+        gain.gain.setValueAtTime(0.08, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(t);
+        osc.stop(t + 0.07);
+      }
+    }
+
+    // SFX - alarm
+    function playAlarmSound() {
+      if (!sfxEnabled) return;
+      const ctx = getAudioCtx();
+      for (let i = 0; i < 4; i++) {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        const t = ctx.currentTime + i * 0.2;
+        osc.type = 'sine';
+        osc.frequency.value = i % 2 === 0 ? 880 : 660;
+        gain.gain.setValueAtTime(0.12, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(t);
+        osc.stop(t + 0.16);
+      }
+    }
+
+    // SFX - dramatic sting
+    function playDramaticSting() {
+      if (!sfxEnabled) return;
+      const ctx = getAudioCtx();
+      [330, 415, 494, 330].forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        const t = ctx.currentTime + i * 0.12;
+        osc.type = i === 0 ? 'triangle' : 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.15, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(t);
+        osc.stop(t + 0.5);
+      });
+    }
+
+    // SFX - splat (sauce dropping)
+    function playSplatSound() {
+      if (!sfxEnabled) return;
+      const ctx = getAudioCtx();
+      const bufferSize = ctx.sampleRate * 0.15;
+      const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufferSize * 0.1));
+      }
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.value = 600;
+      const gain = ctx.createGain();
+      gain.gain.value = 0.2;
+      source.connect(filter);
+      filter.connect(gain);
+      gain.connect(ctx.destination);
+      source.start(ctx.currentTime);
+    }
+
+    // Voice synthesis
+    function speak(text) {
+      if (!voiceEnabled || !window.speechSynthesis) return;
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.rate = 0.95;
+      utter.pitch = 1.1;
+      utter.volume = 0.9;
+      // Try to pick a fun voice
+      const voices = window.speechSynthesis.getVoices();
+      const preferred = voices.find(v => v.name.includes('Google UK English Male'))
+        || voices.find(v => v.name.includes('Daniel'))
+        || voices.find(v => v.lang === 'en-GB')
+        || voices.find(v => v.lang.startsWith('en'));
+      if (preferred) utter.voice = preferred;
+
+      const indicator = document.getElementById('speechIndicator');
+      utter.onstart = () => indicator.classList.add('show');
+      utter.onend = () => indicator.classList.remove('show');
+      utter.onerror = () => indicator.classList.remove('show');
+      window.speechSynthesis.speak(utter);
+    }
+
+    // Toggle buttons
+    function toggleMusic() {
+      musicEnabled = !musicEnabled;
+      document.getElementById('musicBtn').classList.toggle('off', !musicEnabled);
+      if (musicEnabled) startMusic(); else stopMusic();
+    }
+    function toggleSfx() {
+      sfxEnabled = !sfxEnabled;
+      document.getElementById('sfxBtn').classList.toggle('off', !sfxEnabled);
+    }
+    function toggleVoice() {
+      voiceEnabled = !voiceEnabled;
+      document.getElementById('voiceBtn').classList.toggle('off', !voiceEnabled);
+      if (!voiceEnabled) window.speechSynthesis.cancel();
+    }
+
+    // Load voices
+    if (window.speechSynthesis) {
+      window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
+    }
+
+    // ============ SAUCE GAME ============
     let count = 0;
     const reactions = [
-      { emoji: "🤢", text: "Valware recoils in horror!" },
-      { emoji: "😵", text: "Valware's eyes water uncontrollably!" },
-      { emoji: "🚫", text: "ABSOLUTELY NOT. NO BURGER SAUCE." },
-      { emoji: "😖", text: "Valware gags and pushes it away!" },
-      { emoji: "💀", text: "Valware is now deceased (not really, but close)!" },
-      { emoji: "😤", text: "Valware: 'WHY WOULD YOU DO THIS TO ME?!'" },
-      { emoji: "🤮", text: "Valware is NOT having a good time!" },
-      { emoji: "⛔", text: "DENIED. Burger sauce = bad. Always." },
-      { emoji: "😰", text: "Valware is trembling at the sight of it!" },
-      { emoji: "🧑‍⚕️", text: "Valware: 'CALL 999, I'VE BEEN POISONED!'" },
-      { emoji: "🤯", text: "Valware's brain cannot comprehend this betrayal!" },
-      { emoji: "😬", text: "Valware slowly backs away..." },
+      { emoji: "🤢", text: "Valware recoils in horror!", voice: "No! Get that away from me! I can smell it from here!", sfx: "gag" },
+      { emoji: "😵", text: "Valware's eyes water uncontrollably!", voice: "My eyes! My eyes are burning! Why would you do this!", sfx: "alarm" },
+      { emoji: "🚫", text: "ABSOLUTELY NOT. NO BURGER SAUCE.", voice: "Absolutely not. No burger sauce. I have made myself extremely clear on this matter.", sfx: "reject" },
+      { emoji: "😖", text: "Valware gags and pushes it away!", voice: "Gross! Gross gross gross! Take it away! I'm going to be sick!", sfx: "gag" },
+      { emoji: "💀", text: "Valware is now deceased (not really, but close)!", voice: "I am deceased. This is it. This is how I die. Death by burger sauce.", sfx: "sting" },
+      { emoji: "😤", text: "Valware: 'WHY WOULD YOU DO THIS TO ME?!'", voice: "Why?! Why would you do this to me?! We were friends! Or at least acquaintances!", sfx: "reject" },
+      { emoji: "🤮", text: "Valware is NOT having a good time!", voice: "I am not having a good time. I want everyone to know that. This is the worst day of my life.", sfx: "gag" },
+      { emoji: "⛔", text: "DENIED. Burger sauce = bad. Always.", voice: "Denied. Request denied. Burger sauce equals bad. This has always been the case and always will be.", sfx: "alarm" },
+      { emoji: "😰", text: "Valware is trembling at the sight of it!", voice: "I'm literally shaking right now. My hands are trembling. That sauce is a war crime.", sfx: "sting" },
+      { emoji: "🧑‍⚕️", text: "Valware: 'CALL 999, I'VE BEEN POISONED!'", voice: "Ring nine nine nine! I have been poisoned! Someone call an ambulance! It's the sauce!", sfx: "alarm" },
+      { emoji: "🤯", text: "Valware's brain cannot comprehend this betrayal!", voice: "I trusted you. I genuinely trusted you. And you bring me... sauce? This is the ultimate betrayal.", sfx: "sting" },
+      { emoji: "😬", text: "Valware slowly backs away...", voice: "I'm just going to slowly back away now. Nobody make any sudden movements with that sauce.", sfx: "reject" },
     ];
 
     function offerSauce() {
@@ -192,6 +463,19 @@
         el.innerHTML = `${r.emoji} ${r.text}`;
         el.style.opacity = 1;
       }, 150);
+
+      // Play appropriate SFX
+      switch (r.sfx) {
+        case 'gag': playGagSound(); break;
+        case 'reject': playRejectSound(); break;
+        case 'alarm': playAlarmSound(); break;
+        case 'sting': playDramaticSting(); break;
+      }
+
+      // Speak
+      speak(r.voice);
+
+      // Drop sauce with splat
       dropSauce();
     }
 
@@ -199,6 +483,7 @@
       const sauces = ['🟡', '🟠', '🍦', '🫙'];
       for (let i = 0; i < 5; i++) {
         setTimeout(() => {
+          playSplatSound();
           const el = document.createElement('div');
           el.className = 'sauce-drip';
           el.textContent = sauces[Math.floor(Math.random() * sauces.length)];
@@ -206,9 +491,13 @@
           el.style.animationDuration = (2 + Math.random() * 3) + 's';
           document.body.appendChild(el);
           setTimeout(() => el.remove(), 5000);
-        }, i * 200);
+        }, i * 300);
       }
     }
+
+    // Start music on first interaction
+    document.addEventListener('click', () => startMusic(), { once: true });
+    document.addEventListener('touchstart', () => startMusic(), { once: true });
   </script>
 </body>
 </html>
