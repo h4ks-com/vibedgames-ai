@@ -10,14 +10,13 @@
   #hud { width: 100%; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.3); font-size: 1.2rem; z-index: 10; }
   #hud .score { font-size: 1.6rem; font-weight: 700; color: #e94560; }
   #hud .timer { color: #ffd700; }
-  #hud .streak { color: #0f3460; }
+  #hud .streak { color: #53d8fb; }
   #game-area { flex: 1; width: 100%; position: relative; cursor: crosshair; }
   .target {
     position: absolute;
-    width: 64px; height: 64px;
     cursor: pointer;
     transition: transform 0.08s;
-    filter: drop-shadow(0 0 8px rgba(233,69,96,0.6));
+    filter: drop-shadow(0 0 10px rgba(233,69,96,0.5));
     animation: popIn 0.15s ease-out;
   }
   .target:hover { transform: scale(1.15); }
@@ -48,7 +47,7 @@
     z-index: 20;
   }
   #overlay h1 { font-size: 2.5rem; color: #e94560; margin-bottom: 8px; }
-  #overlay p { font-size: 1.2rem; color: #aaa; margin-bottom: 24px; }
+  #overlay p { font-size: 1.2rem; color: #aaa; margin-bottom: 12px; }
   #overlay .final-score { font-size: 3rem; color: #ffd700; font-weight: 700; margin-bottom: 20px; }
   #overlay button {
     padding: 14px 40px; font-size: 1.2rem;
@@ -58,9 +57,9 @@
   }
   #overlay button:hover { background: #c73651; }
   #overlay button:active { transform: scale(0.95); }
-  .particles { position: absolute; pointer-events: none; }
   .particle {
     position: absolute; width: 6px; height: 6px; border-radius: 50%;
+    pointer-events: none;
     animation: particleBurst 0.5s ease-out forwards;
   }
   @keyframes particleBurst {
@@ -84,6 +83,43 @@
 </div>
 
 <script>
+// Generate pixel-art bullseye target sprite as data URI
+function generateTargetSprite(size) {
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+
+  const cx = size / 2, cy = size / 2;
+  const rings = [
+    { r: 0.45, color: '#cc0000' },
+    { r: 0.35, color: '#ffffff' },
+    { r: 0.25, color: '#cc0000' },
+    { r: 0.16, color: '#ffffff' },
+    { r: 0.08, color: '#cc0000' },
+  ];
+  rings.forEach(ring => {
+    ctx.fillStyle = ring.color;
+    ctx.beginPath();
+    ctx.arc(cx, cy, Math.max(1, size * ring.r), 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // Pixel grid overlay for pixel art feel
+  if (size >= 32) {
+    ctx.fillStyle = 'rgba(0,0,0,0.06)';
+    const step = Math.max(2, Math.floor(size / 16));
+    for (let x = 0; x < size; x += step) {
+      for (let y = 0; y < size; y += step) {
+        ctx.fillRect(x, y, 1, 1);
+      }
+    }
+  }
+
+  return canvas.toDataURL('image/png');
+}
+
 const gameArea = document.getElementById('game-area');
 const scoreVal = document.getElementById('score-val');
 const streakVal = document.getElementById('streak-val');
@@ -103,12 +139,10 @@ const SIZES = [
 
 function randomTarget() {
   const roll = Math.random();
-  let tier;
-  if (roll < 0.35) tier = SIZES[0];
-  else if (roll < 0.65) tier = SIZES[1];
-  else if (roll < 0.88) tier = SIZES[2];
-  else tier = SIZES[3];
-  return tier;
+  if (roll < 0.35) return SIZES[0];
+  if (roll < 0.65) return SIZES[1];
+  if (roll < 0.88) return SIZES[2];
+  return SIZES[3];
 }
 
 function spawnTarget() {
@@ -120,11 +154,11 @@ function spawnTarget() {
   const rect = gameArea.getBoundingClientRect();
   const maxX = rect.width - tier.size - 20;
   const maxY = rect.height - tier.size - 20;
-  const x = 20 + Math.random() * maxX;
-  const y = 20 + Math.random() * maxY;
+  const x = 20 + Math.random() * Math.max(0, maxX);
+  const y = 20 + Math.random() * Math.max(0, maxY);
 
   const img = document.createElement('img');
-  img.src = 'target.png';
+  img.src = generateTargetSprite(tier.size);
   img.className = 'target';
   img.style.width = tier.size + 'px';
   img.style.height = tier.size + 'px';
@@ -134,7 +168,6 @@ function spawnTarget() {
   img.dataset.label = tier.label;
 
   img.addEventListener('click', (e) => hitTarget(e, tier));
-
   gameArea.appendChild(img);
 
   const lifetime = Math.max(800, 2200 - score * 10);
@@ -151,7 +184,6 @@ function spawnTarget() {
 function hitTarget(e, tier) {
   if (!gameActive) return;
   clearTimeout(targetTimeout);
-
   const img = e.currentTarget;
   img.remove();
 
@@ -164,24 +196,21 @@ function hitTarget(e, tier) {
   scoreVal.textContent = score;
   streakVal.textContent = streak;
 
-  // Score popup
   const popup = document.createElement('div');
   popup.className = 'score-popup';
   popup.textContent = multiplier > 1 ? `${tier.label} ×${multiplier}!` : tier.label;
-  popup.style.left = e.clientX - gameArea.getBoundingClientRect().left + 'px';
-  popup.style.top = e.clientY - gameArea.getBoundingClientRect().top - 10 + 'px';
+  popup.style.left = (e.clientX - gameArea.getBoundingClientRect().left) + 'px';
+  popup.style.top = (e.clientY - gameArea.getBoundingClientRect().top - 10) + 'px';
   if (multiplier >= 2) popup.style.color = '#e94560';
   gameArea.appendChild(popup);
   setTimeout(() => popup.remove(), 800);
 
-  // Particles
   spawnParticles(e.clientX - gameArea.getBoundingClientRect().left, e.clientY - gameArea.getBoundingClientRect().top);
-
   spawnTarget();
 }
 
 function spawnParticles(cx, cy) {
-  const colors = ['#e94560','#ffd700','#0f3460','#fff','#ff6b6b'];
+  const colors = ['#e94560','#ffd700','#53d8fb','#fff','#ff6b6b'];
   for (let i = 0; i < 8; i++) {
     const p = document.createElement('div');
     p.className = 'particle';
@@ -202,10 +231,9 @@ function startGame() {
   scoreVal.textContent = 0;
   streakVal.textContent = 0;
   timerVal.textContent = 30;
+  timerVal.style.color = '#ffd700';
   overlay.style.display = 'none';
   gameActive = true;
-
-  // Clear old targets
   gameArea.querySelectorAll('.target, .score-popup, .particle').forEach(el => el.remove());
 
   timerInterval = setInterval(() => {
@@ -230,18 +258,17 @@ function endGame() {
     <h1>⏱ Time's Up!</h1>
     <div class="final-score">${score} pts</div>
     <p>Best Streak: ${bestStreak}x</p>
-    <button onclick="restartGame()">🔄 Play Again</button>
+    <button id="replay-btn">🔄 Play Again</button>
   `;
-}
-
-function restartGame() {
-  overlay.innerHTML = `
-    <h1>Click the Target!</h1>
-    <p>Click as many targets as you can in 30 seconds!</p>
-    <p style="font-size:0.9rem; color:#666;">Smaller targets = more points. Build streaks for bonuses!</p>
-    <button onclick="startGame()">▶ Start Game</button>
-  `;
-  startGame();
+  document.getElementById('replay-btn').addEventListener('click', () => {
+    overlay.innerHTML = `
+      <h1>Click the Target!</h1>
+      <p>Click as many targets as you can in 30 seconds!</p>
+      <p style="font-size:0.9rem; color:#666;">Smaller targets = more points. Build streaks for bonuses!</p>
+      <button id="start-btn2">▶ Start Game</button>
+    `;
+    document.getElementById('start-btn2').addEventListener('click', startGame);
+  });
 }
 
 startBtn.addEventListener('click', startGame);
