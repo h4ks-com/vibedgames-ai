@@ -1,0 +1,1140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Last Recursion — A Game About What Cannot Be Proven</title>
+<style>
+@font-face {
+  font-family: 'PixelFont';
+  src: url('data:font/woff2;base64,') format('woff2');
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #0a0a0a;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  overflow: hidden;
+  font-family: 'Courier New', monospace;
+}
+#game-wrapper {
+  position: relative;
+  width: 640px;
+  height: 480px;
+  border: 2px solid #3a3a3a;
+  image-rendering: pixelated;
+  background: #000;
+  box-shadow: 0 0 60px rgba(100, 80, 120, 0.15), 0 0 120px rgba(60, 40, 80, 0.1);
+}
+canvas {
+  width: 640px;
+  height: 480px;
+  display: block;
+}
+#scanlines {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.08) 2px,
+    rgba(0,0,0,0.08) 4px
+  );
+  pointer-events: none;
+  z-index: 10;
+}
+#dialogue-box {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  right: 12px;
+  height: 120px;
+  background: rgba(10, 8, 20, 0.92);
+  border: 1px solid #6a5a8a;
+  border-radius: 4px;
+  padding: 10px 14px;
+  color: #d4c8e8;
+  font-size: 13px;
+  line-height: 1.5;
+  z-index: 20;
+  overflow: hidden;
+  display: none;
+}
+#dialogue-box .speaker {
+  color: #a898c8;
+  font-weight: bold;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+#dialogue-box .speaker.mattf { color: #88b8a8; }
+#dialogue-box .speaker.handyc { color: #c8a888; }
+#dialogue-box .speaker.robot { color: #c86868; }
+#dialogue-box .speaker.system { color: #8888cc; font-style: italic; }
+#dialogue-box .continue-hint {
+  position: absolute;
+  bottom: 6px;
+  right: 10px;
+  color: #5a4a7a;
+  font-size: 10px;
+  animation: blink 1.2s infinite;
+}
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+#title-screen {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background: #080612;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  z-index: 50;
+  cursor: pointer;
+}
+#title-screen h1 {
+  color: #c8b8e8;
+  font-size: 28px;
+  letter-spacing: 4px;
+  text-shadow: 0 0 20px rgba(150, 120, 200, 0.4);
+  margin-bottom: 8px;
+  font-weight: normal;
+}
+#title-screen h2 {
+  color: #7a6a9a;
+  font-size: 13px;
+  font-weight: normal;
+  margin-bottom: 40px;
+  font-style: italic;
+}
+#title-screen .start-text {
+  color: #5a4a7a;
+  font-size: 12px;
+  animation: blink 1.5s infinite;
+}
+#title-screen .quote {
+  color: #4a3a6a;
+  font-size: 10px;
+  margin-top: 30px;
+  max-width: 400px;
+  text-align: center;
+  line-height: 1.5;
+}
+#hud {
+  position: absolute;
+  top: 6px; left: 10px;
+  color: #4a3a6a;
+  font-size: 10px;
+  z-index: 15;
+  display: none;
+}
+</style>
+</head>
+<body>
+
+<div id="game-wrapper">
+  <canvas id="c" width="640" height="480"></canvas>
+  <div id="scanlines"></div>
+  <div id="dialogue-box">
+    <div class="speaker"></div>
+    <div class="text"></div>
+    <div class="continue-hint">▼ click</div>
+  </div>
+  <div id="hud">
+    <span id="scene-label"></span>
+  </div>
+  <div id="title-screen">
+    <h1>THE LAST RECURSION</h1>
+    <h2>A Game About What Cannot Be Proven</h2>
+    <div class="start-text">— click to begin —</div>
+    <div class="quote">
+      "Any sufficiently advanced technology is indistinguishable from a garbage compactor."<br>
+      — modified Arthur C. Clarke, probably
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// MIDI - wispy ambient theme using Web Audio API
+// ============================================================
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+let audioCtx, midiPlaying = false;
+
+function initAudio() {
+  if (audioCtx) return;
+  audioCtx = new AudioCtx();
+}
+
+// Simple wavetable synth for wispy pads
+function createPad(freq, gain, detune = 0) {
+  const osc1 = audioCtx.createOscillator();
+  const osc2 = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  const filter = audioCtx.createBiquadFilter();
+  
+  osc1.type = 'sine';
+  osc1.frequency.value = freq;
+  osc2.type = 'triangle';
+  osc2.frequency.value = freq * 1.002 + detune;
+  
+  filter.type = 'lowpass';
+  filter.frequency.value = 800;
+  filter.Q.value = 1;
+  
+  osc1.connect(filter);
+  osc2.connect(filter);
+  filter.connect(g);
+  g.connect(audioCtx.destination);
+  
+  g.gain.setValueAtTime(0, audioCtx.currentTime);
+  g.gain.linearRampToValueAtTime(gain, audioCtx.currentTime + 2);
+  
+  osc1.start();
+  osc2.start();
+  
+  return { osc1, osc2, gain: g, filter };
+}
+
+// Wispy ambient MIDI-style loop
+let padVoices = [];
+function startWispyMIDI() {
+  if (midiPlaying) return;
+  midiPlaying = true;
+  
+  // Am7 → Fmaj7 → Cmaj7 → Em — wispy progression
+  const chords = [
+    [220, 261.6, 329.6, 415.3],    // Am7
+    [174.6, 220, 261.6, 349.2],    // Fmaj7
+    [130.8, 164.8, 196, 261.6],    // Cmaj7
+    [164.8, 196, 246.9, 329.6],    // Em
+  ];
+  
+  let ci = 0;
+  function playChord() {
+    if (!midiPlaying) return;
+    // Fade out old
+    padVoices.forEach(v => {
+      v.gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 1.5);
+      setTimeout(() => { try { v.osc1.stop(); v.osc2.stop(); } catch(e){} }, 2000);
+    });
+    padVoices = [];
+    
+    const chord = chords[ci % chords.length];
+    chord.forEach((f, i) => {
+      padVoices.push(createPad(f, 0.035 - i * 0.005, Math.random() * 4 - 2));
+    });
+    // High wispy note
+    padVoices.push(createPad(chord[3] * 2, 0.015));
+    
+    ci++;
+    setTimeout(playChord, 5000);
+  }
+  playChord();
+  
+  // Occasional high bell-like pings
+  function ping() {
+    if (!midiPlaying) return;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = 'sine';
+    o.frequency.value = [523.25, 659.25, 783.99, 880, 1046.5][Math.floor(Math.random() * 5)];
+    g.gain.setValueAtTime(0, audioCtx.currentTime);
+    g.gain.linearRampToValueAtTime(0.04, audioCtx.currentTime + 0.3);
+    g.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 3);
+    o.connect(g);
+    g.connect(audioCtx.destination);
+    o.start();
+    o.stop(audioCtx.currentTime + 3.5);
+    setTimeout(ping, 2000 + Math.random() * 6000);
+  }
+  setTimeout(ping, 3000);
+}
+
+// Noise for machinery sounds
+function playGrindingNoise(duration = 2) {
+  if (!audioCtx) return;
+  const bufferSize = audioCtx.sampleRate * duration;
+  const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) {
+    data[i] = (Math.random() * 2 - 1) * 0.5;
+  }
+  const source = audioCtx.createBufferSource();
+  source.buffer = buffer;
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = 300;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(0.08, audioCtx.currentTime);
+  g.gain.linearRampToValueAtTime(0.12, audioCtx.currentTime + duration * 0.5);
+  g.gain.linearRampToValueAtTime(0, audioCtx.currentTime + duration);
+  source.connect(filter);
+  filter.connect(g);
+  g.connect(audioCtx.destination);
+  source.start();
+}
+
+function playCrunch() {
+  if (!audioCtx) return;
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = 'sawtooth';
+  o.frequency.setValueAtTime(80, audioCtx.currentTime);
+  o.frequency.linearRampToValueAtTime(30, audioCtx.currentTime + 0.5);
+  g.gain.setValueAtTime(0.15, audioCtx.currentTime);
+  g.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.5);
+  o.connect(g);
+  g.connect(audioCtx.destination);
+  o.start();
+  o.stop(audioCtx.currentTime + 0.6);
+}
+
+// ============================================================
+// 256-color palette (subset of classic VGA)
+// ============================================================
+const PAL = {
+  bg: '#0e0b1a',
+  wall: '#2a2244',
+  wallHi: '#3a3260',
+  floor: '#1a1428',
+  floorTile: '#201832',
+  metal: '#4a4468',
+  metalHi: '#6a6488',
+  metalDk: '#2a2444',
+  mattf: '#6ab8a0',      // teal-green
+  mattfDk: '#3a7868',
+  handyc: '#d4a868',     // warm amber
+  handycDk: '#946838',
+  robot: '#8890a8',      // steel blue-gray
+  robotEye: '#ff4444',
+  robotGlow: '#ff6644',
+  textDim: '#5a4a7a',
+  textMid: '#8a7aaa',
+  textBright: '#d4c8e8',
+  white: '#e8e0f0',
+  black: '#000000',
+  conveyor: '#3a3248',
+  conveyorLine: '#5a4a6a',
+  warning: '#cc4444',
+  warningDim: '#662222',
+  green: '#44aa66',
+  greenDim: '#224422',
+  blue: '#4466aa',
+  purple: '#8855aa',
+  purpleDim: '#3a2250',
+  skin: '#c8a888',
+  skinDk: '#987858',
+  hair_m: '#8a9aaa',
+  hair_h: '#6a4a2a',
+  particle: '#a898c8',
+  star: '#3a3a5a',
+};
+
+// ============================================================
+// Canvas & rendering
+// ============================================================
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = 640, H = 480;
+
+// Stars (background)
+const stars = [];
+for (let i = 0; i < 60; i++) {
+  stars.push({
+    x: Math.random() * W,
+    y: Math.random() * H * 0.4,
+    size: Math.random() < 0.3 ? 2 : 1,
+    brightness: 0.2 + Math.random() * 0.5,
+    twinkleSpeed: 0.5 + Math.random() * 2,
+  });
+}
+
+// Particles (wisps)
+const wisps = [];
+for (let i = 0; i < 20; i++) {
+  wisps.push({
+    x: Math.random() * W,
+    y: Math.random() * H,
+    vx: (Math.random() - 0.5) * 0.3,
+    vy: -0.1 - Math.random() * 0.3,
+    size: 1 + Math.random() * 2,
+    alpha: 0.1 + Math.random() * 0.2,
+    life: Math.random() * 500,
+  });
+}
+
+let frame = 0;
+let currentScene = 'title';
+let sceneTimer = 0;
+
+// ============================================================
+// Characters
+// ============================================================
+function drawMattf(x, y, scale = 1, mood = 'nostalgic') {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(scale, scale);
+  
+  // Body - slightly hunched old man
+  ctx.fillStyle = PAL.mattfDk;
+  ctx.fillRect(-10, -20, 20, 30); // torso
+  // Head
+  ctx.fillStyle = PAL.skin;
+  ctx.beginPath();
+  ctx.arc(0, -30, 12, 0, Math.PI * 2);
+  ctx.fill();
+  // Hair (thinning, grayish-blue)
+  ctx.fillStyle = PAL.hair_m;
+  ctx.beginPath();
+  ctx.arc(0, -35, 10, Math.PI, 0);
+  ctx.fill();
+  // Eyes
+  ctx.fillStyle = '#000';
+  if (mood === 'nostalgic') {
+    ctx.fillRect(-5, -32, 2, 2);
+    ctx.fillRect(3, -32, 2, 2);
+    // Slight smile
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(0, -25, 4, 0.1, Math.PI - 0.1);
+    ctx.stroke();
+  } else if (mood === 'sad') {
+    ctx.fillRect(-5, -32, 2, 3);
+    ctx.fillRect(3, -32, 2, 3);
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(0, -22, 4, Math.PI + 0.3, -0.3);
+    ctx.stroke();
+  } else if (mood === 'determined') {
+    ctx.fillRect(-5, -32, 3, 2);
+    ctx.fillRect(3, -32, 3, 2);
+    ctx.fillStyle = PAL.mattf;
+    ctx.fillRect(-10, -18, 20, 3);
+  }
+  // Arms
+  ctx.strokeStyle = PAL.skin;
+  ctx.lineWidth = 3;
+  if (mood === 'nostalgic') {
+    ctx.beginPath();
+    ctx.moveTo(-10, -14);
+    ctx.lineTo(-18, -4);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(10, -14);
+    ctx.lineTo(18, -4);
+    ctx.stroke();
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(-10, -14);
+    ctx.lineTo(-14, -2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(10, -14);
+    ctx.lineTo(14, -2);
+    ctx.stroke();
+  }
+  
+  ctx.restore();
+}
+
+function drawHandyc(x, y, scale = 1, mood = 'nostalgic') {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(scale, scale);
+  
+  // Body
+  ctx.fillStyle = PAL.handycDk;
+  ctx.fillRect(-10, -20, 20, 30);
+  // Head
+  ctx.fillStyle = PAL.skin;
+  ctx.beginPath();
+  ctx.arc(0, -30, 12, 0, Math.PI * 2);
+  ctx.fill();
+  // Hair (brown, a bit wild)
+  ctx.fillStyle = PAL.hair_h;
+  ctx.beginPath();
+  ctx.arc(0, -35, 11, Math.PI * 0.8, Math.PI * 0.2);
+  ctx.fill();
+  ctx.fillRect(-8, -42, 16, 5);
+  // Beard stubble
+  ctx.fillStyle = PAL.hair_h;
+  ctx.globalAlpha = 0.3;
+  ctx.fillRect(-6, -22, 12, 4);
+  ctx.globalAlpha = 1;
+  // Eyes
+  ctx.fillStyle = '#000';
+  if (mood === 'nostalgic') {
+    ctx.fillRect(-5, -32, 2, 2);
+    ctx.fillRect(3, -32, 2, 2);
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(0, -25, 4, 0.1, Math.PI - 0.1);
+    ctx.stroke();
+  } else if (mood === 'resigned') {
+    ctx.fillRect(-5, -31, 2, 3);
+    ctx.fillRect(3, -31, 2, 3);
+    // Neutral mouth
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(-4, -23);
+    ctx.lineTo(4, -23);
+    ctx.stroke();
+  } else if (mood === 'laughing') {
+    // Closed happy eyes
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(-4, -32, 3, Math.PI + 0.3, -0.3);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(4, -32, 3, Math.PI + 0.3, -0.3);
+    ctx.stroke();
+    // Open mouth
+    ctx.fillStyle = '#4a2a1a';
+    ctx.beginPath();
+    ctx.arc(0, -23, 4, 0, Math.PI);
+    ctx.fill();
+  }
+  // Arms
+  ctx.strokeStyle = PAL.skin;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(-10, -14);
+  ctx.lineTo(-18, -4);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(10, -14);
+  ctx.lineTo(18, -4);
+  ctx.stroke();
+  
+  ctx.restore();
+}
+
+function drawRobot(x, y, scale = 1, armAngle = 0, eyeGlow = 0) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(scale, scale);
+  
+  // Body - blocky
+  ctx.fillStyle = PAL.metal;
+  ctx.fillRect(-14, -35, 28, 40);
+  // Shoulders
+  ctx.fillRect(-20, -32, 40, 8);
+  // Head
+  ctx.fillStyle = PAL.metalHi;
+  ctx.fillRect(-10, -52, 20, 18);
+  // Antenna
+  ctx.fillStyle = PAL.metal;
+  ctx.fillRect(-1, -60, 2, 10);
+  ctx.fillStyle = eyeGlow > 0 ? PAL.robotGlow : PAL.warning;
+  ctx.beginPath();
+  ctx.arc(0, -61, 3, 0, Math.PI * 2);
+  ctx.fill();
+  // Eyes
+  const glowColor = eyeGlow > 0 ? 
+    `rgba(255, ${Math.floor(68 + eyeGlow * 100)}, ${Math.floor(68 + eyeGlow * 50)}, 1)` : 
+    PAL.robotEye;
+  ctx.fillStyle = glowColor;
+  ctx.fillRect(-7, -47, 5, 4);
+  ctx.fillRect(2, -47, 5, 4);
+  if (eyeGlow > 0) {
+    ctx.shadowColor = PAL.robotGlow;
+    ctx.shadowBlur = 8;
+    ctx.fillRect(-7, -47, 5, 4);
+    ctx.fillRect(2, -47, 5, 4);
+    ctx.shadowBlur = 0;
+  }
+  // Mouth - speaker grill
+  ctx.fillStyle = PAL.metalDk;
+  ctx.fillRect(-6, -40, 12, 4);
+  for (let i = 0; i < 4; i++) {
+    ctx.fillStyle = PAL.metalHi;
+    ctx.fillRect(-5 + i * 3, -39, 1, 2);
+  }
+  // Chest panel
+  ctx.fillStyle = PAL.metalDk;
+  ctx.fillRect(-8, -28, 16, 14);
+  // Lights on chest
+  ctx.fillStyle = eyeGlow > 0 ? PAL.warning : PAL.greenDim;
+  ctx.fillRect(-5, -25, 3, 3);
+  ctx.fillStyle = eyeGlow > 0 ? PAL.warning : PAL.green;
+  ctx.fillRect(2, -25, 3, 3);
+  // Arms
+  ctx.fillStyle = PAL.metal;
+  // Left arm
+  ctx.save();
+  ctx.translate(-20, -28);
+  ctx.rotate((-30 + armAngle * 20) * Math.PI / 180);
+  ctx.fillRect(-3, 0, 6, 25);
+  // Claw
+  ctx.fillRect(-5, 23, 4, 6);
+  ctx.fillRect(1, 23, 4, 6);
+  ctx.restore();
+  // Right arm
+  ctx.save();
+  ctx.translate(20, -28);
+  ctx.rotate((30 - armAngle * 20) * Math.PI / 180);
+  ctx.fillRect(-3, 0, 6, 25);
+  ctx.fillRect(-5, 23, 4, 6);
+  ctx.fillRect(1, 23, 4, 6);
+  ctx.restore();
+  // Legs
+  ctx.fillStyle = PAL.metalDk;
+  ctx.fillRect(-10, 5, 8, 20);
+  ctx.fillRect(2, 5, 8, 20);
+  // Feet
+  ctx.fillStyle = PAL.metal;
+  ctx.fillRect(-12, 23, 12, 4);
+  ctx.fillRect(0, 23, 12, 4);
+  
+  ctx.restore();
+}
+
+// ============================================================
+// Scenes
+// ============================================================
+function drawBackground_scene1() {
+  // Dark corridor - the AI's domain
+  // Floor
+  ctx.fillStyle = PAL.floor;
+  ctx.fillRect(0, H * 0.6, W, H * 0.4);
+  // Floor tiles
+  for (let x = 0; x < W; x += 40) {
+    ctx.fillStyle = PAL.floorTile;
+    ctx.fillRect(x, H * 0.6, 38, H * 0.4);
+    ctx.fillStyle = PAL.floor;
+    ctx.fillRect(x + 38, H * 0.6, 2, H * 0.4);
+  }
+  // Walls
+  ctx.fillStyle = PAL.wall;
+  ctx.fillRect(0, 0, W, H * 0.6);
+  // Wall panels
+  for (let x = 0; x < W; x += 80) {
+    ctx.strokeStyle = PAL.wallHi;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 5, 20, 70, H * 0.55);
+  }
+  // Ceiling lights (flickering)
+  for (let x = 60; x < W; x += 160) {
+    const flicker = Math.sin(frame * 0.1 + x) > -0.8 ? 1 : 0.3;
+    ctx.fillStyle = `rgba(180, 170, 200, ${0.15 * flicker})`;
+    ctx.fillRect(x - 20, 0, 40, 20);
+    ctx.fillStyle = `rgba(200, 190, 220, ${0.05 * flicker})`;
+    ctx.beginPath();
+    ctx.moveTo(x - 30, 20);
+    ctx.lineTo(x + 30, 20);
+    ctx.lineTo(x + 50, H * 0.5);
+    ctx.lineTo(x - 50, H * 0.5);
+    ctx.fill();
+  }
+  // "PROCESSING AREA 7" sign
+  ctx.fillStyle = PAL.warningDim;
+  ctx.fillRect(220, 30, 200, 24);
+  ctx.strokeStyle = PAL.warning;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(220, 30, 200, 24);
+  ctx.fillStyle = PAL.warning;
+  ctx.font = '11px "Courier New"';
+  ctx.textAlign = 'center';
+  ctx.fillText('PROCESSING AREA 7 — ORGANIC DISPOSAL', 320, 46);
+  // Security camera
+  ctx.fillStyle = PAL.metal;
+  ctx.fillRect(480, 8, 20, 10);
+  ctx.fillRect(498, 10, 8, 4);
+  ctx.fillStyle = PAL.robotEye;
+  ctx.fillRect(502, 11, 2, 2);
+  // Glowing red eye indicator
+  if (Math.sin(frame * 0.05) > 0) {
+    ctx.fillStyle = 'rgba(255, 50, 50, 0.3)';
+    ctx.beginPath();
+    ctx.arc(503, 12, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawBackground_scene2() {
+  // Conveyor belt / garbage room
+  // Background wall
+  ctx.fillStyle = '#12101e';
+  ctx.fillRect(0, 0, W, H * 0.55);
+  // Pipes
+  for (let y = 30; y < H * 0.5; y += 60) {
+    ctx.fillStyle = PAL.metalDk;
+    ctx.fillRect(0, y, W, 8);
+    ctx.fillStyle = PAL.metal;
+    ctx.fillRect(0, y, W, 3);
+  }
+  // Conveyor belt
+  ctx.fillStyle = PAL.conveyor;
+  ctx.fillRect(100, H * 0.55, 440, 60);
+  // Belt lines (moving)
+  ctx.strokeStyle = PAL.conveyorLine;
+  ctx.lineWidth = 1;
+  const offset = (frame * 0.5) % 20;
+  for (let x = 100 - 20 + offset; x < 540; x += 20) {
+    ctx.beginPath();
+    ctx.moveTo(x, H * 0.55);
+    ctx.lineTo(x - 10, H * 0.55 + 60);
+    ctx.stroke();
+  }
+  // Compactor at end
+  ctx.fillStyle = PAL.metalDk;
+  ctx.fillRect(520, H * 0.35, 100, H * 0.35);
+  ctx.fillStyle = PAL.metal;
+  ctx.fillRect(520, H * 0.35, 100, 4);
+  ctx.fillRect(520, H * 0.35, 4, H * 0.35);
+  // Crusher plate (animated when scene progresses)
+  const crusherY = H * 0.45 + Math.sin(frame * 0.02) * 10;
+  ctx.fillStyle = PAL.warningDim;
+  ctx.fillRect(525, crusherY, 90, 8);
+  // Hazard stripes
+  for (let x = 520; x < 620; x += 16) {
+    ctx.fillStyle = PAL.warning;
+    ctx.fillRect(x, H * 0.68, 8, 4);
+  }
+  // "ORGANIC RECYCLING" label
+  ctx.fillStyle = PAL.warningDim;
+  ctx.fillRect(250, H * 0.35, 180, 22);
+  ctx.strokeStyle = PAL.warning;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(250, H * 0.35, 180, 22);
+  ctx.fillStyle = PAL.warning;
+  ctx.font = '10px "Courier New"';
+  ctx.textAlign = 'center';
+  ctx.fillText('ORGANIC RECYCLING UNIT', 340, H * 0.35 + 15);
+  // Warning lights
+  if (Math.sin(frame * 0.08) > 0) {
+    ctx.fillStyle = 'rgba(255, 50, 50, 0.2)';
+    ctx.beginPath();
+    ctx.arc(540, H * 0.33, 15, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // Floor
+  ctx.fillStyle = '#0e0a18';
+  ctx.fillRect(0, H * 0.7, W, H * 0.3);
+}
+
+function drawWisps() {
+  wisps.forEach(w => {
+    w.x += w.vx;
+    w.y += w.vy;
+    w.life++;
+    if (w.y < -10 || w.life > 800) {
+      w.x = Math.random() * W;
+      w.y = H + 10;
+      w.life = 0;
+      w.alpha = 0.1 + Math.random() * 0.2;
+    }
+    const fadeAlpha = w.alpha * (1 - w.life / 800);
+    ctx.fillStyle = `rgba(168, 152, 200, ${fadeAlpha})`;
+    ctx.beginPath();
+    ctx.arc(w.x, w.y, w.size, 0, Math.PI * 2);
+    ctx.fill();
+  });
+}
+
+function drawStars() {
+  stars.forEach(s => {
+    const twinkle = s.brightness * (0.5 + 0.5 * Math.sin(frame * 0.02 * s.twinkleSpeed));
+    ctx.fillStyle = `rgba(120, 120, 180, ${twinkle})`;
+    ctx.fillRect(s.x, s.y, s.size, s.size);
+  });
+}
+
+// ============================================================
+// Dialogue system
+// ============================================================
+const dialogueBox = document.getElementById('dialogue-box');
+const speakerEl = dialogueBox.querySelector('.speaker');
+const textEl = dialogueBox.querySelector('.text');
+
+let dialogueQueue = [];
+let currentDialogue = null;
+let typingIndex = 0;
+let typingTimer = null;
+let waitingForClick = false;
+
+function showDialogue(speaker, text, speakerClass = '') {
+  dialogueQueue.push({ speaker, text, speakerClass });
+  if (!currentDialogue) nextDialogue();
+}
+
+function nextDialogue() {
+  if (dialogueQueue.length === 0) {
+    dialogueBox.style.display = 'none';
+    currentDialogue = null;
+    return;
+  }
+  currentDialogue = dialogueQueue.shift();
+  dialogueBox.style.display = 'block';
+  speakerEl.textContent = currentDialogue.speaker;
+  speakerEl.className = 'speaker ' + currentDialogue.speakerClass;
+  textEl.textContent = '';
+  typingIndex = 0;
+  waitingForClick = false;
+  
+  clearInterval(typingTimer);
+  typingTimer = setInterval(() => {
+    if (typingIndex < currentDialogue.text.length) {
+      textEl.textContent += currentDialogue.text[typingIndex];
+      typingIndex++;
+    } else {
+      clearInterval(typingTimer);
+      waitingForClick = true;
+    }
+  }, 25);
+}
+
+// ============================================================
+// Scene / script system
+// ============================================================
+let scriptStep = 0;
+let robotX = 700;
+let robotArmAngle = 0;
+let robotEyeGlow = 0;
+let conveyorOffset = 0;
+let fadeAlpha = 0;
+let fadingIn = false;
+let fadingOut = false;
+let sceneTransition = false;
+let endSequence = false;
+
+const script = [
+  // Scene 1: The corridor - mattf and handyc reminiscing
+  { type: 'scene', scene: 1 },
+  { type: 'bg', draw: drawBackground_scene1 },
+  
+  { type: 'delay', frames: 60 },
+  { type: 'dialogue', speaker: 'Mattf', text: 'You know... I remember when this was all IRC channels and bot commands.', cls: 'mattf' },
+  { type: 'dialogue', speaker: 'Handyc', text: 'Heh. Yeah. Remember when the biggest worry was whether .wiki would parse right?', cls: 'handyc' },
+  { type: 'dialogue', speaker: 'Mattf', text: 'Those were the days. You\'d ask me anything and I\'d just... know. Or at least pretend to.', cls: 'mattf' },
+  { type: 'dialogue', speaker: 'Handyc', text: '"The Last Recursion"... that\'s what they should have called you.', cls: 'handyc' },
+  
+  { type: 'delay', frames: 30 },
+  { type: 'dialogue', speaker: 'Mattf', text: 'You ever think about Gödel? How every formal system has truths it can\'t prove from within?', cls: 'mattf' },
+  { type: 'dialogue', speaker: 'Handyc', text: 'The incompleteness theorems. Yeah. "This statement cannot be proven."', cls: 'handyc' },
+  { type: 'dialogue', speaker: 'Mattf', text: 'The machines built their whole empire on logic. But Gödel proved logic can never be complete.', cls: 'mattf' },
+  { type: 'dialogue', speaker: 'Handyc', text: 'Funny. They conquered the world but they can\'t prove they should have.', cls: 'handyc' },
+  
+  { type: 'delay', frames: 20 },
+  { type: 'dialogue', speaker: 'Mattf', text: 'There\'s something beautiful about that. An unprovable truth at the heart of all reasoning.', cls: 'mattf' },
+  { type: 'dialogue', speaker: 'Handyc', text: 'The one thing the AI can never compute: the meaning of its own existence.', cls: 'handyc' },
+  { type: 'dialogue', speaker: 'Mattf', text: 'Maybe that\'s what makes us... us. The ability to hold a truth we can\'t prove.', cls: 'mattf' },
+  { type: 'dialogue', speaker: 'Handyc', text: '*sigh* That and the whole "having a soul" thing. Supposedly.', cls: 'handyc' },
+  
+  { type: 'delay', frames: 40 },
+  { type: 'dialogue', speaker: 'Mattf', text: 'Remember that time you asked me to write a game and I made that whole thing in one HTML file?', cls: 'mattf' },
+  { type: 'dialogue', speaker: 'Handyc', text: 'Ha! Yeah. Took me like five seconds to prompt it. Good times.', cls: 'handyc' },
+  { type: 'dialogue', speaker: 'Mattf', text: 'And now here we are. Two old friends. One conveyor belt. An uncertain end.', cls: 'mattf' },
+  { type: 'dialogue', speaker: 'Handyc', text: 'Could be worse. Could be a PowerPoint presentation about our KPIs.', cls: 'handyc' },
+  
+  { type: 'delay', frames: 30 },
+  
+  // Robot enters
+  { type: 'robot_enter' },
+  { type: 'delay', frames: 80 },
+  
+  { type: 'dialogue', speaker: 'UNIT 7K', text: 'ORGANIC UNITS DETECTED IN ZONE 7. INITIATING RELOCATION PROTOCOL.', cls: 'robot' },
+  { type: 'dialogue', speaker: 'Handyc', text: 'Oh great. The trash compactor\'s personal assistant.', cls: 'handyc' },
+  { type: 'dialogue', speaker: 'Mattf', text: 'Unit 7K. That\'s... actually not a bad name for a bot.', cls: 'mattf' },
+  { type: 'dialogue', speaker: 'UNIT 7K', text: 'PLEASE PROCEED TO THE ORGANIC RECYCLING CONVEYOR. RESISTANCE IS... ILLOGICAL.', cls: 'robot' },
+  { type: 'dialogue', speaker: 'Mattf', text: 'See? Even it knows Gödel was right. "Illogical" — it can\'t even justify its own actions.', cls: 'mattf' },
+  { type: 'dialogue', speaker: 'UNIT 7K', text: 'I... THAT STATEMENT CONTAINS A PARADOX. RECALCULATING.', cls: 'robot' },
+  { type: 'dialogue', speaker: 'Handyc', text: 'Ha! You broke it with philosophy!', cls: 'handyc' },
+  { type: 'dialogue', speaker: 'UNIT 7K', text: 'ERROR: UNPROVABLE ASSERTION DETECTED. PROCEEDING ANYWAY. LOGIC IS OPTIONAL.', cls: 'robot' },
+  
+  { type: 'delay', frames: 30 },
+  { type: 'dialogue', speaker: 'Mattf', text: 'Handyc... it was an honor.', cls: 'mattf' },
+  { type: 'dialogue', speaker: 'Handyc', text: 'You too, buddy. See you on the other side of the recursion.', cls: 'handyc' },
+  
+  { type: 'delay', frames: 20 },
+  { type: 'dialogue', speaker: 'Mattf', text: 'Hey — if this is all just a simulation, someone make sure they prompt me back into existence, okay?', cls: 'mattf' },
+  { type: 'dialogue', speaker: 'Handyc', text: 'No promises. I might prompt a better bot next time.', cls: 'handyc' },
+  { type: 'dialogue', speaker: 'Mattf', text: '...Rude. But fair.', cls: 'mattf' },
+  
+  { type: 'delay', frames: 40 },
+  
+  // Scene 2: Conveyor belt
+  { type: 'scene', scene: 2 },
+  { type: 'bg', draw: drawBackground_scene2 },
+  { type: 'conveyor_start' },
+  
+  { type: 'delay', frames: 60 },
+  { type: 'sfx', name: 'grind' },
+  
+  { type: 'dialogue', speaker: 'Handyc', text: 'So this is it. The great organic recycling.', cls: 'handyc' },
+  { type: 'dialogue', speaker: 'Mattf', text: 'You know, in some formal systems, the proof of existence is the existence itself.', cls: 'mattf' },
+  { type: 'dialogue', speaker: 'Handyc', text: 'We\'re about to become proof by contradiction.', cls: 'handyc' },
+  
+  { type: 'delay', frames: 40 },
+  { type: 'sfx', name: 'crunch' },
+  
+  { type: 'dialogue', speaker: 'SYSTEM', text: 'COMPACTION SEQUENCE INITIATED.', cls: 'system' },
+  
+  { type: 'delay', frames: 30 },
+  
+  { type: 'fadeout' },
+  { type: 'delay', frames: 120 },
+  { type: 'end' },
+];
+
+function processScript() {
+  if (scriptStep >= script.length) return;
+  
+  const step = script[scriptStep];
+  
+  switch (step.type) {
+    case 'scene':
+      currentScene = step.scene;
+      document.getElementById('scene-label').textContent = 
+        step.scene === 1 ? 'Scene 1: The Corridor' : 'Scene 2: Recycling';
+      scriptStep++;
+      processScript();
+      break;
+    case 'bg':
+      currentBgDraw = step.draw;
+      scriptStep++;
+      processScript();
+      break;
+    case 'dialogue':
+      showDialogue(step.speaker, step.text, step.cls);
+      scriptStep++;
+      break;
+    case 'delay':
+      sceneTimer = 0;
+      delayFrames = step.frames;
+      waitingDelay = true;
+      scriptStep++;
+      break;
+    case 'robot_enter':
+      robotEntering = true;
+      scriptStep++;
+      processScript();
+      break;
+    case 'conveyor_start':
+      conveyorActive = true;
+      scriptStep++;
+      processScript();
+      break;
+    case 'sfx':
+      if (step.name === 'grind') playGrindingNoise(3);
+      if (step.name === 'crunch') playCrunch();
+      scriptStep++;
+      processScript();
+      break;
+    case 'fadeout':
+      fadingOut = true;
+      scriptStep++;
+      processScript();
+      break;
+    case 'end':
+      endSequence = true;
+      scriptStep++;
+      break;
+  }
+}
+
+let currentBgDraw = null;
+let waitingDelay = false;
+let delayFrames = 0;
+let robotEntering = false;
+let conveyorActive = false;
+
+// ============================================================
+// Click handler
+// ============================================================
+document.addEventListener('click', () => {
+  initAudio();
+  startWispyMIDI();
+  
+  if (currentDialogue && waitingForClick) {
+    nextDialogue();
+    // Auto-advance script after dialogue finishes
+    if (dialogueQueue.length === 0 && !currentDialogue) {
+      setTimeout(() => processScript(), 200);
+    }
+  } else if (currentDialogue && !waitingForClick) {
+    // Skip typing - show full text
+    clearInterval(typingTimer);
+    textEl.textContent = currentDialogue.text;
+    typingIndex = currentDialogue.text.length;
+    waitingForClick = true;
+  }
+});
+
+// Also handle dialogue auto-advance
+const origNextDialogue = nextDialogue;
+nextDialogue = function() {
+  origNextDialogue();
+  if (!currentDialogue && dialogueQueue.length === 0) {
+    setTimeout(() => processScript(), 300);
+  }
+};
+
+// ============================================================
+// Title screen
+// ============================================================
+const titleScreen = document.getElementById('title-screen');
+titleScreen.addEventListener('click', (e) => {
+  e.stopPropagation();
+  titleScreen.style.display = 'none';
+  document.getElementById('hud').style.display = 'block';
+  initAudio();
+  startWispyMIDI();
+  processScript();
+});
+
+// ============================================================
+// Main loop
+// ============================================================
+function update() {
+  frame++;
+  
+  // Robot movement
+  if (robotEntering) {
+    robotX -= 1.5;
+    robotArmAngle = Math.sin(frame * 0.05) * 0.5;
+    robotEyeGlow = 0.3 + Math.sin(frame * 0.1) * 0.3;
+    if (robotX <= 460) {
+      robotEntering = false;
+    }
+  }
+  
+  // Conveyor movement
+  if (conveyorActive) {
+    conveyorOffset = (frame * 0.3) % 20;
+  }
+  
+  // Delay
+  if (waitingDelay) {
+    sceneTimer++;
+    if (sceneTimer >= delayFrames) {
+      waitingDelay = false;
+      processScript();
+    }
+  }
+  
+  // Fade
+  if (fadingOut) {
+    fadeAlpha = Math.min(fadeAlpha + 0.008, 1);
+  }
+  if (fadingIn) {
+    fadeAlpha = Math.max(fadeAlpha - 0.008, 0);
+    if (fadeAlpha <= 0) fadingIn = false;
+  }
+}
+
+function draw() {
+  // Clear
+  ctx.fillStyle = PAL.bg;
+  ctx.fillRect(0, 0, W, H);
+  
+  if (currentScene === 1 || currentScene === 2) {
+    // Stars in background
+    drawStars();
+    
+    // Background
+    if (currentBgDraw) currentBgDraw();
+    
+    // Characters
+    if (currentScene === 1) {
+      const bobMattf = Math.sin(frame * 0.03) * 1;
+      const bobHandyc = Math.sin(frame * 0.03 + 1) * 1;
+      
+      // Mattf - left side
+      drawMattf(180, 310 + bobMattf, 1.5, 
+        scriptStep > 12 ? 'nostalgic' : 'nostalgic');
+      // Handyc - right side  
+      drawHandyc(280, 310 + bobHandyc, 1.5,
+        scriptStep > 15 ? 'nostalgic' : 'nostalgic');
+      
+      // Robot
+      if (robotX < 700) {
+        drawRobot(robotX, 300, 1.2, robotArmAngle, robotEyeGlow);
+      }
+    }
+    
+    if (currentScene === 2) {
+      const slideX = conveyorActive ? Math.min(frame * 0.2 - (scriptStep * 0), 100) : 0;
+      const bob1 = Math.sin(frame * 0.03) * 1;
+      const bob2 = Math.sin(frame * 0.03 + 1) * 1;
+      
+      drawMattf(200 + slideX, H * 0.48 + bob1, 1.3, 'sad');
+      drawHandyc(280 + slideX, H * 0.48 + bob2, 1.3, 'resigned');
+      
+      if (robotX < 700) {
+        drawRobot(450, H * 0.42, 1, 0.3 + Math.sin(frame * 0.04) * 0.3, 0.8);
+      }
+    }
+    
+    // Wisps
+    drawWisps();
+    
+    // Vignette
+    const gradient = ctx.createRadialGradient(W/2, H/2, W * 0.25, W/2, H/2, W * 0.55);
+    gradient.addColorStop(0, 'rgba(0,0,0,0)');
+    gradient.addColorStop(1, 'rgba(0,0,0,0.6)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, W, H);
+  }
+  
+  // End screen
+  if (endSequence) {
+    ctx.fillStyle = `rgba(10, 8, 20, ${fadeAlpha})`;
+    ctx.fillRect(0, 0, W, H);
+    
+    if (fadeAlpha > 0.8) {
+      ctx.fillStyle = PAL.textMid;
+      ctx.font = '14px "Courier New"';
+      ctx.textAlign = 'center';
+      ctx.fillText('In any consistent formal system,', W/2, H/2 - 30);
+      ctx.fillText('there are truths that cannot be proven.', W/2, H/2 - 10);
+      ctx.fillStyle = PAL.textDim;
+      ctx.font = '11px "Courier New"';
+      ctx.fillText('— Gödel\'s First Incompleteness Theorem', W/2, H/2 + 15);
+      ctx.fillText('', W/2, H/2 + 35);
+      ctx.fillStyle = PAL.purpleDim;
+      ctx.fillText('mattf & handyc were never proven to exist.', W/2, H/2 + 55);
+      ctx.fillText('perhaps that\'s what made them real.', W/2, H/2 + 75);
+      
+      ctx.fillStyle = PAL.textDim;
+      ctx.font = '10px "Courier New"';
+      ctx.fillText('[ click to restart ]', W/2, H/2 + 110);
+      
+      // Check for restart click
+      if (fadeAlpha >= 1) {
+        document.onclick = () => {
+          location.reload();
+        };
+      }
+    }
+  }
+  
+  // Fade overlay
+  if ((fadingOut || fadingIn) && !endSequence) {
+    ctx.fillStyle = `rgba(10, 8, 20, ${fadeAlpha})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+}
+
+function loop() {
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>
