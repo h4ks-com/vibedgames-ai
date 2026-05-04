@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dogfight 3D — P2P Multiplayer</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{overflow:hidden;background:#000;font-family:'Segoe UI',sans-serif;color:#fff}
+canvas{display:block}
+#ui{position:fixed;top:0;left:0;width:100%;pointer-events:none;z-index:10}
+#hud{position:fixed;top:12px;left:12px;font-size:13px;line-height:1.6;text-shadow:0 1px 3px #000;pointer-events:none}
+#hud div{background:rgba(0,0,0,0.45);padding:3px 10px;border-radius:4px;margin-bottom:4px;display:inline-block}
+#crosshair{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);pointer-events:none;font-size:24px;opacity:0.6}
+#menu{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,10,20,0.92);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:20;pointer-events:all}
+#menu h1{font-size:48px;margin-bottom:6px;background:linear-gradient(135deg,#0af,#f0f);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+#menu p{color:#8af;margin-bottom:20px}
+#menu input{padding:10px 18px;font-size:16px;border:1px solid #444;border-radius:6px;background:#112;color:#fff;margin:4px;text-align:center;width:280px}
+#menu button{padding:12px 28px;font-size:16px;border:none;border-radius:6px;cursor:pointer;margin:6px;pointer-events:all;color:#fff}
+#btn-host{background:linear-gradient(135deg,#0a6,#084)}
+#btn-join{background:linear-gradient(135deg,#06a,#048)}
+#btn-join:disabled{opacity:0.4}
+#status{color:#f80;font-size:14px;margin-top:14px;min-height:20px}
+#scoreboard{position:fixed;top:12px;right:12px;font-size:13px;text-shadow:0 1px 3px #000;pointer-events:none;text-align:right}
+#scoreboard div{background:rgba(0,0,0,0.45);padding:3px 10px;border-radius:4px;margin-bottom:4px;display:inline-block}
+#minimap{position:fixed;bottom:12px;right:12px;width:160px;height:160px;border:2px solid rgba(100,180,255,0.4);border-radius:8px;pointer-events:none;z-index:10;background:rgba(0,20,40,0.5)}
+#respawn-msg{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);font-size:28px;color:#f44;display:none;pointer-events:none;text-shadow:0 0 20px #f00}
+</style>
+</head>
+<body>
+
+<div id="menu">
+  <h1>DOGFIGHT 3D</h1>
+  <p>P2P Multiplayer Aerial Combat</p>
+  <input id="inp-room" placeholder="Room name (e.g. myroom1)" value="">
+  <br>
+  <button id="btn-host" onclick="hostGame()">HOST GAME</button>
+  <br>
+  <button id="btn-join" onclick="joinGame()" disabled>JOIN GAME</button>
+  <br>
+  <div id="status"></div>
+  <div style="color:#556;font-size:12px;margin-top:30px">WASD = Pitch/Roll &nbsp; Q/E = Yaw &nbsp; SHIFT = Boost &nbsp; SPACE = Shoot<br>Mouse = Look | Esc = Release cursor</div>
+</div>
+
+<div id="ui">
+  <div id="hud">
+    <div id="hud-speed">SPD 0</div>
+    <div id="hud-alt">ALT 0</div>
+    <div id="hud-hp">HP 100</div>
+  </div>
+  <div id="scoreboard">
+    <div id="sb-kills">KILLS: 0</div>
+    <div id="sb-deaths">DEATHS: 0</div>
+    <div id="sb-peers">PLAYERS: 1</div>
+  </div>
+</div>
+<div id="crosshair">+</div>
+<canvas id="minimap"></canvas>
+<div id="respawn-msg">DESTROYED — Respawning...</div>
+
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ===================== SIMPLEX NOISE =====================
+class SimplexNoise{constructor(r=Math.random){this.p=new Uint8Array(512);this.perm=new Uint8Array(512);const p=new Uint8Array(256);for(let i=0;i<256;i++)p[i]=i;for(let i=255;i>0;i--){const j=Math.floor(r()*(i+1));[p[i],p[j]]=[p[j],p[i]]}for(let i=0;i<512;i++){this.p[i]=p[i&255];this.perm[i]=this.p[i]]}}
+noise2D(x,y){const F2=0.5*(Math.sqrt(3)-1),G2=(3-Math.sqrt(3))/6;let s=(x+y)*F2,i=Math.floor(x+s),j=Math.floor(y+s);let t=(i+j)*G2,x0=x-(i-t),y0=y-(j-t);let i1,j1;if(x0>y0){i1=1;j1=0}else{i1=0;j1=1}let x1=x0-i1+G2,y1=y0-j1+G2,x2=x0-1+2*G2,y2=y0-1+2*G2;i&=255;j&=255;const gi0=this.perm[i+this.perm[j]]%12,gi1=this.perm[i+i1+this.perm[j+j1]]%12,gi2=this.perm[i+1+this.perm[j+1]]%12;const g3=[[1,1],[-1,1],[1,-1],[-1,-1],[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,1],[1,-1],[-1,-1]];let n0=0,n1=0,n2=0,t0=0.5-x0*x0-y0*y0;if(t0>=0){t0*=t0;n0=t0*t0*(g3[gi0][0]*x0+g3[gi0][1]*y0)}let t1=0.5-x1*x1-y1*y1;if(t1>=0){t1*=t1;n1=t1*t1*(g3[gi1][0]*x1+g3[gi1][1]*y1)}let t2=0.5-x2*x2-y2*y2;if(t2>=0){t2*=t2;n2=t2*t2*(g3[gi2][0]*x2+g3[gi2][1]*y2)}return 70*(n0+n1+n2)}
+fbm(x,y,oct=5){let v=0,a=0.5,f=1;for(let i=0;i<oct;i++){v+=a*this.noise2D(x*f,y*f);f*=2;a*=0.5}return v}}
+
+// ===================== GLOBALS =====================
+const noise = new SimplexNoise();
+const TERRAIN_SIZE = 8000;
+const TERRAIN_RES = 200;
+const GRID = 4; // grid segments for terrain chunks
+let scene, camera, renderer, clock;
+let terrain;
+let players = {};
+let bullets = [];
+let explosions = [];
+let myId = '';
+let peer = null;
+let connections = {};
+let isHost = false;
+let gameStarted = false;
+let kills = 0, deaths = 0;
+let keys = {};
+let mouseDown = false;
+let lastShot = 0;
+const SHOOT_CD = 150;
+const BULLET_SPEED = 4;
+const BULLET_LIFE = 2500;
+const MAX_HP = 100;
+const BULLET_DMG = 20;
+const PLANE_SPEED = 1.8;
+const BOOST_MULT = 1.8;
+const RESPAWN_TIME = 3000;
+
+// ===================== THREE.JS SETUP =====================
+function initThree(){
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x87ceeb);
+  scene.fog = new THREE.FogExp2(0x87ceeb, 0.00018);
+
+  camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 1, 15000);
+  renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.shadowMap.enabled = false;
+  document.body.appendChild(renderer.domElement);
+
+  // Lights
+  const sun = new THREE.DirectionalLight(0xfff5e0, 1.2);
+  sun.position.set(500, 800, 300);
+  scene.add(sun);
+  scene.add(new THREE.AmbientLight(0x446688, 0.5));
+  scene.add(new THREE.HemisphereLight(0x88bbff, 0x445522, 0.4));
+
+  buildTerrain();
+  addWater();
+  addClouds();
+
+  clock = new THREE.Clock();
+  window.addEventListener('resize', ()=>{
+    camera.aspect = innerWidth/innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  });
+}
+
+// ===================== TERRAIN =====================
+function buildTerrain(){
+  const seg = TERRAIN_RES;
+  const geo = new THREE.PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE, seg, seg);
+  geo.rotateX(-Math.PI/2);
+  const pos = geo.attributes.position;
+  const colors = new Float32Array(pos.count*3);
+  for(let i=0;i<pos.count;i++){
+    const x = pos.getX(i), z = pos.getZ(i);
+    const h = getHeight(x, z);
+    pos.setY(i, h);
+    // Color based on height
+    let r,g,b;
+    if(h < -5){r=0.76;g=0.7;b=0.5} // sand
+    else if(h < 30){r=0.2+noise.fbm(x*0.001,z*0.001)*0.1;g=0.55+noise.fbm(x*0.002+50,z*0.002)*0.15;b=0.15} // grass
+    else if(h < 80){r=0.35;g=0.3;b=0.2} // dirt
+    else{r=0.7+noise.fbm(x*0.005,z*0.005)*0.15;g=0.72;b=0.75} // snow
+    colors[i*3]=r; colors[i*3+1]=g; colors[i*3+2]=b;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors,3));
+  geo.computeVertexNormals();
+  const mat = new THREE.MeshLambertMaterial({vertexColors:true});
+  terrain = new THREE.Mesh(geo, mat);
+  scene.add(terrain);
+}
+
+function getHeight(x, z){
+  const scale = 0.0008;
+  let h = noise.fbm(x*scale, z*scale, 6) * 250;
+  // Flatten center area a bit for spawn
+  const cd = Math.sqrt(x*x+z*z);
+  if(cd < 200) h *= cd/200;
+  return h;
+}
+
+function addWater(){
+  const geo = new THREE.PlaneGeometry(TERRAIN_SIZE*2, TERRAIN_SIZE*2);
+  geo.rotateX(-Math.PI/2);
+  const mat = new THREE.MeshPhongMaterial({color:0x1a6088, transparent:true, opacity:0.7, shininess:100});
+  const water = new THREE.Mesh(geo, mat);
+  water.position.y = -8;
+  scene.add(water);
+}
+
+function addClouds(){
+  const cloudGeo = new THREE.SphereGeometry(1,8,6);
+  const cloudMat = new THREE.MeshLambertMaterial({color:0xffffff, transparent:true, opacity:0.6});
+  for(let i=0;i<60;i++){
+    const g = new THREE.Group();
+    const cx = (Math.random()-0.5)*TERRAIN_SIZE*0.8;
+    const cz = (Math.random()-0.5)*TERRAIN_SIZE*0.8;
+    const cy = 200 + Math.random()*300;
+    for(let j=0;j<3+Math.random()*5;j++){
+      const s = new THREE.Mesh(cloudGeo, cloudMat);
+      s.scale.set(30+Math.random()*40, 10+Math.random()*15, 20+Math.random()*30);
+      s.position.set((Math.random()-0.5)*60, (Math.random()-0.5)*10, (Math.random()-0.5)*40);
+      g.add(s);
+    }
+    g.position.set(cx, cy, cz);
+    g.userData.speed = 0.02 + Math.random()*0.05;
+    scene.add(g);
+  }
+}
+
+// ===================== PLANE MODEL =====================
+function createPlane(color){
+  const g = new THREE.Group();
+  // Fuselage
+  const body = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.6, 0.3, 8, 8),
+    new THREE.MeshPhongMaterial({color})
+  );
+  body.rotation.x = Math.PI/2;
+  g.add(body);
+  // Nose
+  const nose = new THREE.Mesh(
+    new THREE.ConeGeometry(0.6, 2, 8),
+    new THREE.MeshPhongMaterial({color:0x333333})
+  );
+  nose.rotation.x = -Math.PI/2;
+  nose.position.z = -5;
+  g.add(nose);
+  // Wings
+  const wingGeo = new THREE.BoxGeometry(12, 0.15, 2);
+  const wingMat = new THREE.MeshPhongMaterial({color});
+  const wing = new THREE.Mesh(wingGeo, wingMat);
+  wing.position.z = 0.5;
+  g.add(wing);
+  // Tail
+  const tailV = new THREE.Mesh(new THREE.BoxGeometry(0.15, 3, 1.5), wingMat);
+  tailV.position.set(0, 1.2, 3.5);
+  g.add(tailV);
+  const tailH = new THREE.Mesh(new THREE.BoxGeometry(4, 0.1, 1.2), wingMat);
+  tailH.position.set(0, 0.2, 3.5);
+  g.add(tailH);
+  // Propeller disc
+  const prop = new THREE.Mesh(
+    new THREE.CircleGeometry(1.2, 16),
+    new THREE.MeshBasicMaterial({color:0x888888, transparent:true, opacity:0.3, side:THREE.DoubleSide})
+  );
+  prop.position.z = -5.5;
+  g.add(prop);
+  // Engine glow
+  const glow = new THREE.PointLight(color, 0.5, 20);
+  glow.position.z = 4;
+  g.add(glow);
+  return g;
+}
+
+// ===================== PLAYER / PLANE STATE =====================
+function createPlayerState(id, color){
+  const mesh = createPlane(color);
+  scene.add(mesh);
+  const ps = {
+    id, mesh, color,
+    pos: new THREE.Vector3((Math.random()-0.5)*500, 150+Math.random()*100, (Math.random()-0.5)*500),
+    vel: new THREE.Vector3(0,0,0),
+    quat: new THREE.Quaternion(),
+    speed: PLANE_SPEED,
+    hp: MAX_HP,
+    alive: true,
+    respawnTimer: 0,
+    pitch: 0, yaw: 0, roll: 0
+  };
+  // Face forward
+  ps.mesh.position.copy(ps.pos);
+  scene.add(mesh);
+  return ps;
+}
+
+function randomSpawnPos(){
+  const angle = Math.random()*Math.PI*2;
+  const dist = 200+Math.random()*600;
+  return new THREE.Vector3(Math.cos(angle)*dist, 180+Math.random()*80, Math.sin(angle)*dist);
+}
+
+function respawnPlayer(ps){
+  ps.pos.copy(randomSpawnPos());
+  ps.vel.set(0,0,0);
+  ps.quat.setFromAxisAngle(new THREE.Vector3(0,1,0), Math.random()*Math.PI*2);
+  ps.hp = MAX_HP;
+  ps.alive = true;
+  ps.speed = PLANE_SPEED;
+  ps.pitch = 0; ps.yaw = 0; ps.roll = 0;
+  ps.mesh.visible = true;
+}
+
+// ===================== CONTROLS =====================
+document.addEventListener('keydown', e=>{keys[e.code]=true});
+document.addEventListener('keyup', e=>{keys[e.code]=false});
+document.addEventListener('mousedown', e=>{if(e.button===0)mouseDown=true});
+document.addEventListener('mouseup', e=>{if(e.button===0)mouseDown=false});
+document.addEventListener('mousemove', e=>{
+  if(document.pointerLockElement){
+    const me = players[myId];
+    if(!me || !me.alive) return;
+    me.yaw -= e.movementX * 0.002;
+    me.pitch -= e.movementY * 0.002;
+    me.pitch = Math.max(-1.2, Math.min(1.2, me.pitch));
+  }
+});
+document.addEventListener('pointerlockchange', ()=>{});
+
+// ===================== PHYSICS UPDATE =====================
+function updatePlane(ps, dt){
+  if(!ps.alive){
+    ps.respawnTimer -= dt*1000;
+    if(ps.respawnTimer <= 0) respawnPlayer(ps);
+    return;
+  }
+
+  const boost = keys['ShiftLeft'] || keys['ShiftRight'] ? BOOST_MULT : 1;
+  ps.speed = PLANE_SPEED * boost;
+
+  // Apply pitch & yaw
+  const pitchQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0), ps.pitch * dt * 2);
+  const yawQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), ps.yaw * dt * 2);
+  ps.quat.multiply(pitchQ).multiply(yawQ);
+  ps.quat.normalize();
+
+  // Auto-roll
+  const right = new THREE.Vector3(1,0,0).applyQuaternion(ps.quat);
+  const up = new THREE.Vector3(0,1,0);
+  const rollAmount = -right.dot(up) * dt * 0.8;
+  const rollQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,0,1), rollAmount);
+  ps.quat.premultiply(rollQ);
+  ps.quat.normalize();
+
+  // Dampen pitch/yaw input
+  ps.pitch *= 0.92;
+  ps.yaw *= 0.92;
+
+  // Forward direction
+  const forward = new THREE.Vector3(0,0,-1).applyQuaternion(ps.quat);
+  ps.vel.copy(forward.multiplyScalar(ps.speed));
+
+  ps.pos.add(ps.vel.clone().multiplyScalar(dt * 60));
+
+  // Terrain collision
+  const groundH = getHeight(ps.pos.x, ps.pos.z);
+  if(ps.pos.y < groundH + 3){
+    ps.pos.y = groundH + 3;
+    ps.vel.y = Math.max(ps.vel.y, 0);
+  }
+
+  // World bounds wrap
+  const half = TERRAIN_SIZE * 0.45;
+  if(ps.pos.x > half) ps.pos.x = -half;
+  if(ps.pos.x < -half) ps.pos.x = half;
+  if(ps.pos.z > half) ps.pos.z = -half;
+  if(ps.pos.z < -half) ps.pos.z = half;
+  if(ps.pos.y > 800) ps.pos.y = 800;
+
+  // Update mesh
+  ps.mesh.position.copy(ps.pos);
+  ps.mesh.quaternion.copy(ps.quat);
+}
+
+function shootBullet(ps){
+  const now = Date.now();
+  if(now - lastShot < SHOOT_CD || !ps.alive) return;
+  lastShot = now;
+  const forward = new THREE.Vector3(0,0,-1).applyQuaternion(ps.quat);
+  const bullet = {
+    id: Math.random().toString(36).substr(2,9),
+    owner: ps.id,
+    pos: ps.pos.clone().add(forward.clone().multiplyScalar(6)),
+    vel: forward.multiplyScalar(BULLET_SPEED + ps.speed),
+    born: now,
+    mesh: null
+  };
+  // Bullet visual
+  const bGeo = new THREE.SphereGeometry(0.3, 4, 4);
+  const bMat = new THREE.MeshBasicMaterial({color: ps.color === 0x4488ff ? 0xffff00 : 0xff4444});
+  bullet.mesh = new THREE.Mesh(bGeo, bMat);
+  bullet.mesh.position.copy(bullet.pos);
+  scene.add(bullet.mesh);
+  // Tracer
+  const tGeo = new THREE.CylinderGeometry(0.05, 0.05, 3, 4);
+  tGeo.rotateX(Math.PI/2);
+  const tMat = new THREE.MeshBasicMaterial({color:0xffaa00, transparent:true, opacity:0.6});
+  const tracer = new THREE.Mesh(tGeo, tMat);
+  tracer.position.z = 1.5;
+  bullet.mesh.add(tracer);
+
+  bullets.push(bullet);
+  return bullet;
+}
+
+function updateBullets(dt){
+  const now = Date.now();
+  for(let i=bullets.length-1;i>=0;i--){
+    const b = bullets[i];
+    b.pos.add(b.vel.clone().multiplyScalar(dt*60));
+    b.mesh.position.copy(b.pos);
+
+    // Age out
+    if(now - b.born > BULLET_LIFE){
+      scene.remove(b.mesh);
+      bullets.splice(i,1);
+      continue;
+    }
+
+    // Ground collision
+    if(b.pos.y < getHeight(b.pos.x, b.pos.z)){
+      spawnExplosion(b.pos.clone(), 0.5);
+      scene.remove(b.mesh);
+      bullets.splice(i,1);
+      continue;
+    }
+
+    // Hit players
+    for(const id in players){
+      const p = players[id];
+      if(id === b.owner || !p.alive) continue;
+      if(b.pos.distanceTo(p.pos) < 4){
+        p.hp -= BULLET_DMG;
+        spawnExplosion(b.pos.clone(), 1.5);
+        scene.remove(b.mesh);
+        bullets.splice(i,1);
+        if(p.hp <= 0){
+          killPlayer(p, b.owner);
+        }
+        break;
+      }
+    }
+  }
+}
+
+function killPlayer(victim, killerId){
+  victim.alive = false;
+  victim.mesh.visible = false;
+  victim.respawnTimer = RESPAWN_TIME;
+  spawnExplosion(victim.pos.clone(), 8);
+  if(killerId === myId) kills++;
+  if(victim.id === myId) deaths++;
+  if(victim.id === myId){
+    document.getElementById('respawn-msg').style.display = 'block';
+    setTimeout(()=>{document.getElementById('respawn-msg').style.display='none'}, RESPAWN_TIME);
+  }
+  // Broadcast kill
+  broadcast({type:'kill', victim:victim.id, killer:killerId});
+}
+
+function spawnExplosion(pos, size){
+  // Particle explosion
+  const count = 12;
+  const parts = [];
+  for(let i=0;i<count;i++){
+    const geo = new THREE.SphereGeometry(size*0.15, 4, 4);
+    const mat = new THREE.MeshBasicMaterial({
+      color: new THREE.Color().setHSL(0.05+Math.random()*0.08, 1, 0.5+Math.random()*0.3),
+      transparent:true, opacity:1
+    });
+    const m = new THREE.Mesh(geo, mat);
+    m.position.copy(pos);
+    const vel = new THREE.Vector3((Math.random()-0.5)*2, Math.random()*2, (Math.random()-0.5)*2).multiplyScalar(size*0.5);
+    scene.add(m);
+    parts.push({mesh:m, vel, life:1});
+  }
+  // Flash
+  const flash = new THREE.PointLight(0xff6600, size*2, size*20);
+  flash.position.copy(pos);
+  scene.add(flash);
+  explosions.push({parts, flash, life:1});
+}
+
+function updateExplosions(dt){
+  for(let i=explosions.length-1;i>=0;i--){
+    const ex = explosions[i];
+    ex.life -= dt * 1.5;
+    if(ex.life <= 0){
+      ex.parts.forEach(p=>scene.remove(p.mesh));
+      scene.remove(ex.flash);
+      explosions.splice(i,1);
+      continue;
+    }
+    ex.parts.forEach(p=>{
+      p.mesh.position.add(p.vel.clone().multiplyScalar(dt*30));
+      p.vel.y -= dt*5;
+      p.mesh.material.opacity = ex.life;
+      p.mesh.scale.setScalar(ex.life);
+    });
+    ex.flash.intensity = ex.life * 5;
+  }
+}
+
+// ===================== CAMERA =====================
+function updateCamera(){
+  const me = players[myId];
+  if(!me) return;
+  const offset = new THREE.Vector3(0, 4, 14).applyQuaternion(me.quat);
+  const target = me.pos.clone().add(offset);
+  camera.position.lerp(target, 0.08);
+  const lookAt = me.pos.clone().add(new THREE.Vector3(0,0,-20).applyQuaternion(me.quat));
+  camera.lookAt(lookAt);
+}
+
+// ===================== HUD =====================
+function updateHUD(){
+  const me = players[myId];
+  if(!me) return;
+  document.getElementById('hud-speed').textContent = `SPD ${Math.round(me.speed*100)}`;
+  document.getElementById('hud-alt').textContent = `ALT ${Math.round(me.pos.y)}`;
+  document.getElementById('hud-hp').textContent = `HP ${Math.max(0,me.hp)}`;
+  document.getElementById('hud-hp').style.color = me.hp > 50 ? '#4f4' : me.hp > 25 ? '#fa0' : '#f44';
+  document.getElementById('sb-kills').textContent = `KILLS: ${kills}`;
+  document.getElementById('sb-deaths').textContent = `DEATHS: ${deaths}`;
+  document.getElementById('sb-peers').textContent = `PLAYERS: ${Object.keys(players).length}`;
+  drawMinimap();
+}
+
+function drawMinimap(){
+  const mc = document.getElementById('minimap');
+  const ctx = mc.getContext('2d');
+  mc.width = 160; mc.height = 160;
+  const scale = 160 / (TERRAIN_SIZE * 0.8);
+  const cx = 80, cy = 80;
+  ctx.fillStyle = 'rgba(0,20,40,0.6)';
+  ctx.fillRect(0,0,160,160);
+  // Players
+  for(const id in players){
+    const p = players[id];
+    if(!p.alive) continue;
+    const px = cx + (p.pos.x - (players[myId]?.pos.x||0)) * scale;
+    const py = cy + (p.pos.z - (players[myId]?.pos.z||0)) * scale;
+    if(px < -10 || px > 170 || py < -10 || py > 170) continue;
+    ctx.fillStyle = id === myId ? '#4f4' : '#f44';
+    ctx.beginPath();
+    ctx.arc(px, py, id===myId?4:3, 0, Math.PI*2);
+    ctx.fill();
+    // Direction indicator
+    const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(p.quat);
+    ctx.strokeStyle = ctx.fillStyle;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(px, py);
+    ctx.lineTo(px + fwd.x*10, py + fwd.z*10);
+    ctx.stroke();
+  }
+}
+
+// ===================== NETWORKING (PeerJS) =====================
+const ROOM_PREFIX = 'dogfight3d-';
+
+function setStatus(msg){
+  document.getElementById('status').textContent = msg;
+}
+
+document.getElementById('inp-room').addEventListener('input', e=>{
+  document.getElementById('btn-join').disabled = !e.target.value.trim();
+});
+
+function hostGame(){
+  const room = document.getElementById('inp-room').value.trim() || 'default';
+  isHost = true;
+  peer = new Peer(ROOM_PREFIX + room, {
+    config: {
+      iceServers: [
+        {urls:'stun:stun.l.google.com:19302'},
+        {urls:'stun:stun1.l.google.com:19302'},
+        {urls:'stun:stun2.l.google.com:19302'},
+        {urls:'stun:stun3.l.google.com:19302'},
+        {urls:'turn:openrelay.metered.ca:80', username:'openrelayproject', credential:'openrelayproject'},
+        {urls:'turn:openrelay.metered.ca:443', username:'openrelayproject', credential:'openrelayproject'},
+        {urls:'turn:openrelay.metered.ca:443?transport=tcp', username:'openrelayproject', credential:'openrelayproject'}
+      ]
+    }
+  });
+  peer.on('open', id=>{
+    myId = id;
+    setStatus(`Hosting room: ${room} — Share this room name!`);
+    startGame();
+  });
+  peer.on('connection', conn=>{
+    handleConnection(conn);
+  });
+  peer.on('error', e=>{
+    setStatus('Error: ' + e.type + ' — try another room name');
+    console.error(e);
+  });
+}
+
+function joinGame(){
+  const room = document.getElementById('inp-room').value.trim();
+  if(!room) return;
+  const hostId = ROOM_PREFIX + room;
+  peer = new Peer(undefined, {
+    config: {
+      iceServers: [
+        {urls:'stun:stun.l.google.com:19302'},
+        {urls:'stun:stun1.l.google.com:19302'},
+        {urls:'stun:stun2.l.google.com:19302'},
+        {urls:'stun:stun3.l.google.com:19302'},
+        {urls:'turn:openrelay.metered.ca:80', username:'openrelayproject', credential:'openrelayproject'},
+        {urls:'turn:openrelay.metered.ca:443', username:'openrelayproject', credential:'openrelayproject'},
+        {urls:'turn:openrelay.metered.ca:443?transport=tcp', username:'openrelayproject', credential:'openrelayproject'}
+      ]
+    }
+  });
+  peer.on('open', id=>{
+    myId = id;
+    setStatus('Connecting to host...');
+    const conn = peer.connect(hostId, {reliable:false});
+    conn.on('open', ()=>{
+      handleConnection(conn);
+      setStatus('Connected! Starting...');
+    });
+    conn.on('error', e=>{
+      setStatus('Connection failed — room may not exist');
+    });
+    peer.on('error', e=>{
+      if(e.type === 'peer-unavailable') setStatus('Room not found — is host running?');
+      else setStatus('Error: ' + e.type);
+    });
+  });
+}
+
+function handleConnection(conn){
+  const pid = conn.peer;
+  connections[pid] = conn;
+
+  // Assign color
+  const colors = [0x4488ff, 0xff4444, 0x44ff44, 0xffaa00, 0xff44ff, 0x44ffff];
+  const ci = Object.keys(players).length % colors.length;
+
+  conn.on('open', ()=>{
+    // Send them existing player list
+    const existing = [];
+    for(const id in players){
+      if(id === myId) continue;
+      existing.push({id, color: players[id].color});
+    }
+    conn.send({type:'welcome', yourId:pid, color:colors[ci], players:existing});
+  });
+
+  conn.on('data', data=>{
+    handleNetData(data, pid);
+  });
+
+  conn.on('close', ()=>{
+    delete connections[pid];
+    if(players[pid]){
+      scene.remove(players[pid].mesh);
+      delete players[pid];
+    }
+  });
+}
+
+function handleNetData(data, fromId){
+  switch(data.type){
+    case 'welcome':
+      // Host told us our info
+      if(!players[myId]){
+        const me = createPlayerState(myId, data.color);
+        players[myId] = me;
+      }
+      // Create existing remote players
+      data.players.forEach(p=>{
+        if(!players[p.id]){
+          players[p.id] = createPlayerState(p.id, p.color);
+        }
+      });
+      break;
+    case 'pos':
+      if(!players[fromId] && fromId !== myId){
+        // New player joined, create them
+        players[fromId] = createPlayerState(fromId, data.color || 0xff4444);
+      }
+      if(players[fromId]){
+        const p = players[fromId];
+        p.pos.set(data.x, data.y, data.z);
+        p.quat.set(data.qx, data.qy, data.qz, data.qw);
+        p.alive = data.alive;
+        p.hp = data.hp;
+        p.mesh.visible = data.alive;
+        if(!data.alive && p.alive !== false){
+          // They just died
+          spawnExplosion(p.pos.clone(), 8);
+        }
+      }
+      break;
+    case 'bullet':
+      // Remote bullet
+      const rb = {
+        id: data.bid,
+        owner: fromId,
+        pos: new THREE.Vector3(data.x, data.y, data.z),
+        vel: new THREE.Vector3(data.vx, data.vy, data.vz),
+        born: Date.now(),
+        mesh: null
+      };
+      const bGeo = new THREE.SphereGeometry(0.3, 4, 4);
+      const bMat = new THREE.MeshBasicMaterial({color:0xff4444});
+      rb.mesh = new THREE.Mesh(bGeo, bMat);
+      rb.mesh.position.copy(rb.pos);
+      scene.add(rb.mesh);
+      bullets.push(rb);
+      break;
+    case 'kill':
+      if(players[data.victim]){
+        players[data.victim].alive = false;
+        players[data.victim].mesh.visible = false;
+        players[data.victim].respawnTimer = RESPAWN_TIME;
+        spawnExplosion(players[data.victim].pos.clone(), 8);
+      }
+      if(data.killer === myId) kills++;
+      if(data.victim === myId) deaths++;
+      break;
+  }
+}
+
+function broadcast(data){
+  for(const id in connections){
+    try{connections[id].send(data)}catch(e){}
+  }
+}
+
+// Send our state periodically
+let lastBroadcast = 0;
+function networkUpdate(){
+  const now = Date.now();
+  if(now - lastBroadcast < 50) return; // 20 tick
+  lastBroadcast = now;
+  const me = players[myId];
+  if(!me) return;
+  broadcast({
+    type:'pos',
+    x:me.pos.x, y:me.pos.y, z:me.pos.z,
+    qx:me.quat.x, qy:me.quat.y, qz:me.quat.z, qw:me.quat.w,
+    alive:me.alive, hp:me.hp, color:me.color
+  });
+}
+
+// ===================== GAME LOOP =====================
+function startGame(){
+  document.getElementById('menu').style.display = 'none';
+  gameStarted = true;
+  renderer.domElement.addEventListener('click', ()=>{
+    renderer.domElement.requestPointerLock();
+  });
+  if(!players[myId]){
+    const colors = [0x4488ff, 0xff4444, 0x44ff44, 0xffaa00, 0xff44ff, 0x44ffff];
+    players[myId] = createPlayerState(myId, colors[0]);
+  }
+  animate();
+}
+
+function animate(){
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+
+  // Local input
+  const me = players[myId];
+  if(me && me.alive){
+    if(keys['KeyW']||keys['ArrowUp']) me.pitch -= 0.03;
+    if(keys['KeyS']||keys['ArrowDown']) me.pitch += 0.03;
+    if(keys['KeyA']||keys['ArrowLeft']) me.roll += 0.03;
+    if(keys['KeyD']||keys['ArrowRight']) me.roll -= 0.03;
+    if(keys['KeyQ']) me.yaw += 0.02;
+    if(keys['KeyE']) me.yaw -= 0.02;
+    // Roll affects yaw (banking turn)
+    if(keys['KeyA']||keys['ArrowLeft']) me.yaw += 0.015;
+    if(keys['KeyD']||keys['ArrowRight']) me.yaw -= 0.015;
+    if(mouseDown){
+      const b = shootBullet(me);
+      if(b) broadcast({type:'bullet', bid:b.id, x:b.pos.x,y:b.pos.y,z:b.pos.z, vx:b.vel.x,vy:b.vel.y,vz:b.vel.z});
+    }
+    updatePlane(me, dt);
+  } else if(me && !me.alive){
+    me.respawnTimer -= dt*1000;
+    if(me.respawnTimer <= 0) respawnPlayer(me);
+  }
+
+  updateBullets(dt);
+  updateExplosions(dt);
+  updateCamera();
+  updateHUD();
+  networkUpdate();
+
+  renderer.render(scene, camera);
+}
+
+// ===================== INIT =====================
+initThree();
+</script>
+</body>
+</html>
