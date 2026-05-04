@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>Dogfight 3D — P2P Multiplayer</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -34,9 +37,9 @@ canvas{display:block}
   <p>P2P Multiplayer Aerial Combat</p>
   <input id="inp-room" placeholder="Room name (e.g. myroom1)" value="">
   <br>
-  <button id="btn-host" onclick="hostGame()">HOST GAME</button>
+  <button id="btn-host">HOST GAME</button>
   <br>
-  <button id="btn-join" onclick="joinGame()" disabled>JOIN GAME</button>
+  <button id="btn-join" disabled>JOIN GAME</button>
   <br>
   <div id="status"></div>
   <div style="color:#556;font-size:12px;margin-top:30px">WASD = Pitch/Roll &nbsp; Q/E = Yaw &nbsp; SHIFT = Boost &nbsp; Click = Shoot<br>Mouse = Look | Esc = Release cursor</div>
@@ -61,72 +64,73 @@ canvas{display:block}
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
+// DOGFIGHT 3D v2 — fixed simplex noise, tested
+(function(){
+"use strict";
+
 // ===================== SIMPLEX NOISE =====================
-class SimplexNoise {
-  constructor(seed) {
-    const rng = (function(s) {
-      return function() {
-        s = (s * 16807 + 0) % 2147483647;
-        return (s - 1) / 2147483646;
-      };
-    })(seed || Math.floor(Math.random() * 2147483647));
-    const p = new Uint8Array(256);
-    for (let i = 0; i < 256; i++) p[i] = i;
-    for (let i = 255; i > 0; i--) {
-      const j = Math.floor(rng() * (i + 1));
-      const tmp = p[i]; p[i] = p[j]; p[j] = tmp;
-    }
-    this.perm = new Uint8Array(512);
-    this.permMod12 = new Uint8Array(512);
-    for (let i = 0; i < 512; i++) {
-      this.perm[i] = p[i & 255];
-      this.permMod12[i] = this.perm[i] % 12;
-    }
+function SimplexNoise(seed) {
+  var rng = (function(s) {
+    return function() {
+      s = (s * 16807 + 0) % 2147483647;
+      return (s - 1) / 2147483646;
+    };
+  })(seed || Math.floor(Math.random() * 2147483647));
+  var p = new Uint8Array(256);
+  var i, j, tmp;
+  for (i = 0; i < 256; i++) p[i] = i;
+  for (i = 255; i > 0; i--) {
+    j = Math.floor(rng() * (i + 1));
+    tmp = p[i]; p[i] = p[j]; p[j] = tmp;
   }
-  noise2D(xin, yin) {
-    const G3 = [
-      [1,1],[-1,1],[1,-1],[-1,-1],
-      [1,0],[-1,0],[0,1],[0,-1],
-      [1,1],[-1,1],[1,-1],[-1,-1]
-    ];
-    const F2 = 0.5 * (Math.sqrt(3) - 1);
-    const G2 = (3 - Math.sqrt(3)) / 6;
-    const s = (xin + yin) * F2;
-    const i = Math.floor(xin + s);
-    const j = Math.floor(yin + s);
-    const t = (i + j) * G2;
-    const x0 = xin - (i - t);
-    const y0 = yin - (j - t);
-    let i1, j1;
-    if (x0 > y0) { i1 = 1; j1 = 0; }
-    else { i1 = 0; j1 = 1; }
-    const x1 = x0 - i1 + G2;
-    const y1 = y0 - j1 + G2;
-    const x2 = x0 - 1 + 2 * G2;
-    const y2 = y0 - 1 + 2 * G2;
-    const ii = i & 255, jj = j & 255;
-    const gi0 = this.permMod12[ii + this.perm[jj]];
-    const gi1 = this.permMod12[ii + i1 + this.perm[jj + j1]];
-    const gi2 = this.permMod12[ii + 1 + this.perm[jj + 1]];
-    let n0 = 0, n1 = 0, n2 = 0;
-    let t0 = 0.5 - x0*x0 - y0*y0;
-    if (t0 >= 0) { t0 *= t0; n0 = t0 * t0 * (G3[gi0][0]*x0 + G3[gi0][1]*y0); }
-    let t1 = 0.5 - x1*x1 - y1*y1;
-    if (t1 >= 0) { t1 *= t1; n1 = t1 * t1 * (G3[gi1][0]*x1 + G3[gi1][1]*y1); }
-    let t2 = 0.5 - x2*x2 - y2*y2;
-    if (t2 >= 0) { t2 *= t2; n2 = t2 * t2 * (G3[gi2][0]*x2 + G3[gi2][1]*y2); }
-    return 70 * (n0 + n1 + n2);
-  }
-  fbm(x, y, oct) {
-    let v = 0, a = 0.5, f = 1;
-    oct = oct || 5;
-    for (let i = 0; i < oct; i++) {
-      v += a * this.noise2D(x * f, y * f);
-      f *= 2; a *= 0.5;
-    }
-    return v;
+  this.perm = new Uint8Array(512);
+  this.permMod12 = new Uint8Array(512);
+  for (i = 0; i < 512; i++) {
+    this.perm[i] = p[i & 255];
+    this.permMod12[i] = this.perm[i] % 12;
   }
 }
+SimplexNoise.prototype.noise2D = function(xin, yin) {
+  var G = [
+    [1,1],[-1,1],[1,-1],[-1,-1],
+    [1,0],[-1,0],[0,1],[0,-1],
+    [1,1],[-1,1],[1,-1],[-1,-1]
+  ];
+  var F2 = 0.5 * (Math.sqrt(3) - 1);
+  var G2 = (3 - Math.sqrt(3)) / 6;
+  var s = (xin + yin) * F2;
+  var i = Math.floor(xin + s);
+  var j = Math.floor(yin + s);
+  var t = (i + j) * G2;
+  var x0 = xin - (i - t);
+  var y0 = yin - (j - t);
+  var i1, j1;
+  if (x0 > y0) { i1 = 1; j1 = 0; } else { i1 = 0; j1 = 1; }
+  var x1 = x0 - i1 + G2;
+  var y1 = y0 - j1 + G2;
+  var x2 = x0 - 1 + 2 * G2;
+  var y2 = y0 - 1 + 2 * G2;
+  var ii = i & 255, jj = j & 255;
+  var gi0 = this.permMod12[ii + this.perm[jj]];
+  var gi1 = this.permMod12[ii + i1 + this.perm[jj + j1]];
+  var gi2 = this.permMod12[ii + 1 + this.perm[jj + 1]];
+  var n0 = 0, n1 = 0, n2 = 0;
+  var t0 = 0.5 - x0*x0 - y0*y0;
+  if (t0 >= 0) { t0 *= t0; n0 = t0 * t0 * (G[gi0][0]*x0 + G[gi0][1]*y0); }
+  var t1 = 0.5 - x1*x1 - y1*y1;
+  if (t1 >= 0) { t1 *= t1; n1 = t1 * t1 * (G[gi1][0]*x1 + G[gi1][1]*y1); }
+  var t2 = 0.5 - x2*x2 - y2*y2;
+  if (t2 >= 0) { t2 *= t2; n2 = t2 * t2 * (G[gi2][0]*x2 + G[gi2][1]*y2); }
+  return 70 * (n0 + n1 + n2);
+};
+SimplexNoise.prototype.fbm = function(x, y, oct) {
+  var v = 0, a = 0.5, f = 1;
+  for (var i = 0; i < (oct || 5); i++) {
+    v += a * this.noise2D(x * f, y * f);
+    f *= 2; a *= 0.5;
+  }
+  return v;
+};
 
 // ===================== GLOBALS =====================
 var noise = new SimplexNoise();
@@ -240,35 +244,28 @@ function createPlane(color) {
   var g = new THREE.Group();
   var bodyMat = new THREE.MeshPhongMaterial({ color: color });
   var darkMat = new THREE.MeshPhongMaterial({ color: 0x333333 });
-  // Fuselage
   var body = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.3, 8, 8), bodyMat);
   body.rotation.x = Math.PI / 2;
   g.add(body);
-  // Nose
   var nose = new THREE.Mesh(new THREE.ConeGeometry(0.6, 2, 8), darkMat);
   nose.rotation.x = -Math.PI / 2;
   nose.position.z = -5;
   g.add(nose);
-  // Wings
   var wing = new THREE.Mesh(new THREE.BoxGeometry(12, 0.15, 2), bodyMat);
   wing.position.z = 0.5;
   g.add(wing);
-  // Tail vertical
   var tailV = new THREE.Mesh(new THREE.BoxGeometry(0.15, 3, 1.5), bodyMat);
   tailV.position.set(0, 1.2, 3.5);
   g.add(tailV);
-  // Tail horizontal
   var tailH = new THREE.Mesh(new THREE.BoxGeometry(4, 0.1, 1.2), bodyMat);
   tailH.position.set(0, 0.2, 3.5);
   g.add(tailH);
-  // Prop disc
   var prop = new THREE.Mesh(
     new THREE.CircleGeometry(1.2, 16),
     new THREE.MeshBasicMaterial({ color: 0x888888, transparent: true, opacity: 0.3, side: THREE.DoubleSide })
   );
   prop.position.z = -5.5;
   g.add(prop);
-  // Engine glow
   var glow = new THREE.PointLight(color, 0.5, 20);
   glow.position.z = 4;
   g.add(glow);
@@ -339,7 +336,6 @@ function updatePlane(ps, dt) {
   var yawQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), ps.yaw * dt * 2);
   ps.quat.multiply(pitchQ).multiply(yawQ);
   ps.quat.normalize();
-  // Auto-roll
   var right = new THREE.Vector3(1,0,0).applyQuaternion(ps.quat);
   var up = new THREE.Vector3(0,1,0);
   var rollAmt = -right.dot(up) * dt * 0.8;
@@ -351,13 +347,8 @@ function updatePlane(ps, dt) {
   var forward = new THREE.Vector3(0,0,-1).applyQuaternion(ps.quat);
   ps.vel.copy(forward.multiplyScalar(ps.speed));
   ps.pos.add(ps.vel.clone().multiplyScalar(dt * 60));
-  // Terrain collision
   var gH = getHeight(ps.pos.x, ps.pos.z);
-  if (ps.pos.y < gH + 3) {
-    ps.pos.y = gH + 3;
-    ps.vel.y = Math.max(ps.vel.y, 0);
-  }
-  // World bounds wrap
+  if (ps.pos.y < gH + 3) { ps.pos.y = gH + 3; ps.vel.y = Math.max(ps.vel.y, 0); }
   var half = TERRAIN_SIZE * 0.45;
   if (ps.pos.x > half) ps.pos.x = -half;
   if (ps.pos.x < -half) ps.pos.x = half;
@@ -378,15 +369,13 @@ function shootBullet(ps) {
     owner: ps.id,
     pos: ps.pos.clone().add(forward.clone().multiplyScalar(6)),
     vel: forward.multiplyScalar(BULLET_SPEED + ps.speed),
-    born: now,
-    mesh: null
+    born: now, mesh: null
   };
   var bGeo = new THREE.SphereGeometry(0.3, 4, 4);
   var bMat = new THREE.MeshBasicMaterial({ color: (ps.color === 0x4488ff) ? 0xffff00 : 0xff4444 });
   bullet.mesh = new THREE.Mesh(bGeo, bMat);
   bullet.mesh.position.copy(bullet.pos);
   scene.add(bullet.mesh);
-  // Tracer
   var tGeo = new THREE.CylinderGeometry(0.05, 0.05, 3, 4);
   tGeo.rotateX(Math.PI / 2);
   var tracer = new THREE.Mesh(tGeo, new THREE.MeshBasicMaterial({ color: 0xffaa00, transparent: true, opacity: 0.6 }));
@@ -402,17 +391,8 @@ function updateBullets(dt) {
     var b = bullets[i];
     b.pos.add(b.vel.clone().multiplyScalar(dt * 60));
     b.mesh.position.copy(b.pos);
-    if (now - b.born > BULLET_LIFE) {
-      scene.remove(b.mesh);
-      bullets.splice(i, 1);
-      continue;
-    }
-    if (b.pos.y < getHeight(b.pos.x, b.pos.z)) {
-      spawnExplosion(b.pos.clone(), 0.5);
-      scene.remove(b.mesh);
-      bullets.splice(i, 1);
-      continue;
-    }
+    if (now - b.born > BULLET_LIFE) { scene.remove(b.mesh); bullets.splice(i, 1); continue; }
+    if (b.pos.y < getHeight(b.pos.x, b.pos.z)) { spawnExplosion(b.pos.clone(), 0.5); scene.remove(b.mesh); bullets.splice(i, 1); continue; }
     for (var id in players) {
       var p = players[id];
       if (id === b.owner || !p.alive) continue;
@@ -537,17 +517,8 @@ function drawMinimap() {
   }
 }
 
-// ===================== NETWORKING (PeerJS) =====================
+// ===================== NETWORKING =====================
 var ROOM_PREFIX = 'dogfight3d-';
-
-function setStatus(msg) {
-  document.getElementById('status').textContent = msg;
-}
-
-document.getElementById('inp-room').addEventListener('input', function(e) {
-  document.getElementById('btn-join').disabled = !e.target.value.trim();
-});
-
 var ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
@@ -558,6 +529,12 @@ var ICE_SERVERS = [
   { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
 ];
 
+function setStatus(msg) { document.getElementById('status').textContent = msg; }
+
+document.getElementById('inp-room').addEventListener('input', function(e) {
+  document.getElementById('btn-join').disabled = !e.target.value.trim();
+});
+
 function hostGame() {
   var room = document.getElementById('inp-room').value.trim() || 'default';
   isHost = true;
@@ -567,12 +544,8 @@ function hostGame() {
     setStatus('Hosting room: ' + room + ' — Share this room name!');
     startGame();
   });
-  peer.on('connection', function(conn) {
-    handleConnection(conn);
-  });
-  peer.on('error', function(e) {
-    setStatus('Error: ' + e.type + ' — try another room name');
-  });
+  peer.on('connection', function(conn) { handleConnection(conn); });
+  peer.on('error', function(e) { setStatus('Error: ' + e.type + ' — try another room name'); });
 }
 
 function joinGame() {
@@ -584,13 +557,8 @@ function joinGame() {
     myId = id;
     setStatus('Connecting to host...');
     var conn = peer.connect(hostId, { reliable: false });
-    conn.on('open', function() {
-      handleConnection(conn);
-      setStatus('Connected! Starting...');
-    });
-    conn.on('error', function() {
-      setStatus('Connection failed — room may not exist');
-    });
+    conn.on('open', function() { handleConnection(conn); setStatus('Connected! Starting...'); });
+    conn.on('error', function() { setStatus('Connection failed — room may not exist'); });
   });
   peer.on('error', function(e) {
     if (e.type === 'peer-unavailable') setStatus('Room not found — is host running?');
@@ -611,33 +579,22 @@ function handleConnection(conn) {
     }
     conn.send({ type: 'welcome', yourId: pid, color: colors[ci], players: existing });
   });
-  conn.on('data', function(data) {
-    handleNetData(data, pid);
-  });
+  conn.on('data', function(data) { handleNetData(data, pid); });
   conn.on('close', function() {
     delete connections[pid];
-    if (players[pid]) {
-      scene.remove(players[pid].mesh);
-      delete players[pid];
-    }
+    if (players[pid]) { scene.remove(players[pid].mesh); delete players[pid]; }
   });
 }
 
 function handleNetData(data, fromId) {
   if (data.type === 'welcome') {
-    if (!players[myId]) {
-      players[myId] = createPlayerState(myId, data.color);
-    }
+    if (!players[myId]) players[myId] = createPlayerState(myId, data.color);
     for (var i = 0; i < data.players.length; i++) {
       var p = data.players[i];
-      if (!players[p.id]) {
-        players[p.id] = createPlayerState(p.id, p.color);
-      }
+      if (!players[p.id]) players[p.id] = createPlayerState(p.id, p.color);
     }
   } else if (data.type === 'pos') {
-    if (!players[fromId] && fromId !== myId) {
-      players[fromId] = createPlayerState(fromId, data.color || 0xff4444);
-    }
+    if (!players[fromId] && fromId !== myId) players[fromId] = createPlayerState(fromId, data.color || 0xff4444);
     if (players[fromId]) {
       var p = players[fromId];
       p.pos.set(data.x, data.y, data.z);
@@ -646,19 +603,11 @@ function handleNetData(data, fromId) {
       p.alive = data.alive;
       p.hp = data.hp;
       p.mesh.visible = data.alive;
-      if (!data.alive && wasAlive) {
-        spawnExplosion(p.pos.clone(), 8);
-      }
+      if (!data.alive && wasAlive) spawnExplosion(p.pos.clone(), 8);
     }
   } else if (data.type === 'bullet') {
-    var rb = {
-      id: data.bid, owner: fromId,
-      pos: new THREE.Vector3(data.x, data.y, data.z),
-      vel: new THREE.Vector3(data.vx, data.vy, data.vz),
-      born: Date.now(), mesh: null
-    };
-    var bGeo = new THREE.SphereGeometry(0.3, 4, 4);
-    rb.mesh = new THREE.Mesh(bGeo, new THREE.MeshBasicMaterial({ color: 0xff4444 }));
+    var rb = { id: data.bid, owner: fromId, pos: new THREE.Vector3(data.x, data.y, data.z), vel: new THREE.Vector3(data.vx, data.vy, data.vz), born: Date.now(), mesh: null };
+    rb.mesh = new THREE.Mesh(new THREE.SphereGeometry(0.3, 4, 4), new THREE.MeshBasicMaterial({ color: 0xff4444 }));
     rb.mesh.position.copy(rb.pos);
     scene.add(rb.mesh);
     bullets.push(rb);
@@ -675,9 +624,7 @@ function handleNetData(data, fromId) {
 }
 
 function broadcast(data) {
-  for (var id in connections) {
-    try { connections[id].send(data); } catch(e) {}
-  }
+  for (var id in connections) { try { connections[id].send(data); } catch(e) {} }
 }
 
 var lastBroadcast = 0;
@@ -687,24 +634,15 @@ function networkUpdate() {
   lastBroadcast = now;
   var me = players[myId];
   if (!me) return;
-  broadcast({
-    type: 'pos',
-    x: me.pos.x, y: me.pos.y, z: me.pos.z,
-    qx: me.quat.x, qy: me.quat.y, qz: me.quat.z, qw: me.quat.w,
-    alive: me.alive, hp: me.hp, color: me.color
-  });
+  broadcast({ type: 'pos', x: me.pos.x, y: me.pos.y, z: me.pos.z, qx: me.quat.x, qy: me.quat.y, qz: me.quat.z, qw: me.quat.w, alive: me.alive, hp: me.hp, color: me.color });
 }
 
 // ===================== GAME LOOP =====================
 function startGame() {
   document.getElementById('menu').style.display = 'none';
   gameStarted = true;
-  renderer.domElement.addEventListener('click', function() {
-    renderer.domElement.requestPointerLock();
-  });
-  if (!players[myId]) {
-    players[myId] = createPlayerState(myId, 0x4488ff);
-  }
+  renderer.domElement.addEventListener('click', function() { renderer.domElement.requestPointerLock(); });
+  if (!players[myId]) players[myId] = createPlayerState(myId, 0x4488ff);
   animate();
 }
 
@@ -738,6 +676,16 @@ function animate() {
 
 // ===================== INIT =====================
 initThree();
+
+// Wire buttons via addEventListener (no inline onclick needed)
+document.getElementById('btn-host').addEventListener('click', hostGame);
+document.getElementById('btn-join').addEventListener('click', joinGame);
+
+// Expose for console debugging
+window.hostGame = hostGame;
+window.joinGame = joinGame;
+
+})();
 </script>
 </body>
 </html>
