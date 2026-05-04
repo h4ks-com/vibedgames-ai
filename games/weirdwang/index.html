@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TOM MOVIEPOSTER 9000 — Wang Tiles</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Orbitron:wght@700;900&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0a0a0a;
+    --fg: #e0e0e0;
+    --accent: #00ff41;
+    --accent2: #7fff00;
+    --card: #111;
+    --border: #222;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: 'JetBrains Mono', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Scanline overlay */
+  body::after {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,255,65,0.015) 2px,
+      rgba(0,255,65,0.015) 4px
+    );
+    z-index: 9999;
+  }
+
+  .header {
+    text-align: center;
+    padding: 30px 20px 10px;
+    position: relative;
+  }
+
+  .header h1 {
+    font-family: 'Orbitron', sans-serif;
+    font-size: clamp(1.2rem, 4vw, 2.2rem);
+    font-weight: 900;
+    color: var(--accent);
+    text-shadow: 0 0 20px rgba(0,255,65,0.5), 0 0 40px rgba(0,255,65,0.2);
+    letter-spacing: 3px;
+  }
+
+  .header .sub {
+    font-size: 0.75rem;
+    color: #666;
+    margin-top: 5px;
+  }
+
+  .controls {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    padding: 15px;
+    flex-wrap: wrap;
+  }
+
+  .controls button {
+    background: transparent;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    padding: 8px 18px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  .controls button:hover, .controls button.active {
+    background: var(--accent);
+    color: #000;
+    box-shadow: 0 0 15px rgba(0,255,65,0.4);
+  }
+
+  .section {
+    padding: 20px;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  .section-title {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 1rem;
+    color: var(--accent2);
+    margin-bottom: 15px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+    letter-spacing: 2px;
+  }
+
+  /* Poster display */
+  .poster-container {
+    display: flex;
+    justify-content: center;
+    gap: 30px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+  }
+
+  .poster-square {
+    width: 280px;
+    height: 280px;
+    border-radius: 6px;
+    overflow: hidden;
+    border: 2px solid var(--accent);
+    box-shadow: 0 0 30px rgba(0,255,65,0.15);
+    position: relative;
+  }
+
+  .poster-square img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .poster-label {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: rgba(0,0,0,0.8);
+    font-size: 0.65rem;
+    padding: 6px;
+    text-align: center;
+    color: var(--accent);
+  }
+
+  /* 64 Tile Grid */
+  .tile-grid {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    gap: 3px;
+    max-width: 680px;
+    margin: 0 auto 30px;
+  }
+
+  .wang-tile {
+    aspect-ratio: 1;
+    position: relative;
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.15s;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .wang-tile:hover {
+    transform: scale(1.15);
+    z-index: 10;
+    box-shadow: 0 0 15px rgba(0,255,65,0.5);
+  }
+
+  .wang-tile .tile-img {
+    position: absolute;
+    inset: 0;
+    background-size: 800% 800%;
+    display: block;
+  }
+
+  .wang-tile .tile-id {
+    position: absolute;
+    top: 1px; left: 3px;
+    font-size: 6px;
+    color: rgba(255,255,255,0.8);
+    text-shadow: 0 0 2px #000;
+    z-index: 2;
+    pointer-events: none;
+  }
+
+  /* Edge colors */
+  .edge {
+    position: absolute;
+    z-index: 1;
+  }
+  .edge-top    { top: 0; left: 0; right: 0; height: 5px; }
+  .edge-bottom { bottom: 0; left: 0; right: 0; height: 5px; }
+  .edge-left   { top: 0; bottom: 0; left: 0; width: 5px; }
+  .edge-right  { top: 0; bottom: 0; right: 0; width: 5px; }
+
+  /* Interactive Tiling Canvas */
+  .tiling-section {
+    margin-top: 20px;
+  }
+
+  .tiling-controls {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 15px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .tiling-controls label {
+    font-size: 0.75rem;
+    color: #888;
+  }
+
+  .tiling-controls select, .tiling-controls input {
+    background: #1a1a1a;
+    border: 1px solid var(--border);
+    color: var(--fg);
+    padding: 5px 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+  }
+
+  .tiling-canvas-wrap {
+    overflow: auto;
+    max-width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #050505;
+    padding: 10px;
+  }
+
+  .tiling-canvas {
+    display: inline-grid;
+    gap: 0;
+    margin: 0 auto;
+  }
+
+  .tiling-canvas .wang-tile {
+    position: relative;
+  }
+
+  .tiling-canvas .wang-tile .tile-img {
+    width: 100%;
+    height: 100%;
+  }
+
+  /* Color legend */
+  .color-legend {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 15px 0;
+    justify-content: center;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.65rem;
+    color: #888;
+  }
+
+  .legend-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 2px;
+    border: 1px solid #333;
+  }
+
+  /* Stats */
+  .stats {
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin: 10px 0;
+  }
+
+  .stat {
+    text-align: center;
+  }
+
+  .stat .val {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 1.4rem;
+    color: var(--accent);
+  }
+
+  .stat .label {
+    font-size: 0.6rem;
+    color: #555;
+    text-transform: uppercase;
+  }
+
+  /* Tooltip */
+  .tooltip {
+    display: none;
+    position: fixed;
+    background: rgba(0,0,0,0.95);
+    border: 1px solid var(--accent);
+    color: var(--fg);
+    padding: 8px 12px;
+    font-size: 0.7rem;
+    border-radius: 4px;
+    z-index: 10000;
+    pointer-events: none;
+    max-width: 250px;
+  }
+
+  .tooltip .tt-title {
+    color: var(--accent);
+    font-weight: bold;
+    margin-bottom: 4px;
+  }
+
+  .tooltip .tt-edges {
+    display: grid;
+    grid-template-columns: auto auto;
+    gap: 2px 10px;
+    font-size: 0.65rem;
+  }
+
+  .tooltip .tt-dir {
+    color: #888;
+    text-align: right;
+  }
+
+  /* Selected tile indicator */
+  .wang-tile.selected {
+    outline: 2px solid #fff;
+    outline-offset: 1px;
+  }
+
+  @media (max-width: 600px) {
+    .tile-grid { max-width: 95vw; }
+    .wang-tile .tile-id { font-size: 5px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>☠ TOM MOVIEPOSTER 9000 ☠</h1>
+  <div class="sub">WANG TILE GENERATOR — 64 TILES — RADIOACTIVE BEES EDITION</div>
+</div>
+
+<div class="controls">
+  <button onclick="showSection('tiles')" id="btn-tiles" class="active">64 TILES</button>
+  <button onclick="showSection('tiling')" id="btn-tiling">TILING ENGINE</button>
+  <button onclick="showSection('poster')">POSTER</button>
+  <button onclick="regenerate()">⟳ REGENERATE</button>
+</div>
+
+<div class="stats">
+  <div class="stat"><div class="val" id="stat-tiles">64</div><div class="label">Wang Tiles</div></div>
+  <div class="stat"><div class="val" id="stat-colors">8</div><div class="label">Edge Colors</div></div>
+  <div class="stat"><div class="val" id="stat-grid">∞</div><div class="label">Tilable</div></div>
+  <div class="stat"><div class="val">8×8</div><div class="label">Grid</div></div>
+</div>
+
+<div class="color-legend" id="color-legend"></div>
+
+<!-- POSTER SECTION -->
+<div class="section" id="sec-poster">
+  <div class="section-title">▸ SOURCE POSTER (SQUARED)</div>
+  <div class="poster-container">
+    <div class="poster-square">
+      <img id="poster-img" src="https://s.h4ks.com/HES.jpg" crossorigin="anonymous">
+      <div class="poster-label">RADIOACTIVE BEES EDITION</div>
+    </div>
+  </div>
+</div>
+
+<!-- TILE SET SECTION -->
+<div class="section" id="sec-tiles">
+  <div class="section-title">▸ COMPLETE WANG TILE SET (64 TILES)</div>
+  <div class="tile-grid" id="tile-grid"></div>
+</div>
+
+<!-- TILING SECTION -->
+<div class="section tiling-section" id="sec-tiling" style="display:none">
+  <div class="section-title">▸ INTERACTIVE WANG TILING</div>
+  <div class="tiling-controls">
+    <label>Grid:</label>
+    <select id="tiling-size" onchange="generateTiling()">
+      <option value="8">8×8</option>
+      <option value="12">12×12</option>
+      <option value="16" selected>16×16</option>
+      <option value="24">24×24</option>
+      <option value="32">32×32</option>
+      <option value="48">48×48</option>
+    </select>
+    <label>Tile px:</label>
+    <select id="tiling-px" onchange="generateTiling()">
+      <option value="20">20</option>
+      <option value="30">30</option>
+      <option value="40" selected>40</option>
+      <option value="60">60</option>
+      <option value="80">80</option>
+    </select>
+    <label>Algorithm:</label>
+    <select id="tiling-algo" onchange="generateTiling()">
+      <option value="periodic">Periodic</option>
+      <option value="random" selected>Random Match</option>
+      <option value="wave">Wave-like</option>
+    </select>
+    <button onclick="generateTiling()">⟳ TILE</button>
+    <button onclick="animateTiling()">▶ ANIMATE</button>
+  </div>
+  <div class="tiling-canvas-wrap">
+    <div class="tiling-canvas" id="tiling-canvas"></div>
+  </div>
+</div>
+
+<div class="tooltip" id="tooltip">
+  <div class="tt-title"></div>
+  <div class="tt-edges"></div>
+</div>
+
+<script>
+// ─── CONFIG ───
+const POSTER_URL = 'https://s.h4ks.com/HES.jpg';
+const GRID_SIZE = 8;
+const NUM_COLORS = 8;
+const NUM_TILES = GRID_SIZE * GRID_SIZE;
+
+// 8 edge colors — radioactive green theme gradient
+const EDGE_COLORS = [
+  '#0a0a0a', // 0: void
+  '#1a3a1a', // 1: dark radiation
+  '#2d6b2d', // 2: forest glow
+  '#3f9f3f', // 3: medium green
+  '#00ff41', // 4: matrix green
+  '#7fff00', // 5: chartreuse
+  '#adff2f', // 6: acid yellow
+  '#ffff00', // 7: toxic yellow
+];
+
+const COLOR_NAMES = ['Void','Dark Rad','Forest','Green','Matrix','Chartreuse','Acid','Toxic'];
+
+// ─── WANG TILE DEFINITIONS ───
+// 64 tiles indexed (row, col) where row,col ∈ [0,7]
+// Edges: top, right, bottom, left
+// For valid periodic tiling: place tile (i,j) at grid pos (i,j)
+// top = row%8, right = col%8, bottom = (row+1)%8, left = (col+7)%8
+let tiles = [];
+
+function generateTiles() {
+  tiles = [];
+  for (let r = 0; r < GRID_SIZE; r++) {
+    for (let c = 0; c < GRID_SIZE; c++) {
+      tiles.push({
+        id: r * GRID_SIZE + c,
+        row: r,
+        col: c,
+        top: r % NUM_COLORS,
+        right: c % NUM_COLORS,
+        bottom: (r + 1) % NUM_COLORS,
+        left: (c + NUM_COLORS - 1) % NUM_COLORS,
+      });
+    }
+  }
+}
+
+// ─── RENDERING ───
+function buildLegend() {
+  const el = document.getElementById('color-legend');
+  el.innerHTML = EDGE_COLORS.map((c, i) =>
+    `<div class="legend-item"><div class="legend-swatch" style="background:${c}"></div>${i}: ${COLOR_NAMES[i]}</div>`
+  ).join('');
+}
+
+function buildTileGrid() {
+  const grid = document.getElementById('tile-grid');
+  grid.innerHTML = '';
+
+  tiles.forEach(t => {
+    const div = document.createElement('div');
+    div.className = 'wang-tile';
+    div.dataset.id = t.id;
+
+    // Poster background — each tile shows its portion of the 8×8 poster grid
+    const bgX = (t.col / GRID_SIZE) * 100;
+    const bgY = (t.row / GRID_SIZE) * 100;
+
+    div.innerHTML = `
+      <div class="tile-img" style="background-image:url('${POSTER_URL}');background-size:${GRID_SIZE * 100}% ${GRID_SIZE * 100}%;background-position:${bgX}% ${bgY}%"></div>
+      <div class="edge edge-top" style="background:${EDGE_COLORS[t.top]}"></div>
+      <div class="edge edge-bottom" style="background:${EDGE_COLORS[t.bottom]}"></div>
+      <div class="edge edge-left" style="background:${EDGE_COLORS[t.left]}"></div>
+      <div class="edge edge-right" style="background:${EDGE_COLORS[t.right]}"></div>
+      <div class="tile-id">#${t.id}</div>
+    `;
+
+    // Tooltip
+    div.addEventListener('mouseenter', e => showTooltip(e, t));
+    div.addEventListener('mousemove', moveTooltip);
+    div.addEventListener('mouseleave', hideTooltip);
+
+    grid.appendChild(div);
+  });
+}
+
+// ─── TOOLTIP ───
+const tooltip = document.getElementById('tooltip');
+
+function showTooltip(e, t) {
+  tooltip.querySelector('.tt-title').textContent = `Tile #${t.id} (${t.row},${t.col})`;
+  tooltip.querySelector('.tt-edges').innerHTML = [
+    ['↑ Top', t.top], ['→ Right', t.right], ['↓ Bottom', t.bottom], ['← Left', t.left]
+  ].map(([label, c]) =>
+    `<span class="tt-dir">${label}</span><span style="color:${EDGE_COLORS[c]}">■ ${c} (${COLOR_NAMES[c]})</span>`
+  ).join('');
+  tooltip.style.display = 'block';
+  moveTooltip(e);
+}
+
+function moveTooltip(e) {
+  tooltip.style.left = (e.clientX + 15) + 'px';
+  tooltip.style.top = (e.clientY + 15) + 'px';
+}
+
+function hideTooltip() { tooltip.style.display = 'none'; }
+
+// ─── SECTIONS ───
+function showSection(name) {
+  document.querySelectorAll('.controls button').forEach(b => b.classList.remove('active'));
+  document.getElementById('btn-' + name).classList.add('active');
+  document.getElementById('sec-poster').style.display = name === 'poster' ? '' : 'none';
+  document.getElementById('sec-tiles').style.display = name === 'tiles' ? '' : 'none';
+  document.getElementById('sec-tiling').style.display = name === 'tiling' ? '' : 'none';
+}
+
+// ─── TILING ENGINE ───
+function generateTiling() {
+  const size = parseInt(document.getElementById('tiling-size').value);
+  const px = parseInt(document.getElementById('tiling-px').value);
+  const algo = document.getElementById('tiling-algo').value;
+  const canvas = document.getElementById('tiling-canvas');
+
+  canvas.style.gridTemplateColumns = `repeat(${size}, ${px}px)`;
+  canvas.innerHTML = '';
+
+  const grid = computeGrid(size, algo);
+
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
+      const t = grid[r][c];
+      const div = document.createElement('div');
+      div.className = 'wang-tile';
+      div.style.width = px + 'px';
+      div.style.height = px + 'px';
+
+      const bgX = (t.col / GRID_SIZE) * 100;
+      const bgY = (t.row / GRID_SIZE) * 100;
+      const edgeW = Math.max(2, px * 0.1);
+
+      div.innerHTML = `
+        <div class="tile-img" style="background-image:url('${POSTER_URL}');background-size:${GRID_SIZE * 100}% ${GRID_SIZE * 100}%;background-position:${bgX}% ${bgY}%"></div>
+        <div class="edge edge-top" style="height:${edgeW}px;background:${EDGE_COLORS[t.top]}"></div>
+        <div class="edge edge-bottom" style="height:${edgeW}px;background:${EDGE_COLORS[t.bottom]}"></div>
+        <div class="edge edge-left" style="width:${edgeW}px;background:${EDGE_COLORS[t.left]}"></div>
+        <div class="edge edge-right" style="width:${edgeW}px;background:${EDGE_COLORS[t.right]}"></div>
+      `;
+
+      div.addEventListener('mouseenter', e => showTooltip(e, t));
+      div.addEventListener('mousemove', moveTooltip);
+      div.addEventListener('mouseleave', hideTooltip);
+
+      canvas.appendChild(div);
+    }
+  }
+}
+
+function computeGrid(size, algo) {
+  if (algo === 'periodic') {
+    // Perfect periodic tiling — place tile (i%8, j%8) at (i,j)
+    return Array.from({length: size}, (_, r) =>
+      Array.from({length: size}, (_, c) => tiles[(r % GRID_SIZE) * GRID_SIZE + (c % GRID_SIZE)])
+    );
+  }
+
+  if (algo === 'wave') {
+    // Wave-like pattern using sine functions for tile selection
+    return Array.from({length: size}, (_, r) =>
+      Array.from({length: size}, (_, c) => {
+        const tr = Math.floor((Math.sin(r * 0.5) * 0.5 + 0.5) * GRID_SIZE) % GRID_SIZE;
+        const tc = Math.floor((Math.cos(c * 0.5) * 0.5 + 0.5) * GRID_SIZE) % GRID_SIZE;
+        // Find a compatible tile
+        const neededTop = r > 0 ? computeGrid._prev[r-1]?.[c]?.bottom : null;
+        const neededLeft = c > 0 ? computeGrid._curr?.[c-1]?.right : null;
+        return findTile(tr, tc, neededTop, neededLeft);
+      })
+    );
+  }
+
+  // Random match — pick random compatible tile at each position
+  const grid = [];
+  for (let r = 0; r < size; r++) {
+    grid[r] = [];
+    for (let c = 0; c < size; c++) {
+      const neededTop = r > 0 ? grid[r-1][c].bottom : null;
+      const neededLeft = c > 0 ? grid[r][c-1].right : null;
+      grid[r][c] = findTile(null, null, neededTop, neededLeft);
+    }
+  }
+  return grid;
+}
+
+function findTile(preferRow, preferCol, needTop, needLeft) {
+  let candidates = tiles.filter(t => {
+    if (needTop !== null && t.top !== needTop) return false;
+    if (needLeft !== null && t.left !== needLeft) return false;
+    return true;
+  });
+
+  if (candidates.length === 0) {
+    // Fallback: relax constraints
+    candidates = tiles.filter(t => {
+      if (needTop !== null && t.top !== needTop) return false;
+      return true;
+    });
+  }
+  if (candidates.length === 0) candidates = tiles;
+
+  // Prefer the suggested tile if it's compatible
+  if (preferRow !== null && preferCol !== null) {
+    const preferred = candidates.find(t => t.row === preferRow && t.col === preferCol);
+    if (preferred) return preferred;
+  }
+
+  return candidates[Math.floor(Math.random() * candidates.length)];
+}
+
+// Fix wave algo to use stored grid
+const origCompute = computeGrid;
+computeGrid = function(size, algo) {
+  if (algo === 'wave') {
+    const grid = [];
+    for (let r = 0; r < size; r++) {
+      grid[r] = [];
+      for (let c = 0; c < size; c++) {
+        const tr = Math.floor((Math.sin(r * 0.4 + c * 0.1) * 0.5 + 0.5) * GRID_SIZE) % GRID_SIZE;
+        const tc = Math.floor((Math.cos(c * 0.4 + r * 0.1) * 0.5 + 0.5) * GRID_SIZE) % GRID_SIZE;
+        const neededTop = r > 0 ? grid[r-1][c].bottom : null;
+        const neededLeft = c > 0 ? grid[r][c-1].right : null;
+        grid[r][c] = findTile(tr, tc, neededTop, neededLeft);
+      }
+    }
+    return grid;
+  }
+  return origCompute(size, algo);
+};
+
+// ─── ANIMATION ───
+let animInterval = null;
+function animateTiling() {
+  if (animInterval) {
+    clearInterval(animInterval);
+    animInterval = null;
+    return;
+  }
+  generateTiling();
+  const size = parseInt(document.getElementById('tiling-size').value);
+  const algo = document.getElementById('tiling-algo').value;
+  let phase = 0;
+
+  animInterval = setInterval(() => {
+    phase += 0.15;
+    const grid = [];
+    for (let r = 0; r < size; r++) {
+      grid[r] = [];
+      for (let c = 0; c < size; c++) {
+        const tr = Math.floor((Math.sin(r * 0.3 + phase) * 0.5 + 0.5) * GRID_SIZE) % GRID_SIZE;
+        const tc = Math.floor((Math.cos(c * 0.3 + phase * 0.7) * 0.5 + 0.5) * GRID_SIZE) % GRID_SIZE;
+        const neededTop = r > 0 ? grid[r-1][c].bottom : null;
+        const neededLeft = c > 0 ? grid[r][c-1].right : null;
+        grid[r][c] = findTile(tr, tc, neededTop, neededLeft);
+      }
+    }
+
+    const canvas = document.getElementById('tiling-canvas');
+    const px = parseInt(document.getElementById('tiling-px').value);
+    const edgeW = Math.max(2, px * 0.1);
+    const children = canvas.children;
+    let idx = 0;
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        const t = grid[r][c];
+        const child = children[idx++];
+        if (!child) continue;
+        const img = child.querySelector('.tile-img');
+        const bgX = (t.col / GRID_SIZE) * 100;
+        const bgY = (t.row / GRID_SIZE) * 100;
+        img.style.backgroundPosition = `${bgX}% ${bgY}%`;
+        child.querySelector('.edge-top').style.background = EDGE_COLORS[t.top];
+        child.querySelector('.edge-bottom').style.background = EDGE_COLORS[t.bottom];
+        child.querySelector('.edge-left').style.background = EDGE_COLORS[t.left];
+        child.querySelector('.edge-right').style.background = EDGE_COLORS[t.right];
+      }
+    }
+  }, 200);
+}
+
+// ─── REGENERATE (shuffle tile poster mapping) ───
+function regenerate() {
+  // Swap some tile edge colors randomly for variety
+  generateTiles();
+  // Shuffle tile-to-poster mapping
+  const indices = Array.from({length: NUM_TILES}, (_, i) => i);
+  for (let i = indices.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [indices[i], indices[j]] = [indices[j], indices[i]];
+  }
+  tiles.forEach((t, i) => {
+    t._posterRow = Math.floor(indices[i] / GRID_SIZE);
+    t._posterCol = indices[i] % GRID_SIZE;
+  });
+  buildTileGrid();
+  // Update grid rendering to use shuffled mapping
+  const origGen = generateTiling;
+  generateTiling = function() {
+    const size = parseInt(document.getElementById('tiling-size').value);
+    const px = parseInt(document.getElementById('tiling-px').value);
+    const algo = document.getElementById('tiling-algo').value;
+    const canvas = document.getElementById('tiling-canvas');
+    canvas.style.gridTemplateColumns = `repeat(${size}, ${px}px)`;
+    canvas.innerHTML = '';
+    const g = computeGrid(size, algo);
+    for (let r = 0; r < size; r++) {
+      for (let c = 0; c < size; c++) {
+        const t = g[r][c];
+        const div = document.createElement('div');
+        div.className = 'wang-tile';
+        div.style.width = px + 'px';
+        div.style.height = px + 'px';
+        const pr = t._posterRow ?? t.row;
+        const pc = t._posterCol ?? t.col;
+        const bgX = (pc / GRID_SIZE) * 100;
+        const bgY = (pr / GRID_SIZE) * 100;
+        const ew = Math.max(2, px * 0.1);
+        div.innerHTML = `
+          <div class="tile-img" style="background-image:url('${POSTER_URL}');background-size:${GRID_SIZE*100}% ${GRID_SIZE*100}%;background-position:${bgX}% ${bgY}%"></div>
+          <div class="edge edge-top" style="height:${ew}px;background:${EDGE_COLORS[t.top]}"></div>
+          <div class="edge edge-bottom" style="height:${ew}px;background:${EDGE_COLORS[t.bottom]}"></div>
+          <div class="edge edge-left" style="width:${ew}px;background:${EDGE_COLORS[t.left]}"></div>
+          <div class="edge edge-right" style="width:${ew}px;background:${EDGE_COLORS[t.right]}"></div>
+        `;
+        div.addEventListener('mouseenter', e => showTooltip(e, t));
+        div.addEventListener('mousemove', moveTooltip);
+        div.addEventListener('mouseleave', hideTooltip);
+        canvas.appendChild(div);
+      }
+    }
+  };
+  generateTiling();
+}
+
+// ─── INIT ───
+generateTiles();
+buildLegend();
+buildTileGrid();
+</script>
+</body>
+</html>
