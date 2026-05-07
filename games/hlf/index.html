@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>office rpg — hi-res · 8-track CA tracker + meta-CA conductor</title>
+<title>office rpg — hi-res · long-journey autoplay + meta-CA music</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000;
                color: #ccc; font-family: ui-monospace, "SF Mono", Menlo,
@@ -2011,28 +2011,43 @@ let workshopFrameCount = 0;
 let lsysGaFrameTick = 0;
 const LSYS_GA_PERIOD = 6;        /* one breed every ~6 frames (~10/s) */
 
-/* ── Autoplay / journey mode (ev9) ──────────────────────────
+/* ── Autoplay / journey mode (ev9, redesigned in ev15) ──────
  *
  * "Screensaver mode": the player walks itself.  Picks a random
- * heading on engage, drifts roughly that direction, and avoids
- * doubling back via a short visited-cell ring.  When an item or
- * (if HP allows) an animal is in scan range, target it as a
- * side quest, head over, then resume the journey heading.  NPCs,
- * water and blocking entities (plants, buildings) are penalised
- * heavily so the planner routes around them.
+ * heading on engage and *commits* to it — every step is scored
+ * by forward projection onto the heading vector, so the journey
+ * dominates over visit-memory jitter and side-quest pull.
+ *
+ * Heading drift is small (±7.5° at most) and slow (every 90 s)
+ * so the player covers real ground before turning.  Bumps don't
+ * rotate the heading drastically — they nudge by ≤±20° to find a
+ * way around obstacles, keeping the overall trajectory.
+ *
+ * Side quests (items, animals) are only acquired when they sit
+ * in the forward half-plane of the heading, with a cooldown
+ * after each one is dropped so the planner doesn't flicker
+ * between adjacent targets.  NPCs, water and blocking entities
+ * (plants, buildings) are penalised heavily so the planner
+ * routes around them.
  *
  * Engaged with `j`; any manual movement key disables it. */
-let autoplayOn       = false;
-let autoplayDir      = { dx: 1, dy: 0 };  /* unit-ish heading vector */
-let autoplayTarget   = null;               /* {x, y, cat} side quest */
-let autoplayLastMs   = 0;
-let autoplayDirAtMs  = 0;
-let autoplayBumps    = 0;
+let autoplayOn         = false;
+let autoplayDir        = { dx: 1, dy: 0 };  /* unit hex-flat heading */
+let autoplayTarget     = null;              /* {x, y, cat} side quest */
+let autoplayLastMs     = 0;
+let autoplayDirAtMs    = 0;
+let autoplayBumps      = 0;
+let autoplayTargetCdMs = 0;                 /* "no new target until" stamp */
 const AUTOPLAY_PERIOD_MS    = 200;         /* ≈5 actions / second */
-const AUTOPLAY_DIR_NUDGE_MS = 30000;       /* small heading drift */
+const AUTOPLAY_DIR_NUDGE_MS = 90000;       /* heading drift cadence */
+const AUTOPLAY_DIR_NUDGE_RAD= Math.PI / 24; /* ±7.5° max per drift */
+const AUTOPLAY_BUMP_NUDGE_RAD= Math.PI / 9; /* ±20° max per bump kick */
 const AUTOPLAY_SCAN_RADIUS  = 5;
-const AUTOPLAY_VISIT_MEM    = 24;
-const AUTOPLAY_BUMP_RESET   = 6;
+const AUTOPLAY_TARGET_FWD_DOT= 0.15;        /* min cos to count as "ahead" */
+const AUTOPLAY_TARGET_CD_MS = 4000;         /* cooldown after dropping target */
+const AUTOPLAY_VISIT_MEM    = 12;
+const AUTOPLAY_BUMP_RESET   = 8;
+const AUTOPLAY_FWD_WEIGHT   = 8.0;          /* how much heading dominates */
 const autoplayVisited = [];                /* ring of recent [x,y] */
 
 function autoplaySimMove(x, y, dir) {
@@ -2050,7 +2065,10 @@ function autoplaySimMove(x, y, dir) {
 }
 
 function autoplayScanInterest() {
-  /* Items > injured-safe animals.  NPCs not targeted (only stall). */
+  /* Items > injured-safe animals.  NPCs not targeted (only stall).
+   * Only consider candidates inside the forward half-plane of the
+   * current heading so detours don't pull the player backward. */
+  if (performance.now() < autoplayTargetCdMs) return null;
   const r = AUTOPLAY_SCAN_RADIUS;
   let best = null, bestScore = -Infinity;
   for (let dy = -r; dy <= r; dy++) {
@@ -2063,8 +2081,13 @@ function autoplayScanInterest() {
       if (c === RC_ITEM) priority = 30;
       else if (c === RC_ANIMAL && player.hp > player.maxHp / 3) priority = 18;
       else continue;
-      const dist = Math.abs(dx) + Math.abs(dy);
-      const score = priority - dist;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < 0.5) continue;
+      const fwd = (dx * autoplayDir.dx + dy * autoplayDir.dy) / dist;
+      if (fwd < AUTOPLAY_TARGET_FWD_DOT) continue;       /* not ahead */
+      /* Reward "ahead-ness" so a forward target beats a sideways one
+       * even when the sideways one is closer. */
+      const score = priority + fwd * 4 - dist;
       if (score > bestScore) { bestScore = score; best = { x, y, cat: c }; }
     }
   }
@@ -2072,15 +2095,9 @@ function autoplayScanInterest() {
 }
 
 function autoplayPickMove() {
-  let goalX, goalY;
-  if (autoplayTarget) {
-    goalX = autoplayTarget.x;
-    goalY = autoplayTarget.y;
-  } else {
-    /* Far-projected goal — distance dominates over jitter. */
-    goalX = px + autoplayDir.dx * 24;
-    goalY = py + autoplayDir.dy * 24;
-  }
+  /* Score = -forward-progress * weight + penalties.  When chasing a
+   * side-quest target, blend in a small pull toward the target so
+   * the planner converges; otherwise pure heading. */
   const dirs = ['w', 'e', 'a', 'd', 'z', 'x'];
   let bestKey = null, bestScore = Infinity;
   for (let di = 0; di < dirs.length; di++) {
@@ -2101,16 +2118,29 @@ function autoplayPickMove() {
         !(autoplayTarget && nx === autoplayTarget.x && ny === autoplayTarget.y)) {
       pen += 4;        /* incidental fight = small risk */
     }
-    /* Anti-doubling-back — recent cells hurt more. */
+    /* Anti-doubling-back — small bias only, so recent cells nudge
+     * the planner aside without overriding the heading. */
     for (let v = 0; v < autoplayVisited.length; v++) {
       const vv = autoplayVisited[v];
       if (vv[0] === nx && vv[1] === ny) {
-        pen += Math.max(2, 9 - v);
+        pen += Math.max(0.4, 2.0 - v * 0.15);
+        break;
       }
     }
-    const ddx = nx - goalX, ddy = ny - goalY;
-    const score = Math.sqrt(ddx * ddx + ddy * ddy) + pen +
-                  Math.random() * 0.4;       /* tiny jitter breaks ties */
+    /* Hex offsets land on half-integers along y; the magnitude per
+     * step is ~1.0, so dotting (nx-px, ny-py) with a unit heading
+     * gives a clean forward-progress scalar in roughly [-1, 1]. */
+    const ddx = nx - px, ddy = ny - py;
+    const proj = ddx * autoplayDir.dx + ddy * autoplayDir.dy;
+    let score = -proj * AUTOPLAY_FWD_WEIGHT;
+    if (autoplayTarget) {
+      /* Mild target attraction — euclidean distance to target, scaled
+       * so it can win ties between equally-forward moves but can't
+       * overpower the heading once the target is far off-axis. */
+      const tdx = nx - autoplayTarget.x, tdy = ny - autoplayTarget.y;
+      score += Math.sqrt(tdx * tdx + tdy * tdy) * 0.5;
+    }
+    score += pen + Math.random() * 0.15;
     if (score < bestScore) { bestScore = score; bestKey = k; }
   }
   return bestKey;
@@ -2122,8 +2152,9 @@ function autoplayInit() {
   autoplayTarget = null;
   autoplayBumps = 0;
   autoplayVisited.length = 0;
-  autoplayLastMs  = performance.now();
-  autoplayDirAtMs = performance.now();
+  autoplayLastMs    = performance.now();
+  autoplayDirAtMs   = performance.now();
+  autoplayTargetCdMs = 0;
 }
 function toggleAutoplay() {
   autoplayOn = !autoplayOn;
@@ -2143,11 +2174,12 @@ function autoplayTick() {
   if (now - autoplayLastMs < AUTOPLAY_PERIOD_MS) return;
   autoplayLastMs = now;
 
-  /* Slow heading drift so the journey doesn't feel mechanical. */
+  /* Slow, small heading drift — journeys stay long and coherent.
+   * ±7.5° every 90 s means the heading wanders ≤~5° per minute. */
   if (now - autoplayDirAtMs > AUTOPLAY_DIR_NUDGE_MS) {
     autoplayDirAtMs = now;
     const a = Math.atan2(autoplayDir.dy, autoplayDir.dx) +
-              (Math.random() - 0.5) * Math.PI / 3;
+              (Math.random() - 0.5) * 2 * AUTOPLAY_DIR_NUDGE_RAD;
     autoplayDir = { dx: Math.cos(a), dy: Math.sin(a) };
   }
 
@@ -2158,6 +2190,7 @@ function autoplayTick() {
     if (tx < 0 || tx >= TILE_W || ty < 0 || ty >= TILE_H ||
         catAt[ty * TILE_W + tx] !== autoplayTarget.cat) {
       autoplayTarget = null;
+      autoplayTargetCdMs = now + AUTOPLAY_TARGET_CD_MS;
     }
   }
   if (!autoplayTarget) autoplayTarget = autoplayScanInterest();
@@ -2173,15 +2206,17 @@ function autoplayTick() {
     if (autoplayVisited.length > AUTOPLAY_VISIT_MEM) autoplayVisited.pop();
     needsRender = true;
   } else {
-    /* Bumped: animal-hit, NPC, blocking entity.  Drop target after
-     * a few stuck ticks + jolt the heading to escape dead ends. */
+    /* Bumped: animal-hit, NPC, blocking entity.  Keep the journey
+     * heading — only nudge by a small angle to find a way around,
+     * and drop any target so the planner doesn't keep ramming it. */
     autoplayBumps++;
     needsRender = true;
     if (autoplayBumps >= AUTOPLAY_BUMP_RESET) {
       autoplayBumps = 0;
       autoplayTarget = null;
+      autoplayTargetCdMs = now + AUTOPLAY_TARGET_CD_MS;
       const a = Math.atan2(autoplayDir.dy, autoplayDir.dx) +
-                (Math.random() - 0.5) * Math.PI;
+                (Math.random() - 0.5) * 2 * AUTOPLAY_BUMP_NUDGE_RAD;
       autoplayDir = { dx: Math.cos(a), dy: Math.sin(a) };
     }
   }
