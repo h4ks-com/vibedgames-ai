@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>office rpg — hi-res · long-journey autoplay + meta-CA music</title>
+<title>office rpg — hi-res · journey + chaos-break autoplay</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000;
                color: #ccc; font-family: ui-monospace, "SF Mono", Menlo,
@@ -2011,7 +2011,7 @@ let workshopFrameCount = 0;
 let lsysGaFrameTick = 0;
 const LSYS_GA_PERIOD = 6;        /* one breed every ~6 frames (~10/s) */
 
-/* ── Autoplay / journey mode (ev9, redesigned in ev15) ──────
+/* ── Autoplay / journey mode (ev9, redesigned in ev15-16) ───
  *
  * "Screensaver mode": the player walks itself.  Picks a random
  * heading on engage and *commits* to it — every step is scored
@@ -2030,6 +2030,15 @@ const LSYS_GA_PERIOD = 6;        /* one breed every ~6 frames (~10/s) */
  * (plants, buildings) are penalised heavily so the planner
  * routes around them.
  *
+ * Oscillation break (ev16): the last 6 successful positions are
+ * kept in a ring; if any cell appears 3+ times the planner is
+ * obviously stuck (A↔B bounce, U-turn around an obstacle, etc.).
+ * We then kick the heading by ±60° and run a 1.6 s random-walk
+ * burst that ignores the heading score entirely — only hard
+ * penalties stop the planner from picking each tick at random.
+ * Once chaos ends the (newly rotated) heading takes back over,
+ * usually clear of the obstacle.
+ *
  * Engaged with `j`; any manual movement key disables it. */
 let autoplayOn         = false;
 let autoplayDir        = { dx: 1, dy: 0 };  /* unit hex-flat heading */
@@ -2038,6 +2047,7 @@ let autoplayLastMs     = 0;
 let autoplayDirAtMs    = 0;
 let autoplayBumps      = 0;
 let autoplayTargetCdMs = 0;                 /* "no new target until" stamp */
+let autoplayChaosUntilMs = 0;               /* random-walk burst until stamp */
 const AUTOPLAY_PERIOD_MS    = 200;         /* ≈5 actions / second */
 const AUTOPLAY_DIR_NUDGE_MS = 90000;       /* heading drift cadence */
 const AUTOPLAY_DIR_NUDGE_RAD= Math.PI / 24; /* ±7.5° max per drift */
@@ -2048,7 +2058,15 @@ const AUTOPLAY_TARGET_CD_MS = 4000;         /* cooldown after dropping target */
 const AUTOPLAY_VISIT_MEM    = 12;
 const AUTOPLAY_BUMP_RESET   = 8;
 const AUTOPLAY_FWD_WEIGHT   = 8.0;          /* how much heading dominates */
+/* Oscillation detector: if any one cell appears OSC_THRESHOLD+ times
+ * within the last OSC_WINDOW successful moves, the planner is stuck
+ * bouncing — kick the heading and run a CHAOS_MS random-walk burst. */
+const AUTOPLAY_OSC_WINDOW   = 6;
+const AUTOPLAY_OSC_THRESHOLD= 3;
+const AUTOPLAY_CHAOS_MS     = 1600;         /* ≈8 ticks of random walk */
+const AUTOPLAY_CHAOS_KICK_RAD= Math.PI / 3; /* ±60° heading jolt */
 const autoplayVisited = [];                /* ring of recent [x,y] */
+const autoplayOscRing = [];                /* short ring for osc detect */
 
 function autoplaySimMove(x, y, dir) {
   const odd = y & 1;
@@ -2094,10 +2112,12 @@ function autoplayScanInterest() {
   return best;
 }
 
-function autoplayPickMove() {
+function autoplayPickMove(chaos) {
   /* Score = -forward-progress * weight + penalties.  When chasing a
    * side-quest target, blend in a small pull toward the target so
-   * the planner converges; otherwise pure heading. */
+   * the planner converges; otherwise pure heading.  In `chaos`
+   * mode (oscillation break-out) only hard penalties + uniform
+   * random — the planner takes a short random walk to escape. */
   const dirs = ['w', 'e', 'a', 'd', 'z', 'x'];
   let bestKey = null, bestScore = Infinity;
   for (let di = 0; di < dirs.length; di++) {
@@ -2117,6 +2137,14 @@ function autoplayPickMove() {
     if (c === RC_ANIMAL &&
         !(autoplayTarget && nx === autoplayTarget.x && ny === autoplayTarget.y)) {
       pen += 4;        /* incidental fight = small risk */
+    }
+    if (chaos) {
+      /* Random walk over legal cells: hard penalties still apply so
+       * we don't dive into water, but heading + visit + target are
+       * all ignored.  Big random keeps the choice uniform. */
+      const score = pen + Math.random() * 10;
+      if (score < bestScore) { bestScore = score; bestKey = k; }
+      continue;
     }
     /* Anti-doubling-back — small bias only, so recent cells nudge
      * the planner aside without overriding the heading. */
@@ -2152,9 +2180,11 @@ function autoplayInit() {
   autoplayTarget = null;
   autoplayBumps = 0;
   autoplayVisited.length = 0;
+  autoplayOscRing.length = 0;
   autoplayLastMs    = performance.now();
   autoplayDirAtMs   = performance.now();
   autoplayTargetCdMs = 0;
+  autoplayChaosUntilMs = 0;
 }
 function toggleAutoplay() {
   autoplayOn = !autoplayOn;
@@ -2195,7 +2225,8 @@ function autoplayTick() {
   }
   if (!autoplayTarget) autoplayTarget = autoplayScanInterest();
 
-  const key = autoplayPickMove();
+  const chaos = now < autoplayChaosUntilMs;
+  const key = autoplayPickMove(chaos);
   if (!key) return;
   const moved = moveStep(key);
   if (moved) {
@@ -2204,6 +2235,29 @@ function autoplayTick() {
     maybeShift();
     autoplayVisited.unshift([px, py]);
     if (autoplayVisited.length > AUTOPLAY_VISIT_MEM) autoplayVisited.pop();
+    /* Oscillation detector: short ring of last few positions; if any
+     * cell appears OSC_THRESHOLD+ times the planner is bouncing.
+     * Skip the check while already in chaos so the burst gets to
+     * finish without immediately re-triggering. */
+    autoplayOscRing.unshift(px * 65536 + py);
+    if (autoplayOscRing.length > AUTOPLAY_OSC_WINDOW) autoplayOscRing.pop();
+    if (!chaos && autoplayOscRing.length === AUTOPLAY_OSC_WINDOW) {
+      const head = autoplayOscRing[0];
+      let hits = 0;
+      for (let v = 0; v < autoplayOscRing.length; v++) {
+        if (autoplayOscRing[v] === head) hits++;
+      }
+      if (hits >= AUTOPLAY_OSC_THRESHOLD) {
+        autoplayChaosUntilMs = now + AUTOPLAY_CHAOS_MS;
+        autoplayTarget = null;
+        autoplayTargetCdMs = now + AUTOPLAY_TARGET_CD_MS;
+        const a = Math.atan2(autoplayDir.dy, autoplayDir.dx) +
+                  (Math.random() < 0.5 ? -1 : 1) * AUTOPLAY_CHAOS_KICK_RAD;
+        autoplayDir = { dx: Math.cos(a), dy: Math.sin(a) };
+        autoplayOscRing.length = 0;
+        autoplayVisited.length = 0;
+      }
+    }
     needsRender = true;
   } else {
     /* Bumped: animal-hit, NPC, blocking entity.  Keep the journey
