@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>office rpg — hi-res · ev46</title>
+<title>office rpg — hi-res · ev47</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000;
                color: #ccc; font-family: ui-monospace, "SF Mono", Menlo,
@@ -525,7 +525,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev46";
+const VERSION = "ev47";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -4961,7 +4961,17 @@ document.getElementById("flowerLiveSlot").addEventListener("change",
  *
  *   • A look-ahead scheduler queues notes ~1 s in advance via
  *     AudioContext.currentTime so timing is sample-accurate even
- *     when the JS main thread is busy. */
+ *     when the JS main thread is busy.
+ *
+ *   • Stereo split (ev47): the score-CA's per-(voice, step) reads
+ *     are panned hard left, and a parallel pass over the meta-CA
+ *     using the same voicing rules is panned hard right.  Both
+ *     channels share the same wavetable + meta gain mask + meta
+ *     root, so they always agree on key and instrument — but the
+ *     L line moves at the score-CA's bar cadence while the R line
+ *     locks to the conductor's slower (1/8) evolution, giving the
+ *     mix a natural counterpoint.  Falls back to mono summing on
+ *     audio backends without StereoPannerNode. */
 const MUSIC_BAR_SECS  = 2.0;           /* one bar in 4/4 at 120 BPM */
 const MUSIC_VOICES    = 8;
 const MUSIC_STEPS     = 8;
@@ -4984,6 +4994,9 @@ const META_TIMBRE_C      = 32;
 
 let audioCtx        = null;
 let musicMaster     = null;
+let musicLDest      = null;            /* ev47: L pan target */
+let musicRDest      = null;            /* ev47: R pan target */
+let musicStereo     = true;            /* ev47: stereo split flag */
 let musicWtBuf      = null;            /* AudioBuffer = single-cycle WT */
 let musicCA         = null;
 let musicCABuf      = null;
@@ -5067,11 +5080,16 @@ function musicBuildWavetable(ctx, src) {
   }
   return buf;
 }
-function musicScheduleNote(ctx, wt, freq, startT, durSecs, vol) {
+function musicScheduleNote(ctx, wt, freq, startT, durSecs, vol, dest) {
   /* Single-cycle WT → loop forever, set playbackRate so one loop
    * length equals 1 / freq seconds.  Native loop period is
    * MUSIC_WT_LEN / sampleRate; multiply by (freq * native_period)
-   * to map to the requested frequency. */
+   * to map to the requested frequency.
+   *
+   * ev47: optional `dest` AudioNode replaces musicMaster as the
+   * connection target — used to route the score-CA voices to a
+   * left-panned bus and the meta-CA voices to a right-panned bus,
+   * giving the stereo image its width. */
   const src = ctx.createBufferSource();
   src.buffer = wt;
   src.loop = true;
@@ -5084,7 +5102,7 @@ function musicScheduleNote(ctx, wt, freq, startT, durSecs, vol) {
   env.gain.setValueAtTime(FLOOR, startT);
   env.gain.exponentialRampToValueAtTime(vol,  startT + 0.005);
   env.gain.exponentialRampToValueAtTime(FLOOR, startT + durSecs);
-  src.connect(env).connect(musicMaster);
+  src.connect(env).connect(dest || musicMaster);
   src.start(startT);
   src.stop(startT + durSecs + 0.02);
 }
@@ -5109,6 +5127,19 @@ function musicScheduleBar(ctx, barStartT) {
   if (moodGain < 0.6) moodGain = 0.6;
   if (moodGain > 1.4) moodGain = 1.4;
   const stepDur = MUSIC_BAR_SECS / MUSIC_STEPS;
+  /* ev47: stereo split — score-CA (musicCA) plays the left channel,
+   * meta-CA (the conductor grid) plays the right channel.  Both
+   * grids share ruleset and the meta-CA's per-voice gain mask, but
+   * because they're seeded independently and the meta-CA only steps
+   * once every 8 bars, the right side moves slower and harmonises
+   * differently against the left.  Headphones turn the two grids
+   * into two complementary instruments.  When `musicStereo` is off,
+   * everything sums to the mono master like before. */
+  const lDest = musicStereo ? musicLDest : musicMaster;
+  const rDest = musicStereo ? musicRDest : musicMaster;
+  /* Slight gain trim on R so the conductor doesn't dominate when
+   * its row+col happen to fire a lot of notes the same bar. */
+  const R_GAIN = 0.75;
   for (let v = 0; v < MUSIC_VOICES; v++) {
     const cfg = MUSIC_VOICE_CFG[v];
     const row = v * (MUSIC_H / MUSIC_VOICES) | 0;     /* 0,8,16,…,56 */
@@ -5118,15 +5149,30 @@ function musicScheduleBar(ctx, barStartT) {
     if (gainMul === 0) continue;                      /* voice muted */
     for (let s = 0; s < MUSIC_STEPS; s++) {
       const col = s * (MUSIC_W / MUSIC_STEPS) | 0;
-      const cell = musicCA[row * MUSIC_W + col] & 3;
-      const semi = MUSIC_CELL_TO_SEMI[cell];
-      if (semi === null) continue;
-      const freq = MUSIC_BASE_FREQ *
-                   Math.pow(2, cfg.octave + (semi + rootSemi) / 12);
+      /* L — score CA. */
+      const cellL = musicCA[row * MUSIC_W + col] & 3;
+      const semiL = MUSIC_CELL_TO_SEMI[cellL];
       const noteStart = barStartT + s * stepDur;
       const noteDur   = stepDur * cfg.dec;
-      musicScheduleNote(ctx, wt, freq, noteStart, noteDur,
-                        cfg.vol * gainMul * moodGain);
+      if (semiL !== null) {
+        const freqL = MUSIC_BASE_FREQ *
+                      Math.pow(2, cfg.octave + (semiL + rootSemi) / 12);
+        musicScheduleNote(ctx, wt, freqL, noteStart, noteDur,
+                          cfg.vol * gainMul * moodGain, lDest);
+      }
+      /* R — meta CA (the board).  Same voicing rules, different
+       * grid; produces a complementary line that locks to the
+       * conductor's slower evolution. */
+      if (musicStereo) {
+        const cellR = metaCA[row * MUSIC_W + col] & 3;
+        const semiR = MUSIC_CELL_TO_SEMI[cellR];
+        if (semiR !== null) {
+          const freqR = MUSIC_BASE_FREQ *
+                        Math.pow(2, cfg.octave + (semiR + rootSemi) / 12);
+          musicScheduleNote(ctx, wt, freqR, noteStart, noteDur,
+                            cfg.vol * gainMul * moodGain * R_GAIN, rDest);
+        }
+      }
     }
   }
 }
@@ -5172,6 +5218,21 @@ function startMusic() {
   musicMaster = audioCtx.createGain();
   musicMaster.gain.value = 0.55;
   musicMaster.connect(audioCtx.destination);
+  /* ev47: stereo bus.  Two StereoPannerNodes hard-panned −1 / +1
+   * sit between the score/board voice graphs and the master gain.
+   * createStereoPanner is unavailable on a couple of older mobile
+   * builds — fall back gracefully to mono summing if absent. */
+  if (typeof audioCtx.createStereoPanner === "function") {
+    musicLDest = audioCtx.createStereoPanner();
+    musicLDest.pan.value = -1.0;
+    musicLDest.connect(musicMaster);
+    musicRDest = audioCtx.createStereoPanner();
+    musicRDest.pan.value = +1.0;
+    musicRDest.connect(musicMaster);
+  } else {
+    musicLDest = musicRDest = musicMaster;
+    musicStereo = false;
+  }
   musicSeedCA();
   musicSeedMetaCA();
   musicBarCount = 0;
@@ -5179,7 +5240,9 @@ function startMusic() {
   musicOn = true;
   musicSchedulerTick();             /* prime the queue immediately */
   musicSchedTimer = setInterval(musicSchedulerTick, MUSIC_SCHED_MS);
-  setAction("music on (8 tracks + meta-CA conductor)");
+  setAction(musicStereo
+    ? "music on (stereo · score-CA L / meta-CA R)"
+    : "music on (mono · stereo unsupported)");
 }
 function stopMusic() {
   if (!musicOn) return;
