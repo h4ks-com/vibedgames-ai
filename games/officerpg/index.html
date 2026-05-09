@@ -224,15 +224,30 @@
   <div class="ga-workshop">
     <div class="ga-col">
       <h3>Rule grid · 128 × 128 · <span id="activeParentLabel">Parent A</span></h3>
-      <canvas id="ruleGrid" width="512" height="512"></canvas>
+      <canvas id="ruleGrid" width="520" height="512"></canvas>
       <div class="legend">
         click a cell to cycle the output 0→1→2→3
-        <br>
-        <span class="swatch" style="background:#1e1e28"></span>0
-        <span class="swatch" style="background:rgb(60,100,200)"></span>1
-        <span class="swatch" style="background:rgb(60,200,100)"></span>2
-        <span class="swatch" style="background:rgb(240,140,60)"></span>3
       </div>
+      <div class="anchor-row" id="rulePalRow" style="margin-top:6px;flex-wrap:wrap;">
+        <span class="legend" style="margin-right:4px;">Rule palette:</span>
+        <label>0<input type="color" id="rulePal0" value="#1e1e28"></label>
+        <label>1<input type="color" id="rulePal1" value="#3c64c8"></label>
+        <label>2<input type="color" id="rulePal2" value="#3cc864"></label>
+        <label>3<input type="color" id="rulePal3" value="#f08c3c"></label>
+        <button id="rulePalRandomBtn">Random</button>
+        <button id="rulePalSyncBtn">Sync from terrain</button>
+        <button id="rulePalResetBtn">Reset</button>
+      </div>
+      <div class="anchor-row" style="margin-top:4px;">
+        <label><input type="checkbox" id="ruleHexShift">
+          Hex-shift display (<span class="key">x</span>)</label>
+      </div>
+      <span class="legend">the rule palette is independent of the
+        terrain palette (<em>random</em> rerolls 4 colours kept distant
+        from terrain anchors); <em>sync from terrain</em> copies the
+        live anchors so the rule grid matches what the world looks
+        like.  Hex-shift offsets odd rows half a cell — the data is
+        still 128×128, just brick-laid for visual clarity.</span>
     </div>
     <div class="ga-col">
       <h3>Live preview · 32 × 32</h3>
@@ -2971,8 +2986,10 @@ function handleKey(e) {
   }
   if (modalOpen === "ga") {
     /* Workshop is open — only Escape closes; everything else falls
-     * through to the modal's own buttons / canvas clicks. */
-    if (k === "Escape" || k === "q") { e.preventDefault(); closeGaWorkshop(); }
+     * through to the modal's own buttons / canvas clicks.
+     * ev37: `x` toggles the rule grid's hex-shift display. */
+    if (k === "Escape" || k === "q") { e.preventDefault(); closeGaWorkshop(); return; }
+    if (k === "x") { e.preventDefault(); setRuleHexShift(!ruleHexShift); return; }
     return;
   }
   if (modalOpen === "bio") {
@@ -3214,6 +3231,12 @@ const RULE_PALETTE = [
   [ 60, 200, 100],   /* 2 */
   [240, 140,  60],   /* 3 */
 ];
+/* Frozen original — used by the "Reset" button on the rule palette. */
+const RULE_PALETTE_DEFAULT = RULE_PALETTE.map(c => c.slice());
+
+/* ev37: hex-shift toggle for the rule grid display.  The data is
+ * unchanged; just the layout offsets odd rows by RULE_GRID_PX/2. */
+let ruleHexShift = false;
 
 const ruleGridEl = document.getElementById("ruleGrid");
 const prevCanvas = document.getElementById("prevCanvas");
@@ -3296,45 +3319,44 @@ function drawPreview() {
 }
 
 function drawRuleGrid() {
-  /* Render via a fast ImageData blit — 128*128*4*4 = 262144 px is
-   * too many fillRects for smooth edits. */
-  const W = RULE_GRID_W * RULE_GRID_PX;
-  const H = RULE_GRID_H * RULE_GRID_PX;
-  const img = ruleGridCtx.createImageData(W, H);
-  const data = img.data;
+  /* ev37: switched from ImageData blit to fillRect.  16384 fillRects
+   * is fine on modern canvas, and it makes hex-shift trivial — odd
+   * rows just draw at col*PX + PX/2 when ruleHexShift is on.  The
+   * canvas is sized 520 wide so the shifted last cell of odd rows
+   * has room (128*4 + 4 = 516 ≤ 520).  Sub-cell `+ 1` widths cover
+   * sub-pixel rounding gaps. */
+  const W = ruleGridEl.width;
+  const H = ruleGridEl.height;
+  ruleGridCtx.fillStyle = "#0d1117";
+  ruleGridCtx.fillRect(0, 0, W, H);
+  const sh = ruleHexShift ? RULE_GRID_PX / 2 : 0;
   for (let row = 0; row < RULE_GRID_H; row++) {
+    const xShift = (row & 1) ? sh : 0;
+    const py = row * RULE_GRID_PX;
     for (let col = 0; col < RULE_GRID_W; col++) {
       const s = editGenome[row * RULE_GRID_W + col] & 3;
       const c = RULE_PALETTE[s];
-      /* Paint a RULE_GRID_PX × RULE_GRID_PX block. */
-      for (let py = 0; py < RULE_GRID_PX; py++) {
-        for (let px = 0; px < RULE_GRID_PX; px++) {
-          const off = ((row * RULE_GRID_PX + py) * W +
-                       (col * RULE_GRID_PX + px)) * 4;
-          data[off]     = c[0];
-          data[off + 1] = c[1];
-          data[off + 2] = c[2];
-          data[off + 3] = 255;
-        }
-      }
+      ruleGridCtx.fillStyle = "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")";
+      ruleGridCtx.fillRect(col * RULE_GRID_PX + xShift, py,
+                           RULE_GRID_PX, RULE_GRID_PX);
     }
   }
-  ruleGridCtx.putImageData(img, 0, 0);
 }
 
 function onRuleGridClick(e) {
   const rect = ruleGridEl.getBoundingClientRect();
   const cx = (e.clientX - rect.left) * ruleGridEl.width  / rect.width;
   const cy = (e.clientY - rect.top)  * ruleGridEl.height / rect.height;
-  const col = (cx / RULE_GRID_PX) | 0;
   const row = (cy / RULE_GRID_PX) | 0;
+  const xShift = (ruleHexShift && (row & 1)) ? RULE_GRID_PX / 2 : 0;
+  const col = ((cx - xShift) / RULE_GRID_PX) | 0;
   if (col < 0 || col >= RULE_GRID_W || row < 0 || row >= RULE_GRID_H) return;
   const idx = row * RULE_GRID_W + col;
   editGenome[idx] = (editGenome[idx] + 1) & 3;
   /* Repaint just the changed cell. */
   const c = RULE_PALETTE[editGenome[idx]];
   ruleGridCtx.fillStyle = "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")";
-  ruleGridCtx.fillRect(col * RULE_GRID_PX, row * RULE_GRID_PX,
+  ruleGridCtx.fillRect(col * RULE_GRID_PX + xShift, row * RULE_GRID_PX,
                         RULE_GRID_PX, RULE_GRID_PX);
 }
 ruleGridEl.addEventListener("click", onRuleGridClick);
@@ -3571,6 +3593,117 @@ function applyMotherColours() {
   needsRender = true;
   if (modalOpen === "ga") drawPreview();
 }
+
+/* ── ev37: rule-grid palette controls ───────────────────────
+ * The rule grid colours each cell by its 4-state output, but the
+ * palette used there is *separate* from TERRAIN_ANCHOR — they're
+ * different conceptual layers (genome readout vs world look).
+ * Default rule palette is high-contrast (dark / blue / green /
+ * orange).  User can:
+ *   - edit individual colours via the 4 colour pickers
+ *   - randomise (kept distant from terrain anchors so they don't
+ *     accidentally match)
+ *   - sync from terrain (copy TERRAIN_ANCHOR into RULE_PALETTE)
+ *   - reset to the original defaults
+ */
+function colDist2(a, b) {
+  const dr = a[0] - b[0], dg = a[1] - b[1], db = a[2] - b[2];
+  return dr * dr + dg * dg + db * db;
+}
+function applyRulePalette() {
+  if (modalOpen === "ga") drawRuleGrid();
+}
+function syncRulePalettePickers() {
+  for (let i = 0; i < 4; i++) {
+    const el = document.getElementById("rulePal" + i);
+    if (el) el.value = rgbToHex(RULE_PALETTE[i]);
+  }
+}
+function randomizeRulePalette() {
+  /* Reroll 4 RGBs.  Each must be ≥ 60 per channel from every
+   * TERRAIN_ANCHOR colour AND ≥ 60 from previously-picked rule
+   * palette entries.  Bounded retries; falls back to last accepted
+   * candidate if we can't satisfy the constraint quickly. */
+  const MIN_D2 = 60 * 60 * 3;     /* squared dist threshold */
+  const out = [];
+  for (let i = 0; i < 4; i++) {
+    let pick = null, tries = 0;
+    while (tries++ < 200) {
+      const c = [
+        (Math.random() * 256) | 0,
+        (Math.random() * 256) | 0,
+        (Math.random() * 256) | 0,
+      ];
+      let ok = true;
+      for (let j = 0; j < 4; j++) {
+        if (colDist2(c, TERRAIN_ANCHOR[j]) < MIN_D2) { ok = false; break; }
+      }
+      if (ok) for (const p of out) {
+        if (colDist2(c, p) < MIN_D2) { ok = false; break; }
+      }
+      if (ok) { pick = c; break; }
+    }
+    out.push(pick || [
+      (Math.random() * 256) | 0,
+      (Math.random() * 256) | 0,
+      (Math.random() * 256) | 0,
+    ]);
+  }
+  for (let i = 0; i < 4; i++) {
+    RULE_PALETTE[i][0] = out[i][0];
+    RULE_PALETTE[i][1] = out[i][1];
+    RULE_PALETTE[i][2] = out[i][2];
+  }
+  syncRulePalettePickers();
+  applyRulePalette();
+  setAction("rule palette randomised");
+}
+function syncRulePaletteFromTerrain() {
+  for (let i = 0; i < 4; i++) {
+    RULE_PALETTE[i][0] = TERRAIN_ANCHOR[i][0];
+    RULE_PALETTE[i][1] = TERRAIN_ANCHOR[i][1];
+    RULE_PALETTE[i][2] = TERRAIN_ANCHOR[i][2];
+  }
+  syncRulePalettePickers();
+  applyRulePalette();
+  setAction("rule palette synced from terrain");
+}
+function resetRulePalette() {
+  for (let i = 0; i < 4; i++) {
+    RULE_PALETTE[i][0] = RULE_PALETTE_DEFAULT[i][0];
+    RULE_PALETTE[i][1] = RULE_PALETTE_DEFAULT[i][1];
+    RULE_PALETTE[i][2] = RULE_PALETTE_DEFAULT[i][2];
+  }
+  syncRulePalettePickers();
+  applyRulePalette();
+  setAction("rule palette reset");
+}
+function setRuleHexShift(v) {
+  ruleHexShift = !!v;
+  const el = document.getElementById("ruleHexShift");
+  if (el && el.checked !== ruleHexShift) el.checked = ruleHexShift;
+  if (modalOpen === "ga") drawRuleGrid();
+}
+/* Wire rule-palette pickers + buttons + checkbox. */
+for (let i = 0; i < 4; i++) {
+  const el = document.getElementById("rulePal" + i);
+  el.addEventListener("input", () => {
+    const rgb = hexToRgb(el.value);
+    RULE_PALETTE[i][0] = rgb[0];
+    RULE_PALETTE[i][1] = rgb[1];
+    RULE_PALETTE[i][2] = rgb[2];
+    applyRulePalette();
+  });
+}
+document.getElementById("rulePalRandomBtn").addEventListener(
+  "click", randomizeRulePalette);
+document.getElementById("rulePalSyncBtn").addEventListener(
+  "click", syncRulePaletteFromTerrain);
+document.getElementById("rulePalResetBtn").addEventListener(
+  "click", resetRulePalette);
+document.getElementById("ruleHexShift").addEventListener("change", (e) => {
+  setRuleHexShift(e.target.checked);
+});
 function syncAnchorPickers() {
   for (let i = 0; i < 4; i++) {
     const el = document.getElementById("anchor" + i);
