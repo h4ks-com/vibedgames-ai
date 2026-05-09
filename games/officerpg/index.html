@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>office rpg — hi-res · ev45</title>
+<title>office rpg — hi-res · ev46</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000;
                color: #ccc; font-family: ui-monospace, "SF Mono", Menlo,
@@ -204,7 +204,8 @@
     <kbd>b</kbd> bio lab · <kbd>n</kbd> music ·
     <kbd>p</kbd> player skin · <kbd>j</kbd> journey ·
     <kbd>o</kbd> map · <kbd>t</kbd> terminal · <kbd>r</kbd> reseed ·
-    <kbd>s</kbd> shot · <kbd>S</kbd> shots · <kbd>y</kbd> full auto
+    <kbd>s</kbd> shot · <kbd>S</kbd> shots · <kbd>y</kbd> full auto ·
+    <kbd>T</kbd> tile shape
   </div>
 </div>
 <div id="invModal" class="modal" hidden>
@@ -220,6 +221,50 @@
 <div id="death" class="modal" hidden>
   <h2>You died</h2>
   <div id="deathBody">Press any key to start a new game.</div>
+</div>
+
+<!-- ev46: custom tile shape (import from Tilesmith / derive from CA) -->
+<div id="shapeModal" class="modal" hidden style="max-width:520px">
+  <h2>Tile shape — Tilesmith profile or CA-derived
+    <span class="ver-badge" id="verBadgeShape"></span></h2>
+  <div style="display:flex;gap:14px;align-items:flex-start">
+    <div>
+      <canvas id="shapePreview" width="160" height="160"
+              style="display:block;background:#111;border:1px solid #333;
+                     image-rendering:pixelated;image-rendering:crisp-edges">
+      </canvas>
+      <div id="shapeMeta" class="dim" style="font-size:0.7rem;
+           margin-top:6px;font-family:ui-monospace,monospace;
+           white-space:pre;line-height:1.4">default rectangular tile</div>
+    </div>
+    <div style="flex:1;display:flex;flex-direction:column;gap:6px;
+                font-size:0.78rem">
+      <div>Replace the world's notched-square tile with any 6-edge
+        Tilesmith profile (offset-hex tessellation invariant
+        preserved by Tilesmith's edge-pair mirror, so the world
+        still tiles).  Or derive a shape from the active ruleset.</div>
+      <textarea id="shapeJson" rows="4" placeholder="paste Tilesmith
+JSON here (the .edges field) — or use the buttons below"
+        style="background:#111;color:#cdc;border:1px solid #333;
+               padding:4px 6px;font-family:ui-monospace,monospace;
+               font-size:0.7rem;width:100%"></textarea>
+      <button id="shapeApplyJson" style="padding:6px 10px">
+        Apply pasted JSON
+      </button>
+      <button id="shapeFromCa" style="padding:6px 10px">
+        Generate from current ruleset
+      </button>
+      <button id="shapeFromParent" style="padding:6px 10px">
+        Cycle through Parents A/B/C/D
+      </button>
+      <button id="shapeReset" style="padding:6px 10px">
+        Reset to default notched
+      </button>
+      <div id="shapeStatus" style="font-size:0.72rem;color:#8b8;
+           min-height:1em;margin-top:4px"></div>
+    </div>
+  </div>
+  <div class="hint">T toggle this · Esc/q close</div>
 </div>
 
 <!-- ev44: live browser-shot capture / replay -->
@@ -480,17 +525,19 @@
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev45";
+const VERSION = "ev46";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
   const b = document.getElementById("verBadgeFlower");
   const c = document.getElementById("verBadgeBio");
   const d = document.getElementById("verBadgeShot");
+  const e = document.getElementById("verBadgeShape");
   if (a) a.textContent = VERSION;
   if (b) b.textContent = VERSION;
   if (c) c.textContent = VERSION;
   if (d) d.textContent = VERSION;
+  if (e) e.textContent = VERSION;
 }
 
 /* ──────────────────────────────────────────────────────────────
@@ -907,6 +954,11 @@ function getCellTexture(wx, wy) {
   off.width = MAP_W;
   off.height = MAP_H;
   off.getContext("2d").putImageData(img, 0, 0);
+  /* ev46: when a custom tile shape is active, clip the cell texture
+   * to the shape silhouette so renders silhouette correctly without
+   * touching the rest of the pipeline.  cellTexCache is cleared on
+   * setTileShape/clearTileShape, so the cached canvas stays in sync. */
+  applyTileShapeMaskTo(off);
   cellTexCache.set(key, off);
   return off;
 }
@@ -2679,6 +2731,14 @@ function drawMinimap() {
  * source rect uses BLOCK_W/3 (a float) for the notch column so
  * the inner CA scales without fractional-pixel artefacts. */
 function drawNotchedTile(tex, tx, ty) {
+  /* ev46: a custom tile shape skips the historical 4-quad notch-and-
+   * protrusion reslice, since the shape silhouette is already baked
+   * into the texture's alpha channel by applyTileShapeMaskTo.  Just
+   * draw the rectangle and the mask reveals the shape on the world. */
+  if (tileShapeMask) {
+    ctx.drawImage(tex, tx, ty, TILE_PX, TILE_PX);
+    return;
+  }
   const sw = tex.width, sh = tex.height;
   const ns = sh / 3;                  /* source notch size (float) */
   const np = NOTCH_PX;                /* dest notch size (int) */
@@ -3450,6 +3510,16 @@ function handleKey(e) {
     }
     return;
   }
+  if (modalOpen === "shape") {
+    /* ev46: tile-shape modal — Esc/q/Shift+T closes. */
+    if (k === "Escape" || k === "q") {
+      e.preventDefault(); closeShapeModal(); return;
+    }
+    if (k === "t" && e.shiftKey) {
+      e.preventDefault(); closeShapeModal(); return;
+    }
+    return;
+  }
 
   /* Escape with no modal open is the global autoplay kill-switch. */
   if (k === "Escape" && autoplayOn) {
@@ -3554,10 +3624,12 @@ function handleKey(e) {
   }
 
   /* Embedded terminal sub-game (ev18) — `t` opens an 80×24 lite
-   * rpg in a Win95-style window. */
+   * rpg in a Win95-style window.  Shift+T opens the ev46 tile-shape
+   * modal instead so the two can coexist on the same letter. */
   if (k === "t") {
     e.preventDefault();
-    toggleLiteTerm();
+    if (e.shiftKey) showShapeModal();
+    else toggleLiteTerm();
     return;
   }
 
@@ -5728,6 +5800,231 @@ function closeLiteTerm() {
   needsRender = true;
 }
 function toggleLiteTerm() { if (liteOpen) closeLiteTerm(); else openLiteTerm(); }
+
+/* ── ev46: custom tile shape — Tilesmith profile or CA-derived ──
+ *
+ * Replaces the default notched-square tile silhouette with any 6-edge
+ * Tilesmith profile.  The 6 edges are: top-left half, top-right half,
+ * right, bottom-right half, bottom-left half, left — same shape model
+ * as Tilesmith, so a tile saved there pastes straight in.  Mirror
+ * pairing (PAIR = [3,4,5,0,1,2]) keeps the offset-hex tessellation
+ * invariant: edge i twins to edge PAIR[i] with reversed parameter
+ * and inverted offset, so neighbouring rows fit cleanly.
+ *
+ * `tileShape` null = the historical notched tile (drawNotchedTile);
+ * non-null = a precomputed alpha mask (`tileShapeMask`) is composited
+ * onto every cell texture's offscreen canvas via destination-in,
+ * clipping the rectangular CA pixels to the shape silhouette. */
+let tileShape = null;
+let tileShapeMask = null;
+const TILE_SHAPE_PAIR = [3, 4, 5, 0, 1, 2];
+/* Edge geometry in tile-px coords (corners at (0,0)…(TILE_PX,TILE_PX),
+ * top + bottom edges split at the half-way x).  outX/outY are the
+ * outward unit vectors used to convert an `off` value into a
+ * perpendicular displacement. */
+const TILE_SHAPE_EDGE_GEOM = [
+  { sX:0,         sY:0,         eX:TILE_PX/2, eY:0,         outX: 0, outY:-1 },
+  { sX:TILE_PX/2, sY:0,         eX:TILE_PX,   eY:0,         outX: 0, outY:-1 },
+  { sX:TILE_PX,   sY:0,         eX:TILE_PX,   eY:TILE_PX,   outX:+1, outY: 0 },
+  { sX:TILE_PX,   sY:TILE_PX,   eX:TILE_PX/2, eY:TILE_PX,   outX: 0, outY:+1 },
+  { sX:TILE_PX/2, sY:TILE_PX,   eX:0,         eY:TILE_PX,   outX: 0, outY:+1 },
+  { sX:0,         sY:TILE_PX,   eX:0,         eY:0,         outX:-1, outY: 0 },
+];
+
+function tileShapeEdgePoint(edgeIdx, p, off) {
+  const g = TILE_SHAPE_EDGE_GEOM[edgeIdx];
+  const bx = g.sX + p * (g.eX - g.sX);
+  const by = g.sY + p * (g.eY - g.sY);
+  return [bx + off * TILE_PX * g.outX, by + off * TILE_PX * g.outY];
+}
+
+function buildTileShapeMask(spec) {
+  const m = document.createElement("canvas");
+  m.width = TILE_PX; m.height = TILE_PX;
+  const c = m.getContext("2d");
+  c.clearRect(0, 0, TILE_PX, TILE_PX);
+  c.beginPath();
+  c.moveTo(0, 0);
+  for (let i = 0; i < 6; i++) {
+    const cps = (spec.edges[i] || []).slice().sort((a, b) => a.p - b.p);
+    for (const cp of cps) {
+      const [x, y] = tileShapeEdgePoint(i,
+        Math.max(0, Math.min(1, cp.p)),
+        Number.isFinite(cp.off) ? cp.off : 0);
+      c.lineTo(x, y);
+    }
+    const g = TILE_SHAPE_EDGE_GEOM[i];
+    c.lineTo(g.eX, g.eY);
+  }
+  c.closePath();
+  c.fillStyle = "#fff";
+  c.fill();
+  return m;
+}
+
+function setTileShape(spec, label) {
+  if (!spec || !Array.isArray(spec.edges) || spec.edges.length !== 6) {
+    const stat = document.getElementById("shapeStatus");
+    if (stat) stat.textContent = "spec.edges must be a 6-array";
+    return false;
+  }
+  /* Coerce edges into clean cp arrays. */
+  const clean = { edges: spec.edges.map(e =>
+    Array.isArray(e) ? e.filter(c => c && Number.isFinite(c.p))
+                          .map(c => ({ p: +c.p, off: +c.off || 0 }))
+                     : []) };
+  tileShape = clean;
+  tileShapeMask = buildTileShapeMask(clean);
+  cellTexCache.clear();
+  needsRender = true;
+  setAction("custom tile shape applied" + (label ? " · " + label : ""));
+  refreshShapePreview();
+  return true;
+}
+
+function clearTileShape() {
+  tileShape = null;
+  tileShapeMask = null;
+  cellTexCache.clear();
+  needsRender = true;
+  setAction("default tile shape");
+  refreshShapePreview();
+}
+
+/* CA → tileshape: walk 3 of the 6 edges; mirror to derive the other 3.
+ * Each edge gets N samples whose `off` is read off the active ruleset
+ * at a stable per-(edge,sample) index — so the same ruleset always
+ * yields the same tile profile, while a fresh GA generation produces
+ * a new one.  Output is centred on 0 so corners stay anchored and
+ * the polygon is always closed. */
+function tileShapeFromRuleset(rs, label) {
+  const N = 9;
+  const edges = [[], [], [], [], [], []];
+  /* Smooth the 4-state values lightly with a 1-2-1 kernel so the
+   * derived profile reads as wave-like rather than blocky 0/1/2/3
+   * steps — a cleaner aesthetic at the world-tile scale. */
+  function sampOff(edgeI, k) {
+    const idx0 = (edgeI * 4096 + k * 233) & 0x3fff;
+    const idx1 = (idx0 + 1) & 0x3fff;
+    const idxm = (idx0 - 1 + 0x4000) & 0x3fff;
+    const v = (rs[idxm] + 2 * rs[idx0] + rs[idx1]) / 4;  /* in [0..3] */
+    return (v - 1.5) * 0.06;       /* off ≈ ±0.09 max */
+  }
+  for (let i = 0; i < 3; i++) {
+    const cps = [];
+    for (let k = 1; k < N; k++) {
+      cps.push({ p: k / N, off: sampOff(i, k) });
+    }
+    edges[i] = cps;
+    /* Mirror to twin edge — preserves the offset-hex tessellation. */
+    edges[TILE_SHAPE_PAIR[i]] = cps.slice().reverse().map(c => ({
+      p: 1 - c.p, off: -c.off,
+    }));
+  }
+  setTileShape({ edges }, label || "from ruleset");
+}
+
+let _shapeFromParentCounter = 0;
+function tileShapeFromNextParent() {
+  if (typeof parentRulesets === "undefined" || !parentRulesets[0]) {
+    setAction("no parent rulesets — open the workshop first");
+    return;
+  }
+  const which = _shapeFromParentCounter % 4;
+  _shapeFromParentCounter++;
+  const label = "Parent " + String.fromCharCode(0x41 + which);
+  if (parentRulesets[which]) {
+    tileShapeFromRuleset(parentRulesets[which], label);
+  }
+}
+
+function refreshShapePreview() {
+  const cv = document.getElementById("shapePreview");
+  const meta = document.getElementById("shapeMeta");
+  if (!cv) return;
+  const cx = cv.getContext("2d");
+  cx.fillStyle = "#000";
+  cx.fillRect(0, 0, cv.width, cv.height);
+  /* Render the world's mask into the preview: tile a 3×3 grid so the
+   * tessellation invariant is visible. */
+  if (!tileShapeMask) {
+    cx.fillStyle = "#1a3a2a";
+    cx.fillRect(20, 20, cv.width - 40, cv.height - 40);
+    if (meta) meta.textContent = "default rectangular tile";
+    return;
+  }
+  const cell = (cv.width / 3) | 0;
+  for (let row = 0; row < 3; row++) {
+    for (let col = 0; col < 3; col++) {
+      const ox = col * cell + (row & 1 ? cell / 2 : 0);
+      const oy = row * cell;
+      cx.save();
+      cx.translate(ox, oy);
+      cx.scale(cell / TILE_PX, cell / TILE_PX);
+      cx.globalAlpha = 0.85;
+      cx.fillStyle = ((row + col) % 2) ? "#345" : "#356";
+      /* Use the mask as a clip via composite. */
+      cx.drawImage(tileShapeMask, 0, 0);
+      cx.restore();
+    }
+  }
+  if (meta) {
+    const total = tileShape.edges.reduce((s, e) => s + e.length, 0);
+    meta.textContent = "custom tile · " + total + " control points";
+  }
+}
+
+/* When tileShapeMask is set we need to clip every cell texture to
+ * the shape.  Patched into getCellTexture by post-composite. */
+function applyTileShapeMaskTo(canvas) {
+  if (!tileShapeMask) return;
+  const cx = canvas.getContext("2d");
+  const prev = cx.globalCompositeOperation;
+  cx.globalCompositeOperation = "destination-in";
+  cx.drawImage(tileShapeMask, 0, 0, canvas.width, canvas.height);
+  cx.globalCompositeOperation = prev;
+}
+
+function showShapeModal() {
+  refreshShapePreview();
+  const m = document.getElementById("shapeModal");
+  if (m) { m.hidden = false; modalOpen = "shape"; }
+}
+function closeShapeModal() {
+  const m = document.getElementById("shapeModal");
+  if (m) m.hidden = true;
+  if (modalOpen === "shape") modalOpen = null;
+  needsRender = true;
+}
+
+/* Wire shape modal buttons. */
+{
+  const apply = document.getElementById("shapeApplyJson");
+  if (apply) apply.addEventListener("click", () => {
+    const ta = document.getElementById("shapeJson");
+    const stat = document.getElementById("shapeStatus");
+    let parsed = null;
+    try { parsed = JSON.parse(ta.value); }
+    catch (err) {
+      if (stat) stat.textContent = "invalid JSON: " + err.message;
+      return;
+    }
+    /* Accept either the bare {edges:[...]} object or the full
+     * Tilesmith spec {name, base_w, base_h, edges:[...]}. */
+    const spec = parsed && parsed.edges ? parsed : null;
+    if (!spec) { if (stat) stat.textContent = "no .edges in JSON"; return; }
+    if (setTileShape(spec, "from JSON")) {
+      if (stat) stat.textContent = "applied";
+    }
+  });
+  const fc = document.getElementById("shapeFromCa");
+  if (fc) fc.addEventListener("click", () =>
+    tileShapeFromRuleset(ruleset, "from current"));
+  const fp = document.getElementById("shapeFromParent");
+  if (fp) fp.addEventListener("click", tileShapeFromNextParent);
+  const rs = document.getElementById("shapeReset");
+  if (rs) rs.addEventListener("click", clearTileShape);
+}
 
 /* ── ev44: live browser shot — capture + replay ─────────────
  *
