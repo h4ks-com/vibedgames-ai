@@ -3550,20 +3550,34 @@ function setImgStatus(msg) {
 }
 
 /* Resolve user-pasted URLs.  Wikipedia "wiki/File:Foo.jpg" pages
- * aren't images; rewrite to Special:FilePath which 302s to the
- * direct upload.wikimedia.org URL (CORS-allowed, *). */
-function resolveImageUrl(raw) {
+ * aren't images; we used to rewrite to Special:FilePath but THAT
+ * 302/301 chain doesn't carry CORS headers, so the browser kills
+ * the request before reaching upload.wikimedia.org (which DOES
+ * have CORS).  Instead we hit the Commons API with origin=* to
+ * resolve to the direct upload.wikimedia.org URL up-front, and
+ * use that as the image src.  Fixed in ev34. */
+async function resolveImageUrl(raw) {
   const u = raw.trim();
   if (!u) return u;
   const m = u.match(
-    /^https?:\/\/([a-z]+\.)?wikipedia\.org\/wiki\/(?:File|Image):(.+)$/i
-  ) || u.match(
-    /^https?:\/\/commons\.wikimedia\.org\/wiki\/(?:File|Image):(.+)$/i
+    /^https?:\/\/(?:[a-z-]+\.)?(?:wikipedia|wikimedia)\.org\/wiki\/(?:File|Image):(.+)$/i
   );
-  if (m) {
-    const fname = m[m.length - 1];
-    return "https://commons.wikimedia.org/wiki/Special:FilePath/" + fname;
-  }
+  if (!m) return u;
+  const fname = decodeURIComponent(m[1]).replace(/_/g, ' ');
+  const apiUrl = "https://commons.wikimedia.org/w/api.php?" +
+    "action=query&format=json&origin=*&prop=imageinfo&iiprop=url&titles=" +
+    encodeURIComponent("File:" + fname);
+  try {
+    const resp = await fetch(apiUrl);
+    const data = await resp.json();
+    const pages = data && data.query && data.query.pages;
+    if (pages) {
+      const page = pages[Object.keys(pages)[0]];
+      if (page && page.imageinfo && page.imageinfo[0] && page.imageinfo[0].url) {
+        return page.imageinfo[0].url;
+      }
+    }
+  } catch (e) { /* fall through */ }
   return u;
 }
 
@@ -3649,7 +3663,8 @@ function nearestAnchor(r, g, b, anchors) {
 }
 
 async function loadImageWorld(rawUrl) {
-  const url = resolveImageUrl(rawUrl);
+  setImgStatus("resolving URL…");
+  const url = await resolveImageUrl(rawUrl);
   if (!url) { setImgStatus("paste a URL first"); return; }
   const Kraw = parseInt(document.getElementById("imgWorldK").value, 10);
   const K = Math.max(1, Math.min(64, Kraw | 0 || 16));
@@ -3770,22 +3785,25 @@ document.getElementById("imgWorldUrl").addEventListener("keydown", (e) => {
  * Add more by appending to IMG_PRESETS — the button row in the
  * HTML reads `data-preset` to pick which entry to use.
  */
+/* Direct upload.wikimedia.org URLs — bypass the Special:FilePath
+ * redirect chain which strips CORS headers.  These end-state URLs
+ * serve `Access-Control-Allow-Origin: *` so they load cleanly. */
 const IMG_PRESETS = {
   paris: {
     label: 'Paris',
-    url:   'https://commons.wikimedia.org/wiki/File:Tour_Eiffel_Wikimedia_Commons.jpg',
+    url:   'https://upload.wikimedia.org/wikipedia/commons/a/a8/Tour_Eiffel_Wikimedia_Commons.jpg',
   },
   mars: {
     label: 'Mars',
-    url:   'https://commons.wikimedia.org/wiki/File:OSIRIS_Mars_true_color.jpg',
+    url:   'https://upload.wikimedia.org/wikipedia/commons/0/02/OSIRIS_Mars_true_color.jpg',
   },
   moon: {
     label: 'Moon',
-    url:   'https://commons.wikimedia.org/wiki/File:FullMoon2010.jpg',
+    url:   'https://upload.wikimedia.org/wikipedia/commons/e/e1/FullMoon2010.jpg',
   },
   vangogh: {
     label: 'Van Gogh',
-    url:   'https://commons.wikimedia.org/wiki/File:Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg',
+    url:   'https://upload.wikimedia.org/wikipedia/commons/e/ea/Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg',
   },
 };
 document.querySelectorAll('#imgPresetRow button[data-preset]').forEach(btn => {
