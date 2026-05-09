@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>office rpg — hi-res · ev49</title>
+<title>office rpg — hi-res · ev50</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000;
                color: #ccc; font-family: ui-monospace, "SF Mono", Menlo,
@@ -525,7 +525,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev49";
+const VERSION = "ev50";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -4988,12 +4988,10 @@ const MUSIC_BAR_SECS  = 2.0;           /* one bar in 4/4 at 120 BPM */
 const MUSIC_VOICES    = 8;
 const MUSIC_STEPS     = 8;
 const MUSIC_BASE_FREQ = 55;            /* A1 root before per-voice octave */
-/* ev49: longer look-ahead + faster tick so a main-thread spike (e.g.
- * a few heavy render frames after ev48's Path2D clipping) doesn't
- * drain the audio buffer.  2.5 s of queued notes survives the worst
- * stalls observed in practice; the 100 ms tick gives ~25 chances to
- * top the queue back up across that window. */
-const MUSIC_LOOK_AHEAD_S = 2.5;
+/* ev50: 3.5 s look-ahead — extra headroom so a render frame that
+ * blows past the previous 2.5 s budget still doesn't drain the
+ * audio queue.  The 100 ms tick gives ~35 chances to top up. */
+const MUSIC_LOOK_AHEAD_S = 3.5;
 const MUSIC_SCHED_MS  = 100;
 const MUSIC_W = 64, MUSIC_H = 64;
 const MUSIC_WT_LEN = (MUSIC_W * MUSIC_H) >> 2;        /* 1024 */
@@ -5070,9 +5068,19 @@ function musicSeedCA() {
     musicCA[i] = (mulberryInt(st) >>> 30) & 3;
   }
 }
+/* ev50: generation counters for wavetable caching.  Bumped on each
+ * step so the schedule loop can skip rebuilding the wavetable when
+ * the source CA hasn't changed (true 7 of 8 bars when the conductor
+ * picks meta-CA as timbre, since meta-CA only steps every 8 bars). */
+let musicCAGen   = 0;
+let metaCAGen    = 0;
+let musicWtCache = null;
+let musicWtKey   = "";
+
 function musicStepCA() {
   hexStep(ruleset, musicCA, musicCABuf, MUSIC_W, MUSIC_H);
   const t = musicCA; musicCA = musicCABuf; musicCABuf = t;
+  musicCAGen++;
 }
 function musicSeedMetaCA() {
   metaCA    = new Uint8Array(MUSIC_W * MUSIC_H);
@@ -5086,6 +5094,7 @@ function musicSeedMetaCA() {
 function musicStepMetaCA() {
   hexStep(ruleset, metaCA, metaCABuf, MUSIC_W, MUSIC_H);
   const t = metaCA; metaCA = metaCABuf; metaCABuf = t;
+  metaCAGen++;
 }
 function musicBuildWavetable(ctx, src) {
   /* Pack 4 cells (2 bits each) into one 8-bit sample, normalise to
@@ -5136,8 +5145,22 @@ function musicScheduleBar(ctx, barStartT) {
    *   – movement root: transpose the whole bar by N semitones
    *   – per-voice gain: 0..3 → mute / quiet / normal / boosted */
   const timbreCell = metaCA[META_TIMBRE_R * MUSIC_W + META_TIMBRE_C] & 3;
-  const wtSrc      = (timbreCell >= 2) ? metaCA : musicCA;
-  const wt         = musicBuildWavetable(ctx, wtSrc);
+  const useMeta    = timbreCell >= 2;
+  const wtSrc      = useMeta ? metaCA : musicCA;
+  /* ev50: cache wavetable across bars that share source + generation.
+   * When timbre = meta-CA (≥ 2), the wavetable stays valid for an
+   * entire 8-bar conductor cycle — saving an AudioBuffer + 1024-sample
+   * Float32 allocation 7 of 8 bars, smoothing GC pressure. */
+  const wtKey = (useMeta ? "m" : "s") + ":" +
+                (useMeta ? metaCAGen : musicCAGen);
+  let wt;
+  if (musicWtCache && musicWtKey === wtKey) {
+    wt = musicWtCache;
+  } else {
+    wt = musicBuildWavetable(ctx, wtSrc);
+    musicWtCache = wt;
+    musicWtKey   = wtKey;
+  }
   const rootCell   = metaCA[0] & 3;
   /* ev42: mood-driven semitone offset added to the conductor's root.
    * Quantised to whole semitones so the synth always plays in-grid;
@@ -5221,12 +5244,21 @@ function musicUpdateMood() {
 function musicSchedulerTick() {
   if (!musicOn || !audioCtx) return;
   const now = audioCtx.currentTime;
-  /* ev49: slip recovery.  If a long main-thread stall let
-   * musicNextBarT fall more than a half-bar behind the audio clock,
-   * skip ahead to (now + small lead-in) instead of dumping a queue
-   * of in-the-past notes.  A one-bar gap is far less audible than
-   * a stutter of overlapping past-time notes. */
-  if (musicNextBarT < now - MUSIC_BAR_SECS / 2) {
+  /* ev50: fine-grained slip recovery.  Even a 100-200 ms slip puts
+   * notes' startT in the past, where Web Audio collapses them all
+   * to "now" and we hear a clustered thud at every bar boundary.
+   * Whenever musicNextBarT falls behind the audio clock at all,
+   * walk the CA forward (so listening continuity is preserved —
+   * music keeps evolving as if the lost time really happened) and
+   * re-anchor to a small lead past now.  The audible gap is bounded
+   * by 0.05 s + slip, far better than a clustered stutter. */
+  if (musicNextBarT < now) {
+    while (musicNextBarT < now) {
+      musicStepCA();
+      musicBarCount++;
+      if ((musicBarCount % META_BARS_PER_STEP) === 0) musicStepMetaCA();
+      musicNextBarT += MUSIC_BAR_SECS;
+    }
     musicNextBarT = now + 0.05;
   }
   while (musicNextBarT < now + MUSIC_LOOK_AHEAD_S) {
