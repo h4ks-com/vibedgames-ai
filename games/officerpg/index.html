@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>office rpg — hi-res · ev63</title>
+<title>office rpg — hi-res · ev64</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000;
                color: #ccc; font-family: ui-monospace, "SF Mono", Menlo,
@@ -201,7 +201,7 @@
     <kbd>i</kbd> inv · <kbd>m</kbd> zap · <kbd>l</kbd> live ·
     <kbd>k</kbd> speeds · <kbd>0</kbd>-<kbd>3</kbd> bend ·
     <kbd>4</kbd>-<kbd>7</kbd> recolour · <kbd>g</kbd> genome ·
-    <kbd>b</kbd> bio lab · <kbd>n</kbd> music · <kbd>v</kbd> waltz ·
+    <kbd>b</kbd> bio lab · <kbd>n</kbd> music · <kbd>v</kbd> meter (V back) ·
     <kbd>p</kbd> player skin · <kbd>j</kbd> journey ·
     <kbd>o</kbd> map · <kbd>t</kbd> terminal · <kbd>r</kbd> reseed ·
     <kbd>s</kbd> shot · <kbd>S</kbd> shots · <kbd>y</kbd> full auto ·
@@ -559,7 +559,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev63";
+const VERSION = "ev64";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -3676,21 +3676,25 @@ function disableAutoplay(reason) {
  * flipping any of them off (e.g. toggling waltz with `v`)
  * exits full-auto state, so the next `y` press re-syncs them. */
 function toggleFullAuto() {
+  /* "Full auto" requires waltz specifically (style 1) to be the
+   * active meter — a freshly cycled non-waltz style means the
+   * user customised the music after engaging full-auto, which
+   * we treat as having already exited the auto state. */
   const allOn = animating && (typeof musicOn !== "undefined" && musicOn)
-                && minimapOn && autoplayOn && musicWaltz;
+                && minimapOn && autoplayOn && musicStyle === 1;
   if (allOn) {
     animating = false;
     if (typeof musicOn !== "undefined" && musicOn) toggleMusic();
     minimapOn = false;
     if (autoplayOn) disableAutoplay(null);
-    musicWaltz = false;
+    musicStyle = 0;                  /* back to common time */
     setAction("full auto OFF — back to manual");
   } else {
     animating = true;
     if (typeof musicOn !== "undefined" && !musicOn) toggleMusic();
     minimapOn = true;
     if (!autoplayOn) toggleAutoplay();
-    musicWaltz = true;
+    musicStyle = 1;                  /* waltz */
     setAction("full auto ON — live + waltz + map + journey + tile-GA · y again to stop");
   }
   needsRender = true;
@@ -4180,18 +4184,20 @@ function handleKey(e) {
     return;
   }
 
-  /* ev60: waltz toggle (v) — flips the music between 4/4 common
-   * time and 3/4 waltz with downbeat emphasis on beat 1.  Per-beat
-   * tempo is unchanged; the same evolving CA score gets recast in
-   * 3/4 so the world plays as a waltz of itself.  Engaging it
-   * mid-bar takes effect at the next bar boundary. */
+  /* ev60/ev64: cultural-style cycle (v).  Advances through the
+   * MUSIC_STYLES table — common time → waltz → Chinese → Indian
+   * → Russian → Brazilian → Native American → African → back to
+   * common.  Shift+V cycles backwards for picking the previous
+   * style without wrapping forward through 7.  Each style swaps
+   * in its own (steps × stepDur × gain matrix) so the same
+   * evolving CA score gets recast as that tradition's rhythm. */
   if (k === "v") {
     e.preventDefault();
     if (e.repeat) return;
-    musicWaltz = !musicWaltz;
-    setAction(musicWaltz
-      ? "waltz mode — 3/4 oompa-pa-pa (50 mpm)"
-      : "common time — 4/4");
+    const N = MUSIC_STYLES.length;
+    if (e.shiftKey) musicStyle = (musicStyle + N - 1) % N;
+    else            musicStyle = (musicStyle + 1) % N;
+    setAction("style: " + MUSIC_STYLES[musicStyle].name);
     return;
   }
 
@@ -5619,48 +5625,122 @@ let musicWorker     = null;            /* ev49: worker that pings
                                          keeps firing through main-
                                          thread stalls */
 let musicOn         = false;
-/* ev60/ev62: waltz mode — toggles from 4/4 (8 steps × 0.25 s =
- * 2.0 s bar) to 3/4 with a STRUCTURAL voice pattern instead of
- * the original (ev60) bare downbeat gain bump.  ev60 just made
- * step 0 louder while 8 voices kept firing on every step — the
- * resulting "waltz" was barely audible against common time.
+/* ev60/ev62/ev64: meter / cultural-style table.  Each entry
+ * defines one rhythmic skeleton — number of steps per bar, step
+ * duration in seconds, and a (steps × 8-voices) gain matrix.
+ * 0 means the voice is structurally silent for that step (the
+ * scheduler skips the schedule entirely so it's a real rest,
+ * not just a quiet note); positive values multiply the voice's
+ * normal gain.
  *
- * ev62 replaces that with classic oompa-pa-pa: bass voices fire
- * ONLY on beat 1; mid-register voices fire ONLY on beats 2 & 3
- * (the "pa-pa" chord); lead voices play across all beats with a
- * strong accent on 1.  Beats are subdivided into halves (6 steps
- * × 0.20 s = 1.2 s bar = 50 measures/min, a comfortable middle-
- * tempo waltz) so the lead can move through passing tones
- * between the bass + chord hits.  The result is unmistakable —
- * not just slightly louder on 1, but rhythmically asymmetric in
- * a way the ear locks onto immediately. */
-let musicWaltz      = false;
-const MUSIC_WALTZ_STEPS_PER_BAR = 6;
-/* Slightly faster step than common time (0.20 s vs 0.25 s) so
- * 6 steps × 0.20 = 1.2 s/bar gives 50 measures/min, classic
- * waltz tempo.  Common time stays at its 0.25 s step. */
-const MUSIC_WALTZ_STEP_DUR      = 0.20;
-const MUSIC_WALTZ_BAR_SECS      = MUSIC_WALTZ_STEPS_PER_BAR *
-                                  MUSIC_WALTZ_STEP_DUR;       /* 1.2 */
-/* Voice × step gain matrix.  Rows are steps 0..5 within the bar
- * (steps 0,2,4 are the strong "1, 2, 3" beats; steps 1,3,5 are
- * the weak half-beat passing positions).  Columns are the 8
- * voices grouped: 0-1 bass, 2-3 mid-low, 4-5 mid-hi, 6-7 lead.
- * 0 mutes the voice for that step entirely (skips note schedule);
- * positive multiplies the voice's normal gain. */
-const MUSIC_WALTZ_GAIN = [
-  /* beat 1 strong: BASS HIT + lead accent              */
-  [2.5, 2.5, 0.0, 0.0, 0.0, 0.0, 1.6, 1.6],
-  /* beat 1 weak:   lead passing tone only              */
-  [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5],
-  /* beat 2 strong: MID CHORD ("pa") + lead             */
-  [0.0, 0.0, 1.5, 1.5, 1.5, 1.5, 1.0, 1.0],
-  /* beat 2 weak:   lead passing tone only              */
-  [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5],
-  /* beat 3 strong: MID CHORD ("pa") + lead             */
-  [0.0, 0.0, 1.5, 1.5, 1.5, 1.5, 1.0, 1.0],
-  /* beat 3 weak:   lead passing tone only              */
-  [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5],
+ * Voice grouping across all styles: 0-1 bass, 2-3 mid-low,
+ * 4-5 mid-hi, 6-7 lead.  Each style picks its own combination
+ * of which voice ranges fire on which steps so the same evolving
+ * CA score gets recast as the chosen tradition's rhythm —
+ * common time / waltz / Chinese ping-pong / Indian keherwa /
+ * Russian trepak / Brazilian bossa / Native American heartbeat /
+ * African 12/8 polyrhythm.  ev60-ev62 covered just common +
+ * waltz; ev64 expands to all 8 styles, cycled by `v`. */
+let   musicStyle = 0;                      /* index into MUSIC_STYLES */
+const MUSIC_STYLES = [
+  { name: 'common (4/4)', steps: 8, stepDur: 0.25, gain: [
+    /* No accent shaping — every voice every step, 1.0× across.   */
+    [1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1, 1, 1, 1],
+  ]},
+  { name: 'waltz (3/4 European)', steps: 6, stepDur: 0.20, gain: [
+    /* Classic oompa-pa-pa.  Bass on beat 1, mid chord on 2 + 3,
+     * lead through all with strong accent on 1, passing tones
+     * on the half-beats.                                         */
+    [2.5, 2.5, 0.0, 0.0, 0.0, 0.0, 1.6, 1.6],
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5],
+    [0.0, 0.0, 1.5, 1.5, 1.5, 1.5, 1.0, 1.0],
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5],
+    [0.0, 0.0, 1.5, 1.5, 1.5, 1.5, 1.0, 1.0],
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5],
+  ]},
+  { name: 'Chinese classical (4/4 ping-pong)', steps: 8, stepDur: 0.24, gain: [
+    /* Sparse pentatonic feel.  Strong bass + lead on beats 1 + 3
+     * ("ping"), soft mid on beats 2 + 4 ("pong"), all 8th-note
+     * positions silent for clarity — the rests are part of the
+     * sound.                                                     */
+    [2.2, 2.2, 0.0, 0.0, 0.0, 0.0, 1.6, 1.6],   /* 1 ping  */
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],   /* rest    */
+    [0.0, 0.0, 0.8, 0.8, 0.8, 0.8, 0.7, 0.7],   /* 2 pong  */
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],   /* rest    */
+    [2.2, 2.2, 0.0, 0.0, 0.0, 0.0, 1.6, 1.6],   /* 3 ping  */
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],   /* rest    */
+    [0.0, 0.0, 0.8, 0.8, 0.8, 0.8, 0.7, 0.7],   /* 4 pong  */
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],   /* rest    */
+  ]},
+  { name: 'Indian classical (Keherwa 8/4)', steps: 8, stepDur: 0.21, gain: [
+    /* Keherwa tala — 8-beat cycle with sam (clap) on 1, weak
+     * khali on 5.  dha-ge-na-ti / na-ke-dhi-na.                  */
+    [2.5, 2.5, 1.2, 1.2, 0.0, 0.0, 1.5, 1.5],   /* dha (sam)  */
+    [0.0, 0.0, 0.6, 0.6, 0.0, 0.0, 0.5, 0.5],   /* ge         */
+    [0.0, 0.0, 1.0, 1.0, 0.8, 0.8, 0.8, 0.8],   /* na         */
+    [0.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.4, 0.4],   /* ti         */
+    [1.5, 1.5, 0.6, 0.6, 0.0, 0.0, 1.0, 1.0],   /* na (khali) */
+    [0.0, 0.0, 0.6, 0.6, 0.0, 0.0, 0.5, 0.5],   /* ke         */
+    [0.0, 0.0, 1.0, 1.0, 0.8, 0.8, 0.8, 0.8],   /* dhi        */
+    [0.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.4, 0.4],   /* na         */
+  ]},
+  { name: 'Russian (Trepak 4/4 driving)', steps: 8, stepDur: 0.17, gain: [
+    /* Fast Russian dance — every beat punches, off-beats keep
+     * the lead moving so the whole bar gallops.                  */
+    [2.8, 2.8, 1.4, 1.4, 1.4, 1.4, 1.6, 1.6],   /* 1 BOOM     */
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.7, 0.7],   /* and        */
+    [1.6, 1.6, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2],   /* 2 boom     */
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.7, 0.7],   /* and        */
+    [2.8, 2.8, 1.4, 1.4, 1.4, 1.4, 1.6, 1.6],   /* 3 BOOM     */
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.7, 0.7],   /* and        */
+    [1.6, 1.6, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2],   /* 4 boom     */
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.7, 0.7],   /* and        */
+  ]},
+  { name: 'Brazilian (Bossa Nova 4/4 syncopated)', steps: 8, stepDur: 0.22, gain: [
+    /* 3-2 son clave inspired.  Heavy 1, lead syncopated on the
+     * "and" of 2 + on 4, mid chord soft underneath.              */
+    [2.0, 2.0, 0.6, 0.6, 0.6, 0.6, 1.4, 1.4],   /* 1 down     */
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],   /* —          */
+    [0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.6, 0.6],   /* and-2      */
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.4, 1.4],   /* synco lead */
+    [0.0, 0.0, 0.6, 0.6, 0.6, 0.6, 0.0, 0.0],   /* 3          */
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],   /* —          */
+    [0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],   /* 4 + lead   */
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],   /* —          */
+  ]},
+  { name: 'Native American (Pow-wow heartbeat)', steps: 4, stepDur: 0.32, gain: [
+    /* Heart-beat drum pattern: STRONG-soft-MEDIUM-soft, lead
+     * decorates only on the strong beats.                        */
+    [3.2, 3.2, 0.0, 0.0, 0.0, 0.0, 1.4, 1.4],   /* BOOM   */
+    [1.4, 1.4, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5],   /* da     */
+    [2.4, 2.4, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0],   /* boom   */
+    [1.4, 1.4, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5],   /* da     */
+  ]},
+  { name: 'African (12/8 polyrhythm)', steps: 12, stepDur: 0.16, gain: [
+    /* 12/8 with two cross-rhythms: bass clicks every 3 (so 4
+     * pulses per bar), mid chord every 4 (so 3 pulses per bar)
+     * — the classic 4-against-3 that rides over a 12-step grid.
+     * Lead syncopates between the cross-rhythm landings.         */
+    [2.4, 2.4, 1.6, 1.6, 1.6, 1.6, 1.6, 1.6],   /*  1 bass+mid */
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4, 0.4],   /*  2          */
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.6, 0.6],   /*  3          */
+    [2.0, 2.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0],   /*  4 bass     */
+    [0.0, 0.0, 1.4, 1.4, 1.4, 1.4, 0.4, 0.4],   /*  5 mid      */
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.6, 0.6],   /*  6          */
+    [2.0, 2.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0],   /*  7 bass     */
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4, 0.4],   /*  8          */
+    [0.0, 0.0, 1.4, 1.4, 1.4, 1.4, 0.6, 0.6],   /*  9 mid      */
+    [2.0, 2.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0],   /* 10 bass     */
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.4, 0.4],   /* 11          */
+    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.6, 0.6],   /* 12          */
+  ]},
 ];
 
 /* ── ev42: mood modifier — current cell influences key + intensity
@@ -5807,17 +5887,13 @@ function musicScheduleBar(ctx, barStartT) {
   let moodGain = musicMoodIntensity;
   if (moodGain < 0.6) moodGain = 0.6;
   if (moodGain > 1.4) moodGain = 1.4;
-  /* ev62: waltz vs common time.  Common time keeps the legacy
-   * 0.25 s step (8 steps × 0.25 = 2.0 s bar).  Waltz uses a
-   * 0.20 s step (6 steps × 0.20 = 1.2 s bar, a 50 mpm waltz),
-   * AND replaces the simple downbeat gain with the per-voice
-   * pattern matrix above so the meter is structural, not just
-   * a level bump.  Step duration is read once per bar so any
-   * mid-bar meter flip takes effect cleanly at the next bar. */
-  const stepsThisBar = musicWaltz
-    ? MUSIC_WALTZ_STEPS_PER_BAR : MUSIC_STEPS;
-  const stepDur      = musicWaltz
-    ? MUSIC_WALTZ_STEP_DUR : (MUSIC_BAR_SECS / MUSIC_STEPS);
+  /* ev64: read the active cultural-style entry once at bar
+   * boundary so a mid-bar style flip takes effect cleanly at
+   * the next bar.  steps/stepDur/gain all come from the table. */
+  const style        = MUSIC_STYLES[musicStyle] || MUSIC_STYLES[0];
+  const stepsThisBar = style.steps;
+  const stepDur      = style.stepDur;
+  const styleGain    = style.gain;
   /* ev47: stereo split — score-CA (musicCA) plays the left channel,
    * meta-CA (the conductor grid) plays the right channel.  Both
    * grids share ruleset and the meta-CA's per-voice gain mask, but
@@ -5845,16 +5921,13 @@ function musicScheduleBar(ctx, barStartT) {
       const semiL = MUSIC_CELL_TO_SEMI[cellL];
       const noteStart = barStartT + s * stepDur;
       const noteDur   = stepDur * cfg.dec;
-      /* ev62: waltz voice-pattern.  Bass voices fire only on
-       * beat 1; mid voices only on beats 2 & 3; lead plays
-       * across with a strong accent on 1.  meterGain === 0
-       * means the voice is structurally silent on this step,
-       * so skip both L and R note scheduling — that's what
-       * creates the rhythmic asymmetry the ear locks onto.
-       * Common time stays flat (1.0 throughout). */
-      const meterGain = musicWaltz
-        ? MUSIC_WALTZ_GAIN[s][v]
-        : 1.0;
+      /* ev64: meter gain comes from the active style's pattern
+       * matrix.  meterGain === 0 means the voice is structurally
+       * silent on this step (real rest, not a quiet note); skip
+       * both L and R note scheduling so the rhythm reads as
+       * asymmetric.  Common time has flat 1.0 across so this
+       * never short-circuits there. */
+      const meterGain = styleGain[s][v];
       if (meterGain === 0) continue;
       if (semiL !== null) {
         const freqL = MUSIC_BASE_FREQ *
@@ -5909,12 +5982,12 @@ function musicSchedulerTick() {
    * music keeps evolving as if the lost time really happened) and
    * re-anchor to a small lead past now.  The audible gap is bounded
    * by 0.05 s + slip, far better than a clustered stutter. */
-  /* ev60: bar duration depends on meter — 2.0 s in 4/4, 1.5 s in
-   * 3/4 (waltz).  Per-beat tempo is fixed; only step count per bar
-   * changes.  Read once per tick so a meter flip mid-tick doesn't
-   * race itself between catch-up and look-ahead loops below. */
-  const barSecs = musicWaltz
-    ? MUSIC_WALTZ_BAR_SECS : MUSIC_BAR_SECS;
+  /* ev64: bar duration is style-specific — every culture's table
+   * entry has its own (steps × stepDur).  Read once per tick so
+   * a style flip mid-tick doesn't race the catch-up vs look-
+   * ahead loops below. */
+  const _style  = MUSIC_STYLES[musicStyle] || MUSIC_STYLES[0];
+  const barSecs = _style.steps * _style.stepDur;
   if (musicNextBarT < now) {
     while (musicNextBarT < now) {
       musicStepCA();
