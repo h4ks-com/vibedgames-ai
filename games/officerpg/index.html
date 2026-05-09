@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>office rpg — hi-res · ev50</title>
+<title>office rpg — hi-res · ev51</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000;
                color: #ccc; font-family: ui-monospace, "SF Mono", Menlo,
@@ -262,6 +262,39 @@ JSON here (the .edges field) — or use the buttons below"
       </button>
       <div id="shapeStatus" style="font-size:0.72rem;color:#8b8;
            min-height:1em;margin-top:4px"></div>
+    </div>
+  </div>
+  <!-- ev51: tile-shape evolution — 4 candidate slots + mutate +
+       crossover.  Click a thumb to set it as the active tile shape. -->
+  <div style="margin-top:10px;padding-top:10px;
+              border-top:1px solid #333;font-size:0.78rem">
+    <div style="color:#aac;margin-bottom:4px">
+      Evolve — click a candidate to apply, then mutate / cross to breed:
+    </div>
+    <div style="display:flex;gap:6px;align-items:flex-start">
+      <canvas id="shapeCand0" width="56" height="56"
+              style="background:#111;border:1px solid #333;cursor:pointer"
+              title="candidate 1"></canvas>
+      <canvas id="shapeCand1" width="56" height="56"
+              style="background:#111;border:1px solid #333;cursor:pointer"
+              title="candidate 2"></canvas>
+      <canvas id="shapeCand2" width="56" height="56"
+              style="background:#111;border:1px solid #333;cursor:pointer"
+              title="candidate 3"></canvas>
+      <canvas id="shapeCand3" width="56" height="56"
+              style="background:#111;border:1px solid #333;cursor:pointer"
+              title="candidate 4"></canvas>
+      <div style="display:flex;flex-direction:column;gap:4px;flex:1">
+        <button id="shapeEvolveMutate" style="padding:4px 8px">
+          Mutate active (replaces 4 candidates)
+        </button>
+        <button id="shapeEvolveCrossover" style="padding:4px 8px">
+          Cross last-2 selected
+        </button>
+        <button id="shapeEvolveSeed" style="padding:4px 8px">
+          Seed candidates from current ruleset
+        </button>
+      </div>
     </div>
   </div>
   <div class="hint">T toggle this · Esc/q close</div>
@@ -525,7 +558,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev50";
+const VERSION = "ev51";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -6216,6 +6249,7 @@ function refreshShapePreview() {
 
 function showShapeModal() {
   refreshShapePreview();
+  refreshShapeCandidates();
   const m = document.getElementById("shapeModal");
   if (m) { m.hidden = false; modalOpen = "shape"; }
 }
@@ -6224,6 +6258,180 @@ function closeShapeModal() {
   if (m) m.hidden = true;
   if (modalOpen === "shape") modalOpen = null;
   needsRender = true;
+}
+
+/* ── ev51: tile-shape evolution ─────────────────────────────────
+ *
+ * 4 candidate specs sit in `tileShapeCandidates`.  Operators:
+ *   • mutate(spec): perturb cp.off, occasionally add or remove a CP
+ *   • crossover(a, b): per-pair pick of edge data from one parent
+ * Both operators only touch the 3 primary edges (0, 1, 2) and then
+ * mirror to edges (3, 4, 5) via TILE_SHAPE_PAIR — preserving the
+ * Tilesmith offset-hex tessellation invariant so an evolved shape
+ * still tiles seamlessly.  User judges by eye: click a candidate
+ * thumb to apply it as the active tile shape; click two thumbs in
+ * a row, then "Cross last-2 selected" to breed them. */
+const tileShapeCandidates = [null, null, null, null];
+const tileShapeCandLast = [-1, -1];   /* most-recent two clicks */
+
+function _cloneSpec(spec) {
+  return { edges: spec.edges.map(e => e.map(c => ({ p: c.p, off: c.off }))) };
+}
+function _mirrorEdges(spec) {
+  /* Enforce mirror invariant: edge PAIR[i] = reversed/inverted edge i. */
+  for (let i = 0; i < 3; i++) {
+    spec.edges[TILE_SHAPE_PAIR[i]] = spec.edges[i].slice().reverse().map(c => ({
+      p: 1 - c.p, off: -c.off,
+    }));
+  }
+}
+function tileShapeMutate(spec) {
+  const out = _cloneSpec(spec);
+  for (let i = 0; i < 3; i++) {
+    /* Nudge each existing CP. */
+    for (const cp of out.edges[i]) {
+      if (Math.random() < 0.35) {
+        cp.off += (Math.random() - 0.5) * 0.10;
+        if (cp.off < -0.18) cp.off = -0.18;
+        if (cp.off >  0.18) cp.off =  0.18;
+      }
+      if (Math.random() < 0.10) {
+        cp.p += (Math.random() - 0.5) * 0.08;
+        if (cp.p < 0.05) cp.p = 0.05;
+        if (cp.p > 0.95) cp.p = 0.95;
+      }
+    }
+    /* Occasionally add a CP. */
+    if (Math.random() < 0.18) {
+      const p = 0.1 + Math.random() * 0.8;
+      const off = (Math.random() - 0.5) * 0.10;
+      out.edges[i].push({ p, off });
+    }
+    /* Occasionally remove a CP — but never let an edge go totally empty
+     * if the shape currently has CPs there (keeps the silhouette
+     * recognisable across mutations). */
+    if (Math.random() < 0.10 && out.edges[i].length > 1) {
+      const idx = Math.floor(Math.random() * out.edges[i].length);
+      out.edges[i].splice(idx, 1);
+    }
+    out.edges[i].sort((a, b) => a.p - b.p);
+  }
+  _mirrorEdges(out);
+  return out;
+}
+function tileShapeCrossoverGenes(a, b) {
+  const out = { edges: [[], [], [], [], [], []] };
+  for (let i = 0; i < 3; i++) {
+    const src = (Math.random() < 0.5 ? a : b).edges[i];
+    out.edges[i] = src.map(c => ({ p: c.p, off: c.off }));
+  }
+  _mirrorEdges(out);
+  return out;
+}
+function tileShapeRandomFromRuleset(rs, salt) {
+  /* Same idea as tileShapeFromRuleset but with a salt so 4 thumbs
+   * coming off the same ruleset are visibly distinct. */
+  const N = 9;
+  const edges = [[], [], [], [], [], []];
+  function sampOff(edgeI, k) {
+    const idx0 = (edgeI * 4096 + k * 233 + (salt | 0)) & 0x3fff;
+    const idx1 = (idx0 + 1) & 0x3fff;
+    const idxm = (idx0 - 1 + 0x4000) & 0x3fff;
+    const v = (rs[idxm] + 2 * rs[idx0] + rs[idx1]) / 4;
+    return (v - 1.5) * 0.06;
+  }
+  for (let i = 0; i < 3; i++) {
+    const cps = [];
+    for (let k = 1; k < N; k++) {
+      cps.push({ p: k / N, off: sampOff(i, k) });
+    }
+    edges[i] = cps;
+  }
+  const spec = { edges };
+  _mirrorEdges(spec);
+  return spec;
+}
+
+function drawShapeThumb(canvas, spec) {
+  const cx = canvas.getContext("2d");
+  cx.fillStyle = "#000";
+  cx.fillRect(0, 0, canvas.width, canvas.height);
+  if (!spec) {
+    cx.fillStyle = "#222";
+    cx.fillRect(8, 8, canvas.width - 16, canvas.height - 16);
+    return;
+  }
+  const path = buildTileShapePath(spec);
+  const cell = Math.min(canvas.width, canvas.height) - 8;
+  cx.save();
+  cx.translate(4, 4);
+  cx.scale(cell / TILE_PX, cell / TILE_PX);
+  cx.fillStyle = "#356";
+  cx.fill(path);
+  cx.restore();
+}
+
+function refreshShapeCandidates() {
+  for (let i = 0; i < 4; i++) {
+    const cv = document.getElementById("shapeCand" + i);
+    if (cv) drawShapeThumb(cv, tileShapeCandidates[i]);
+  }
+}
+
+function selectShapeCandidate(idx) {
+  const spec = tileShapeCandidates[idx];
+  if (!spec) {
+    const stat = document.getElementById("shapeStatus");
+    if (stat) stat.textContent = "candidate " + (idx + 1) + " is empty — seed first";
+    return;
+  }
+  /* Track click order for crossover. */
+  tileShapeCandLast[1] = tileShapeCandLast[0];
+  tileShapeCandLast[0] = idx;
+  setTileShape(spec, "evolve · candidate " + (idx + 1));
+}
+
+function evolveMutateActive() {
+  const seed = tileShape || (tileShapeCandidates.find(s => s) || null);
+  if (!seed) {
+    /* Nothing to mutate — seed from ruleset first. */
+    evolveSeedFromRuleset();
+    return;
+  }
+  for (let i = 0; i < 4; i++) {
+    tileShapeCandidates[i] = tileShapeMutate(seed);
+  }
+  refreshShapeCandidates();
+  const stat = document.getElementById("shapeStatus");
+  if (stat) stat.textContent = "mutated · click a candidate to apply";
+}
+
+function evolveCrossoverLastTwo() {
+  const i = tileShapeCandLast[0], j = tileShapeCandLast[1];
+  if (i < 0 || j < 0 || i === j ||
+      !tileShapeCandidates[i] || !tileShapeCandidates[j]) {
+    const stat = document.getElementById("shapeStatus");
+    if (stat) stat.textContent = "click two different candidates first, then cross";
+    return;
+  }
+  const child = tileShapeCrossoverGenes(
+    tileShapeCandidates[i], tileShapeCandidates[j]);
+  setTileShape(child, "evolve · cross of " + (i + 1) + "×" + (j + 1));
+  /* Replace candidates with mutations of the child for the next round. */
+  for (let k = 0; k < 4; k++) {
+    tileShapeCandidates[k] = tileShapeMutate(child);
+  }
+  refreshShapeCandidates();
+}
+
+function evolveSeedFromRuleset() {
+  for (let i = 0; i < 4; i++) {
+    tileShapeCandidates[i] = tileShapeRandomFromRuleset(
+      ruleset, 0xa5a5a5a5 ^ (i * 0x9e3779b9));
+  }
+  refreshShapeCandidates();
+  const stat = document.getElementById("shapeStatus");
+  if (stat) stat.textContent = "4 candidates from current ruleset";
 }
 
 /* Wire shape modal buttons. */
@@ -6253,6 +6461,20 @@ function closeShapeModal() {
   if (fp) fp.addEventListener("click", tileShapeFromNextParent);
   const rs = document.getElementById("shapeReset");
   if (rs) rs.addEventListener("click", clearTileShape);
+  /* ev51 — evolution panel. */
+  for (let i = 0; i < 4; i++) {
+    const cv = document.getElementById("shapeCand" + i);
+    if (cv) {
+      const idx = i;
+      cv.addEventListener("click", () => selectShapeCandidate(idx));
+    }
+  }
+  const em = document.getElementById("shapeEvolveMutate");
+  if (em) em.addEventListener("click", evolveMutateActive);
+  const ec = document.getElementById("shapeEvolveCrossover");
+  if (ec) ec.addEventListener("click", evolveCrossoverLastTwo);
+  const es = document.getElementById("shapeEvolveSeed");
+  if (es) es.addEventListener("click", evolveSeedFromRuleset);
 }
 
 /* ── ev44: live browser shot — capture + replay ─────────────
