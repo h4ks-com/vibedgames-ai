@@ -310,6 +310,38 @@
   </div>
 </div>
 
+<div id="flowerModal" class="modal" hidden>
+  <h2>Hex CA ruleset — flower view</h2>
+  <p class="legend" style="margin:0 0 6px 0;">
+    Each thumbnail shows one of the 16384 rules: the centre cell + 6
+    hex neighbours (NW NE W E SW SE), an arrow, and the result the
+    centre becomes next tick.  Page <span id="flowerPageNum">1</span>
+    of 64 · 256 rules per page · colours from the live
+    <code>TERRAIN_ANCHOR</code>.</p>
+  <div id="flowerNav" style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+    <button id="flowerFirstBtn">⏮ first</button>
+    <button id="flowerPrevBtn">◀ prev</button>
+    <label>page
+      <input type="number" id="flowerPageInput" min="1" max="64"
+        value="1" style="width:60px;font-family:inherit;">
+    </label>
+    <button id="flowerNextBtn">next ▶</button>
+    <button id="flowerLastBtn">last ⏭</button>
+    <span style="flex:1"></span>
+    <label><input type="checkbox" id="flowerLiveSlot" checked>
+      track active parent slot</label>
+    <button id="flowerCloseBtn">Close (esc)</button>
+  </div>
+  <canvas id="flowerCanvas" width="800" height="560"
+    style="background:#0d1117;border:1px solid #21262d;
+    image-rendering:pixelated;display:block;max-width:100%;"></canvas>
+  <p class="legend" style="margin-top:6px;">
+    <em>Open with <span class="key">f</span>.</em>  Hover or click to
+    select; clicking jumps the rule grid in the GA workshop to the
+    same byte.  Pages: 1 = rules 0..255, 2 = 256..511, …, 64 =
+    16128..16383.  64 pages × 256 thumbs = 16384.</p>
+</div>
+
 <div id="bioModal" class="modal" hidden>
   <h2>Background L-system evolution — silent breeders</h2>
   <div id="bioBody" class="ga-workshop">
@@ -2951,6 +2983,25 @@ function handleKey(e) {
     }
     return;
   }
+  if (modalOpen === "flower") {
+    /* Flower view — Escape, q, or f again closes; arrow keys page. */
+    if (k === "Escape" || k === "q" || k === "f") {
+      e.preventDefault();
+      closeFlowerView();
+      return;
+    }
+    if (k === "ArrowLeft" || k === "h") {
+      e.preventDefault();
+      flowerSetPage(flowerPage - 1);
+      return;
+    }
+    if (k === "ArrowRight" || k === "l") {
+      e.preventDefault();
+      flowerSetPage(flowerPage + 1);
+      return;
+    }
+    return;
+  }
 
   /* Escape with no modal open is the global autoplay kill-switch. */
   if (k === "Escape" && autoplayOn) {
@@ -3037,6 +3088,13 @@ function handleKey(e) {
   if (k === "b") {
     e.preventDefault();
     openBioLab();
+    return;
+  }
+
+  /* Flower view (f) — browse all 16384 hex CA rules as flowers. */
+  if (k === "f") {
+    e.preventDefault();
+    openFlowerView();
     return;
   }
 
@@ -3819,7 +3877,9 @@ const IMG_PRESETS = {
   },
   vangogh: {
     label: 'Van Gogh',
-    url:   'https://upload.wikimedia.org/wikipedia/commons/e/ea/Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg',
+    /* ev36: was Google_Art_Project (696 MB!) — browser killed it on
+     * decode.  Same painting, 1.9 MB version. */
+    url:   'https://upload.wikimedia.org/wikipedia/commons/6/66/VanGogh-starry_night_ballance1.jpg',
   },
 };
 document.querySelectorAll('#imgPresetRow button[data-preset]').forEach(btn => {
@@ -3938,6 +3998,194 @@ function closeBioLab() {
   if (bioRedrawTimer) { clearInterval(bioRedrawTimer); bioRedrawTimer = null; }
   needsRender = true;
 }
+
+/* ── ev36: flower view of the 16384-rule hex CA ─────────────
+ * Decode each rule index back to (centre_state, [n0..n5]) and
+ * render as a small "flower": centre cell + 6 hex neighbours +
+ * arrow + result hex.  256 thumbnails per page, 64 pages, total
+ * 16384.  Rule index encoding (matches sitIdx in hexStep):
+ *     idx = self*4^6 + n[0]*4^5 + n[1]*4^4 + ... + n[5]*4^0
+ * Decoding peels from the bottom:
+ *     n[5] = idx & 3, n[4] = (idx>>2)&3, ..., self = (idx>>12)&3.
+ * Neighbour order is NW(0), NE(1), W(2), E(3), SW(4), SE(5),
+ * laid out as a brick-pattern hex flower.
+ */
+const FLOWER_PAGE_RULES = 256;     /* 16 × 16 thumbs */
+const FLOWER_PAGES      = 16384 / FLOWER_PAGE_RULES;     /* 64 */
+const FLOWER_GRID_W     = 16;
+const FLOWER_GRID_H     = 16;
+const FLOWER_TILE_W     = 50;
+const FLOWER_TILE_H     = 35;
+const FLOWER_CELL_PX    = 7;       /* hex cell within flower */
+const FLOWER_RESULT_PX  = 9;       /* the result hex (slightly bigger) */
+
+let flowerPage = 0;
+let flowerCanvas, flowerCtx, flowerPageInput, flowerPageNum;
+
+function decodeRule(idx) {
+  return {
+    self: (idx >>> 12) & 3,
+    n: [
+      (idx >>> 10) & 3,
+      (idx >>>  8) & 3,
+      (idx >>>  6) & 3,
+      (idx >>>  4) & 3,
+      (idx >>>  2) & 3,
+      (idx >>>  0) & 3,
+    ],
+  };
+}
+
+function rgbStrFor(state) {
+  const c = TERRAIN_ANCHOR[state & 3];
+  return "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")";
+}
+
+function drawFlowerThumb(ctx, ox, oy, ruleIdx, ruleset) {
+  const rule = decodeRule(ruleIdx);
+  const result = ruleset[ruleIdx] & 3;
+  const w = FLOWER_CELL_PX;
+  /* Flower cell centres relative to (ox + 1.5w, oy + tileH/2):
+   * brick-pattern hex with cell width = w, vertical spacing = w. */
+  const cx = ox + 1.5 * w + 2;
+  const cy = oy + FLOWER_TILE_H / 2;
+  const positions = [
+    [-w / 2, -w],   /* k=0 NW */
+    [+w / 2, -w],   /* k=1 NE */
+    [-w,      0],   /* k=2 W  */
+    [+w,      0],   /* k=3 E  */
+    [-w / 2, +w],   /* k=4 SW */
+    [+w / 2, +w],   /* k=5 SE */
+  ];
+  /* Centre cell (highlighted with a thin outline so it's readable). */
+  ctx.fillStyle = rgbStrFor(rule.self);
+  ctx.fillRect(cx - w / 2, cy - w / 2, w, w);
+  ctx.strokeStyle = "#444";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(cx - w / 2 + 0.5, cy - w / 2 + 0.5, w - 1, w - 1);
+  /* 6 neighbours. */
+  for (let k = 0; k < 6; k++) {
+    const dx = positions[k][0], dy = positions[k][1];
+    ctx.fillStyle = rgbStrFor(rule.n[k]);
+    ctx.fillRect(cx + dx - w / 2, cy + dy - w / 2, w, w);
+  }
+  /* Arrow.  Drawn in light grey from right edge of flower to result. */
+  const arrowX0 = cx + 1.5 * w + 1;
+  const arrowX1 = arrowX0 + 7;
+  ctx.strokeStyle = "#7a8492";
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(arrowX0, cy);
+  ctx.lineTo(arrowX1, cy);
+  ctx.stroke();
+  ctx.fillStyle = "#7a8492";
+  ctx.beginPath();
+  ctx.moveTo(arrowX1 + 3, cy);
+  ctx.lineTo(arrowX1, cy - 2.5);
+  ctx.lineTo(arrowX1, cy + 2.5);
+  ctx.fill();
+  /* Result hex (bigger, with outline). */
+  const rw = FLOWER_RESULT_PX;
+  const rx = arrowX1 + 5;
+  ctx.fillStyle = rgbStrFor(result);
+  ctx.fillRect(rx, cy - rw / 2, rw, rw);
+  ctx.strokeStyle = "#222";
+  ctx.strokeRect(rx + 0.5, cy - rw / 2 + 0.5, rw - 1, rw - 1);
+}
+
+function drawFlowerPage(pageIdx) {
+  if (!flowerCtx) return;
+  const W = flowerCanvas.width, H = flowerCanvas.height;
+  flowerCtx.fillStyle = "#0d1117";
+  flowerCtx.fillRect(0, 0, W, H);
+  /* Which ruleset to read from — track the active parent slot if the
+   * checkbox is on; otherwise the legacy `ruleset`. */
+  const live = document.getElementById("flowerLiveSlot");
+  const rs = (live && live.checked && parentRulesets[editParentSlot])
+           ? parentRulesets[editParentSlot]
+           : ruleset;
+  const base = pageIdx * FLOWER_PAGE_RULES;
+  for (let row = 0; row < FLOWER_GRID_H; row++) {
+    for (let col = 0; col < FLOWER_GRID_W; col++) {
+      const rIdx = base + row * FLOWER_GRID_W + col;
+      if (rIdx >= 16384) break;
+      const ox = col * FLOWER_TILE_W;
+      const oy = row * FLOWER_TILE_H;
+      drawFlowerThumb(flowerCtx, ox, oy, rIdx, rs);
+    }
+  }
+  /* Light grid lines between thumbs to ease counting. */
+  flowerCtx.strokeStyle = "#1a1f27";
+  flowerCtx.lineWidth = 1;
+  for (let c = 1; c < FLOWER_GRID_W; c++) {
+    flowerCtx.beginPath();
+    flowerCtx.moveTo(c * FLOWER_TILE_W + 0.5, 0);
+    flowerCtx.lineTo(c * FLOWER_TILE_W + 0.5, H);
+    flowerCtx.stroke();
+  }
+  for (let r = 1; r < FLOWER_GRID_H; r++) {
+    flowerCtx.beginPath();
+    flowerCtx.moveTo(0, r * FLOWER_TILE_H + 0.5);
+    flowerCtx.lineTo(W, r * FLOWER_TILE_H + 0.5);
+    flowerCtx.stroke();
+  }
+  flowerPageNum.textContent = (pageIdx + 1).toString();
+  flowerPageInput.value = (pageIdx + 1).toString();
+}
+
+function flowerSetPage(p) {
+  if (p < 0) p = 0;
+  if (p >= FLOWER_PAGES) p = FLOWER_PAGES - 1;
+  flowerPage = p;
+  drawFlowerPage(flowerPage);
+}
+
+function openFlowerView() {
+  if (modalOpen) return;
+  modalOpen = "flower";
+  flowerCanvas = flowerCanvas || document.getElementById("flowerCanvas");
+  flowerCtx    = flowerCtx    || flowerCanvas.getContext("2d");
+  flowerPageInput = flowerPageInput || document.getElementById("flowerPageInput");
+  flowerPageNum   = flowerPageNum   || document.getElementById("flowerPageNum");
+  document.getElementById("flowerModal").hidden = false;
+  drawFlowerPage(flowerPage);
+}
+
+function closeFlowerView() {
+  document.getElementById("flowerModal").hidden = true;
+  modalOpen = null;
+  needsRender = true;
+}
+
+function flowerOnClick(e) {
+  /* Click a thumb → log the rule index + drop to the rule grid. */
+  const rect = flowerCanvas.getBoundingClientRect();
+  const cx = (e.clientX - rect.left) * flowerCanvas.width  / rect.width;
+  const cy = (e.clientY - rect.top)  * flowerCanvas.height / rect.height;
+  const col = (cx / FLOWER_TILE_W) | 0;
+  const row = (cy / FLOWER_TILE_H) | 0;
+  if (col < 0 || col >= FLOWER_GRID_W || row < 0 || row >= FLOWER_GRID_H) return;
+  const rIdx = flowerPage * FLOWER_PAGE_RULES + row * FLOWER_GRID_W + col;
+  if (rIdx >= 16384) return;
+  setAction("rule " + rIdx + " · " + JSON.stringify(decodeRule(rIdx)));
+}
+
+document.getElementById("flowerCanvas").addEventListener("click", flowerOnClick);
+document.getElementById("flowerCloseBtn").addEventListener("click", closeFlowerView);
+document.getElementById("flowerFirstBtn").addEventListener("click",
+  () => flowerSetPage(0));
+document.getElementById("flowerLastBtn").addEventListener("click",
+  () => flowerSetPage(FLOWER_PAGES - 1));
+document.getElementById("flowerPrevBtn").addEventListener("click",
+  () => flowerSetPage(flowerPage - 1));
+document.getElementById("flowerNextBtn").addEventListener("click",
+  () => flowerSetPage(flowerPage + 1));
+document.getElementById("flowerPageInput").addEventListener("change", (e) => {
+  const v = parseInt(e.target.value, 10);
+  if (Number.isFinite(v)) flowerSetPage(v - 1);
+});
+document.getElementById("flowerLiveSlot").addEventListener("change",
+  () => drawFlowerPage(flowerPage));
 
 /* ── 8-track CA tracker music + meta-CA conductor (ev14) ─────
  *
