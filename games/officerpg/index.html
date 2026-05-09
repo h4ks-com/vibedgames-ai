@@ -425,7 +425,7 @@
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev40";
+const VERSION = "ev41";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -870,11 +870,19 @@ const BLOCK_W = 64, BLOCK_H = 64;
 const blockBufA = new Uint8Array(BLOCK_W * BLOCK_H);
 const blockBufB = new Uint8Array(BLOCK_W * BLOCK_H);
 
-function getBlockTexture(seedRgb, salt) {
-  /* Cache key folds salt + colour together.  Stringify for Map
-   * stability — salt collisions across different RGBs would
-   * otherwise pick wrong textures. */
-  const key = (salt >>> 0) + ":" + seedRgb[0] + "," + seedRgb[1] + "," + seedRgb[2];
+function getBlockTexture(seedRgb, salt, transparentInner) {
+  /* ev41: transparentInner ∈ -1..3.  When 0..3, pixels of the inner
+   * 64×64 CA whose state matches that index render alpha=0 — so the
+   * world terrain shows through ~25% of the texture in an organic
+   * pattern (the holes follow the inner CA's morphology, not block
+   * boundaries).  Used by L-system sprites to break up the blocky
+   * silhouette; NPCs / terrain pass the default -1 = fully opaque. */
+  if (transparentInner === undefined) transparentInner = -1;
+  /* Cache key folds salt + colour + transparentInner together.
+   * Stringify for Map stability — salt collisions across different
+   * (RGB, transparentInner) would otherwise pick wrong textures. */
+  const key = (salt >>> 0) + ":" + seedRgb[0] + "," + seedRgb[1] +
+              "," + seedRgb[2] + ":t" + transparentInner;
   let off = blockTexCache.get(key);
   if (off) return off;
 
@@ -913,7 +921,10 @@ function getBlockTexture(seedRgb, salt) {
     data[p    ] = pal[c][0];
     data[p + 1] = pal[c][1];
     data[p + 2] = pal[c][2];
-    data[p + 3] = 255;
+    /* ev41: alpha=0 for pixels matching the gene-chosen inner state,
+     * so terrain shows through.  Default behaviour (transparentInner
+     * = -1) keeps every pixel fully opaque. */
+    data[p + 3] = (c === transparentInner) ? 0 : 255;
   }
   off = document.createElement("canvas");
   off.width  = BLOCK_W;
@@ -1457,13 +1468,19 @@ function buildSprite(cat, idx, panelSlot) {
   for (let r = 0; r < h; r++) {
     for (let col = 0; col < SPRITE_W; col++) {
       const p = grid[r * SPRITE_W + col];
-      /* ev39: skip the structural empty slot AND the gene-chosen
-       * see-through slot.  When transparentSlot ∈ 1..3, that
-       * brightness band of the sprite isn't rasterised, so the
-       * underlying terrain shows through and the sprite reads
-       * less blocky. */
-      if (p === 0 || p === transparentSlot) continue;
-      const tex = getBlockTexture(pal[p], (baseSalt ^ (p * 0x7feb352d)) >>> 0);
+      /* Skip only the structural empty slot — cells with no L-system
+       * points landed in them.  ev41: visibility holes in visible
+       * cells are now driven by getBlockTexture's transparentInner
+       * parameter, which punches alpha=0 pixels at the inner-CA
+       * state matching transparentSlot.  Result: ~25% of pixels in
+       * each visible cell render see-through, following the inner
+       * CA's organic morphology instead of removing rectangular
+       * chunks.  ev39's "skip whole cell" turned out to be the
+       * wrong granularity. */
+      if (p === 0) continue;
+      const tex = getBlockTexture(pal[p],
+                  (baseSalt ^ (p * 0x7feb352d)) >>> 0,
+                  transparentSlot);
       c.drawImage(tex,
                   col * cellPx | 0, r * cellPx | 0,
                   (cellPx + 1) | 0, (cellPx + 1) | 0);
