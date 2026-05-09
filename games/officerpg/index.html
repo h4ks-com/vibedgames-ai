@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>office rpg — hi-res · ev38</title>
+<title>office rpg — hi-res · ev44</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000;
                color: #ccc; font-family: ui-monospace, "SF Mono", Menlo,
@@ -192,7 +192,8 @@
     <kbd>4</kbd>-<kbd>7</kbd> recolour · <kbd>g</kbd> genome ·
     <kbd>b</kbd> bio lab · <kbd>n</kbd> music ·
     <kbd>p</kbd> player skin · <kbd>j</kbd> journey ·
-    <kbd>o</kbd> map · <kbd>t</kbd> terminal · <kbd>r</kbd> reseed
+    <kbd>o</kbd> map · <kbd>t</kbd> terminal · <kbd>r</kbd> reseed ·
+    <kbd>s</kbd> shot · <kbd>S</kbd> shots
   </div>
 </div>
 <div id="invModal" class="modal" hidden>
@@ -208,6 +209,49 @@
 <div id="death" class="modal" hidden>
   <h2>You died</h2>
   <div id="deathBody">Press any key to start a new game.</div>
+</div>
+
+<!-- ev44: live browser-shot capture / replay -->
+<input type="file" id="shotFileInput" accept=".json,application/json" hidden>
+<div id="shotsModal" class="modal" hidden style="max-width:560px">
+  <h2>Browser shot — what officerpg sees right now
+    <span class="ver-badge" id="verBadgeShot"></span></h2>
+  <div style="display:flex;gap:14px;align-items:flex-start">
+    <div>
+      <img id="shotPreview" alt="last shot" style="display:block;
+           width:240px;height:240px;background:#111;border:1px solid #333;
+           image-rendering:pixelated;image-rendering:crisp-edges">
+      <div id="shotMeta" class="dim" style="font-size:0.7rem;
+           margin-top:6px;font-family:ui-monospace,monospace;
+           white-space:pre;line-height:1.4"></div>
+    </div>
+    <div style="flex:1;display:flex;flex-direction:column;gap:6px;
+                font-size:0.78rem">
+      <div>What this is: a paired snapshot of the canvas pixels
+           (.png) plus the semantic state behind them (rule, palettes,
+           player, view box). Drop a previously captured .json back in
+           to replay the world it described.</div>
+      <button id="shotBtnDownload" style="padding:6px 10px">
+        Download bundle (.json)
+      </button>
+      <button id="shotBtnDownloadPng" style="padding:6px 10px">
+        Download PNG only
+      </button>
+      <button id="shotBtnCopy" style="padding:6px 10px">
+        Copy JSON to clipboard
+      </button>
+      <button id="shotBtnReplay" style="padding:6px 10px">
+        Replay this state into the live game
+      </button>
+      <button id="shotBtnImport" style="padding:6px 10px">
+        Import a shot from disk…
+      </button>
+      <div id="shotStatus" style="font-size:0.72rem;color:#8b8;
+           min-height:1em;margin-top:4px"></div>
+    </div>
+  </div>
+  <div class="hint">s recapture · Shift+S open this · Esc/q close ·
+    drop a .json onto the canvas to replay</div>
 </div>
 
 <div id="gaModal" class="modal" hidden>
@@ -425,15 +469,17 @@
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev43";
+const VERSION = "ev44";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
   const b = document.getElementById("verBadgeFlower");
   const c = document.getElementById("verBadgeBio");
+  const d = document.getElementById("verBadgeShot");
   if (a) a.textContent = VERSION;
   if (b) b.textContent = VERSION;
   if (c) c.textContent = VERSION;
+  if (d) d.textContent = VERSION;
 }
 
 /* ──────────────────────────────────────────────────────────────
@@ -3206,6 +3252,19 @@ function handleKey(e) {
     }
     return;
   }
+  if (modalOpen === "shot") {
+    /* ev44: shot modal — Esc/q/s closes, r replays. */
+    if (k === "Escape" || k === "q") {
+      e.preventDefault(); closeShotsModal(); return;
+    }
+    if (k === "s") { e.preventDefault(); closeShotsModal(); return; }
+    if (k === "r" && lastShot.state) {
+      e.preventDefault();
+      if (applyShot(lastShot.state)) closeShotsModal();
+      return;
+    }
+    return;
+  }
 
   /* Escape with no modal open is the global autoplay kill-switch. */
   if (k === "Escape" && autoplayOn) {
@@ -3342,6 +3401,22 @@ function handleKey(e) {
     minimapOn = !minimapOn;
     setAction(minimapOn ? "minimap on" : "minimap off");
     needsRender = true;
+    return;
+  }
+
+  /* ev44: shot — `s` captures the live canvas + state and opens the
+   * shot modal.  Shift+S re-opens the last captured shot (or a fresh
+   * one if none yet) without re-snapping, useful for inspecting a
+   * just-imported file. */
+  if (k === "s") {
+    e.preventDefault();
+    if (e.repeat) return;
+    if (e.shiftKey) {
+      if (lastShot.state) showShotsModal(lastShot.state, "viewing last");
+      else captureShot();
+    } else {
+      captureShot();
+    }
     return;
   }
 }
@@ -5445,6 +5520,325 @@ function closeLiteTerm() {
   needsRender = true;
 }
 function toggleLiteTerm() { if (liteOpen) closeLiteTerm(); else openLiteTerm(); }
+
+/* ── ev44: live browser shot — capture + replay ─────────────
+ *
+ * The point of a shot is debugging visibility: the game can take a
+ * picture of itself, hand the picture (PNG) and the semantic state
+ * behind it (rule, palettes, player, view box) to a Velour app or
+ * to Claude, and the receiver can both *see* what was on screen and
+ * *replay* the same world to compare against current behaviour.
+ *
+ * Format — schema "officerpg-shot/1":
+ *   { schema, version, capturedAt, png, view, player, rule(b64),
+ *     palettes, panelSeed, action, autoplay }
+ *
+ * The PNG is embedded base64 so a single .json is the whole bundle
+ * — easy to drop into a chat, attach to an issue, or feed back via
+ * the in-game importer.  Replay restores rule + palettes + view +
+ * player; the panel mosaic is allowed to re-evolve from the rule
+ * (perfect cell-level reproduction would need a much larger blob
+ * and isn't useful for the "what does the screen look like" use
+ * case the user actually wants). */
+const lastShot = { state: null, prettyJson: null };
+
+function _b64FromBytes(u8) {
+  /* btoa wants a binary string; loop in chunks to dodge call-stack
+   * limits on a 16 KB Uint8Array. */
+  let s = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < u8.length; i += CHUNK) {
+    s += String.fromCharCode.apply(null, u8.subarray(i, i + CHUNK));
+  }
+  return btoa(s);
+}
+function _bytesFromB64(b64) {
+  const s = atob(b64);
+  const out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+  return out;
+}
+
+function buildShotState() {
+  /* Snapshot the visible canvas as a PNG dataURL. */
+  const png = canvas.toDataURL("image/png");
+
+  /* Per-panel palettes — palettes[] holds 9 sub-panels, each an
+   * array of 4 [r,g,b] tuples.  Round-trip safe through JSON. */
+  const palettesOut = [];
+  for (let i = 0; i < 9; i++) {
+    const p = palettes[i];
+    if (p) {
+      palettesOut.push(p.map(c => [c[0]|0, c[1]|0, c[2]|0]));
+    } else {
+      palettesOut.push(null);
+    }
+  }
+
+  return {
+    schema: "officerpg-shot/1",
+    version: VERSION,
+    capturedAt: new Date().toISOString(),
+    png: png,
+    view: {
+      px: px, py: py,
+      mx: worldPos[0] | 0, my: worldPos[1] | 0,
+      mapW: MAP_W, mapH: MAP_H,
+      tileW: TILE_W, tileH: TILE_H,
+      tilePx: TILE_PX,
+      worldPos: Array.from(worldPos),
+    },
+    player: {
+      hp: player.hp, maxHp: player.maxHp,
+      mp: player.mp, maxMp: player.maxMp,
+      alive: player.alive,
+      headRgb: playerHeadRgb.slice(),
+      bodyRgb: playerBodyRgb.slice(),
+      headSalt: playerHeadSalt | 0,
+      bodySalt: playerBodySalt | 0,
+      inv: Array.from(player.inv),
+      invNames: Array.from(player.invNames),
+      invCount: player.invCount,
+      bendSkill: Array.from(player.bendSkill),
+      catBend: Array.from(player.catBend),
+    },
+    rule: _b64FromBytes(ruleset),
+    palettes: palettesOut,
+    panelSeed: Array.from(panelSeed),
+    action: actionEl ? (actionEl.textContent || "") : "",
+    autoplay: {
+      on: !!autoplayOn,
+      dir: autoplayDir ? { dx: autoplayDir.dx, dy: autoplayDir.dy } : null,
+      bumps: autoplayBumps | 0,
+    },
+  };
+}
+
+function captureShot() {
+  /* Force a fresh render so the PNG is current — needsRender flips
+   * each frame and we may be mid-pause (e.g. modal just closed). */
+  if (typeof render === "function") {
+    try { render(); } catch (_) {}
+  }
+  const state = buildShotState();
+  lastShot.state = state;
+  lastShot.prettyJson = JSON.stringify(state, null, 0);
+  showShotsModal(state, "captured · " + state.capturedAt.replace("T", " ").slice(0, 19));
+}
+
+function showShotsModal(state, status) {
+  const mod = document.getElementById("shotsModal");
+  const img = document.getElementById("shotPreview");
+  const meta = document.getElementById("shotMeta");
+  const stat = document.getElementById("shotStatus");
+  if (state && state.png) img.src = state.png;
+  else img.removeAttribute("src");
+  if (state) {
+    meta.textContent =
+      "version  " + state.version + "\n" +
+      "shot at  " + state.capturedAt + "\n" +
+      "view     mx=" + state.view.mx + " my=" + state.view.my +
+        " px=" + state.view.px + " py=" + state.view.py + "\n" +
+      "player   hp=" + state.player.hp + "/" + state.player.maxHp +
+        " mp=" + state.player.mp + "/" + state.player.maxMp +
+        " inv=" + state.player.invCount + "\n" +
+      "rule     " + (state.rule ? state.rule.length + "B b64" : "—") + "\n" +
+      "autoplay " + (state.autoplay.on ? "on" : "off") + "\n" +
+      "size     " + (lastShot.prettyJson ? lastShot.prettyJson.length + " B json" : "—");
+  } else {
+    meta.textContent = "(no shot yet — press s to capture)";
+  }
+  if (stat) stat.textContent = status || "";
+  mod.hidden = false;
+  modalOpen = "shot";
+  needsRender = false;  /* don't repaint behind the modal */
+}
+
+function closeShotsModal() {
+  const mod = document.getElementById("shotsModal");
+  if (mod) mod.hidden = true;
+  if (modalOpen === "shot") modalOpen = null;
+  needsRender = true;
+}
+
+function downloadShotBundle() {
+  if (!lastShot.state) return;
+  const ts = lastShot.state.capturedAt.replace(/[:.]/g, "-").slice(0, 19);
+  const blob = new Blob([JSON.stringify(lastShot.state)],
+                        { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "officerpg-shot-" + lastShot.state.version + "-" + ts + ".json";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+  const stat = document.getElementById("shotStatus");
+  if (stat) stat.textContent = "saved bundle";
+}
+
+function downloadShotPng() {
+  if (!lastShot.state || !lastShot.state.png) return;
+  const ts = lastShot.state.capturedAt.replace(/[:.]/g, "-").slice(0, 19);
+  const a = document.createElement("a");
+  a.href = lastShot.state.png;
+  a.download = "officerpg-shot-" + lastShot.state.version + "-" + ts + ".png";
+  document.body.appendChild(a); a.click(); a.remove();
+  const stat = document.getElementById("shotStatus");
+  if (stat) stat.textContent = "saved png";
+}
+
+function copyShotJson() {
+  if (!lastShot.prettyJson) return;
+  const stat = document.getElementById("shotStatus");
+  const txt = lastShot.prettyJson;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(txt).then(
+      () => { if (stat) stat.textContent = "copied json"; },
+      () => { if (stat) stat.textContent = "copy failed"; }
+    );
+  } else if (stat) {
+    stat.textContent = "clipboard unsupported";
+  }
+}
+
+function applyShot(state) {
+  /* Defensive: only handle our schema. */
+  if (!state || state.schema !== "officerpg-shot/1") {
+    const stat = document.getElementById("shotStatus");
+    if (stat) stat.textContent = "wrong schema — expected officerpg-shot/1";
+    return false;
+  }
+  /* Rule. */
+  if (typeof state.rule === "string" && state.rule.length) {
+    const bytes = _bytesFromB64(state.rule);
+    if (bytes.length === RULESET_BYTES) {
+      ruleset.set(bytes);
+    }
+  }
+  /* Per-panel palettes + seeds. */
+  if (Array.isArray(state.palettes)) {
+    for (let i = 0; i < 9 && i < state.palettes.length; i++) {
+      if (state.palettes[i]) palettes[i] = state.palettes[i];
+    }
+  }
+  if (Array.isArray(state.panelSeed)) {
+    for (let i = 0; i < 9 && i < state.panelSeed.length; i++) {
+      panelSeed[i] = (state.panelSeed[i] | 0) >>> 0;
+    }
+  }
+  /* View — restore the entire worldPos chain if present so the
+   * meta-overworld depth comes back too; otherwise just the px/py
+   * pixel cursor.  Bare mx/my isn't a global in this fork — the
+   * top-level meta lives at worldPos[0..1]. */
+  if (state.view) {
+    if (Array.isArray(state.view.worldPos)
+        && state.view.worldPos.length === worldPos.length) {
+      for (let i = 0; i < worldPos.length; i++) {
+        worldPos[i] = state.view.worldPos[i] | 0;
+      }
+    } else {
+      if (Number.isFinite(state.view.mx)) worldPos[0] = state.view.mx | 0;
+      if (Number.isFinite(state.view.my)) worldPos[1] = state.view.my | 0;
+    }
+    if (Number.isFinite(state.view.px)) px = state.view.px | 0;
+    if (Number.isFinite(state.view.py)) py = state.view.py | 0;
+  }
+  /* Player. */
+  if (state.player) {
+    const p = state.player;
+    if (Number.isFinite(p.hp)) player.hp = p.hp | 0;
+    if (Number.isFinite(p.maxHp)) player.maxHp = p.maxHp | 0;
+    if (Number.isFinite(p.mp)) player.mp = p.mp | 0;
+    if (Number.isFinite(p.maxMp)) player.maxMp = p.maxMp | 0;
+    if (typeof p.alive === "boolean") player.alive = p.alive;
+    if (Array.isArray(p.headRgb) && p.headRgb.length === 3)
+      playerHeadRgb = p.headRgb.slice();
+    if (Array.isArray(p.bodyRgb) && p.bodyRgb.length === 3)
+      playerBodyRgb = p.bodyRgb.slice();
+    if (Number.isFinite(p.headSalt)) playerHeadSalt = p.headSalt | 0;
+    if (Number.isFinite(p.bodySalt)) playerBodySalt = p.bodySalt | 0;
+  }
+  /* Caches keyed by old palettes/salts/rule are now stale. */
+  if (typeof cellTexCache !== "undefined") cellTexCache.clear();
+  if (typeof spriteCache !== "undefined") spriteCache.clear();
+  if (typeof blockTexCache !== "undefined") blockTexCache.clear();
+  /* Rebuild the visible mosaic from the restored rule + seeds. */
+  try {
+    if (typeof refreshPalettes === "function") refreshPalettes();
+    if (typeof regenMosaic === "function") regenMosaic();
+    if (typeof regenMosaicEntities === "function")
+      regenMosaicEntities(px, py);
+    if (typeof snapshotAllPanels === "function") snapshotAllPanels();
+  } catch (e) {
+    console.warn("applyShot regen failed:", e);
+  }
+  if (deathEl) deathEl.hidden = !!player.alive ? true : deathEl.hidden;
+  setAction("replayed shot · " + (state.capturedAt || "?"));
+  needsRender = true;
+  return true;
+}
+
+function loadShotFromFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    let parsed = null;
+    try { parsed = JSON.parse(e.target.result); }
+    catch (err) {
+      const stat = document.getElementById("shotStatus");
+      if (stat) stat.textContent = "invalid json: " + err.message;
+      return;
+    }
+    lastShot.state = parsed;
+    lastShot.prettyJson = JSON.stringify(parsed);
+    showShotsModal(parsed, "loaded · " + file.name);
+  };
+  reader.onerror = () => {
+    const stat = document.getElementById("shotStatus");
+    if (stat) stat.textContent = "read failed";
+  };
+  reader.readAsText(file);
+}
+
+/* Wire shot-modal buttons + hidden file input + canvas drop zone. */
+{
+  const fi = document.getElementById("shotFileInput");
+  if (fi) fi.addEventListener("change", (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (f) loadShotFromFile(f);
+    e.target.value = "";  /* allow re-picking the same file */
+  });
+  const bd = document.getElementById("shotBtnDownload");
+  if (bd) bd.addEventListener("click", downloadShotBundle);
+  const bp = document.getElementById("shotBtnDownloadPng");
+  if (bp) bp.addEventListener("click", downloadShotPng);
+  const bc = document.getElementById("shotBtnCopy");
+  if (bc) bc.addEventListener("click", copyShotJson);
+  const br = document.getElementById("shotBtnReplay");
+  if (br) br.addEventListener("click", () => {
+    if (!lastShot.state) return;
+    const ok = applyShot(lastShot.state);
+    if (ok) closeShotsModal();
+  });
+  const bi = document.getElementById("shotBtnImport");
+  if (bi) bi.addEventListener("click", () => {
+    if (fi) fi.click();
+  });
+
+  /* Drop a .json file onto the canvas → replay it. */
+  if (canvas) {
+    canvas.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    });
+    canvas.addEventListener("drop", (e) => {
+      e.preventDefault();
+      const f = e.dataTransfer && e.dataTransfer.files
+                && e.dataTransfer.files[0];
+      if (f) loadShotFromFile(f);
+    });
+  }
+}
 
 window.addEventListener("keydown", handleKey);
 
