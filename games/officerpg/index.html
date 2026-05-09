@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>office rpg — hi-res · ev51</title>
+<title>office rpg — hi-res · ev52</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000;
                color: #ccc; font-family: ui-monospace, "SF Mono", Menlo,
@@ -205,7 +205,7 @@
     <kbd>p</kbd> player skin · <kbd>j</kbd> journey ·
     <kbd>o</kbd> map · <kbd>t</kbd> terminal · <kbd>r</kbd> reseed ·
     <kbd>s</kbd> shot · <kbd>S</kbd> shots · <kbd>y</kbd> full auto ·
-    <kbd>T</kbd> tile shape
+    <kbd>T</kbd> tile shape · <kbd>u</kbd> per-cell rules
   </div>
 </div>
 <div id="invModal" class="modal" hidden>
@@ -558,7 +558,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev51";
+const VERSION = "ev52";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -834,6 +834,85 @@ const panelSeed  = new Uint32Array(9);   /* world seed per sub-panel */
 const palettes   = new Array(9);          /* 4 RGB triples per sub-panel */
 let ruleset = new Uint8Array(RULESET_BYTES);   /* hex CA rule lookup */
 
+/* ── ev52: per-cell rulesets (pool variant) ─────────────────────
+ *
+ * Toggle (Shift+U) lets every world cell pick its inner-CA
+ * ruleset from a 256-rule pool instead of all sharing the mother.
+ * The pool is mother + 255 lightly-mutated copies so transitions
+ * between regions read as variations, not as random noise — and
+ * each cell's pool index is derived from a hash of (panelSeed, wx,
+ * wy), so the same world coord always maps to the same rule
+ * across mosaic shifts.
+ *
+ * RAM cost: 256 × 16 KB = 4 MB pool, no per-cell index array
+ * needed (function-derived).  cellTexCache must be cleared on
+ * toggle since the same world hash now resolves to a different
+ * texture under the per-cell rule. */
+const RULE_POOL_SIZE = 256;
+const RULE_POOL_MUTATION = 0.10;       /* fraction of bytes per slot */
+let rulesetPool   = null;              /* Uint8Array(POOL_SIZE * 16384) */
+let perCellRulesOn = false;
+
+function ensureRulePool() {
+  if (rulesetPool) return;
+  rulesetPool = new Uint8Array(RULE_POOL_SIZE * RULESET_BYTES);
+  /* Slot 0 mirrors the mother — touching this slot covers cells
+   * whose hash happens to land on 0, keeping a baseline familiar. */
+  rulesetPool.set(ruleset, 0);
+  /* Slots 1..N-1: random-byte mutations of the mother.  ~10% of
+   * 16 384 bytes flipped per slot = enough variation that the
+   * inner CA evolves differently, but not so much that the slot
+   * descends into pure noise. */
+  const nMutate = Math.max(1, (RULESET_BYTES * RULE_POOL_MUTATION) | 0);
+  for (let i = 1; i < RULE_POOL_SIZE; i++) {
+    const offset = i * RULESET_BYTES;
+    rulesetPool.set(ruleset, offset);
+    for (let m = 0; m < nMutate; m++) {
+      const idx = (Math.random() * RULESET_BYTES) | 0;
+      rulesetPool[offset + idx] = (Math.random() * 4) | 0;
+    }
+  }
+}
+
+function reseedRulePool() {
+  /* Discard pool so the next ensureRulePool rebuilds against the
+   * current mother — useful after the user has bent terrain or
+   * imported a new ruleset and wants the pool to track. */
+  rulesetPool = null;
+  if (perCellRulesOn) ensureRulePool();
+  cellTexCache.clear();
+  needsRender = true;
+}
+
+function getCellRulesetForWorld(wx, wy) {
+  if (!perCellRulesOn || !rulesetPool) return ruleset;
+  /* Stable per-world-coord index — derives from the panel seed
+   * + cell position, so walking around shows coherent regions
+   * rather than swirling noise.  Returns a subarray view, no
+   * copy; hexStep accepts views as-is. */
+  const sx = (wx / MAP_W) | 0;
+  const sy = (wy / MAP_H) | 0;
+  const localX = wx - sx * MAP_W;
+  const localY = wy - sy * MAP_H;
+  const seed = panelSeed[sy * 3 + sx] | 0;
+  const idx = (hash3(seed ^ localX, localY, 0xa5a5a5a5) & 0xff);
+  return rulesetPool.subarray(idx * RULESET_BYTES,
+                              (idx + 1) * RULESET_BYTES);
+}
+
+function togglePerCellRules() {
+  if (!perCellRulesOn) {
+    ensureRulePool();
+    perCellRulesOn = true;
+    setAction("per-cell rulesets ON · 256-rule pool · ~4 MB");
+  } else {
+    perCellRulesOn = false;
+    setAction("per-cell rulesets OFF · mother ruleset");
+  }
+  cellTexCache.clear();
+  needsRender = true;
+}
+
 /* ── Multi-ruleset terrain (ev22) ────────────────────────────
  * Four parent rulesets evolve over time via a tournament; each
  * cell is tagged 0..3 picking which parent it lives under, so the
@@ -954,8 +1033,12 @@ function getCellTexture(wx, wy) {
   for (let i = 0; i < MAP_W * MAP_H; i++)
     scratchA[i] = (mulberryInt(st) >>> 30) & 3;
   let a = scratchA, b = scratchB;
+  /* ev52: when per-cell rulesets are enabled, fetch the cell's
+   * pool entry once (a Uint8Array view, no copy) and step under
+   * that instead of the mother ruleset. */
+  const cellRs = perCellRulesOn ? getCellRulesetForWorld(wx, wy) : ruleset;
   for (let t = 0; t < INNER_STEPS; t++) {
-    hexStep(ruleset, a, b, MAP_W, MAP_H);
+    hexStep(cellRs, a, b, MAP_W, MAP_H);
     [a, b] = [b, a];
   }
   const inner = a;
@@ -3731,6 +3814,17 @@ function handleKey(e) {
     } else {
       captureShot();
     }
+    return;
+  }
+
+  /* ev52: per-cell rulesets — `u` toggles, Shift+U reseeds the pool
+   * from the current mother (useful after bending terrain so the
+   * pool tracks the live ruleset). */
+  if (k === "u") {
+    e.preventDefault();
+    if (e.repeat) return;
+    if (e.shiftKey) reseedRulePool();
+    else            togglePerCellRules();
     return;
   }
 }
