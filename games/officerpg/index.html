@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>office rpg — hi-res · ev59</title>
+<title>office rpg — hi-res · ev60</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000;
                color: #ccc; font-family: ui-monospace, "SF Mono", Menlo,
@@ -201,7 +201,7 @@
     <kbd>i</kbd> inv · <kbd>m</kbd> zap · <kbd>l</kbd> live ·
     <kbd>k</kbd> speeds · <kbd>0</kbd>-<kbd>3</kbd> bend ·
     <kbd>4</kbd>-<kbd>7</kbd> recolour · <kbd>g</kbd> genome ·
-    <kbd>b</kbd> bio lab · <kbd>n</kbd> music ·
+    <kbd>b</kbd> bio lab · <kbd>n</kbd> music · <kbd>v</kbd> waltz ·
     <kbd>p</kbd> player skin · <kbd>j</kbd> journey ·
     <kbd>o</kbd> map · <kbd>t</kbd> terminal · <kbd>r</kbd> reseed ·
     <kbd>s</kbd> shot · <kbd>S</kbd> shots · <kbd>y</kbd> full auto ·
@@ -559,7 +559,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev59";
+const VERSION = "ev60";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -3967,6 +3967,19 @@ function handleKey(e) {
     return;
   }
 
+  /* ev60: waltz toggle (v) — flips the music between 4/4 common
+   * time and 3/4 waltz with downbeat emphasis on beat 1.  Per-beat
+   * tempo is unchanged; the same evolving CA score gets recast in
+   * 3/4 so the world plays as a waltz of itself.  Engaging it
+   * mid-bar takes effect at the next bar boundary. */
+  if (k === "v") {
+    e.preventDefault();
+    if (e.repeat) return;
+    musicWaltz = !musicWaltz;
+    setAction(musicWaltz ? "waltz mode (3/4)" : "common time (4/4)");
+    return;
+  }
+
   /* Embedded terminal sub-game (ev18) — `t` opens an 80×24 lite
    * rpg in a Win95-style window.  Shift+T opens the ev46 tile-shape
    * modal instead so the two can coexist on the same letter. */
@@ -5391,6 +5404,16 @@ let musicWorker     = null;            /* ev49: worker that pings
                                          keeps firing through main-
                                          thread stalls */
 let musicOn         = false;
+/* ev60: waltz mode — toggle from 4/4 (8 steps × 0.25 s = 2.0 s bar)
+ * to 3/4 (6 steps × 0.25 s = 1.5 s bar) with downbeat emphasis on
+ * step 0 of every bar.  Per-beat tempo stays at 120 BPM; only the
+ * meter changes, so the waltz reads as the same world's score
+ * recast in 3/4 rather than as a separate piece.  Toggled by `v`. */
+let musicWaltz      = false;
+const MUSIC_WALTZ_STEPS_PER_BAR = 6;
+const MUSIC_WALTZ_BAR_SECS      = 1.5;
+const MUSIC_WALTZ_DOWNBEAT_GAIN = 1.5;
+const MUSIC_WALTZ_OFFBEAT_GAIN  = 0.85;
 
 /* ── ev42: mood modifier — current cell influences key + intensity
  * Each frame we sample the player's current 64×64 cell from mapArr
@@ -5536,6 +5559,13 @@ function musicScheduleBar(ctx, barStartT) {
   let moodGain = musicMoodIntensity;
   if (moodGain < 0.6) moodGain = 0.6;
   if (moodGain > 1.4) moodGain = 1.4;
+  /* ev60: waltz vs common time.  Step duration stays constant
+   * (= 0.25 s, an 8th note at 120 BPM); only the number of steps
+   * per bar (and so the bar duration itself) changes between
+   * 4/4 and 3/4.  Step 0 of each bar gets a louder downbeat in
+   * waltz mode so the 3/4 metre reads clearly. */
+  const stepsThisBar = musicWaltz
+    ? MUSIC_WALTZ_STEPS_PER_BAR : MUSIC_STEPS;
   const stepDur = MUSIC_BAR_SECS / MUSIC_STEPS;
   /* ev47: stereo split — score-CA (musicCA) plays the left channel,
    * meta-CA (the conductor grid) plays the right channel.  Both
@@ -5557,18 +5587,26 @@ function musicScheduleBar(ctx, barStartT) {
     const gainCell = metaCA[META_VOICE_ROW * MUSIC_W + gainCol] & 3;
     const gainMul  = META_GAIN_MUL[gainCell];
     if (gainMul === 0) continue;                      /* voice muted */
-    for (let s = 0; s < MUSIC_STEPS; s++) {
-      const col = s * (MUSIC_W / MUSIC_STEPS) | 0;
+    for (let s = 0; s < stepsThisBar; s++) {
+      const col = s * (MUSIC_W / stepsThisBar) | 0;
       /* L — score CA. */
       const cellL = musicCA[row * MUSIC_W + col] & 3;
       const semiL = MUSIC_CELL_TO_SEMI[cellL];
       const noteStart = barStartT + s * stepDur;
       const noteDur   = stepDur * cfg.dec;
+      /* ev60: waltz downbeat emphasis — step 0 louder, others
+       * slightly quieter, so the 1-2-3 reads as oompa-pa-pa.
+       * Common-time stays flat (no per-step gain shaping). */
+      const meterGain = musicWaltz
+        ? (s === 0 ? MUSIC_WALTZ_DOWNBEAT_GAIN
+                   : MUSIC_WALTZ_OFFBEAT_GAIN)
+        : 1.0;
       if (semiL !== null) {
         const freqL = MUSIC_BASE_FREQ *
                       Math.pow(2, cfg.octave + (semiL + rootSemi) / 12);
         musicScheduleNote(ctx, wt, freqL, noteStart, noteDur,
-                          cfg.vol * gainMul * moodGain, lDest);
+                          cfg.vol * gainMul * moodGain * meterGain,
+                          lDest);
       }
       /* R — meta CA (the board).  Same voicing rules, different
        * grid; produces a complementary line that locks to the
@@ -5580,7 +5618,8 @@ function musicScheduleBar(ctx, barStartT) {
           const freqR = MUSIC_BASE_FREQ *
                         Math.pow(2, cfg.octave + (semiR + rootSemi) / 12);
           musicScheduleNote(ctx, wt, freqR, noteStart, noteDur,
-                            cfg.vol * gainMul * moodGain * R_GAIN, rDest);
+                            cfg.vol * gainMul * moodGain *
+                            meterGain * R_GAIN, rDest);
         }
       }
     }
@@ -5615,12 +5654,18 @@ function musicSchedulerTick() {
    * music keeps evolving as if the lost time really happened) and
    * re-anchor to a small lead past now.  The audible gap is bounded
    * by 0.05 s + slip, far better than a clustered stutter. */
+  /* ev60: bar duration depends on meter — 2.0 s in 4/4, 1.5 s in
+   * 3/4 (waltz).  Per-beat tempo is fixed; only step count per bar
+   * changes.  Read once per tick so a meter flip mid-tick doesn't
+   * race itself between catch-up and look-ahead loops below. */
+  const barSecs = musicWaltz
+    ? MUSIC_WALTZ_BAR_SECS : MUSIC_BAR_SECS;
   if (musicNextBarT < now) {
     while (musicNextBarT < now) {
       musicStepCA();
       musicBarCount++;
       if ((musicBarCount % META_BARS_PER_STEP) === 0) musicStepMetaCA();
-      musicNextBarT += MUSIC_BAR_SECS;
+      musicNextBarT += barSecs;
     }
     musicNextBarT = now + 0.05;
   }
@@ -5631,7 +5676,7 @@ function musicSchedulerTick() {
     /* Conductor advances 1/8 as fast as the score — one tick every
      * 64 beats brings in a new movement / instrument / key. */
     if ((musicBarCount % META_BARS_PER_STEP) === 0) musicStepMetaCA();
-    musicNextBarT += MUSIC_BAR_SECS;
+    musicNextBarT += barSecs;
   }
 }
 
