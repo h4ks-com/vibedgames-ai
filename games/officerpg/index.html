@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>office rpg — hi-res · ev47</title>
+<title>office rpg — hi-res · ev48</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000;
                color: #ccc; font-family: ui-monospace, "SF Mono", Menlo,
@@ -525,7 +525,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev47";
+const VERSION = "ev48";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -954,11 +954,10 @@ function getCellTexture(wx, wy) {
   off.width = MAP_W;
   off.height = MAP_H;
   off.getContext("2d").putImageData(img, 0, 0);
-  /* ev46: when a custom tile shape is active, clip the cell texture
-   * to the shape silhouette so renders silhouette correctly without
-   * touching the rest of the pipeline.  cellTexCache is cleared on
-   * setTileShape/clearTileShape, so the cached canvas stays in sync. */
-  applyTileShapeMaskTo(off);
+  /* ev48: cell textures stay rectangular in the cache.  Tile-shape
+   * silhouetting moved to a Path2D clip applied in drawNotchedTile
+   * — it fixes the protrusion-clip seam that the offscreen-mask
+   * approach (ev46) couldn't avoid. */
   cellTexCache.set(key, off);
   return off;
 }
@@ -2731,12 +2730,25 @@ function drawMinimap() {
  * source rect uses BLOCK_W/3 (a float) for the notch column so
  * the inner CA scales without fractional-pixel artefacts. */
 function drawNotchedTile(tex, tx, ty) {
-  /* ev46: a custom tile shape skips the historical 4-quad notch-and-
-   * protrusion reslice, since the shape silhouette is already baked
-   * into the texture's alpha channel by applyTileShapeMaskTo.  Just
-   * draw the rectangle and the mask reveals the shape on the world. */
-  if (tileShapeMask) {
-    ctx.drawImage(tex, tx, ty, TILE_PX, TILE_PX);
+  /* ev48: a custom tile shape clips the main canvas to its Path2D
+   * silhouette and paints the cell texture into a destination rect
+   * enlarged by tileShapeMarginPx in each direction.  The enlarged
+   * rect actually fills outward protrusions (which the ev46 mask
+   * approach lost to canvas-edge clipping → black seams) — and the
+   * Tilesmith mirror invariant guarantees neighbour tiles' indents
+   * leave exactly the matching room, so the union covers the world
+   * with no gaps.  Source rect stays the full 64×64 CA: the only
+   * cost is a slight stretch of pattern into the protrusion area,
+   * imperceptible at TILE_PX = 32 with margin ≤ ~6 px. */
+  if (tileShapePath) {
+    const m = tileShapeMarginPx | 0;
+    ctx.save();
+    ctx.translate(tx, ty);
+    ctx.beginPath();
+    ctx.clip(tileShapePath);
+    ctx.drawImage(tex, 0, 0, MAP_W, MAP_H,
+                  -m, -m, TILE_PX + 2 * m, TILE_PX + 2 * m);
+    ctx.restore();
     return;
   }
   const sw = tex.width, sh = tex.height;
@@ -5875,11 +5887,21 @@ function toggleLiteTerm() { if (liteOpen) closeLiteTerm(); else openLiteTerm(); 
  * and inverted offset, so neighbouring rows fit cleanly.
  *
  * `tileShape` null = the historical notched tile (drawNotchedTile);
- * non-null = a precomputed alpha mask (`tileShapeMask`) is composited
- * onto every cell texture's offscreen canvas via destination-in,
- * clipping the rectangular CA pixels to the shape silhouette. */
+ * non-null = the main canvas is clipped with a Path2D in drawNotchedTile
+ * (ev48) and the cell texture is painted into a destination rect
+ * enlarged by tileShapeMarginPx so outward protrusions are filled.
+ * The mirror invariant ensures neighbour tiles' indents leave exactly
+ * the matching room — silhouettes meet without gap or overlap. */
 let tileShape = null;
-let tileShapeMask = null;
+let tileShapeMask = null;     /* preview-only canvas; main render uses
+                                 the Path2D below */
+let tileShapePath = null;     /* ev48: Path2D for ctx.clip(), in
+                                 tile-local 0..TILE_PX coords */
+let tileShapeMarginPx = 0;    /* ev48: outward extent of any control
+                                 point in pixels, drives the enlarged
+                                 destination rect so protrusions are
+                                 actually painted instead of clipped
+                                 to the tile bounding box */
 const TILE_SHAPE_PAIR = [3, 4, 5, 0, 1, 2];
 /* Edge geometry in tile-px coords (corners at (0,0)…(TILE_PX,TILE_PX),
  * top + bottom edges split at the half-way x).  outX/outY are the
@@ -5901,11 +5923,59 @@ function tileShapeEdgePoint(edgeIdx, p, off) {
   return [bx + off * TILE_PX * g.outX, by + off * TILE_PX * g.outY];
 }
 
+function buildTileShapePath(spec) {
+  /* ev48: Path2D used by the main render's ctx.clip() — vertices in
+   * tile-local coords (0..TILE_PX) PLUS any outward control-point
+   * displacement, which can land outside that range when off > 0.
+   * Unlike the offscreen mask, Path2D has no canvas-bound clipping,
+   * so protrusions survive intact and we can fill them by extending
+   * the drawImage destination rect by tileShapeMarginPx in each
+   * direction (mirror invariant guarantees neighbour tiles don't
+   * also try to claim that pixel). */
+  const path = new Path2D();
+  path.moveTo(0, 0);
+  for (let i = 0; i < 6; i++) {
+    const cps = (spec.edges[i] || []).slice().sort((a, b) => a.p - b.p);
+    for (const cp of cps) {
+      const [x, y] = tileShapeEdgePoint(i,
+        Math.max(0, Math.min(1, cp.p)),
+        Number.isFinite(cp.off) ? cp.off : 0);
+      path.lineTo(x, y);
+    }
+    const g = TILE_SHAPE_EDGE_GEOM[i];
+    path.lineTo(g.eX, g.eY);
+  }
+  path.closePath();
+  return path;
+}
+
+function computeTileShapeMargin(spec) {
+  /* Largest |off| (in tile-fraction units) determines how far any
+   * control point can poke past the tile bounding box.  Convert to
+   * pixels and add a 2-px safety pad so the enlarged destination
+   * rect reliably covers every protrusion. */
+  let maxOff = 0;
+  for (const edge of spec.edges) {
+    for (const cp of edge) {
+      const o = cp && cp.off ? Math.abs(cp.off) : 0;
+      if (o > maxOff) maxOff = o;
+    }
+  }
+  return Math.ceil(maxOff * TILE_PX) + 2;
+}
+
 function buildTileShapeMask(spec) {
+  /* Preview-only mask canvas: sized large enough to contain the
+   * whole silhouette including outward protrusions, with the
+   * polygon translated by margin so it sits inside the canvas.
+   * Used for the modal's preview render and nothing else now. */
+  const margin = computeTileShapeMargin(spec);
+  const W = TILE_PX + 2 * margin, H = TILE_PX + 2 * margin;
   const m = document.createElement("canvas");
-  m.width = TILE_PX; m.height = TILE_PX;
+  m.width = W; m.height = H;
   const c = m.getContext("2d");
-  c.clearRect(0, 0, TILE_PX, TILE_PX);
+  c.clearRect(0, 0, W, H);
+  c.translate(margin, margin);
   c.beginPath();
   c.moveTo(0, 0);
   for (let i = 0; i < 6; i++) {
@@ -5936,8 +6006,10 @@ function setTileShape(spec, label) {
     Array.isArray(e) ? e.filter(c => c && Number.isFinite(c.p))
                           .map(c => ({ p: +c.p, off: +c.off || 0 }))
                      : []) };
-  tileShape = clean;
-  tileShapeMask = buildTileShapeMask(clean);
+  tileShape         = clean;
+  tileShapePath     = buildTileShapePath(clean);
+  tileShapeMarginPx = computeTileShapeMargin(clean);
+  tileShapeMask     = buildTileShapeMask(clean);  /* preview only */
   cellTexCache.clear();
   needsRender = true;
   setAction("custom tile shape applied" + (label ? " · " + label : ""));
@@ -5946,8 +6018,10 @@ function setTileShape(spec, label) {
 }
 
 function clearTileShape() {
-  tileShape = null;
-  tileShapeMask = null;
+  tileShape         = null;
+  tileShapePath     = null;
+  tileShapeMarginPx = 0;
+  tileShapeMask     = null;
   cellTexCache.clear();
   needsRender = true;
   setAction("default tile shape");
@@ -6008,45 +6082,40 @@ function refreshShapePreview() {
   const cx = cv.getContext("2d");
   cx.fillStyle = "#000";
   cx.fillRect(0, 0, cv.width, cv.height);
-  /* Render the world's mask into the preview: tile a 3×3 grid so the
-   * tessellation invariant is visible. */
-  if (!tileShapeMask) {
+  if (!tileShapePath) {
     cx.fillStyle = "#1a3a2a";
     cx.fillRect(20, 20, cv.width - 40, cv.height - 40);
     if (meta) meta.textContent = "default rectangular tile";
     return;
   }
+  /* ev48: render via Path2D fill so the preview shows the same
+   * silhouette the world uses — including outward protrusions that
+   * the offscreen mask used to clip. 3×3 offset-hex layout makes
+   * the tessellation invariant visible. */
   const cell = (cv.width / 3) | 0;
+  const scale = cell / TILE_PX;
   for (let row = 0; row < 3; row++) {
     for (let col = 0; col < 3; col++) {
       const ox = col * cell + (row & 1 ? cell / 2 : 0);
       const oy = row * cell;
       cx.save();
       cx.translate(ox, oy);
-      cx.scale(cell / TILE_PX, cell / TILE_PX);
-      cx.globalAlpha = 0.85;
+      cx.scale(scale, scale);
       cx.fillStyle = ((row + col) % 2) ? "#345" : "#356";
-      /* Use the mask as a clip via composite. */
-      cx.drawImage(tileShapeMask, 0, 0);
+      cx.fill(tileShapePath);
       cx.restore();
     }
   }
   if (meta) {
     const total = tileShape.edges.reduce((s, e) => s + e.length, 0);
-    meta.textContent = "custom tile · " + total + " control points";
+    meta.textContent = "custom tile · " + total + " CPs · margin "
+                     + tileShapeMarginPx + "px";
   }
 }
 
-/* When tileShapeMask is set we need to clip every cell texture to
- * the shape.  Patched into getCellTexture by post-composite. */
-function applyTileShapeMaskTo(canvas) {
-  if (!tileShapeMask) return;
-  const cx = canvas.getContext("2d");
-  const prev = cx.globalCompositeOperation;
-  cx.globalCompositeOperation = "destination-in";
-  cx.drawImage(tileShapeMask, 0, 0, canvas.width, canvas.height);
-  cx.globalCompositeOperation = prev;
-}
+/* ev48: applyTileShapeMaskTo retired — clipping moved to ctx.clip()
+ * with a Path2D in drawNotchedTile so outward protrusions survive
+ * intact and the tile mirror invariant produces seamless seams. */
 
 function showShapeModal() {
   refreshShapePreview();
