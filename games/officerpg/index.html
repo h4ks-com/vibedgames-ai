@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>office rpg — hi-res · ev55</title>
+<title>office rpg — hi-res · ev57</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000;
                color: #ccc; font-family: ui-monospace, "SF Mono", Menlo,
@@ -559,7 +559,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev55";
+const VERSION = "ev57";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -830,16 +830,39 @@ function hexToRgb(s) {
 
 /* ── World coord stack ─────────────────────────────────────── */
 const worldPos = new Int32Array(WORLD_LEVELS * 2);
-function worldAdvance(dx, dy) {
+/* ev56: meta-grid topology is hex (offset-r), not rectangular.
+ *
+ * worldAdvance now takes an optional `hexMove` (one of 'wadezx').
+ * When provided, every cascade level re-resolves the move using
+ * that level's own my parity — so a single NW step at level 0
+ * cascades upward as the same NW step at level 1, but with level
+ * 1's parity applied to figure out whether that NW lands at
+ * (mx, my-1) or (mx-1, my-1).  Without a hexMove (e.g. legacy
+ * neighborSeed callers) the cascade falls back to rectangular
+ * propagation. */
+function worldAdvance(dx, dy, hexMove) {
   let cx = dx, cy = dy;
   for (let level = 0; level < WORLD_LEVELS && (cx || cy); level++) {
     worldPos[level * 2    ] += cx;
     worldPos[level * 2 + 1] += cy;
-    cx = 0; cy = 0;
-    if (worldPos[level * 2    ] <  0) { worldPos[level * 2    ] += 64; cx = -1; }
-    if (worldPos[level * 2    ] >= 64){ worldPos[level * 2    ] -= 64; cx = +1; }
-    if (worldPos[level * 2 + 1] <  0) { worldPos[level * 2 + 1] += 64; cy = -1; }
-    if (worldPos[level * 2 + 1] >= 64){ worldPos[level * 2 + 1] -= 64; cy = +1; }
+    let xOver = 0, yOver = 0;
+    if (worldPos[level * 2    ] <  0) { worldPos[level * 2    ] += 64; xOver = -1; }
+    if (worldPos[level * 2    ] >= 64){ worldPos[level * 2    ] -= 64; xOver = +1; }
+    if (worldPos[level * 2 + 1] <  0) { worldPos[level * 2 + 1] += 64; yOver = -1; }
+    if (worldPos[level * 2 + 1] >= 64){ worldPos[level * 2 + 1] -= 64; yOver = +1; }
+    if (!xOver && !yOver) { cx = 0; cy = 0; break; }
+    if (hexMove && yOver !== 0) {
+      /* Re-resolve the same hex move at level+1's my parity. */
+      const upperMy = worldPos[(level + 1) * 2 + 1];
+      const [hdx, hdy] = hexMetaShift(hexMove, upperMy);
+      cx = hdx;
+      cy = hdy;
+    } else {
+      /* Pure x-overflow (E/W) is parity-invariant; rectangular
+       * cascade handles it correctly.  Same for hexMove-less calls. */
+      cx = xOver;
+      cy = yOver;
+    }
   }
 }
 function currentWorldSeed() {
@@ -2444,7 +2467,10 @@ function maybeShift() {
     const [h_dmx, h_dmy] = hexMetaShift(lastHexMove, worldPos[1]);
     if (h_dmx || h_dmy) { metaDx = h_dmx; metaDy = h_dmy; }
   }
-  worldAdvance(metaDx, metaDy);
+  /* ev56: pass lastHexMove so worldAdvance re-resolves via hex
+   * topology at every cascade level — meta-overworld panel
+   * relationships are now hex all the way up, not rectangular. */
+  worldAdvance(metaDx, metaDy, lastHexMove);
   refreshPalettes();
   regenMosaic();
   regenMosaicEntities(px, py);
@@ -2842,13 +2868,13 @@ function requestRender() { needsRender = true; }
  * 3 × 3 cyan square that always shows where you are within the
  * mosaic.  Hotkey `o` toggles it.
  *
- * ev19 — meta-rows of panels render with a hex offset: the middle
- * panel-row (and any other odd-indexed meta-row) is x-shifted by
- * half a panel width, so the 3×3 mosaic of panels visually tiles
- * like a flat-top hex grid — matching how individual cells inside
- * each panel hex-tile each other.  Note that the underlying
- * worldAdvance() still treats panel neighbours as an 8-square
- * grid; this is a display-only change, not a connectivity rewrite. */
+ * ev19 — meta-rows of panels render with a hex offset: the row
+ * whose meta-my is ODD is x-shifted by half a panel width, so
+ * the 3×3 mosaic of panels visually tiles like a flat-top hex
+ * grid — matching how individual cells inside each panel hex-tile
+ * each other.  ev56 — worldAdvance() now uses hex topology at
+ * every cascade level too, so the minimap's visual offset matches
+ * the actual meta-overworld connectivity. */
 const MINI_DEST = 144;             /* on-screen size in px */
 const MINI_PAD  = 8;
 let minimapOn = false;
@@ -2938,8 +2964,17 @@ function drawMinimap() {
   ctx.strokeRect(x0 - 1.5, y0 - 1.5, totalW + 3, MINI_DEST + 3);
   const prevSmoothing = ctx.imageSmoothingEnabled;
   ctx.imageSmoothingEnabled = false;
+  /* ev56: shift the row whose meta-my is ODD (offset-r layout),
+   * not always the middle row.  The 3 visible rows are at meta-my
+   * (worldPos[1] - 1), (worldPos[1]), (worldPos[1] + 1); whichever
+   * of those is odd gets the half-panel x-shift so the minimap
+   * tracks the same hex topology worldAdvance now uses. */
+  const playerMy = worldPos[1] | 0;
+  function _miniRowOdd(mr) {
+    return ((playerMy + mr - 1) & 1) === 1;
+  }
   for (let mr = 0; mr < 3; mr++) {
-    const xOff = (mr & 1) ? halfP : 0;
+    const xOff = _miniRowOdd(mr) ? halfP : 0;
     ctx.drawImage(minimapCanvas,
                   0, mr * srcPan, TILE_W, srcPan,
                   x0 + xOff, y0 + mr * panelH, MINI_DEST, panelH);
@@ -2950,7 +2985,7 @@ function drawMinimap() {
   ctx.strokeStyle = "rgba(255,255,255,0.18)";
   ctx.lineWidth = 1;
   for (let mr = 0; mr < 3; mr++) {
-    const xOff = (mr & 1) ? halfP : 0;
+    const xOff = _miniRowOdd(mr) ? halfP : 0;
     for (let i = 1; i < 3; i++) {
       const vx = x0 + xOff + (panelW * i) | 0;
       ctx.beginPath();
@@ -3942,16 +3977,16 @@ function handleKey(e) {
     return;
   }
 
-  /* ev44: shot — `s` captures the live canvas + state and opens the
-   * shot modal.  Shift+S re-opens the last captured shot (or a fresh
-   * one if none yet) without re-snapping, useful for inspecting a
-   * just-imported file. */
+  /* ev44/ev57: shot — `s` instantly captures + downloads the
+   * complete bundle (PNG + rule + tile shape + per-cell pool +
+   * view + player + flags).  Shift+S opens the modal instead so
+   * you can review last shot, replay a state, or import from disk. */
   if (k === "s") {
     e.preventDefault();
     if (e.repeat) return;
     if (e.shiftKey) {
       if (lastShot.state) showShotsModal(lastShot.state, "viewing last");
-      else captureShot();
+      else captureShot({ showModal: true });
     } else {
       captureShot();
     }
@@ -6879,8 +6914,21 @@ function buildShotState() {
     }
   }
 
+  /* ev57: include the per-cell rule pool when it's been built, so a
+   * shot taken with `u` engaged round-trips back to the same world.
+   * Pool is 256 × 16 KB = 4 MB → 5.5 MB base64; we accept the size
+   * because "everything to rebuild the world" was the explicit ask. */
+  let pool = null;
+  if (rulesetPool) {
+    pool = {
+      size:  RULE_POOL_SIZE,
+      bytes: RULESET_BYTES,
+      b64:   _b64FromBytes(rulesetPool),
+    };
+  }
+
   return {
-    schema: "officerpg-shot/1",
+    schema: "officerpg-shot/2",
     version: VERSION,
     capturedAt: new Date().toISOString(),
     png: png,
@@ -6915,19 +6963,45 @@ function buildShotState() {
       dir: autoplayDir ? { dx: autoplayDir.dx, dy: autoplayDir.dy } : null,
       bumps: autoplayBumps | 0,
     },
+    /* ev57: tile shape (Tilesmith profile) + tile pixel size +
+     * per-cell rule pool + music + minimap + animation flags.
+     * Together with rule/palettes/panelSeed/worldPos, this is
+     * everything the next applyShot needs to rebuild the same
+     * world from scratch. */
+    tileShape:    tileShape ? { edges: tileShape.edges.map(
+      e => e.map(c => ({ p: c.p, off: c.off }))) } : null,
+    tilePxSize:   TILE_PX,
+    perCellRules: { on: !!perCellRulesOn },
+    rulesetPool:  pool,
+    music:        { on: !!musicOn,
+                    stereo: typeof musicStereo !== "undefined"
+                            ? !!musicStereo : true },
+    flags:        { animating: !!animating,
+                    minimapOn: !!minimapOn },
   };
 }
 
-function captureShot() {
-  /* Force a fresh render so the PNG is current — needsRender flips
-   * each frame and we may be mid-pause (e.g. modal just closed). */
+function captureShot(opts) {
+  /* ev57: by default the `s` hotkey now INSTANTLY downloads the
+   * complete bundle (PNG + rule + tile shape + pool + view + player
+   * + flags) — everything needed to rebuild this specific world.
+   * The modal is no longer in the critical path; pass
+   * { showModal: true } to open it (still used by Shift+S replay
+   * inspection and the import-from-disk flow). */
   if (typeof render === "function") {
     try { render(); } catch (_) {}
   }
   const state = buildShotState();
   lastShot.state = state;
   lastShot.prettyJson = JSON.stringify(state, null, 0);
-  showShotsModal(state, "captured · " + state.capturedAt.replace("T", " ").slice(0, 19));
+  if (opts && opts.showModal) {
+    showShotsModal(state, "captured · " +
+      state.capturedAt.replace("T", " ").slice(0, 19));
+  } else {
+    /* Trigger the download immediately. */
+    downloadShotBundle();
+    setAction("shot saved · " + lastShot.prettyJson.length + " B");
+  }
 }
 
 function showShotsModal(state, status) {
@@ -7006,10 +7080,11 @@ function copyShotJson() {
 }
 
 function applyShot(state) {
-  /* Defensive: only handle our schema. */
-  if (!state || state.schema !== "officerpg-shot/1") {
+  /* Defensive: accept schema /1 (legacy ev44) or /2 (ev57+). */
+  if (!state || (state.schema !== "officerpg-shot/1" &&
+                 state.schema !== "officerpg-shot/2")) {
     const stat = document.getElementById("shotStatus");
-    if (stat) stat.textContent = "wrong schema — expected officerpg-shot/1";
+    if (stat) stat.textContent = "wrong schema — expected officerpg-shot/1 or /2";
     return false;
   }
   /* Rule. */
@@ -7061,6 +7136,41 @@ function applyShot(state) {
       playerBodyRgb = p.bodyRgb.slice();
     if (Number.isFinite(p.headSalt)) playerHeadSalt = p.headSalt | 0;
     if (Number.isFinite(p.bodySalt)) playerBodySalt = p.bodySalt | 0;
+  }
+  /* ev57: schema /2 fields — tile size, tile shape, per-cell rule
+   * pool, music + minimap + animating flags. */
+  if (Number.isFinite(state.tilePxSize) &&
+      typeof setTilePx === "function") {
+    setTilePx(state.tilePxSize | 0);
+  }
+  if (state.tileShape && typeof setTileShape === "function") {
+    setTileShape(state.tileShape, "from shot");
+  } else if (state.tileShape === null && typeof clearTileShape === "function") {
+    clearTileShape();
+  }
+  if (state.rulesetPool && typeof state.rulesetPool.b64 === "string") {
+    const bytes = _bytesFromB64(state.rulesetPool.b64);
+    if (bytes.length === RULE_POOL_SIZE * RULESET_BYTES) {
+      rulesetPool = bytes;
+      poolGaRounds = 0;
+      poolGaLastMs = 0;
+    }
+  }
+  if (state.perCellRules && state.perCellRules.on !== undefined) {
+    if (state.perCellRules.on && !perCellRulesOn) {
+      ensureRulePool();
+      perCellRulesOn = true;
+    } else if (!state.perCellRules.on && perCellRulesOn) {
+      perCellRulesOn = false;
+    }
+  }
+  if (state.flags) {
+    if (state.flags.animating !== undefined) animating = !!state.flags.animating;
+    if (state.flags.minimapOn !== undefined) minimapOn = !!state.flags.minimapOn;
+  }
+  if (state.music && state.music.on !== undefined) {
+    if (state.music.on && !musicOn) startMusic();
+    else if (!state.music.on && musicOn) stopMusic();
   }
   /* Caches keyed by old palettes/salts/rule are now stale. */
   if (typeof cellTexCache !== "undefined") cellTexCache.clear();
