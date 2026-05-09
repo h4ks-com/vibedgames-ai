@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>office rpg — hi-res · ev54</title>
+<title>office rpg — hi-res · ev55</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000;
                color: #ccc; font-family: ui-monospace, "SF Mono", Menlo,
@@ -559,7 +559,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev54";
+const VERSION = "ev55";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -3407,7 +3407,7 @@ function toggleFullAuto() {
     if (typeof musicOn !== "undefined" && !musicOn) toggleMusic();
     minimapOn = true;
     if (!autoplayOn) toggleAutoplay();
-    setAction("full auto ON — live + music + map + journey · y again to stop");
+    setAction("full auto ON — live + music + map + journey + tile-GA · y again to stop");
   }
   needsRender = true;
 }
@@ -3579,6 +3579,9 @@ function frame() {
   /* ev54: pool GA runs only when per-cell rulesets are enabled.
    * No-op fast path otherwise (single boolean check). */
   poolGaTick(performance.now());
+  /* ev55: tile-shape GA runs only when full-auto is engaged.
+   * No-op fast path otherwise. */
+  tileShapeAutoTick(performance.now());
   if (needsRender) {
     render();
     needsRender = false;
@@ -6690,6 +6693,93 @@ function evolveSeedFromRuleset() {
   refreshShapeCandidates();
   const stat = document.getElementById("shapeStatus");
   if (stat) stat.textContent = "4 candidates from current ruleset";
+}
+
+/* ── ev55: tile-shape GA — runs only in full-auto mode ──────────
+ *
+ * Maintains a 4-shape population; every TILE_SHAPE_GA_PERIOD_MS
+ * tournaments two random members, breeds the winner with a third
+ * (crossover + mutation), and replaces the loser.  Every 3rd
+ * round the current best is applied as the live tile shape, so
+ * the world silhouette drifts through evolved variants while you
+ * sit in full-auto and watch.
+ *
+ * Fitness rewards "shape character" — total |off| across the 3
+ * primary edges — and lightly penalises runaway CP growth so the
+ * population doesn't asymptote to noisy 30-CP edges.  Slot 0 is
+ * NOT protected: the whole pop is allowed to drift, unlike the
+ * mother-rule slot in the per-cell pool. */
+const TILE_SHAPE_GA_POP   = 4;
+const TILE_SHAPE_GA_PERIOD_MS = 4000;   /* one round per 4 s */
+const TILE_SHAPE_GA_APPLY_EVERY = 3;    /* apply best every 3 rounds = ~12 s */
+const tileShapeGaPop = [];
+let tileShapeGaLastMs = 0;
+let tileShapeGaRounds = 0;
+
+function tileShapeFitness(spec) {
+  /* Sum |off| across primary edges (more wobble = more interest)
+   * minus a soft penalty for very high CP counts (>18 across all
+   * three edges).  Returns a scalar; higher = better. */
+  let totalCps = 0, sumAbs = 0;
+  for (let i = 0; i < 3; i++) {
+    totalCps += spec.edges[i].length;
+    for (const cp of spec.edges[i]) sumAbs += Math.abs(cp.off);
+  }
+  let score = sumAbs;
+  if (totalCps < 3) score -= 0.4;
+  if (totalCps > 18) score -= (totalCps - 18) * 0.05;
+  return score;
+}
+
+function tileShapeGaInit() {
+  tileShapeGaPop.length = 0;
+  for (let i = 0; i < TILE_SHAPE_GA_POP; i++) {
+    tileShapeGaPop.push(tileShapeRandomFromRuleset(
+      ruleset, 0xa5a5a5a5 ^ (i * 0x9e3779b9)));
+  }
+}
+
+function tileShapeIsFullAutoOn() {
+  return animating && (typeof musicOn !== "undefined" && musicOn)
+         && minimapOn && autoplayOn;
+}
+
+function tileShapeAutoTick(now) {
+  if (!tileShapeIsFullAutoOn()) return;
+  if (now - tileShapeGaLastMs < TILE_SHAPE_GA_PERIOD_MS) return;
+  tileShapeGaLastMs = now;
+  if (tileShapeGaPop.length === 0) tileShapeGaInit();
+
+  /* Tournament-2: pick two distinct members. */
+  let i = (Math.random() * TILE_SHAPE_GA_POP) | 0;
+  let j = (Math.random() * TILE_SHAPE_GA_POP) | 0;
+  if (i === j) j = (j + 1) % TILE_SHAPE_GA_POP;
+  const fitI = tileShapeFitness(tileShapeGaPop[i]);
+  const fitJ = tileShapeFitness(tileShapeGaPop[j]);
+  const winIdx  = (fitI >= fitJ) ? i : j;
+  const loseIdx = (fitI >= fitJ) ? j : i;
+
+  /* Pick a third partner for crossover (anyone but the winner). */
+  let k = (Math.random() * TILE_SHAPE_GA_POP) | 0;
+  if (k === winIdx) k = (k + 1) % TILE_SHAPE_GA_POP;
+
+  let child = tileShapeCrossoverGenes(
+    tileShapeGaPop[winIdx], tileShapeGaPop[k]);
+  child = tileShapeMutate(child);
+  tileShapeGaPop[loseIdx] = child;
+
+  tileShapeGaRounds++;
+
+  /* Periodically apply the population's best as the world shape. */
+  if (tileShapeGaRounds % TILE_SHAPE_GA_APPLY_EVERY === 0) {
+    let bestIdx = 0, bestFit = -Infinity;
+    for (let s = 0; s < TILE_SHAPE_GA_POP; s++) {
+      const f = tileShapeFitness(tileShapeGaPop[s]);
+      if (f > bestFit) { bestFit = f; bestIdx = s; }
+    }
+    setTileShape(tileShapeGaPop[bestIdx],
+      "auto · GA r" + tileShapeGaRounds);
+  }
 }
 
 /* Wire shape modal buttons. */
