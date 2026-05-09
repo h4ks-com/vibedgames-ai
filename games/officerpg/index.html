@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>office rpg — hi-res · ev61</title>
+<title>office rpg — hi-res · ev62</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000;
                color: #ccc; font-family: ui-monospace, "SF Mono", Menlo,
@@ -559,7 +559,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev61";
+const VERSION = "ev62";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -4182,7 +4182,9 @@ function handleKey(e) {
     e.preventDefault();
     if (e.repeat) return;
     musicWaltz = !musicWaltz;
-    setAction(musicWaltz ? "waltz mode (3/4)" : "common time (4/4)");
+    setAction(musicWaltz
+      ? "waltz mode — 3/4 oompa-pa-pa (50 mpm)"
+      : "common time — 4/4");
     return;
   }
 
@@ -5610,16 +5612,49 @@ let musicWorker     = null;            /* ev49: worker that pings
                                          keeps firing through main-
                                          thread stalls */
 let musicOn         = false;
-/* ev60: waltz mode — toggle from 4/4 (8 steps × 0.25 s = 2.0 s bar)
- * to 3/4 (6 steps × 0.25 s = 1.5 s bar) with downbeat emphasis on
- * step 0 of every bar.  Per-beat tempo stays at 120 BPM; only the
- * meter changes, so the waltz reads as the same world's score
- * recast in 3/4 rather than as a separate piece.  Toggled by `v`. */
+/* ev60/ev62: waltz mode — toggles from 4/4 (8 steps × 0.25 s =
+ * 2.0 s bar) to 3/4 with a STRUCTURAL voice pattern instead of
+ * the original (ev60) bare downbeat gain bump.  ev60 just made
+ * step 0 louder while 8 voices kept firing on every step — the
+ * resulting "waltz" was barely audible against common time.
+ *
+ * ev62 replaces that with classic oompa-pa-pa: bass voices fire
+ * ONLY on beat 1; mid-register voices fire ONLY on beats 2 & 3
+ * (the "pa-pa" chord); lead voices play across all beats with a
+ * strong accent on 1.  Beats are subdivided into halves (6 steps
+ * × 0.20 s = 1.2 s bar = 50 measures/min, a comfortable middle-
+ * tempo waltz) so the lead can move through passing tones
+ * between the bass + chord hits.  The result is unmistakable —
+ * not just slightly louder on 1, but rhythmically asymmetric in
+ * a way the ear locks onto immediately. */
 let musicWaltz      = false;
 const MUSIC_WALTZ_STEPS_PER_BAR = 6;
-const MUSIC_WALTZ_BAR_SECS      = 1.5;
-const MUSIC_WALTZ_DOWNBEAT_GAIN = 1.5;
-const MUSIC_WALTZ_OFFBEAT_GAIN  = 0.85;
+/* Slightly faster step than common time (0.20 s vs 0.25 s) so
+ * 6 steps × 0.20 = 1.2 s/bar gives 50 measures/min, classic
+ * waltz tempo.  Common time stays at its 0.25 s step. */
+const MUSIC_WALTZ_STEP_DUR      = 0.20;
+const MUSIC_WALTZ_BAR_SECS      = MUSIC_WALTZ_STEPS_PER_BAR *
+                                  MUSIC_WALTZ_STEP_DUR;       /* 1.2 */
+/* Voice × step gain matrix.  Rows are steps 0..5 within the bar
+ * (steps 0,2,4 are the strong "1, 2, 3" beats; steps 1,3,5 are
+ * the weak half-beat passing positions).  Columns are the 8
+ * voices grouped: 0-1 bass, 2-3 mid-low, 4-5 mid-hi, 6-7 lead.
+ * 0 mutes the voice for that step entirely (skips note schedule);
+ * positive multiplies the voice's normal gain. */
+const MUSIC_WALTZ_GAIN = [
+  /* beat 1 strong: BASS HIT + lead accent              */
+  [2.5, 2.5, 0.0, 0.0, 0.0, 0.0, 1.6, 1.6],
+  /* beat 1 weak:   lead passing tone only              */
+  [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5],
+  /* beat 2 strong: MID CHORD ("pa") + lead             */
+  [0.0, 0.0, 1.5, 1.5, 1.5, 1.5, 1.0, 1.0],
+  /* beat 2 weak:   lead passing tone only              */
+  [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5],
+  /* beat 3 strong: MID CHORD ("pa") + lead             */
+  [0.0, 0.0, 1.5, 1.5, 1.5, 1.5, 1.0, 1.0],
+  /* beat 3 weak:   lead passing tone only              */
+  [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5],
+];
 
 /* ── ev42: mood modifier — current cell influences key + intensity
  * Each frame we sample the player's current 64×64 cell from mapArr
@@ -5765,14 +5800,17 @@ function musicScheduleBar(ctx, barStartT) {
   let moodGain = musicMoodIntensity;
   if (moodGain < 0.6) moodGain = 0.6;
   if (moodGain > 1.4) moodGain = 1.4;
-  /* ev60: waltz vs common time.  Step duration stays constant
-   * (= 0.25 s, an 8th note at 120 BPM); only the number of steps
-   * per bar (and so the bar duration itself) changes between
-   * 4/4 and 3/4.  Step 0 of each bar gets a louder downbeat in
-   * waltz mode so the 3/4 metre reads clearly. */
+  /* ev62: waltz vs common time.  Common time keeps the legacy
+   * 0.25 s step (8 steps × 0.25 = 2.0 s bar).  Waltz uses a
+   * 0.20 s step (6 steps × 0.20 = 1.2 s bar, a 50 mpm waltz),
+   * AND replaces the simple downbeat gain with the per-voice
+   * pattern matrix above so the meter is structural, not just
+   * a level bump.  Step duration is read once per bar so any
+   * mid-bar meter flip takes effect cleanly at the next bar. */
   const stepsThisBar = musicWaltz
     ? MUSIC_WALTZ_STEPS_PER_BAR : MUSIC_STEPS;
-  const stepDur = MUSIC_BAR_SECS / MUSIC_STEPS;
+  const stepDur      = musicWaltz
+    ? MUSIC_WALTZ_STEP_DUR : (MUSIC_BAR_SECS / MUSIC_STEPS);
   /* ev47: stereo split — score-CA (musicCA) plays the left channel,
    * meta-CA (the conductor grid) plays the right channel.  Both
    * grids share ruleset and the meta-CA's per-voice gain mask, but
@@ -5800,13 +5838,17 @@ function musicScheduleBar(ctx, barStartT) {
       const semiL = MUSIC_CELL_TO_SEMI[cellL];
       const noteStart = barStartT + s * stepDur;
       const noteDur   = stepDur * cfg.dec;
-      /* ev60: waltz downbeat emphasis — step 0 louder, others
-       * slightly quieter, so the 1-2-3 reads as oompa-pa-pa.
-       * Common-time stays flat (no per-step gain shaping). */
+      /* ev62: waltz voice-pattern.  Bass voices fire only on
+       * beat 1; mid voices only on beats 2 & 3; lead plays
+       * across with a strong accent on 1.  meterGain === 0
+       * means the voice is structurally silent on this step,
+       * so skip both L and R note scheduling — that's what
+       * creates the rhythmic asymmetry the ear locks onto.
+       * Common time stays flat (1.0 throughout). */
       const meterGain = musicWaltz
-        ? (s === 0 ? MUSIC_WALTZ_DOWNBEAT_GAIN
-                   : MUSIC_WALTZ_OFFBEAT_GAIN)
+        ? MUSIC_WALTZ_GAIN[s][v]
         : 1.0;
+      if (meterGain === 0) continue;
       if (semiL !== null) {
         const freqL = MUSIC_BASE_FREQ *
                       Math.pow(2, cfg.octave + (semiL + rootSemi) / 12);
