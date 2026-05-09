@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>office rpg — hi-res · ev48</title>
+<title>office rpg — hi-res · ev49</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000;
                color: #ccc; font-family: ui-monospace, "SF Mono", Menlo,
@@ -525,7 +525,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev48";
+const VERSION = "ev49";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -4988,8 +4988,13 @@ const MUSIC_BAR_SECS  = 2.0;           /* one bar in 4/4 at 120 BPM */
 const MUSIC_VOICES    = 8;
 const MUSIC_STEPS     = 8;
 const MUSIC_BASE_FREQ = 55;            /* A1 root before per-voice octave */
-const MUSIC_LOOK_AHEAD_S = 1.0;
-const MUSIC_SCHED_MS  = 250;
+/* ev49: longer look-ahead + faster tick so a main-thread spike (e.g.
+ * a few heavy render frames after ev48's Path2D clipping) doesn't
+ * drain the audio buffer.  2.5 s of queued notes survives the worst
+ * stalls observed in practice; the 100 ms tick gives ~25 chances to
+ * top the queue back up across that window. */
+const MUSIC_LOOK_AHEAD_S = 2.5;
+const MUSIC_SCHED_MS  = 100;
 const MUSIC_W = 64, MUSIC_H = 64;
 const MUSIC_WT_LEN = (MUSIC_W * MUSIC_H) >> 2;        /* 1024 */
 /* cell value → semitone offset (or null for rest) */
@@ -5016,7 +5021,14 @@ let metaCA          = null;            /* conductor grid (ev14) */
 let metaCABuf       = null;
 let musicBarCount   = 0;               /* bars scheduled since music start */
 let musicNextBarT   = 0;               /* AudioContext time of next bar */
-let musicSchedTimer = null;
+let musicSchedTimer = null;            /* setInterval handle, or
+                                         the literal 'worker' when
+                                         the worker scheduler is on */
+let musicWorker     = null;            /* ev49: worker that pings
+                                         musicSchedulerTick on its
+                                         own thread so the scheduler
+                                         keeps firing through main-
+                                         thread stalls */
 let musicOn         = false;
 
 /* ── ev42: mood modifier — current cell influences key + intensity
@@ -5208,7 +5220,16 @@ function musicUpdateMood() {
 
 function musicSchedulerTick() {
   if (!musicOn || !audioCtx) return;
-  while (musicNextBarT < audioCtx.currentTime + MUSIC_LOOK_AHEAD_S) {
+  const now = audioCtx.currentTime;
+  /* ev49: slip recovery.  If a long main-thread stall let
+   * musicNextBarT fall more than a half-bar behind the audio clock,
+   * skip ahead to (now + small lead-in) instead of dumping a queue
+   * of in-the-past notes.  A one-bar gap is far less audible than
+   * a stutter of overlapping past-time notes. */
+  if (musicNextBarT < now - MUSIC_BAR_SECS / 2) {
+    musicNextBarT = now + 0.05;
+  }
+  while (musicNextBarT < now + MUSIC_LOOK_AHEAD_S) {
     musicScheduleBar(audioCtx, musicNextBarT);
     musicStepCA();                  /* next bar reads the next CA gen */
     musicBarCount++;
@@ -5216,6 +5237,36 @@ function musicSchedulerTick() {
      * 64 beats brings in a new movement / instrument / key. */
     if ((musicBarCount % META_BARS_PER_STEP) === 0) musicStepMetaCA();
     musicNextBarT += MUSIC_BAR_SECS;
+  }
+}
+
+/* ev49: build (lazily) a Web Worker whose only job is to fire a
+ * postMessage every MUSIC_SCHED_MS, so the scheduler tick keeps
+ * coming even while the main thread is running heavy render or
+ * GA work.  The actual scheduling logic still runs on the main
+ * thread (it has to — Web Audio nodes are main-thread-bound), so
+ * a single very long stall still pauses scheduling for the duration
+ * of the stall.  But the worker prevents setInterval call coalescing
+ * during sustained stop-and-go work, and the bumped look-ahead means
+ * there's already 2.5 s of audio queued to play through any catch-
+ * up gap.  Falls back to setInterval if Worker construction fails. */
+function ensureMusicWorker() {
+  if (musicWorker) return musicWorker;
+  try {
+    const src =
+      "let iv=null;onmessage=(e)=>{" +
+        "if(e.data==='start'){if(!iv)iv=setInterval(()=>postMessage('t')," +
+          MUSIC_SCHED_MS + ");}" +
+        "else if(e.data==='stop'){if(iv){clearInterval(iv);iv=null;}}};";
+    const blob = new Blob([src], { type: "application/javascript" });
+    const url = URL.createObjectURL(blob);
+    const w = new Worker(url);
+    w.onmessage = () => musicSchedulerTick();
+    musicWorker = w;
+    return w;
+  } catch (e) {
+    musicWorker = null;
+    return null;
   }
 }
 
@@ -5251,7 +5302,14 @@ function startMusic() {
   musicNextBarT = audioCtx.currentTime + 0.15;
   musicOn = true;
   musicSchedulerTick();             /* prime the queue immediately */
-  musicSchedTimer = setInterval(musicSchedulerTick, MUSIC_SCHED_MS);
+  /* ev49: try the worker scheduler first; fall back to setInterval. */
+  const w = ensureMusicWorker();
+  if (w) {
+    w.postMessage("start");
+    musicSchedTimer = "worker";
+  } else {
+    musicSchedTimer = setInterval(musicSchedulerTick, MUSIC_SCHED_MS);
+  }
   setAction(musicStereo
     ? "music on (stereo · score-CA L / meta-CA R)"
     : "music on (mono · stereo unsupported)");
@@ -5259,7 +5317,14 @@ function startMusic() {
 function stopMusic() {
   if (!musicOn) return;
   musicOn = false;
-  if (musicSchedTimer) { clearInterval(musicSchedTimer); musicSchedTimer = null; }
+  /* ev49: timer handle is either a numeric setInterval id or the
+   * literal 'worker' marker.  Stop whichever is active. */
+  if (musicSchedTimer === "worker") {
+    if (musicWorker) musicWorker.postMessage("stop");
+  } else if (musicSchedTimer) {
+    clearInterval(musicSchedTimer);
+  }
+  musicSchedTimer = null;
   if (musicMaster) {
     /* Quick exp fade so already-scheduled notes die gracefully. */
     const t = audioCtx.currentTime;
