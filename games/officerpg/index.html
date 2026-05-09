@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>office rpg — hi-res · ev52</title>
+<title>office rpg — hi-res · ev54</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000;
                color: #ccc; font-family: ui-monospace, "SF Mono", Menlo,
@@ -205,7 +205,8 @@
     <kbd>p</kbd> player skin · <kbd>j</kbd> journey ·
     <kbd>o</kbd> map · <kbd>t</kbd> terminal · <kbd>r</kbd> reseed ·
     <kbd>s</kbd> shot · <kbd>S</kbd> shots · <kbd>y</kbd> full auto ·
-    <kbd>T</kbd> tile shape · <kbd>u</kbd> per-cell rules
+    <kbd>T</kbd> tile shape · <kbd>u</kbd> per-cell rules ·
+    <kbd>+</kbd>/<kbd>-</kbd> zoom
   </div>
 </div>
 <div id="invModal" class="modal" hidden>
@@ -558,7 +559,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev52";
+const VERSION = "ev54";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -605,14 +606,51 @@ document.title = "officerpg · " + VERSION;
 /* ── Constants ─────────────────────────────────────────────── */
 const MAP_W = 64, MAP_H = 64;             /* one panel */
 const TILE_W = 3 * MAP_W, TILE_H = 3 * MAP_H;   /* 192×192 mosaic */
-const TILE_PX = 32;                       /* on-screen tile size */
-const HEX_OFFSET = TILE_PX / 2;           /* odd rows shift +half-tile */
+/* ev53: TILE_PX is mutable now — `+`/`-` zoom the world tiles in
+ * 4-px steps without changing the underlying CA grid.  HEX_OFFSET
+ * and NOTCH_PX track via setTilePx() below.  All call-sites read
+ * these names at call-time, so the next render frame picks up the
+ * new size without restart. */
+let TILE_PX    = 32;                      /* on-screen tile size */
+let HEX_OFFSET = TILE_PX / 2;             /* odd rows shift +half-tile */
+const TILE_PX_DFLT = 32;
+const TILE_PX_MIN  = 12;
+const TILE_PX_MAX  = 96;
+const TILE_PX_STEP = 4;
 /* ev11: tiles are no longer plain squares — each one has a 1/3 × 1/3
  * notch carved out of its left-middle band and a matching protrusion
  * sticking out of its right-middle band, so horizontal neighbours
  * mesh like puzzle pieces.  All notch/protrusion sizes are derived
  * from these two constants. */
-const NOTCH_PX  = Math.round(TILE_PX / 3);  /* dest size of the notch + bump */
+let NOTCH_PX = Math.round(TILE_PX / 3);   /* dest size of the notch + bump */
+
+/* ev53: live tile-size zoom.  Snaps to TILE_PX_STEP-px increments so
+ * the notch math stays clean (NOTCH_PX is rounded — at multiples of
+ * 4, both notch sizes and HEX_OFFSET land on integers).  Rebuilds
+ * the tile-shape edge geom + Path2D + mask only if a custom shape
+ * is currently active; otherwise the next render frame just picks
+ * up the new TILE_PX/HEX_OFFSET/NOTCH_PX values directly. */
+function setTilePx(px) {
+  px = Math.max(TILE_PX_MIN, Math.min(TILE_PX_MAX,
+                                      Math.round(px / TILE_PX_STEP) * TILE_PX_STEP));
+  if (px === TILE_PX) return;
+  TILE_PX    = px;
+  HEX_OFFSET = TILE_PX / 2;
+  NOTCH_PX   = Math.round(TILE_PX / 3);
+  TILE_SHAPE_EDGE_GEOM = makeTileShapeEdgeGeom(TILE_PX);
+  if (tileShape) {
+    tileShapePath     = buildTileShapePath(tileShape);
+    tileShapeMarginPx = computeTileShapeMargin(tileShape);
+    tileShapeMask     = buildTileShapeMask(tileShape);
+  }
+  if (typeof refreshShapePreview === "function") refreshShapePreview();
+  if (typeof setAction === "function") {
+    setAction("tile size " + TILE_PX + "px");
+  }
+  needsRender = true;
+}
+function nudgeTilePx(delta) { setTilePx(TILE_PX + delta); }
+function resetTilePx()     { setTilePx(TILE_PX_DFLT); }
 const GEN_STEPS = 5;                      /* terrain CA ticks */
 const INNER_STEPS = 2;                    /* per-cell inner CA ticks */
 const WORLD_LEVELS = 63;                  /* meta-overworld depth */
@@ -880,6 +918,8 @@ function reseedRulePool() {
    * imported a new ruleset and wants the pool to track. */
   rulesetPool = null;
   if (perCellRulesOn) ensureRulePool();
+  poolGaRounds = 0;
+  poolGaLastMs = 0;
   cellTexCache.clear();
   needsRender = true;
 }
@@ -904,11 +944,106 @@ function togglePerCellRules() {
   if (!perCellRulesOn) {
     ensureRulePool();
     perCellRulesOn = true;
-    setAction("per-cell rulesets ON · 256-rule pool · ~4 MB");
+    setAction("per-cell rulesets ON · 256-rule pool · GA breeding");
   } else {
     perCellRulesOn = false;
     setAction("per-cell rulesets OFF · mother ruleset");
   }
+  cellTexCache.clear();
+  needsRender = true;
+}
+
+/* ── ev54: pool GA ──────────────────────────────────────────────
+ *
+ * Only runs while perCellRulesOn is true.  Every POOL_GA_PERIOD_MS
+ * we tournament-2 random pool slots, score them by Shannon entropy
+ * of the rule's output distribution (a cheap proxy for "rule has
+ * varied dynamics"), and replace the loser with a child of the
+ * winner — usually crossover with another random slot, sometimes
+ * mutation only.  Slot 0 is protected (mirrors the mother) so the
+ * baseline rule stays available even after long-running evolution.
+ *
+ * Cell texture cache is cleared on each round so the next render
+ * shows the freshly-evolved rule(s).  At 6 s cadence this reads as
+ * a slow drift through rule-space, not a flicker. */
+const POOL_GA_PERIOD_MS = 6000;
+const POOL_GA_MUTATION_CO = 0.02;   /* mutation rate after crossover */
+const POOL_GA_MUTATION_MO = 0.05;   /* mutation rate when mutate-only */
+let poolGaLastMs = 0;
+let poolGaRounds = 0;
+
+function poolFitness(rs) {
+  /* Shannon entropy of state distribution, in [0, 2].  A rule whose
+   * output is uniform across {0, 1, 2, 3} scores 2; one that mostly
+   * outputs the same state scores 0.  Higher = more interesting. */
+  const counts = [0, 0, 0, 0];
+  for (let i = 0; i < RULESET_BYTES; i++) counts[rs[i] & 3]++;
+  let h = 0;
+  for (let k = 0; k < 4; k++) {
+    if (counts[k] > 0) {
+      const p = counts[k] / RULESET_BYTES;
+      h -= p * Math.log2(p);
+    }
+  }
+  return h;
+}
+
+function poolMutateInto(dst, src, rate) {
+  for (let i = 0; i < RULESET_BYTES; i++) dst[i] = src[i];
+  const n = Math.max(1, (RULESET_BYTES * rate) | 0);
+  for (let m = 0; m < n; m++) {
+    const idx = (Math.random() * RULESET_BYTES) | 0;
+    dst[idx] = (Math.random() * 4) | 0;
+  }
+}
+
+function poolCrossoverInto(dst, srcA, srcB) {
+  /* Single-point crossover: byte 0..cut comes from A, rest from B. */
+  const cut = (Math.random() * RULESET_BYTES) | 0;
+  for (let i = 0; i < cut; i++)            dst[i] = srcA[i];
+  for (let i = cut; i < RULESET_BYTES; i++) dst[i] = srcB[i];
+}
+
+function poolGaTick(now) {
+  if (!perCellRulesOn || !rulesetPool) return;
+  if (now - poolGaLastMs < POOL_GA_PERIOD_MS) return;
+  poolGaLastMs = now;
+
+  /* Tournament-2.  Slot 0 is excluded so the mother stays put. */
+  let a = 1 + ((Math.random() * (RULE_POOL_SIZE - 1)) | 0);
+  let b = 1 + ((Math.random() * (RULE_POOL_SIZE - 1)) | 0);
+  if (a === b) b = (b % (RULE_POOL_SIZE - 1)) + 1;
+
+  const aSlice = rulesetPool.subarray(a * RULESET_BYTES, (a + 1) * RULESET_BYTES);
+  const bSlice = rulesetPool.subarray(b * RULESET_BYTES, (b + 1) * RULESET_BYTES);
+  const fitA = poolFitness(aSlice);
+  const fitB = poolFitness(bSlice);
+  const winSlice = (fitA >= fitB) ? aSlice : bSlice;
+  const loseIdx  = (fitA >= fitB) ? b : a;
+  const dst = rulesetPool.subarray(loseIdx * RULESET_BYTES,
+                                   (loseIdx + 1) * RULESET_BYTES);
+
+  if (Math.random() < 0.7) {
+    /* Crossover with another random slot, then mild mutation. */
+    let c = (Math.random() * RULE_POOL_SIZE) | 0;
+    if (c === loseIdx) c = (c + 1) % RULE_POOL_SIZE;
+    const cSlice = rulesetPool.subarray(c * RULESET_BYTES,
+                                        (c + 1) * RULESET_BYTES);
+    poolCrossoverInto(dst, winSlice, cSlice);
+    const n = (RULESET_BYTES * POOL_GA_MUTATION_CO) | 0;
+    for (let m = 0; m < n; m++) {
+      const idx = (Math.random() * RULESET_BYTES) | 0;
+      dst[idx] = (Math.random() * 4) | 0;
+    }
+  } else {
+    poolMutateInto(dst, winSlice, POOL_GA_MUTATION_MO);
+  }
+
+  poolGaRounds++;
+  /* Cells whose rule index resolves to loseIdx now look stale.  We
+   * don't track which world coords those are (would cost an extra
+   * 144 KB inverse map), so wipe the cache wholesale.  Lazy rebuild
+   * means cost is paid only on the cells the player can see next. */
   cellTexCache.clear();
   needsRender = true;
 }
@@ -3441,6 +3576,9 @@ function frame() {
   /* ev22: 4-parent tournament runs once per PARENT_TOURNAMENT_PERIOD_MS
    * regardless of focus state — the CA library evolves while you play. */
   tickParentTournament(performance.now());
+  /* ev54: pool GA runs only when per-cell rulesets are enabled.
+   * No-op fast path otherwise (single boolean check). */
+  poolGaTick(performance.now());
   if (needsRender) {
     render();
     needsRender = false;
@@ -3825,6 +3963,26 @@ function handleKey(e) {
     if (e.repeat) return;
     if (e.shiftKey) reseedRulePool();
     else            togglePerCellRules();
+    return;
+  }
+
+  /* ev53: live tile-size zoom — `+`/`=` zoom in, `-` zoom out,
+   * `\` reset to 32 px.  Auto-repeat IS allowed here so holding
+   * the key walks the size smoothly. */
+  if (k === "+" || k === "=") {
+    e.preventDefault();
+    nudgeTilePx(+TILE_PX_STEP);
+    return;
+  }
+  if (k === "-" || k === "_") {
+    e.preventDefault();
+    nudgeTilePx(-TILE_PX_STEP);
+    return;
+  }
+  if (k === "\\") {
+    e.preventDefault();
+    if (e.repeat) return;
+    resetTilePx();
     return;
   }
 }
@@ -6131,14 +6289,20 @@ const TILE_SHAPE_PAIR = [3, 4, 5, 0, 1, 2];
  * top + bottom edges split at the half-way x).  outX/outY are the
  * outward unit vectors used to convert an `off` value into a
  * perpendicular displacement. */
-const TILE_SHAPE_EDGE_GEOM = [
-  { sX:0,         sY:0,         eX:TILE_PX/2, eY:0,         outX: 0, outY:-1 },
-  { sX:TILE_PX/2, sY:0,         eX:TILE_PX,   eY:0,         outX: 0, outY:-1 },
-  { sX:TILE_PX,   sY:0,         eX:TILE_PX,   eY:TILE_PX,   outX:+1, outY: 0 },
-  { sX:TILE_PX,   sY:TILE_PX,   eX:TILE_PX/2, eY:TILE_PX,   outX: 0, outY:+1 },
-  { sX:TILE_PX/2, sY:TILE_PX,   eX:0,         eY:TILE_PX,   outX: 0, outY:+1 },
-  { sX:0,         sY:TILE_PX,   eX:0,         eY:0,         outX:-1, outY: 0 },
-];
+/* ev53: rebuilt by setTilePx() whenever the user zooms.  Lets here
+ * (not const) so reassignment lands in the same binding the
+ * downstream tileShapeEdgePoint / buildTileShapePath calls read. */
+function makeTileShapeEdgeGeom(px) {
+  return [
+    { sX:0,      sY:0,    eX:px/2,  eY:0,    outX: 0, outY:-1 },
+    { sX:px/2,   sY:0,    eX:px,    eY:0,    outX: 0, outY:-1 },
+    { sX:px,     sY:0,    eX:px,    eY:px,   outX:+1, outY: 0 },
+    { sX:px,     sY:px,   eX:px/2,  eY:px,   outX: 0, outY:+1 },
+    { sX:px/2,   sY:px,   eX:0,     eY:px,   outX: 0, outY:+1 },
+    { sX:0,      sY:px,   eX:0,     eY:0,    outX:-1, outY: 0 },
+  ];
+}
+let TILE_SHAPE_EDGE_GEOM = makeTileShapeEdgeGeom(TILE_PX);
 
 function tileShapeEdgePoint(edgeIdx, p, off) {
   const g = TILE_SHAPE_EDGE_GEOM[edgeIdx];
