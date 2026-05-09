@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>office rpg — hi-res · ev60</title>
+<title>office rpg — hi-res · ev61</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000;
                color: #ccc; font-family: ui-monospace, "SF Mono", Menlo,
@@ -559,7 +559,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev60";
+const VERSION = "ev61";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -2207,6 +2207,11 @@ function regenMosaicEntities(spawnX, spawnY) {
       npcAt[ny * TILE_W + nx] = 0;
     }
   }
+  /* ev61: animals just regenerated, so any action state from
+   * the prior mosaic is stale — clear so new spawns start in
+   * AA_WALK with no ghost timers. */
+  animalActionAt.fill(0);
+  animalActionTtl.fill(0);
 }
 
 /* ── Closed-loop wander paths ────────────────────────────── */
@@ -2274,6 +2279,20 @@ function pathTick(pX, pY) {
       } else {
         catAt[ni] = catAt[i]; idxAt[ni] = idxAt[i]; hpAt[ni] = hpAt[i];
         catAt[i]  = 0;        idxAt[i]  = 0;        hpAt[i]  = 0;
+        /* ev61: carry the action state with the migrating animal,
+         * then bump it to EAT briefly if it just walked next to a
+         * plant cell.  Otherwise the destination defaults to WALK
+         * (the cleared source cell drops back to no-action). */
+        const carryAction = animalActionAt[i];
+        const carryTtl    = animalActionTtl[i];
+        animalActionAt[i]  = 0; animalActionTtl[i] = 0;
+        if (animalNearPlant(nx, ny)) {
+          animalActionAt[ni]  = AA_EAT;
+          animalActionTtl[ni] = ANIMAL_ACTION_TTL;
+        } else {
+          animalActionAt[ni]  = carryAction;
+          animalActionTtl[ni] = carryTtl;
+        }
       }
       const nstep = (step + 1) % path.length;
       let npid = pathId[i];
@@ -2375,11 +2394,19 @@ function moveStep(dir) {
       const dmgE = (Math.random() * 4 | 0) + 1;
       const dmgP = (Math.random() * 3 | 0) + 1;
       let hp = hpAt[i];
+      const variantHit = idxAt[i];
       hp = (hp > dmgE) ? hp - dmgE : 0;
       hpAt[i] = hp;
       let msg = "hit " + (archName || ec.name) + " for " + dmgE;
+      /* ev61: visualise the swing — the hit animal pivots into
+       * its ATTACK animation, and any same-variant kin within
+       * one hex flee.  TTL is in render-frames, so the badges
+       * fade naturally as time passes without further input. */
+      animalSetAction(i, AA_ATTACK, ANIMAL_ACTION_TTL);
+      animalSpookKin(nx, ny, variantHit);
       if (hp === 0) {
         catAt[i] = 0;
+        animalSetAction(i, AA_WALK, 0);
         msg += "; killed!";
       } else {
         player.hp -= dmgP;
@@ -2406,6 +2433,162 @@ function moveStep(dir) {
   }
   px = nx; py = ny;
   return true;
+}
+
+/* ── ev61: per-animal action animations ──────────────────────
+ *
+ * Each of the 64 animal variants gets a personal hex CA + 10
+ * preseeded 4-colour 64×64 maps that drive its action animation.
+ * Four action channels (walk / attack / flee / eat) each pick
+ * one of the 10 maps as their seed; the variant's personal CA
+ * evolves the chosen map every render frame, and a single cell
+ * sample becomes the tint drawn under the sprite.  Same animal,
+ * different look depending on what it's doing.
+ *
+ * Memory footprint is lazy: ~57 KB per observed variant (16 KB
+ * personal ruleset + 10 × 4 KB maps + 8 KB scratch).  Capped at
+ * the 64-variant alphabet so worst case sits under 4 MB even if
+ * every animal kind has been seen.
+ *
+ * Per-cell TTL: when the action expires (counter hits 0), the
+ * cell reverts to AA_WALK so the resting animation resumes.
+ *   – ATTACK is set on the animal the player just hit.
+ *   – FLEE is set on every same-variant neighbour of that hit.
+ *   – EAT is set when an animal walks adjacent to a plant cell.
+ *   – WALK is the default and never expires. */
+const ANIMAL_MAP_COUNT = 10;
+const ANIMAL_MAP_W = 64, ANIMAL_MAP_H = 64;
+const ANIMAL_MAP_LEN = ANIMAL_MAP_W * ANIMAL_MAP_H;
+const AA_WALK = 0, AA_ATTACK = 1, AA_FLEE = 2, AA_EAT = 3;
+/* Each action picks one of the 10 maps as its base.  Distinct
+ * indices so the four actions diverge visually even when the
+ * underlying personal CA hits the same orbit on each map. */
+const ANIMAL_ACTION_MAP = [6, 0, 3, 9];      /* walk attack flee eat */
+const ANIMAL_ACTION_TTL = 30;                /* frames before revert */
+/* Per-action 4-colour palette.  Cell value 0..3 indexes; the
+ * action says which colour family the animation reads as.
+ * Walk = mossy / calm; attack = fire; flee = bright cyan-yellow
+ * alarm; eat = leafy / tan.  Designed to read as semantic
+ * status badges around the sprite. */
+const ANIMAL_ACTION_PALETTE = [
+  [[ 80, 110,  80],[140, 170, 100],[ 60,  90,  60],[ 40,  60,  40]], /* walk */
+  [[200,  50,  40],[230, 130,  40],[240, 200,  60],[120,  40,  40]], /* attack */
+  [[230, 230, 100],[240, 200,  90],[220, 220, 220],[120, 200, 220]], /* flee */
+  [[140, 200,  90],[200, 220,  70],[220, 170,  60],[ 80, 150,  80]], /* eat */
+];
+/* Per-cell action state.  TTL in render-frames; 0 means "no
+ * decoration timer running" (cell either holds AA_WALK forever
+ * or has none of these flags set if the cell isn't an animal). */
+const animalActionAt  = new Uint8Array(TILE_W * TILE_H);
+const animalActionTtl = new Uint8Array(TILE_W * TILE_H);
+const animalAnimCache = new Map();           /* variant idx → entry */
+
+function animalAnimEnsure(variant) {
+  let entry = animalAnimCache.get(variant);
+  if (entry) return entry;
+  /* Personal CA derived purely from the variant idx — independent
+   * of the live world ruleset so it stays stable across reseeds
+   * and the cache never needs invalidating.  Each rule lookup
+   * gets a deterministic K=4 cell value (0..3) from a per-byte
+   * FNV-1a hash mixed with the variant. */
+  const personalCA = new Uint8Array(RULESET_BYTES);
+  let h = (0xcbf29ce4 ^ ((variant + 1) * 0x9e3779b9)) >>> 0;
+  for (let i = 0; i < RULESET_BYTES; i++) {
+    h = Math.imul(h ^ i, 0x01000193) >>> 0;
+    personalCA[i] = (h >>> 13) & 3;
+  }
+  /* Ten preseeded 4-colour 64×64 maps. */
+  const maps = new Array(ANIMAL_MAP_COUNT);
+  for (let m = 0; m < ANIMAL_MAP_COUNT; m++) {
+    const map = new Uint8Array(ANIMAL_MAP_LEN);
+    let hh = 0x811c9dc5 ^ ((variant * 31 + m + 1) * 0x9e3779b9);
+    for (let i = 0; i < ANIMAL_MAP_LEN; i++) {
+      hh = Math.imul(hh ^ i, 0x01000193) >>> 0;
+      map[i] = (hh >>> 13) & 3;
+    }
+    maps[m] = map;
+  }
+  /* Two scratch buffers so hexStep can ping-pong without
+   * mutating the seed maps (which need to stay canonical for
+   * subsequent frame calls). */
+  const scratchA = new Uint8Array(ANIMAL_MAP_LEN);
+  const scratchB = new Uint8Array(ANIMAL_MAP_LEN);
+  entry = { personalCA, maps, scratchA, scratchB };
+  animalAnimCache.set(variant, entry);
+  return entry;
+}
+
+function animalAnimColor(variant, action, frame) {
+  const entry = animalAnimEnsure(variant);
+  const seed = entry.maps[ANIMAL_ACTION_MAP[action & 3]];
+  /* Beyond ~6 generations a class-1 CA has usually stabilised,
+   * so cap the evolution; the (frame % 7) modulus also gives a
+   * 7-frame visible cycle.  Re-do the evolution from the seed
+   * each call to keep the result locked to the frame counter
+   * — caching the intermediate maps would cost ~2.5 MB more
+   * per variant for marginal compute savings. */
+  const steps = (frame >>> 0) % 7;
+  let src = entry.scratchA, dst = entry.scratchB;
+  src.set(seed);
+  for (let s = 0; s < steps; s++) {
+    hexStep(entry.personalCA, src, dst,
+            ANIMAL_MAP_W, ANIMAL_MAP_H);
+    const t = src; src = dst; dst = t;
+  }
+  /* Sample-cell drift — frame-dependent jump through the map
+   * so even a stable orbit produces a moving tint. */
+  const sampleI = ((frame * 7919) >>> 0) & (ANIMAL_MAP_LEN - 1);
+  const cell    = src[sampleI] & 3;
+  return ANIMAL_ACTION_PALETTE[action & 3][cell];
+}
+
+/* Tick the per-cell TTLs once per render frame.  Cells whose
+ * timer hits 0 fall back to AA_WALK; AA_WALK itself doesn't run
+ * a timer (resting animation stays on indefinitely). */
+function animalActionTick() {
+  for (let i = 0; i < animalActionTtl.length; i++) {
+    if (animalActionTtl[i] === 0) continue;
+    if (--animalActionTtl[i] === 0) animalActionAt[i] = AA_WALK;
+  }
+}
+
+function animalSetAction(idx, action, ttl) {
+  animalActionAt[idx]  = action & 3;
+  animalActionTtl[idx] = ttl & 0xff;
+}
+
+/* Mark every adjacent same-variant animal as fleeing.  Called
+ * when the player attacks; the kin react.  Hex-neighbours
+ * because the world is offset-r; rectangular neighbours would
+ * miss the diagonal hex slot. */
+function animalSpookKin(cellX, cellY, variant) {
+  const odd = cellY & 1;
+  const HX = odd ? [+1, +1,  0, -1,  0, +1] : [+1,  0, -1, -1, -1,  0];
+  const HY =       [ 0, -1, -1,  0, +1, +1];
+  for (let k = 0; k < 6; k++) {
+    const nx = cellX + HX[k], ny = cellY + HY[k];
+    if (nx < 0 || nx >= TILE_W || ny < 0 || ny >= TILE_H) continue;
+    const ni = ny * TILE_W + nx;
+    if (catAt[ni] !== RC_ANIMAL) continue;
+    if (idxAt[ni] !== variant)   continue;
+    animalSetAction(ni, AA_FLEE, ANIMAL_ACTION_TTL);
+  }
+}
+
+/* Returns true if (x, y) has at least one hex-neighbour holding
+ * a plant — used by pathTick to flag EAT after an animal walks
+ * next to greenery.  Edge-cells are treated as having no plant
+ * neighbours, so the action stays WALK at the world border. */
+function animalNearPlant(x, y) {
+  const odd = y & 1;
+  const HX = odd ? [+1, +1,  0, -1,  0, +1] : [+1,  0, -1, -1, -1,  0];
+  const HY =       [ 0, -1, -1,  0, +1, +1];
+  for (let k = 0; k < 6; k++) {
+    const nx = x + HX[k], ny = y + HY[k];
+    if (nx < 0 || nx >= TILE_W || ny < 0 || ny >= TILE_H) continue;
+    if (catAt[ny * TILE_W + nx] === RC_PLANT) return true;
+  }
+  return false;
 }
 
 /* ── Hex meta-grid (ev20) ────────────────────────────────────
@@ -3167,6 +3350,25 @@ function render() {
       const drawH = TILE_PX * sp.height / SPRITE_W;
       const drawX = tx;
       const drawY = ty + TILE_PX - drawH;
+      /* ev61: animal action animation — paint a small tinted
+       * footprint UNDER the sprite so the personal-CA-driven
+       * colour shift reads as a status ring around the animal
+       * without recolouring the L-system shape itself.  Colour
+       * comes from animalAnimColor(variant, action, frame); the
+       * frame counter ticks every render call so the tint
+       * cycles even at rest. */
+      if (cat === RC_ANIMAL) {
+        const action = animalActionAt[i];
+        const rgb = animalAnimColor(idxAt[i], action, frameCounter);
+        const alpha = (action === AA_WALK) ? 0.35 : 0.6;
+        ctx.fillStyle = "rgba(" + rgb[0] + "," + rgb[1] + "," +
+                                  rgb[2] + "," + alpha + ")";
+        const ringH = (TILE_PX * 0.22) | 0;
+        const ringW = (TILE_PX * 0.85) | 0;
+        const ringX = drawX + ((TILE_PX - ringW) >> 1);
+        const ringY = ty + TILE_PX - ringH;
+        ctx.fillRect(ringX, ringY, ringW, ringH);
+      }
       ctx.drawImage(sp.canvas, drawX | 0, drawY | 0, drawW | 0, drawH | 0);
     }
   }
@@ -3640,6 +3842,10 @@ function autoplayTick() {
 let frameCounter = 0;
 function frame() {
   frameCounter++;
+  /* ev61: drop per-cell action TTLs so attack/flee/eat fade
+   * back to walk after their window without a separate timer.
+   * Cheap (one Uint8Array linear pass per render frame). */
+  animalActionTick();
   if (animating) {
     const throttle = (typeof musicOn !== "undefined") && musicOn;
     const skip = throttle && (frameCounter % 3 !== 0);
