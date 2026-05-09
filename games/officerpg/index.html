@@ -124,6 +124,15 @@
   #bioBody .lib-entry .meta .rule { color: #cdc; word-break: break-all;
                                      font-family: ui-monospace, monospace; }
   #bioBody .lib-entry .meta .fit  { color: #888; font-size: 0.7rem; }
+  /* ev40: usage badge — shows "p4 p5 p7" if this lib entry is
+   * currently rendered in any of the 9 visible world panels.  Cyan
+   * tint matches the rule-grid pair-B accent for tonal consistency. */
+  #bioBody .lib-entry .meta .usage { color: #79c0ff; font-size: 0.65rem;
+    font-family: ui-monospace, monospace; letter-spacing: 0.04em;
+    margin-left: 6px; padding: 1px 4px; border-radius: 3px;
+    background: rgba(121, 192, 255, 0.08);
+    border: 1px solid rgba(121, 192, 255, 0.2); }
+  #bioBody .lib-entry.in-use { box-shadow: inset 2px 0 0 #79c0ff; }
   #bioBody .lib-entry.top { background: rgba(60, 100, 80, 0.08); }
   #bioBody .lib-entry.bot { opacity: 0.6; }
   #bioBody .ga-col h3 { display: flex; justify-content: space-between; }
@@ -365,7 +374,18 @@
 </div>
 
 <div id="bioModal" class="modal" hidden>
-  <h2>Background L-system evolution — silent breeders</h2>
+  <h2>Background L-system evolution — silent breeders
+    <span class="ver-badge" id="verBadgeBio"></span></h2>
+  <div class="anchor-row" style="margin-bottom:8px;">
+    <label><input type="checkbox" id="bioAutoResnap" checked>
+      auto-resnap world panels every</label>
+    <input type="number" id="bioResnapSec" min="5" max="300" value="30"
+      style="width:60px;background:#0d1117;border:1px solid #21262d;
+      color:#c9d1d9;padding:3px 6px;border-radius:4px;font-family:inherit;">
+    <span class="legend">seconds — when on, the world's visible
+      creatures drift as the GA improves the library; when off,
+      panels stay frozen until you walk into a new region.</span>
+  </div>
   <div id="bioBody" class="ga-workshop">
     <div id="bioCol_1" class="ga-col"></div>
     <div id="bioCol_2" class="ga-col"></div>
@@ -405,13 +425,15 @@
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev39";
+const VERSION = "ev40";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
   const b = document.getElementById("verBadgeFlower");
+  const c = document.getElementById("verBadgeBio");
   if (a) a.textContent = VERSION;
   if (b) b.textContent = VERSION;
+  if (c) c.textContent = VERSION;
 }
 
 /* ──────────────────────────────────────────────────────────────
@@ -706,6 +728,20 @@ let WORKSHOP_PREV_PERIOD = 12;                    /* rAF frames per preview step
 const WORKSHOP_PREV_PERIOD_DFLT = 12;
 let LSYS_GA_PERIOD = 6;                           /* one breed every ~6 frames (~10/s) */
 const LSYS_GA_PERIOD_DFLT = 6;
+
+/* ev40: auto-resnap state + helpers.  When the biolab's checkbox is
+ * on, the world's panels are re-archetyped every N seconds so the
+ * GA's improvements actually become visible without travel. */
+let lastResnapAt = 0;
+function autoResnapEnabled() {
+  const el = document.getElementById("bioAutoResnap");
+  return el ? el.checked : true;     /* default true if DOM not ready */
+}
+function autoResnapSec() {
+  const el = document.getElementById("bioResnapSec");
+  const v = el ? parseInt(el.value, 10) : 30;
+  return Math.max(5, Math.min(300, v || 30));
+}
 let lastParentTourneyMs = 0;
 
 /* Scratch for CA stepping — sized for one panel. */
@@ -1283,7 +1319,14 @@ function snapshotPanelArchetypes(slot, panelSeedVal) {
       sel[i] = { axiom: e.axiom, rule: e.rule, name: e.name,
                  /* ev39: carry the transparent-slot gene through the
                   * snapshot so buildSprite can read it. */
-                 transparentSlot: e.transparentSlot | 0 };
+                 transparentSlot: e.transparentSlot | 0,
+                 /* ev40: hold a reference to the live lib entry so
+                  * renderBioLab can compute "this entry is currently
+                  * used by panel X cat Y" badges.  When the GA
+                  * replaces the lib entry, the panel still points at
+                  * the old object until snapshotAllPanels runs — so
+                  * the badge shows what the world actually shows. */
+                 source: e };
     }
     panelArchetypes[slot][cat] = sel;
   }
@@ -2947,12 +2990,27 @@ function frame() {
   }
   /* Background L-system evolution — one breed step per LSYS_GA_PERIOD
    * frames.  Each step is a single fitness eval (≈ 0.2-1 ms) so it's
-   * imperceptible cost.  Pauses while the bio modal is open so the
-   * user can watch the library at rest. */
+   * imperceptible cost.  ev40: previously paused while the bio modal
+   * was open ("watch at rest"), but that hid all evolution from the
+   * user — now runs unconditionally so the bio modal's 1.5s refresh
+   * shows new entries appearing in real time. */
   lsysGaFrameTick++;
-  if (modalOpen !== "bio" && (lsysGaFrameTick % LSYS_GA_PERIOD) === 0) {
+  if ((lsysGaFrameTick % LSYS_GA_PERIOD) === 0) {
     lsysGaTick();
-    /* If the bio modal is on screen and content drifted, redraw it. */
+  }
+  /* ev40: optional periodic resnap of all 9 panels so the world
+   * shows fresh archetypes without travel.  Gated on the biolab's
+   * checkbox; default ON, default 30 s.  When the modal is closed
+   * we re-read its DOM state on each tick (cheap; document.* lookups
+   * are O(1)).  Skip if the user disabled it. */
+  if (autoResnapEnabled() && (lsysGaFrameTick % 60 === 0)) {
+    const sec = autoResnapSec();
+    const dueAt = lastResnapAt + sec * 1000;
+    if (performance.now() >= dueAt) {
+      snapshotAllPanels();
+      lastResnapAt = performance.now();
+      needsRender = true;
+    }
   }
   requestAnimationFrame(frame);
 }
@@ -4152,7 +4210,32 @@ function bioRenderThumb(cat, axiom, rule, palette) {
   return off;
 }
 
+/* ev40: build "which (slot, cat) panels currently use this lib
+ * entry" map, by walking panelArchetypes and matching `source`
+ * against each lib entry by reference.  Returns a Map keyed by
+ * the lib-entry object → array of {slot, archIdx} pairs. */
+function bioComputeUsage() {
+  const usage = new Map();
+  for (let slot = 0; slot < 9; slot++) {
+    const slotArch = panelArchetypes[slot];
+    if (!slotArch) continue;
+    for (let cat = 1; cat <= 4; cat++) {
+      const archs = slotArch[cat];
+      if (!archs) continue;
+      for (let a = 0; a < archs.length; a++) {
+        const src = archs[a] && archs[a].source;
+        if (!src) continue;
+        let arr = usage.get(src);
+        if (!arr) { arr = []; usage.set(src, arr); }
+        arr.push({ slot, cat, archIdx: a });
+      }
+    }
+  }
+  return usage;
+}
+
 function renderBioLab() {
+  const usage = bioComputeUsage();
   for (let cat = 1; cat <= 4; cat++) {
     const col = document.getElementById("bioCol_" + cat);
     const lib = lsysLib[cat];
@@ -4170,19 +4253,37 @@ function renderBioLab() {
       meta.className = "meta";
       const ruleShort = e.rule.length > 28 ? e.rule.slice(0, 26) + "…" : e.rule;
       const nameStr = e.name || "—";
+      /* ev40: usage badge — shows which world panels currently
+       * render with this lib entry.  Format: "p4 p5 p7" (panel
+       * slots 0..8).  Empty if no panel uses this entry. */
+      const uses = usage.get(e) || [];
+      let usageHtml = "";
+      if (uses.length > 0) {
+        const slotsStr = uses.map(u => "p" + u.slot).join(" ");
+        usageHtml = "<span class=\"usage\" title=\"in use by panel slots " +
+          slotsStr + "\">" + slotsStr + "</span>";
+      }
       meta.innerHTML =
         "<span class=\"rule\"><b>" + nameStr + "</b> · " + ruleShort + "</span>" +
-        "<span class=\"fit\">fit " + e.fitness.toFixed(2) + "</span>";
+        "<span class=\"fit\">fit " + e.fitness.toFixed(2) +
+        (e.transparentSlot ? " · t" + e.transparentSlot : "") +
+        "</span>" + usageHtml;
       wrap.appendChild(meta);
+      if (uses.length > 0) wrap.classList.add("in-use");
       col.appendChild(wrap);
     }
   }
   let total = 0;
   for (let cat = 1; cat <= 4; cat++) total += libGen[cat];
+  const resnapState = document.getElementById("bioAutoResnap");
+  const resnapInfo = (resnapState && resnapState.checked)
+    ? ("auto-resnap every " +
+       (parseInt(document.getElementById("bioResnapSec").value, 10) || 30) + " s")
+    : "panels resnap only on mosaic shift";
   bioStatsEl.textContent =
     "Total breeding events: " + total +
     "   ·   pace: ~" + Math.round(60 / LSYS_GA_PERIOD) + " /s" +
-    "   ·   panels resnap on each mosaic shift";
+    "   ·   " + resnapInfo;
 }
 
 function openBioLab() {
