@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>office rpg — hi-res · ev65</title>
+<title>office rpg — hi-res · ev66</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000;
                color: #ccc; font-family: ui-monospace, "SF Mono", Menlo,
@@ -559,7 +559,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev65";
+const VERSION = "ev66";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -3974,6 +3974,13 @@ function newGame() {
 function handleKey(e) {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  /* ev66: announce restored bred-styles count once, on the first
+   * key press (setAction needs the chrome to be live). */
+  if (window._musicRestoredCount) {
+    const r = window._musicRestoredCount;
+    window._musicRestoredCount = 0;
+    setAction('restored ' + r + ' bred music styles from last session');
+  }
 
   /* Death overlay — any key starts a new game. */
   if (!player.alive) {
@@ -4205,7 +4212,9 @@ function handleKey(e) {
    * the child the new active.  Shift+X crosses the active with a
    * randomly-picked sibling.  Pool grows to MUSIC_STYLE_CAP (=64)
    * total entries, with FIFO eviction of GA-bred entries (the 16
-   * hand-crafted ancestors stay pinned). */
+   * hand-crafted ancestors stay pinned).
+   * ev66: bred children persist to localStorage so they survive a
+   * page reload; Shift+Z clears the pool back to the 16 ancestors. */
   if (e.shiftKey && (k === "m" || e.code === "KeyM")) {
     e.preventDefault();
     if (e.repeat) return;
@@ -4216,6 +4225,21 @@ function handleKey(e) {
     e.preventDefault();
     if (e.repeat) return;
     musicCrossoverCurrent();
+    return;
+  }
+  if (e.shiftKey && (k === "z" || e.code === "KeyZ")) {
+    e.preventDefault();
+    if (e.repeat) return;
+    /* Reset the GA pool to ancestors only.  Useful if the bred
+     * children have drifted somewhere unappealing and the user
+     * wants a clean restart of the breeding tree. */
+    const dropped = MUSIC_STYLES.length - MUSIC_ANCESTOR_COUNT;
+    MUSIC_STYLES.length = MUSIC_ANCESTOR_COUNT;
+    if (musicStyle >= MUSIC_ANCESTOR_COUNT) musicStyle = 0;
+    musicSaveBredToStorage();
+    setAction(dropped > 0
+      ? 'cleared ' + dropped + ' bred styles — back to ancestors'
+      : 'pool already at ancestors');
     return;
   }
 
@@ -5896,7 +5920,10 @@ function _resampleSteps(matrix, targetSteps) {
 function _evictGABredIfNeeded() {
   if (MUSIC_STYLES.length < MUSIC_STYLE_CAP) return;
   /* Pop the oldest GA-bred entry, which sits right after the
-   * MUSIC_ANCESTOR_COUNT pinned hand-crafted styles. */
+   * MUSIC_ANCESTOR_COUNT pinned hand-crafted styles.  ev66:
+   * caller (mutate / crossover) is responsible for the storage
+   * sync after the new child is appended; we don't double-write
+   * here. */
   if (MUSIC_STYLES.length > MUSIC_ANCESTOR_COUNT) {
     MUSIC_STYLES.splice(MUSIC_ANCESTOR_COUNT, 1);
     /* The current style index may have moved if we evicted an
@@ -5947,6 +5974,77 @@ function musicMutateCurrent() {
   });
   musicStyle = MUSIC_STYLES.length - 1;
   setAction('mutated → ' + MUSIC_STYLES[musicStyle].name);
+  musicSaveBredToStorage();   /* ev66: persist the GA pool */
+}
+
+/* ev66: persist the GA-bred portion of MUSIC_STYLES across page
+ * reloads.  Hand-crafted ancestors (indices 0..MUSIC_ANCESTOR_COUNT-1)
+ * stay in code so a fresh checkout still ships the canonical 16
+ * styles; everything past that is reconstructed from localStorage.
+ *
+ * Keyed by VERSION so a future fork that changes the gain matrix
+ * voice grouping doesn't try to load incompatible old children
+ * — the GA pool simply starts fresh from the 16 ancestors on the
+ * first run of a new ev. */
+const MUSIC_STORE_KEY = 'officerpg.musicStyles.bred.' + VERSION;
+
+function musicSaveBredToStorage() {
+  try {
+    const bred = MUSIC_STYLES.slice(MUSIC_ANCESTOR_COUNT);
+    if (bred.length === 0) {
+      localStorage.removeItem(MUSIC_STORE_KEY);
+    } else {
+      localStorage.setItem(MUSIC_STORE_KEY, JSON.stringify(bred));
+    }
+  } catch (_e) {
+    /* Private-mode browsers throw on localStorage writes; the
+     * GA pool degrades to in-session-only and that's fine. */
+  }
+}
+
+function musicLoadBredFromStorage() {
+  try {
+    const raw = localStorage.getItem(MUSIC_STORE_KEY);
+    if (!raw) return 0;
+    const bred = JSON.parse(raw);
+    if (!Array.isArray(bred)) return 0;
+    let added = 0;
+    for (const entry of bred) {
+      if (MUSIC_STYLES.length >= MUSIC_STYLE_CAP) break;
+      /* Defensive shape check — if the saved entry is missing
+       * any required field, skip it rather than crash the
+       * scheduler when this style happens to be active. */
+      if (!entry || typeof entry !== 'object') continue;
+      if (typeof entry.name   !== 'string')  continue;
+      if (typeof entry.steps  !== 'number')  continue;
+      if (typeof entry.stepDur!== 'number')  continue;
+      if (!Array.isArray(entry.gain))        continue;
+      if (entry.gain.length !== entry.steps) continue;
+      let ok = true;
+      for (const row of entry.gain) {
+        if (!Array.isArray(row) || row.length !== 8) { ok = false; break; }
+      }
+      if (!ok) continue;
+      MUSIC_STYLES.push(entry);
+      added++;
+    }
+    return added;
+  } catch (_e) {
+    return 0;
+  }
+}
+
+/* Run the loader at script-eval time so a re-loaded page has
+ * the user's bred children available before they cycle with v. */
+{
+  const restored = musicLoadBredFromStorage();
+  if (restored > 0) {
+    /* setAction isn't safe to call yet (the action element may
+     * not be in the DOM), so defer the announce until first
+     * frame.  Stash the count where toggleAutoplay etc. can
+     * pick it up if they want; the value is informational. */
+    window._musicRestoredCount = restored;
+  }
 }
 
 function musicCrossoverCurrent() {
@@ -5994,6 +6092,7 @@ function musicCrossoverCurrent() {
   });
   musicStyle = MUSIC_STYLES.length - 1;
   setAction('bred → ' + MUSIC_STYLES[musicStyle].name);
+  musicSaveBredToStorage();   /* ev66: persist the GA pool */
 }
 
 /* ── ev42: mood modifier — current cell influences key + intensity
