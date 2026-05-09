@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>office rpg — hi-res · ev66</title>
+<title>office rpg — hi-res · ev67</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000;
                color: #ccc; font-family: ui-monospace, "SF Mono", Menlo,
@@ -202,6 +202,7 @@
     <kbd>k</kbd> speeds · <kbd>0</kbd>-<kbd>3</kbd> bend ·
     <kbd>4</kbd>-<kbd>7</kbd> recolour · <kbd>g</kbd> genome ·
     <kbd>b</kbd> bio lab · <kbd>n</kbd> music · <kbd>v</kbd> meter (V back) ·
+    <kbd>h</kbd> halos ·
     <kbd>p</kbd> player skin · <kbd>j</kbd> journey ·
     <kbd>o</kbd> map · <kbd>t</kbd> terminal · <kbd>r</kbd> reseed ·
     <kbd>s</kbd> shot · <kbd>S</kbd> shots · <kbd>y</kbd> full auto ·
@@ -559,7 +560,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev66";
+const VERSION = "ev67";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -2279,19 +2280,21 @@ function pathTick(pX, pY) {
       } else {
         catAt[ni] = catAt[i]; idxAt[ni] = idxAt[i]; hpAt[ni] = hpAt[i];
         catAt[i]  = 0;        idxAt[i]  = 0;        hpAt[i]  = 0;
-        /* ev61: carry the action state with the migrating animal,
-         * then bump it to EAT briefly if it just walked next to a
-         * plant cell.  Otherwise the destination defaults to WALK
-         * (the cleared source cell drops back to no-action). */
-        const carryAction = animalActionAt[i];
-        const carryTtl    = animalActionTtl[i];
-        animalActionAt[i]  = 0; animalActionTtl[i] = 0;
-        if (animalNearPlant(nx, ny)) {
-          animalActionAt[ni]  = AA_EAT;
-          animalActionTtl[ni] = ANIMAL_ACTION_TTL;
-        } else {
-          animalActionAt[ni]  = carryAction;
-          animalActionTtl[ni] = carryTtl;
+        /* ev61/ev67: carry the action state with the migrating
+         * animal, then bump it to EAT briefly if it just walked
+         * next to a plant cell.  Skipped when animalAnimOn is
+         * off so path-tick stays at its pre-ev61 cost. */
+        if (animalAnimOn) {
+          const carryAction = animalActionAt[i];
+          const carryTtl    = animalActionTtl[i];
+          animalActionAt[i]  = 0; animalActionTtl[i] = 0;
+          if (animalNearPlant(nx, ny)) {
+            animalActionAt[ni]  = AA_EAT;
+            animalActionTtl[ni] = ANIMAL_ACTION_TTL;
+          } else {
+            animalActionAt[ni]  = carryAction;
+            animalActionTtl[ni] = carryTtl;
+          }
         }
       }
       const nstep = (step + 1) % path.length;
@@ -2398,15 +2401,17 @@ function moveStep(dir) {
       hp = (hp > dmgE) ? hp - dmgE : 0;
       hpAt[i] = hp;
       let msg = "hit " + (archName || ec.name) + " for " + dmgE;
-      /* ev61: visualise the swing — the hit animal pivots into
-       * its ATTACK animation, and any same-variant kin within
-       * one hex flee.  TTL is in render-frames, so the badges
-       * fade naturally as time passes without further input. */
-      animalSetAction(i, AA_ATTACK, ANIMAL_ACTION_TTL);
-      animalSpookKin(nx, ny, variantHit);
+      /* ev61/ev67: visualise the swing — the hit animal pivots
+       * into its ATTACK animation, and any same-variant kin
+       * within one hex flee.  Gated on animalAnimOn so the
+       * action arrays stay zero when the feature is off. */
+      if (animalAnimOn) {
+        animalSetAction(i, AA_ATTACK, ANIMAL_ACTION_TTL);
+        animalSpookKin(nx, ny, variantHit);
+      }
       if (hp === 0) {
         catAt[i] = 0;
-        animalSetAction(i, AA_WALK, 0);
+        if (animalAnimOn) animalSetAction(i, AA_WALK, 0);
         msg += "; killed!";
       } else {
         player.hp -= dmgP;
@@ -2481,6 +2486,14 @@ const ANIMAL_ACTION_PALETTE = [
  * or has none of these flags set if the cell isn't an animal). */
 const animalActionAt  = new Uint8Array(TILE_W * TILE_H);
 const animalActionTtl = new Uint8Array(TILE_W * TILE_H);
+/* ev67: master toggle for the per-animal action animation
+ * subsystem.  Off by default — the per-frame tick over 36864
+ * cells plus the animalAnimColor hexStep evolutions (up to 6
+ * generations × 4096 cells × visible animals) noticeably slow
+ * the render under -journey + live-anim, and the visual signal
+ * is a small enhancement to a sprite already legible through
+ * its L-system shape.  Toggled by `h` (for halo). */
+let animalAnimOn = false;
 const animalAnimCache = new Map();           /* variant idx → entry */
 
 function animalAnimEnsure(variant) {
@@ -3357,7 +3370,7 @@ function render() {
        * comes from animalAnimColor(variant, action, frame); the
        * frame counter ticks every render call so the tint
        * cycles even at rest. */
-      if (cat === RC_ANIMAL) {
+      if (animalAnimOn && cat === RC_ANIMAL) {
         const action = animalActionAt[i];
         const rgb = animalAnimColor(idxAt[i], action, frameCounter);
         const alpha = (action === AA_WALK) ? 0.35 : 0.6;
@@ -3853,10 +3866,11 @@ function autoplayTick() {
 let frameCounter = 0;
 function frame() {
   frameCounter++;
-  /* ev61: drop per-cell action TTLs so attack/flee/eat fade
-   * back to walk after their window without a separate timer.
-   * Cheap (one Uint8Array linear pass per render frame). */
-  animalActionTick();
+  /* ev61/ev67: drop per-cell action TTLs so attack/flee/eat
+   * fade back to walk after their window.  Skipped entirely
+   * when animalAnimOn is false (the default) so the linear
+   * 36864-cell sweep doesn't run when the feature is off. */
+  if (animalAnimOn) animalActionTick();
   if (animating) {
     const throttle = (typeof musicOn !== "undefined") && musicOn;
     const skip = throttle && (frameCounter % 3 !== 0);
@@ -4188,6 +4202,31 @@ function handleKey(e) {
   if (k === "n") {
     e.preventDefault();
     toggleMusic();
+    return;
+  }
+
+  /* ev67: animal action-halo toggle (h).  Off by default — the
+   * per-frame 36864-cell tick + per-visible-animal hexStep
+   * evolutions slow the render under journey + live-anim, and
+   * the L-system sprite already reads its action through shape
+   * alone.  Engaging clears the action arrays so attack/flee/
+   * eat halos start fresh from the next interaction. */
+  if (k === "h") {
+    e.preventDefault();
+    if (e.repeat) return;
+    animalAnimOn = !animalAnimOn;
+    if (!animalAnimOn) {
+      /* Drop any in-flight action timers so the halo doesn't
+       * stay frozen on screen — render gates the paint on the
+       * flag, but a fresh re-engage shouldn't inherit stale
+       * TTLs from the previous on-period either. */
+      animalActionAt.fill(0);
+      animalActionTtl.fill(0);
+    }
+    setAction(animalAnimOn
+      ? "animal halos ON — h to disengage"
+      : "animal halos OFF");
+    needsRender = true;
     return;
   }
 
