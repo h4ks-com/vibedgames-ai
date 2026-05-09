@@ -207,7 +207,7 @@
 </div>
 <div id="death" class="modal" hidden>
   <h2>You died</h2>
-  <div>Press any key to start a new game.</div>
+  <div id="deathBody">Press any key to start a new game.</div>
 </div>
 
 <div id="gaModal" class="modal" hidden>
@@ -425,7 +425,7 @@
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev42";
+const VERSION = "ev43";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -1924,6 +1924,11 @@ function moveStep(dir) {
           player.alive = false;
           msg += " — you died";
           deathEl.hidden = false;
+          /* ev43: in journey mode the player isn't at the keyboard,
+           * so a permanent death modal halts the run.  Auto-respawn
+           * after a short pause and re-engage the journey planner so
+           * an unattended session keeps exploring. */
+          scheduleJourneyRespawn();
         }
       }
       setAction(msg);
@@ -2878,6 +2883,42 @@ function disableAutoplay(reason) {
   if (!autoplayOn) return;
   autoplayOn = false;
   if (reason) setAction("autoplay off (" + reason + ")");
+}
+
+/* ev43: auto-respawn while in journey mode.
+ *
+ * If the player dies while the journey planner is engaged, the
+ * "press any key to restart" modal would otherwise stall an
+ * unattended run forever.  scheduleJourneyRespawn snapshots the
+ * journey-on flag, waits a short readable beat so the user can
+ * see the death notice, then calls newGame() and re-engages
+ * journey mode.  Manual deaths (autoplay off) are unaffected —
+ * they still wait on a keypress as before. */
+let journeyRespawnPending = false;
+function scheduleJourneyRespawn() {
+  if (!autoplayOn) return;            /* manual death — keep modal */
+  if (journeyRespawnPending) return;  /* don't stack timers */
+  journeyRespawnPending = true;
+  const dbody = document.getElementById("deathBody");
+  if (dbody) dbody.textContent =
+    "Journey mode — respawning in 1.5s …";
+  setAction("you died — respawning in 1.5s (journey continues)");
+  setTimeout(() => {
+    journeyRespawnPending = false;
+    /* If the user already restarted manually in the interim, do
+     * nothing — newGame() will have run and re-armed everything. */
+    if (player.alive) {
+      if (dbody) dbody.textContent =
+        "Press any key to start a new game.";
+      return;
+    }
+    newGame();
+    if (dbody) dbody.textContent =
+      "Press any key to start a new game.";
+    autoplayOn = true;
+    autoplayInit();
+    setAction("respawned · journey continues — j to disengage");
+  }, 1500);
 }
 
 function autoplayTick() {
