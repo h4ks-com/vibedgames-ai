@@ -425,7 +425,7 @@
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev41";
+const VERSION = "ev42";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -3029,6 +3029,9 @@ function frame() {
       needsRender = true;
     }
   }
+  /* ev42: feed the music's mood state from the player's current cell.
+   * Cheap; safe to call every frame. */
+  musicUpdateMood();
   requestAnimationFrame(frame);
 }
 
@@ -4595,6 +4598,23 @@ let musicNextBarT   = 0;               /* AudioContext time of next bar */
 let musicSchedTimer = null;
 let musicOn         = false;
 
+/* ── ev42: mood modifier — current cell influences key + intensity
+ * Each frame we sample the player's current 64×64 cell from mapArr
+ * (terrain class) and the cell-world hash (a per-cell stable value
+ * 0..255).  Both feed low-pass filters with a ~1.4 s time constant
+ * so quick movement doesn't make the music chaotic — slow drift
+ * across biomes is the audible effect.
+ *   - musicMoodSemi: smoothed semitone offset.  Quantised to whole
+ *     semitones at read time so we never send microtonal weirdness
+ *     through the synth.
+ *   - musicMoodIntensity: smoothed gain multiplier 0.85..1.15 — the
+ *     same biome stays quietly consistent; crossing into a new one
+ *     gradually brightens or darkens the mix. */
+const MUSIC_MOOD_ALPHA = 0.012;        /* low-pass; ≈ 1.4 s @ 60 fps */
+const MUSIC_MOOD_BY_TERRAIN = [-2, 0, +2, -5];  /* rock, sand, soil, water */
+let   musicMoodSemi      = 0;
+let   musicMoodIntensity = 1.0;
+
 /* Per-voice config: octave above MUSIC_BASE_FREQ, decay, volume.
  * Octaves chosen to span four full ranges with two voices each so the
  * stack reads as bass / low-mid / hi-mid / lead pairs. */
@@ -4681,7 +4701,17 @@ function musicScheduleBar(ctx, barStartT) {
   const wtSrc      = (timbreCell >= 2) ? metaCA : musicCA;
   const wt         = musicBuildWavetable(ctx, wtSrc);
   const rootCell   = metaCA[0] & 3;
-  const rootSemi   = META_ROOT_SEMI[rootCell];
+  /* ev42: mood-driven semitone offset added to the conductor's root.
+   * Quantised to whole semitones so the synth always plays in-grid;
+   * the smoothed musicMoodSemi drifts slowly between integer values
+   * as the player crosses biomes. */
+  const moodOffset = Math.round(musicMoodSemi);
+  const rootSemi   = META_ROOT_SEMI[rootCell] + moodOffset;
+  /* Mood-driven loudness multiplier — clamped just to be safe even
+   * though the smoother is bounded. */
+  let moodGain = musicMoodIntensity;
+  if (moodGain < 0.6) moodGain = 0.6;
+  if (moodGain > 1.4) moodGain = 1.4;
   const stepDur = MUSIC_BAR_SECS / MUSIC_STEPS;
   for (let v = 0; v < MUSIC_VOICES; v++) {
     const cfg = MUSIC_VOICE_CFG[v];
@@ -4700,10 +4730,28 @@ function musicScheduleBar(ctx, barStartT) {
       const noteStart = barStartT + s * stepDur;
       const noteDur   = stepDur * cfg.dec;
       musicScheduleNote(ctx, wt, freq, noteStart, noteDur,
-                        cfg.vol * gainMul);
+                        cfg.vol * gainMul * moodGain);
     }
   }
 }
+/* ev42: pull the player's current cell into the smoothed mood state.
+ * Cheap (one mapArr index, one hash3 call) + low-pass filter, so the
+ * frame loop can call this every tick without measurable cost. */
+function musicUpdateMood() {
+  if (!musicOn) return;
+  if (px < 0 || px >= TILE_W || py < 0 || py >= TILE_H) return;
+  const terrain = mapArr[py * TILE_W + px] & 3;
+  const tgtSemi = MUSIC_MOOD_BY_TERRAIN[terrain];
+  musicMoodSemi += (tgtSemi - musicMoodSemi) * MUSIC_MOOD_ALPHA;
+  /* Per-cell hash drives a small gain wobble in [0.85, 1.15] so
+   * neighbouring cells of the same terrain class still differ
+   * a tiny bit — adds organic life to the mix without being
+   * disorienting when you walk around. */
+  const h = cellWorldHash(px, py);
+  const tgtInt = 0.85 + ((h & 0xff) / 255) * 0.30;
+  musicMoodIntensity += (tgtInt - musicMoodIntensity) * MUSIC_MOOD_ALPHA;
+}
+
 function musicSchedulerTick() {
   if (!musicOn || !audioCtx) return;
   while (musicNextBarT < audioCtx.currentTime + MUSIC_LOOK_AHEAD_S) {
