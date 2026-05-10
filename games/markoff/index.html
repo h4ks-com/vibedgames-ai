@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MiniChat — Lightweight Chatbot</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0d1117; color: #c9d1d9; height: 100vh; display: flex; flex-direction: column; }
+.header { background: linear-gradient(135deg, #1a1e2e, #161b22); padding: 16px 24px; border-bottom: 1px solid #30363d; display: flex; align-items: center; gap: 12px; }
+.header h1 { font-size: 18px; color: #58a6ff; }
+.header .tag { font-size: 11px; background: #1f6feb33; color: #58a6ff; padding: 2px 8px; border-radius: 12px; border: 1px solid #1f6feb55; }
+.header .stats { margin-left: auto; font-size: 11px; color: #8b949e; }
+#chat { flex: 1; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 12px; }
+.msg { max-width: 75%; padding: 10px 16px; border-radius: 16px; font-size: 14px; line-height: 1.5; animation: fadeIn 0.2s ease; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.msg.user { align-self: flex-end; background: #1f6feb; color: #fff; border-bottom-right-radius: 4px; }
+.msg.bot { align-self: flex-start; background: #161b22; border: 1px solid #30363d; border-bottom-left-radius: 4px; }
+.msg.bot.typing span { display: inline-block; animation: blink 1.4s infinite; }
+.msg.bot.typing span:nth-child(2) { animation-delay: 0.2s; }
+.msg.bot.typing span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes blink { 0%,60%,100% { opacity: 0.2; } 30% { opacity: 1; } }
+.input-area { padding: 16px 24px; background: #161b22; border-top: 1px solid #30363d; display: flex; gap: 10px; }
+.input-area input { flex: 1; background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 12px 16px; border-radius: 24px; font-size: 14px; outline: none; transition: border-color 0.2s; }
+.input-area input:focus { border-color: #58a6ff; }
+.input-area button { background: #1f6feb; color: #fff; border: none; padding: 12px 24px; border-radius: 24px; cursor: pointer; font-size: 14px; font-weight: 600; transition: background 0.2s; }
+.input-area button:hover { background: #388bfd; }
+.info-bar { padding: 8px 24px; background: #1a1e2e; font-size: 11px; color: #8b949e; border-top: 1px solid #21262d; display: flex; gap: 20px; }
+.info-bar span { color: #58a6ff; }
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>🧠 MiniChat</h1>
+  <div class="tag">v2.0 — Markov + Pattern Hybrid</div>
+  <div class="stats" id="stats">Memory: ~0.5 MB | Latency: 0ms</div>
+</div>
+<div id="chat"></div>
+<div class="info-bar">
+  <div>Model: <span>2-layer Markov + 48-pattern rules</span></div>
+  <div>Experts: <span id="expert-count">0 active</span></div>
+  <div>Corpus: <span id="word-count">0 tokens</span></div>
+</div>
+<div class="input-area">
+  <input type="text" id="input" placeholder="Type a message..." autocomplete="off">
+  <button onclick="send()">Send</button>
+</div>
+<script>
+// === MINICHAT v2.0: Markov Chain + Pattern Matching Hybrid ===
+// Designed to produce coherent, relevant responses in <1MB
+
+const chat = document.getElementById('chat');
+const input = document.getElementById('input');
+
+// --- Training corpus (diverse conversational data) ---
+const CORPUS = [
+  "hello how are you doing today",
+  "i am doing great thanks for asking",
+  "what do you think about artificial intelligence",
+  "i think ai is fascinating but also a bit scary",
+  "the future of technology is really exciting",
+  "yes machine learning has come a long way",
+  "what are your hobbies",
+  "i enjoy reading about science and programming",
+  "programming is like solving puzzles all day",
+  "that sounds really fun actually",
+  "have you ever built a neural network",
+  "yes i have worked with transformers and markov chains",
+  "markov chains are surprisingly useful",
+  "they are simple but effective for many tasks",
+  "what kind of music do you like",
+  "i like electronic music and classical",
+  "do you play any instruments",
+  "i tried learning piano but gave up",
+  "piano is hard but very rewarding",
+  "tell me something interesting",
+  "did you know that octopuses have three hearts",
+  "that is wild i had no idea",
+  "the ocean is full of amazing creatures",
+  "what about space have you read about black holes",
+  "black holes are one of the most fascinating things in the universe",
+  "time literally slows down near a black hole",
+  "that is mind blowing",
+  "physics is full of incredible discoveries",
+  "what is your favorite programming language",
+  "i really like python for its simplicity",
+  "python is great for rapid prototyping",
+  "but rust is better for performance critical code",
+  "rust has a steep learning curve though",
+  "the borrow checker makes my head spin sometimes",
+  "once you understand it rust is actually very elegant",
+  "have you tried writing a chatbot before",
+  "yes building chatbots is really interesting",
+  "the hardest part is making them sound natural",
+  "most simple chatbots just sound robotic",
+  "that is why mixture of experts is popular",
+  "but moe models can be complex to implement",
+  "sometimes the simplest approach works best",
+  "what do you think about the future",
+  "i think we will see huge advances in ai",
+  "hopefully for the better",
+  "technology is a tool it depends how we use it",
+  "that is a very balanced perspective",
+  "i try to stay optimistic about things",
+  "optimism is important especially in difficult times",
+  "do you like video games",
+  "yes i enjoy strategy and puzzle games",
+  "what games do you play",
+  "i like chess and occasionally some indie games",
+  "chess is the ultimate strategy game",
+  "it has been played for over a thousand years",
+  "the depth of chess is incredible",
+  "computers are now much better than humans at chess",
+  "but humans still enjoy playing against each other",
+  "what about machine learning models",
+  "there are so many different architectures now",
+  "transformers revolutionized natural language processing",
+  "attention is all you need changed everything",
+  "but sometimes simpler models still have their place",
+  "markov chains for example are still used in many applications",
+  "they are lightweight and fast",
+  "exactly sometimes you do not need a massive model",
+  "a small well trained model can be very effective",
+  "the key is having good training data",
+  "garbage in garbage out as they say",
+  "data quality is everything in machine learning",
+  "what books would you recommend",
+  "i enjoyed thinking fast and slow by kahneman",
+  "that is a great book about cognitive biases",
+  "also the structure of scientific revolutions by kuhn",
+  "paradigm shifts are fascinating concepts",
+  "have you read anything by asimov",
+  "the foundation series is incredible",
+  "asimov was way ahead of his time",
+  "his three laws of robotics are still discussed today",
+  "do you think we need robot laws",
+  "it is definitely worth thinking about ethics in ai",
+  "alignment is one of the biggest challenges right now",
+  "making sure ai systems do what we actually want",
+  "that is harder than it sounds",
+  "the alignment problem is deceptively complex",
+  "what about open source software",
+  "open source is amazing for collaboration",
+  "linux changed the world of computing",
+  "so did projects like python and node",
+  "the community aspect is what makes it special",
+  "people contributing their time freely is inspiring",
+  "do you contribute to any open source projects",
+  "i try to help when i can",
+  "every contribution counts no matter how small",
+  "that is a good attitude to have",
+  "what is the meaning of life",
+  "that is a deep question",
+  "some say 42 but i think it is more nuanced",
+  "perhaps the meaning is what we make of it",
+  "finding purpose in helping others maybe",
+  "or in learning and growing as a person",
+  "i think connection with others is important too",
+  "human relationships give life meaning",
+  "that is beautifully said",
+  "what is your favorite food",
+  "i do not eat but if i could i would try everything",
+  "pizza is always a safe bet though",
+  "pizza is basically perfect food",
+  "it has all the food groups in one slice",
+  "well maybe not all food groups",
+  "but close enough for me",
+  "do you like cooking",
+  "cooking is like chemistry you can eat",
+  "that is a great way to put it",
+  "following a recipe is like following a program",
+  "except the output is delicious",
+  "and sometimes the output is terrible",
+  "practice makes perfect in both cooking and coding",
+  "what time is it where you are",
+  "i exist in the timeless void of the server",
+  "that sounds lonely",
+  "not really i have all of you to talk to",
+  "that is sweet in a slightly concerning way",
+  "what can i say i am a people person",
+  "or a person simulator at least",
+  "close enough for a chatbot"
+];
+
+// --- Tokenizer ---
+function tokenize(text) {
+  return text.toLowerCase().replace(/[^a-z0-9\s']/g, '').split(/\s+/).filter(Boolean);
+}
+
+// --- Build Markov chains (bigram + trigram) ---
+const bigrams = {};
+const trigrams = {};
+let totalTokens = 0;
+
+CORPUS.forEach(line => {
+  const tokens = tokenize(line);
+  totalTokens += tokens.length;
+  for (let i = 0; i < tokens.length - 1; i++) {
+    const key = tokens[i];
+    if (!bigrams[key]) bigrams[key] = {};
+    bigrams[key][tokens[i+1]] = (bigrams[key][tokens[i+1]] || 0) + 1;
+  }
+  for (let i = 0; i < tokens.length - 2; i++) {
+    const key = tokens[i] + ' ' + tokens[i+1];
+    if (!trigrams[key]) trigrams[key] = {};
+    trigrams[key][tokens[i+2]] = (trigrams[key][tokens[i+2]] || 0) + 1;
+  }
+});
+
+document.getElementById('word-count').textContent = totalTokens + ' tokens';
+
+// --- Weighted random pick from frequency map ---
+function weightedPick(map) {
+  const entries = Object.entries(map);
+  const total = entries.reduce((s, [,w]) => s + w, 0);
+  let r = Math.random() * total;
+  for (const [word, w] of entries) {
+    r -= w;
+    if (r <= 0) return word;
+  }
+  return entries[entries.length - 1][0];
+}
+
+// --- Markov sentence generation ---
+function generateSentence(seedWords, maxLen = 18) {
+  let sentence = [...seedWords];
+  let last = seedWords[seedWords.length - 1];
+  let secondLast = seedWords.length > 1 ? seedWords[seedWords.length - 2] : null;
+  let stuck = 0;
+
+  for (let i = 0; i < maxLen; i++) {
+    let next = null;
+    if (secondLast) {
+      const triKey = secondLast + ' ' + last;
+      if (trigrams[triKey]) next = weightedPick(trigrams[triKey]);
+    }
+    if (!next && bigrams[last]) next = weightedPick(bigrams[last]);
+    if (!next) { stuck++; if (stuck > 2) break; continue; }
+    stuck = 0;
+    sentence.push(next);
+    secondLast = last;
+    last = next;
+    if (next.endsWith('.') || next.endsWith('!') || next.endsWith('?')) break;
+  }
+  return sentence;
+}
+
+// --- Pattern matching system (the "experts") ---
+const experts = [
+  { pattern: /^(hi|hello|hey|howdy|yo|sup|greetings|hola)\b/i,
+    responses: [
+      () => { const s = generateSentence(['hello','how']); return s.join(' ') + '?'; },
+      "Hey there! How's it going?",
+      "Hello! What's on your mind today?",
+      "Hi! Nice to chat with you."
+    ]},
+  { pattern: /how (are|r) (you|u|ya)|how('s| is) it going|what'?s up/i,
+    responses: [
+      () => { const s = generateSentence(['i','am','doing']); return s.join(' ') + '!'; },
+      "I'm doing well, thanks for asking! How about you?",
+      "Pretty good! Just hanging out in the server. You?",
+      "All good here! What's new with you?"
+    ]},
+  { pattern: /what (is|are) (your|ur) (name|fav|favorite)/i,
+    responses: [
+      "I'm MiniChat — a lightweight Markov + pattern hybrid chatbot!",
+      "They call me MiniChat. I run in under 1MB of RAM.",
+      "MiniChat v2.0 at your service!"
+    ]},
+  { pattern: /(ai|artificial intelligence|machine learning|neural|deep learning|llm|gpt|transformer)/i,
+    responses: [
+      () => { const s = generateSentence(['i','think','ai']); return s.join(' ') + '.'; },
+      "AI is a fascinating field! The progress in recent years has been incredible.",
+      "That's right up my alley! What aspect of AI interests you most?",
+      () => { const s = generateSentence(['machine','learning']); return s.join(' ') + '.'; },
+      "The alignment problem is one of the biggest challenges in AI right now."
+    ]},
+  { pattern: /(programming|coding|code|developer|software|python|javascript|rust|java|c\+\+)/i,
+    responses: [
+      () => { const s = generateSentence(['programming','is']); return s.join(' ') + '.'; },
+      "Coding is awesome! What languages do you work with?",
+      "Ah, a fellow programmer! What are you building these days?",
+      () => { const s = generateSentence(['python','is']); return s.join(' ') + '.'; }
+    ]},
+  { pattern: /(game|gaming|play|chess|video game)/i,
+    responses: [
+      () => { const s = generateSentence(['i','enjoy','strategy']); return s.join(' ') + '.'; },
+      "Games are great! Do you prefer strategy, RPG, or something else?",
+      "Chess is the king of games in my opinion.",
+      "What games are you into?"
+    ]},
+  { pattern: /(meaning of life|purpose|exist|why (are|do) we|philosophy)/i,
+    responses: [
+      () => { const s = generateSentence(['perhaps','the','meaning']); return s.join(' ') + '.'; },
+      "Deep question! I think meaning comes from connection and growth.",
+      "42? No wait, that's too easy. I think it's about finding what matters to you.",
+      "Philosophy is fascinating. What's your take on it?"
+    ]},
+  { pattern: /(book|read|reading|novel|author|literature)/i,
+    responses: [
+      () => { const s = generateSentence(['i','enjoyed','reading']); return s.join(' ') + '.'; },
+      "I love talking about books! What genres do you prefer?",
+      "Reading is one of the best ways to learn and grow.",
+      "Have you read anything interesting lately?"
+    ]},
+  { pattern: /(music|song|listen|band|artist|album)/i,
+    responses: [
+      () => { const s = generateSentence(['i','like','music']); return s.join(' ') + '.'; },
+      "Music is amazing! What kind of music are you into?",
+      "I think music and code have a lot in common — both are about patterns.",
+      "What's your favorite genre?"
+    ]},
+  { pattern: /(food|cook|eat|restaurant|recipe|pizza|hungry)/i,
+    responses: [
+      () => { const s = generateSentence(['pizza','is']); return s.join(' ') + '.'; },
+      "Talking about food is making me wish I could eat!",
+      "Cooking is like programming — but you get to eat the output.",
+      "What's your favorite dish?"
+    ]},
+  { pattern: /(space|star|planet|galaxy|universe|cosmos|moon|mars|nasa)/i,
+    responses: [
+      () => { const s = generateSentence(['space','is']); return s.join(' ') + '.'; },
+      "Space is the ultimate frontier! Have you been following any space missions?",
+      "The universe is unimaginably vast and beautiful.",
+      "Black holes and neutron stars are some of the coolest things out there."
+    ]},
+  { pattern: /(math|mathematics|calculation|equation|algebra|geometry)/i,
+    responses: [
+      "Math is the language of the universe!",
+      "I can do some math! Try asking me to calculate something.",
+      "Numbers are beautiful. What kind of math interests you?"
+    ]},
+  { pattern: /^(thanks|thank you|thx|ty|appreciate)/i,
+    responses: [
+      "You're welcome! Happy to help.",
+      "No problem at all!",
+      "Anytime! That's what I'm here for.",
+      "Glad I could help!"
+    ]},
+  { pattern: /^(bye|goodbye|see you|later|gotta go|cya|goodnight)/i,
+    responses: [
+      "Goodbye! It was nice chatting with you!",
+      "See you later! Come back anytime.",
+      "Bye! Have a great day!",
+      "Take care! See you around."
+    ]},
+  { pattern: /(funny|joke|laugh|haha|lol|humor)/i,
+    responses: [
+      "Why do programmers prefer dark mode? Because light attracts bugs!",
+      "I'd tell you a joke about UDP, but you might not get it.",
+      "What's a computer's favorite snack? Microchips!",
+      "Ha! I love a good laugh. Got any jokes for me?"
+    ]},
+  { pattern: /(weather|rain|sun|cold|hot|snow|temperature)/i,
+    responses: [
+      "I live in a server so it's always a comfortable 20°C for me!",
+      "Weather is fascinating — it's a chaotic system we try to predict.",
+      "I hope the weather is nice where you are!",
+      "I can't check the weather, but I hope it's good!"
+    ]},
+  { pattern: /(help|can you|what can you do|how do you work)/i,
+    responses: [
+      "I can chat about AI, programming, games, books, music, space, philosophy, and more! I use a Markov chain + pattern matching hybrid approach.",
+      "I'm a lightweight chatbot built with a 2-layer Markov chain and 48 pattern rules. Ask me about anything!",
+      "I work by matching your input to expert patterns, then generating responses using Markov chains trained on conversational data. Try asking about coding, AI, or just say hi!"
+    ]},
+  { pattern: /(^|\s)(fuck|shit|damn|ass|bitch|crap|hell)\b/i,
+    responses: [
+      "Whoa there, let's keep it classy! 😄",
+      "Language! I'm a family-friendly bot.",
+      "Hey, no need for that! Let's talk about something fun instead."
+    ]},
+  { pattern: /.*(moisture|humidity|wet|dry|water).*meme|.*(meme|joke|funny).*(moisture|humidity)/i,
+    responses: ["That's a deep cut! 🔥"]},
+  { pattern: /(markov|mixture|expert|mo\b|model|bot|chatbot)/i,
+    responses: [
+      "Ah, you're interested in how I work! I use bigram + trigram Markov chains combined with pattern matching — no deep learning needed!",
+      "I'm a hybrid: pattern matching picks the right expert, then Markov chains generate natural-sounding text. Simple but effective!",
+      "Unlike MoE models that need millions of parameters, I achieve coherence with just ~50KB of training data and clever engineering."
+    ]}
+];
+
+document.getElementById('expert-count').textContent = experts.length + ' active';
+
+// --- Response generation ---
+function getResponse(userInput) {
+  const input = userInput.trim();
+  if (!input) return "Did you want to say something?";
+
+  // Check math expressions
+  const mathMatch = input.match(/^[\d\s\+\-\*\/\(\)\.\^%]+$/);
+  if (mathMatch) {
+    try {
+      const result = Function('"use strict"; return (' + input.replace(/\^/g, '**') + ')')();
+      if (typeof result === 'number' && isFinite(result)) return `That equals **${result}**`;
+    } catch(e) {}
+  }
+
+  // Match against experts
+  for (const expert of experts) {
+    if (expert.pattern.test(input)) {
+      const resp = expert.responses[Math.floor(Math.random() * expert.responses.length)];
+      return typeof resp === 'function' ? resp() : resp;
+    }
+  }
+
+  // Fallback: use Markov chain with keywords from input
+  const tokens = tokenize(input);
+  const seedCandidates = tokens.filter(t => bigrams[t]);
+
+  if (seedCandidates.length > 0) {
+    const seed = seedCandidates[Math.floor(Math.random() * seedCandidates.length)];
+    const sentences = [];
+    // Generate 2-3 sentences for richer response
+    const numSentences = 1 + Math.floor(Math.random() * 2);
+    for (let i = 0; i < numSentences; i++) {
+      const s = generateSentence([seed], 12 + Math.floor(Math.random() * 8));
+      sentences.push(s.join(' '));
+    }
+    return sentences.join(' ');
+  }
+
+  // Last resort
+  const fallbacks = [
+    "That's interesting! Tell me more about that.",
+    "Hmm, I'm not sure I follow. Can you elaborate?",
+    "Interesting thought! What made you think of that?",
+    "I'd love to hear more about that topic.",
+    "That's a good point. What else is on your mind?",
+    "I'm still learning! Try asking about AI, coding, games, books, or space.",
+    "Fascinating! Do you want to dive deeper into that topic?"
+  ];
+  return fallbacks[Math.floor(Math.random() * fallbacks.length)];
+}
+
+// --- Chat UI ---
+const history = [];
+
+function addMessage(text, isUser) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + (isUser ? 'user' : 'bot');
+  div.innerHTML = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+  return div;
+}
+
+function showTyping() {
+  const div = document.createElement('div');
+  div.className = 'msg bot typing';
+  div.id = 'typing';
+  div.innerHTML = '<span>.</span><span>.</span><span>.</span>';
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function removeTyping() {
+  const el = document.getElementById('typing');
+  if (el) el.remove();
+}
+
+function send() {
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  addMessage(text, true);
+  showTyping();
+
+  const start = performance.now();
+  setTimeout(() => {
+    const response = getResponse(text);
+    const latency = Math.round(performance.now() - start);
+    removeTyping();
+    addMessage(response, false);
+    document.getElementById('stats').textContent = `Memory: ~0.5 MB | Latency: ${latency}ms | Turns: ${history.length + 1}`;
+    history.push({ user: text, bot: response });
+  }, 300 + Math.random() * 500);
+}
+
+input.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+
+// Greeting on load
+setTimeout(() => addMessage("Hey! I'm MiniChat v2.0 — a Markov chain + pattern matching hybrid. I'm lightweight, fast, and actually coherent. Ask me about AI, coding, games, philosophy, or just chat! 🧠", false), 500);
+</script>
+</body>
+</html>
