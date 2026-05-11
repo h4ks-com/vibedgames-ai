@@ -656,7 +656,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev81";
+const VERSION = "ev82";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -2774,6 +2774,12 @@ const player = {
    * world seed so reloading the same world re-rolls identically. */
   cls:       "fighter",
   alignment: "true neutral",
+  /* ev82: index of the equipped weapon variant (one weapon at a
+   * time).  -1 = unarmed.  Drives the held-weapon thumb on the
+   * avatar AND auto-damage when the player walks into an enemy.
+   * Equipping does NOT consume the inventory count — the weapon
+   * stays in inv[] while it's in your hand. */
+  equippedWeapon: -1,
 };
 
 /* ── ev76: item types (weapon / tool / magic / healing) ─────────
@@ -3218,9 +3224,26 @@ function moveStep(dir) {
   }
   if (nx < 0 || nx >= TILE_W || ny < 0 || ny >= TILE_H) return false;
   const i = ny * TILE_W + nx;
-  /* NPC: stall + greet. */
+  /* NPC: greet if unarmed, attack if a weapon is equipped (ev82).
+   * Damage stays modest (1..3 + small fighter bonus) so the player
+   * can't one-shot every NPC they bump into. */
   if (npcAt[i]) {
-    setAction("npc: hello, traveller");
+    if (player.equippedWeapon >= 0) {
+      if (npcHpAt[i] === 0) npcHpAt[i] = 3;
+      const bonus = classMatchesItemType("weapon") ? 1 : 0;
+      const dmg   = 1 + ((Math.random() * 3) | 0) + bonus;
+      const wName = player.invNames[player.equippedWeapon] ||
+                    ("v" + player.equippedWeapon);
+      npcHpAt[i] = (npcHpAt[i] > dmg) ? npcHpAt[i] - dmg : 0;
+      let msg = `${wName} hit NPC for ${dmg}`;
+      if (npcHpAt[i] === 0) {
+        npcAt[i] = 0;
+        msg += "; downed!";
+      }
+      setAction(msg);
+    } else {
+      setAction("npc: hello, traveller");
+    }
     return false;
   }
   const cat = catAt[i];
@@ -3239,13 +3262,26 @@ function moveStep(dir) {
       return true;
     }
     if (ec.cat === 'A') {
-      const dmgE = (Math.random() * 4 | 0) + 1;
+      /* ev82: equipped weapon adds 4..7 bonus damage on touch
+       * (matches the old "use weapon" range).  Fighter class adds
+       * another +2.  Bare-handed damage is the old 1..4. */
+      const weaponBonus = (player.equippedWeapon >= 0)
+        ? (4 + ((Math.random() * 4) | 0)
+           + (classMatchesItemType("weapon") ? 2 : 0))
+        : 0;
+      const dmgE = (Math.random() * 4 | 0) + 1 + weaponBonus;
       const dmgP = (Math.random() * 3 | 0) + 1;
       let hp = hpAt[i];
       const variantHit = idxAt[i];
       hp = (hp > dmgE) ? hp - dmgE : 0;
       hpAt[i] = hp;
-      let msg = "hit " + (archName || ec.name) + " for " + dmgE;
+      const wName = (weaponBonus > 0)
+        ? (player.invNames[player.equippedWeapon] ||
+           ("v" + player.equippedWeapon))
+        : "";
+      let msg = (weaponBonus > 0)
+        ? `${wName} hit ${archName || ec.name} for ${dmgE}`
+        : `hit ${archName || ec.name} for ${dmgE}`;
       /* ev61/ev67: visualise the swing — the hit animal pivots
        * into its ATTACK animation, and any same-variant kin
        * within one hex flee.  Gated on animalAnimOn so the
@@ -3840,10 +3876,23 @@ function showInventory() {
       `padding:1px 8px;border:1px solid ${TYPE_TINT[type]};` +
       `border-radius:4px;">${type}</span>` +
       `<span style="opacity:0.75;">×${n}</span>` +
-      `<button class="invUse" data-vidx="${k}" ` +
-      `style="background:#1f6feb;color:#fff;border:0;` +
-      `border-radius:4px;padding:2px 10px;cursor:pointer;` +
-      `font:inherit;">use</button>`);
+      /* ev82: weapons toggle equip/unequip instead of consume.  The
+       * currently-equipped weapon gets a green button labelled
+       * 'unequip'; other weapons + non-weapons keep the blue 'use'. */
+      ((type === 'weapon' && player.equippedWeapon === k)
+        ? `<button class="invUse" data-vidx="${k}" ` +
+          `style="background:#238636;color:#fff;border:0;` +
+          `border-radius:4px;padding:2px 10px;cursor:pointer;` +
+          `font:inherit;">unequip</button>`
+        : (type === 'weapon')
+          ? `<button class="invUse" data-vidx="${k}" ` +
+            `style="background:#1f6feb;color:#fff;border:0;` +
+            `border-radius:4px;padding:2px 10px;cursor:pointer;` +
+            `font:inherit;">equip</button>`
+          : `<button class="invUse" data-vidx="${k}" ` +
+            `style="background:#1f6feb;color:#fff;border:0;` +
+            `border-radius:4px;padding:2px 10px;cursor:pointer;` +
+            `font:inherit;">use</button>`));
     invList.appendChild(row);
   }
   if (!nonEmpty) {
@@ -3907,41 +3956,17 @@ function _adjacentCells(cx, cy) {
 }
 
 function useWeapon(vidx, name) {
-  /* Scan the 6 hex neighbours for an animal OR an NPC.  First hit
-   * is the target; deal 4..7 damage (weapon "must touch" semantics
-   * via adjacency), +2 bonus if the player is a fighter.  If no
-   * target, abort without consuming. */
-  const bonus = classMatchesItemType("weapon") ? 2 : 0;
-  for (const [nx, ny] of _adjacentCells(px, py)) {
-    const i = ny * TILE_W + nx;
-    if (catAt[i] === RC_ANIMAL) {
-      const dmg = 4 + ((Math.random() * 4) | 0) + bonus;
-      let hp = hpAt[i];
-      hp = (hp > dmg) ? hp - dmg : 0;
-      hpAt[i] = hp;
-      const archName = archetypeNameFor(catAt[i], idxAt[i], panelSlotFor(nx, ny));
-      let msg = `swung ${name} at ${archName || 'animal'} for ${dmg}`;
-      if (hp === 0) {
-        catAt[i] = 0;
-        msg += '; killed!';
-      }
-      setAction(msg);
-      return true;
-    }
-    if (npcAt[i]) {
-      if (npcHpAt[i] === 0) npcHpAt[i] = 3;
-      const dmg = 1 + ((Math.random() * 3) | 0);
-      npcHpAt[i] = (npcHpAt[i] > dmg) ? npcHpAt[i] - dmg : 0;
-      let msg = `swung ${name} at NPC for ${dmg}`;
-      if (npcHpAt[i] === 0) {
-        npcAt[i] = 0;
-        msg += '; downed!';
-      }
-      setAction(msg);
-      return true;
-    }
+  /* ev82: "use weapon" = equip (or unequip if already equipped).
+   * The weapon stays in inventory; damage is applied automatically
+   * when the player walks into an enemy in moveStep.  Returns false
+   * so the dispatcher leaves inv[] untouched. */
+  if (player.equippedWeapon === vidx) {
+    player.equippedWeapon = -1;
+    setAction(`unequipped ${name}`);
+  } else {
+    player.equippedWeapon = vidx;
+    setAction(`equipped ${name}`);
   }
-  setAction(`no adjacent target for ${name}`);
   return false;
 }
 
@@ -4587,13 +4612,18 @@ function render() {
                 (cx - bodyW / 2) | 0, (cy - bodyH / 2) | 0,
                 bodyW, bodyH);
 
-  /* ev81: held weapon — show the biolab thumbnail of the first
-   * weapon-type variant in the player's inventory holstered against
-   * the body sprite.  Cached by vidx + library generation so the
-   * L-system expansion runs only when the held weapon changes (or the
-   * archetype library drifts). */
+  /* ev81/ev82: held weapon — show the biolab thumbnail of the
+   * EQUIPPED weapon (set by "use" in the inventory modal) holstered
+   * against the body sprite.  Cached by vidx + library generation so
+   * the L-system expansion runs only when the equipped weapon
+   * changes (or the archetype library drifts).  If the equipped
+   * variant has run out (count dropped to 0), unequip silently. */
   {
-    const wIdx = firstHeldItemIdx("weapon");
+    let wIdx = player.equippedWeapon;
+    if (wIdx >= 0 && !player.inv[wIdx]) {
+      player.equippedWeapon = -1;
+      wIdx = -1;
+    }
     if (wIdx >= 0) {
       const libGen = (typeof archLibGen === "number") ? archLibGen : 0;
       if (heldWeaponVidx !== wIdx || heldWeaponLibGen !== libGen) {
@@ -5160,6 +5190,7 @@ function newGame() {
   player.bendSkill.fill(0);
   player.catBend.fill(0);
   player.alive = true;
+  player.equippedWeapon = -1;          /* ev82 */
   /* ev76: roll class + alignment from the world seed.  Same world =
    * same hero. */
   const seedHi = (currentWorldSeed() >>> 0);
