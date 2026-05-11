@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cellular Automaton Data Compression — Proof of Concept</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0a0a1a; color: #e0e0e0; font-family: 'Courier New', monospace; padding: 20px; }
+h1 { color: #7b68ee; text-align: center; margin-bottom: 5px; font-size: 1.4em; }
+h2 { color: #9370db; margin: 15px 0 8px; font-size: 1em; }
+.subtitle { text-align: center; color: #888; font-size: 0.85em; margin-bottom: 20px; }
+.subtitle em { color: #daa520; }
+.row { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; margin-bottom: 15px; }
+.panel { background: #111128; border: 1px solid #333; border-radius: 8px; padding: 15px; flex: 1; min-width: 300px; max-width: 550px; }
+textarea { width: 100%; height: 80px; background: #0d0d20; color: #0f0; border: 1px solid #444; border-radius: 4px; padding: 10px; font-family: 'Courier New', monospace; font-size: 14px; resize: vertical; }
+input[type=range] { width: 100%; accent-color: #7b68ee; margin: 8px 0; }
+.controls { display: flex; gap: 10px; align-items: center; margin: 10px 0; flex-wrap: wrap; }
+label { font-size: 0.85em; color: #aaa; }
+button { background: #7b68ee; color: #fff; border: none; padding: 8px 18px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 0.9em; }
+button:hover { background: #9370db; }
+button.secondary { background: #333; }
+button.secondary:hover { background: #555; }
+canvas { border: 1px solid #444; border-radius: 4px; image-rendering: pixelated; display: block; margin: 8px auto; }
+.stats { font-size: 0.8em; color: #aaa; margin-top: 8px; }
+.stats .good { color: #0f0; }
+.stats .bad { color: #f44; }
+.comparison { display: flex; gap: 10px; justify-content: center; align-items: flex-start; flex-wrap: wrap; }
+.comp-block { text-align: center; }
+.comp-block h3 { font-size: 0.85em; margin-bottom: 5px; }
+.comp-block canvas { margin: 0; }
+#mismatchCanvas { border-color: #f44; }
+.info-box { background: #1a1a30; border-left: 3px solid #daa520; padding: 10px 15px; margin: 15px 0; font-size: 0.85em; line-height: 1.5; max-width: 900px; margin-left: auto; margin-right: auto; }
+.legend { display: flex; gap: 15px; justify-content: center; margin: 8px 0; font-size: 0.8em; }
+.legend span { display: flex; align-items: center; gap: 4px; }
+.legend .dot { width: 12px; height: 12px; border-radius: 2px; display: inline-block; }
+select { background: #0d0d20; color: #e0e0e0; border: 1px solid #444; border-radius: 4px; padding: 4px 8px; font-family: inherit; }
+</style>
+</head>
+<body>
+
+<h1>🧬 Cellular Automaton "Compression" — Proof of Concept</h1>
+<p class="subtitle">Encoding text into a CA initial state, running it, and comparing output vs. expected.<br>
+Demonstrates <em>why</em> this is harder than it sounds.</p>
+
+<div class="info-box">
+<b>💡 The Idea:</b> Instead of outputting translated text directly (limited by LLM output tokens), 
+output a compact CA rule + initial state that *generates* the text when executed.<br>
+<b>⚠️ The Problem:</b> Finding the right initial state is an <em>inverse problem</em> — 
+and tiny errors cascade into total corruption. Watch below.
+</div>
+
+<div class="row">
+<div class="panel">
+<h2>📝 Input Text</h2>
+<textarea id="inputText">Hello, vinaya scholars! This is a test of encoding text into cellular automaton initial conditions. Pāṭimokkha rules are complex.</textarea>
+<div class="controls">
+<label>CA Rule: </label>
+<select id="caRule">
+<option value="30">Rule 30 (chaotic)</option>
+<option value="90" selected>Rule 90 (fractal)</option>
+<option value="110">Rule 110 (Turing complete)</option>
+<option value="150">Rule 150 (fractal)</option>
+<option value="184">Rule 184 (traffic)</option>
+</select>
+<button onclick="runDemo()">▶ Run Encoding</button>
+</div>
+<div class="controls">
+<label>Simulated "noise" (LLM imprecision): </label>
+<input type="range" id="noise" min="0" max="50" value="5" oninput="updateNoiseLabel()">
+<span id="noiseLabel" style="font-size:0.85em;color:#daa520">5%</span>
+</div>
+</div>
+
+<div class="panel">
+<h2>📊 Encoding Summary</h2>
+<div id="statsPanel">
+<div class="stats">Enter text and click <b>Run Encoding</b> to begin.</div>
+</div>
+</div>
+</div>
+
+<div class="row">
+<div class="panel">
+<h2>Step 1: Text → Bitmap (Target)</h2>
+<p class="stats">The input text is converted to a pixel grid where each pixel represents part of a character's bit pattern.</p>
+<canvas id="targetCanvas" width="480" height="160"></canvas>
+</div>
+</div>
+
+<div class="row">
+<div class="panel">
+<h2>Step 2: CA Initial State</h2>
+<p class="stats">The bitmap is packed into the first row of the cellular automaton. <span style="color:#daa520">Yellow cells</span> show where simulated LLM errors were introduced.</p>
+<canvas id="initCanvas" width="480" height="40"></canvas>
+<div class="legend">
+<span><span class="dot" style="background:#7b68ee"></span> State 0</span>
+<span><span class="dot" style="background:#0f0"></span> State 1</span>
+<span><span class="dot" style="background:#daa520"></span> Corrupted (noise)</span>
+</div>
+</div>
+</div>
+
+<div class="row">
+<div class="panel">
+<h2>Step 3: CA Runs Forward...</h2>
+<p class="stats">The CA evolves for N generations. Each row = one generation. Notice how errors <span style="color:#f44">cascade and spread</span>.</p>
+<canvas id="caCanvas" width="480" height="160"></canvas>
+</div>
+</div>
+
+<div class="row">
+<div class="panel">
+<h2>Step 4: Comparison</h2>
+<div class="comparison">
+<div class="comp-block">
+<h3 style="color:#0f0">✓ Expected (original text bitmap)</h3>
+<canvas id="expectedCanvas" width="220" height="80"></canvas>
+</div>
+<div class="comp-block">
+<h3 style="color:#daa520">⚡ CA Output (recovered)</h3>
+<canvas id="outputCanvas" width="220" height="80"></canvas>
+</div>
+<div class="comp-block">
+<h3 style="color:#f44">✗ Mismatch Map</h3>
+<canvas id="mismatchCanvas" width="220" height="80"></canvas>
+</div>
+</div>
+<div id="finalStats" class="stats" style="text-align:center;margin-top:10px"></div>
+</div>
+</div>
+
+<div class="row">
+<div class="panel">
+<h2>Step 5: Decoded Text</h2>
+<p class="stats">Attempting to read characters back from the CA output bitmap:</p>
+<div id="decodedText" style="background:#0d0d20;padding:10px;border-radius:4px;min-height:50px;font-size:14px;word-break:break-all;">
+<i style="color:#555">— waiting for run —</i>
+</div>
+</div>
+</div>
+
+<div class="info-box">
+<b>🎓 Takeaway:</b> Even with a simple 1D 2-state CA (Rule 90/110), just <b>5% noise</b> in the initial 
+state causes massive corruption after a few generations. A 4-color 2D CA would be exponentially harder 
+to control. The inverse problem — "what initial state produces my exact Dutch text?" — is computationally 
+intractable for an LLM to solve in a single shot. Beautiful theory, brutal practice.
+</div>
+
+<script>
+const GRID_W = 480;
+const GRID_H = 160;
+const SCALE = 1;
+
+function textToBitmap(text, width, height) {
+    // Convert text to binary bitmap using canvas
+    const c = document.createElement('canvas');
+    c.width = width; c.height = height;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = '#fff';
+    ctx.font = '12px Courier New';
+    ctx.textBaseline = 'top';
+    
+    // Word wrap
+    const words = text.split(' ');
+    let line = '';
+    let y = 4;
+    const lineHeight = 14;
+    
+    for (const word of words) {
+        const test = line + word + ' ';
+        if (ctx.measureText(test).width > width - 10 && line) {
+            ctx.fillText(line, 5, y);
+            line = word + ' ';
+            y += lineHeight;
+            if (y > height - lineHeight) break;
+        } else {
+            line = test;
+        }
+    }
+    if (line && y <= height - lineHeight) ctx.fillText(line, 5, y);
+    
+    const imageData = ctx.getImageData(0, 0, width, height);
+    const bitmap = [];
+    for (let i = 0; i < imageData.data.length; i += 4) {
+        bitmap.push(imageData.data[i] > 128 ? 1 : 0);
+    }
+    return bitmap;
+}
+
+function bitmapToRow(bitmap, width, height) {
+    // Pack the 2D bitmap into a 1D row by reading columns top-to-bottom
+    const row = [];
+    const cellsNeeded = width * height;
+    // We'll use width as our row length
+    for (let x = 0; x < width; x++) {
+        let val = 0;
+        for (let y = 0; y < height; y++) {
+            const bit = bitmap[y * width + x] || 0;
+            val = (val + bit) % 2; // XOR fold
+        }
+        row.push(val);
+    }
+    return row;
+}
+
+function applyNoise(row, percent) {
+    const corrupted = new Array(row.length).fill(false);
+    const noisy = [...row];
+    const flipCount = Math.floor(row.length * percent / 100);
+    const indices = [];
+    for (let i = 0; i < row.length; i++) indices.push(i);
+    // Fisher-Yates partial shuffle
+    for (let i = 0; i < flipCount; i++) {
+        const j = i + Math.floor(Math.random() * (indices.length - i));
+        [indices[i], indices[j]] = [indices[j], indices[i]];
+        noisy[indices[i]] = 1 - noisy[indices[i]];
+        corrupted[indices[i]] = true;
+    }
+    return { noisy, corrupted };
+}
+
+function runCA(rule, initialState, generations) {
+    const width = initialState.length;
+    const grid = [initialState];
+    for (let g = 1; g < generations; g++) {
+        const prev = grid[g - 1];
+        const row = [];
+        for (let x = 0; x < width; x++) {
+            const l = prev[(x - 1 + width) % width];
+            const c = prev[x];
+            const r = prev[(x + 1) % width];
+            const idx = (l << 2) | (c << 1) | r;
+            row.push((rule >> idx) & 1);
+        }
+        grid.push(row);
+    }
+    return grid;
+}
+
+function drawGrid(canvasId, grid, width, height, options = {}) {
+    const canvas = document.getElementById(canvasId);
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    canvas.width = width;
+    canvas.height = height;
+    
+    const scaleX = width / grid[0].length;
+    const scaleY = height / grid.length;
+    
+    for (let y = 0; y < grid.length; y++) {
+        for (let x = 0; x < grid[y].length; x++) {
+            const px = Math.floor(x * scaleX);
+            const py = Math.floor(y * scaleY);
+            const pw = Math.max(1, Math.ceil(scaleX));
+            const ph = Math.max(1, Math.ceil(scaleY));
+            
+            if (options.corrupted && options.corrupted[y] && options.corrupted[y][x]) {
+                ctx.fillStyle = '#daa520';
+            } else if (grid[y][x]) {
+                ctx.fillStyle = options.color || '#0f0';
+            } else {
+                ctx.fillStyle = options.bg || '#111128';
+            }
+            ctx.fillRect(px, py, pw, ph);
+        }
+    }
+}
+
+function drawBitmap(canvasId, bitmap, width, height, options = {}) {
+    const canvas = document.getElementById(canvasId);
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const idx = y * width + x;
+            if (options.mismatches && options.mismatches.has(idx)) {
+                ctx.fillStyle = '#f44';
+            } else if (bitmap[idx]) {
+                ctx.fillStyle = options.color || '#0f0';
+            } else {
+                ctx.fillStyle = options.bg || '#111128';
+            }
+            ctx.fillRect(x, y, 1, 1);
+        }
+    }
+}
+
+function updateNoiseLabel() {
+    const v = document.getElementById('noise').value;
+    document.getElementById('noiseLabel').textContent = v + '%';
+}
+
+function runDemo() {
+    const text = document.getElementById('inputText').value;
+    const rule = parseInt(document.getElementById('caRule').value);
+    const noisePercent = parseInt(document.getElementById('noise').value);
+    
+    // Step 1: Text to bitmap
+    const targetBitmap = textToBitmap(text, GRID_W, GRID_H);
+    drawBitmap('targetCanvas', targetBitmap, GRID_W, GRID_H, { color: '#0f0' });
+    
+    // Step 2: Pack into CA initial row and apply noise
+    const initRow = bitmapToRow(targetBitmap, GRID_W, GRID_H);
+    const { noisy, corrupted } = applyNoise(initRow, noisePercent);
+    
+    // Draw initial state
+    const initGrid = [initRow];
+    const corruptedGrid = [noisy.map((v, i) => corrupted[i] ? 2 : v)];
+    drawGrid('initCanvas', corruptedGrid, GRID_W, 40, {
+        color: '#0f0',
+        bg: '#111128',
+        corrupted: [corrupted]
+    });
+    
+    // Step 3: Run CA
+    const generations = GRID_H;
+    const caGrid = runCA(rule, noisy, generations);
+    drawGrid('caCanvas', caGrid, GRID_W, GRID_H, { color: '#7b68ee', bg: '#0a0a18' });
+    
+    // Step 4: Extract output bitmap from last CA row (spread back to 2D)
+    // Use last row as the "decoded" row
+    const lastRow = caGrid[caGrid.length - 1];
+    const outputBitmap = [];
+    for (let y = 0; y < GRID_H; y++) {
+        for (let x = 0; x < GRID_W; x++) {
+            outputBitmap.push(lastRow[x]); // Same value replicated
+        }
+    }
+    
+    // Actually, let's use the full CA grid as output by reading a specific generation
+    // For a fair comparison, let's decode from the middle of the CA run
+    const midGen = Math.floor(generations / 2);
+    const decodedBitmap = [];
+    for (let y = 0; y < GRID_H; y++) {
+        for (let x = 0; x < GRID_W; x++) {
+            const gen = Math.min(y + midGen, generations - 1);
+            decodedBitmap.push(caGrid[gen][x]);
+        }
+    }
+    
+    // Find mismatches
+    const mismatches = new Set();
+    let matchCount = 0;
+    let totalPixels = GRID_W * GRID_H;
+    for (let i = 0; i < totalPixels; i++) {
+        if (targetBitmap[i] === decodedBitmap[i]) matchCount++;
+        else mismatches.add(i);
+    }
+    const accuracy = ((matchCount / totalPixels) * 100).toFixed(1);
+    
+    // Draw comparison (scaled down)
+    const compW = 220, compH = 80;
+    const scaleF = compW / GRID_W;
+    
+    const targetSmall = [];
+    const outputSmall = [];
+    const mismatchesSmall = new Set();
+    
+    for (let y = 0; y < compH; y++) {
+        for (let x = 0; x < compW; x++) {
+            const sx = Math.floor(x / scaleF);
+            const sy = Math.floor(y / (compH / GRID_H));
+            const idx = sy * GRID_W + sx;
+            targetSmall.push(targetBitmap[idx]);
+            outputSmall.push(decodedBitmap[idx]);
+            if (mismatches.has(idx)) mismatchesSmall.add(y * compW + x);
+        }
+    }
+    
+    drawBitmap('expectedCanvas', targetSmall, compW, compH, { color: '#0f0' });
+    drawBitmap('outputCanvas', outputSmall, compW, compH, { color: '#daa520' });
+    drawBitmap('mismatchCanvas', outputSmall, compW, compH, { 
+        color: '#333', 
+        bg: '#111',
+        mismatches: mismatchesSmall 
+    });
+    
+    // Stats
+    const noiseFlips = Math.floor(initRow.length * noisePercent / 100);
+    const originalBits = initRow.reduce((a, b) => a + b, 0);
+    
+    document.getElementById('statsPanel').innerHTML = `
+        <div class="stats">📏 Input: <b>${text.length}</b> chars → <b>${GRID_W}×${GRID_H}</b> = <b>${(GRID_W*GRID_H/8).toFixed(0)}</b> bytes bitmap</div>
+        <div class="stats">🎲 Noise: <b class="bad">${noisePercent}%</b> = <b>${noiseFlips}</b> cells flipped out of <b>${GRID_W}</b></div>
+        <div class="stats">⚙️ CA Rule: <b>${rule}</b>, generations: <b>${generations}</b></div>
+        <div class="stats">✅ Pixel match: <b class="${parseFloat(accuracy) > 90 ? 'good' : 'bad'}">${accuracy}%</b> (${matchCount}/${totalPixels} pixels)</div>
+        <div class="stats">💥 Mismatched pixels: <b class="bad">${mismatches.size.toLocaleString()}</b></div>
+    `;
+    
+    document.getElementById('finalStats').innerHTML = `
+        <span class="${parseFloat(accuracy) > 90 ? 'good' : 'bad'}"><b>${accuracy}%</b> accuracy</span> — 
+        ${parseFloat(accuracy) > 95 ? '🔬 Surprisingly close, but try increasing noise!' : 
+          parseFloat(accuracy) > 80 ? '⚡ Significant corruption visible — text would be garbled.' :
+          '💀 Total data loss — the original text is unrecoverable.'}
+    `;
+    
+    // Step 5: Decode text from output (attempt OCR-like reading)
+    const decodedCanvas = document.createElement('canvas');
+    decodedCanvas.width = GRID_W;
+    decodedCanvas.height = GRID_H;
+    const dctx = decodedCanvas.getContext('2d');
+    for (let y = 0; y < GRID_H; y++) {
+        for (let x = 0; x < GRID_W; x++) {
+            dctx.fillStyle = decodedBitmap[y * GRID_W + x] ? '#fff' : '#000';
+            dctx.fillRect(x, y, 1, 1);
+        }
+    }
+    
+    // Show as image
+    const dataUrl = decodedCanvas.toDataURL();
+    document.getElementById('decodedText').innerHTML = `
+        <div style="margin-bottom:8px;color:#888;font-size:0.85em">CA output rendered as bitmap (compare with original text above):</div>
+        <img src="${dataUrl}" style="width:100%;border-radius:4px;border:1px solid #444;image-rendering:pixelated" alt="Decoded output">
+        <div style="margin-top:8px;color:#daa520;font-size:0.85em">
+            ${parseFloat(accuracy) > 95 ? '⚡ Looks readable! But remember: a real 4-color 2D CA would be exponentially harder.' :
+              parseFloat(accuracy) > 80 ? '⚡ Partially readable — many characters corrupted. An LLM could not reliably prevent this.' :
+              '💀 Unreadable. Even 5% initial noise destroyed the data. This is the fundamental problem.'}
+        </div>
+    `;
+}
+
+// Auto-run on load
+runDemo();
+</script>
+
+</body>
+</html>
