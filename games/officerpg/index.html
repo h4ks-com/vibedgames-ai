@@ -656,7 +656,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev87";
+const VERSION = "ev88";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -1408,7 +1408,12 @@ const MANGEL_GENE_LEN = 17;
 const MANGEL_AGENT_SIZE  = 16;                           /* was AGENT_SIZE=8 */
 const MANGEL_AGENTS_PER_PANEL_AXIS =
         (MAP_W / MANGEL_AGENT_SIZE) | 0;                 /* 4 */
-const MANGEL_RES          = 32;                          /* was MAP_W=64 */
+/* ev88: mangel tile resolution is user-tunable.  Lower res = chunkier,
+ * faster; higher = sharper, slower.  Shift+R cycles through this list
+ * and Shift+E resets to the default (32 = 1:1 with TILE_PX). */
+const MANGEL_RES_PRESETS = [16, 24, 32, 48, 64, 96];
+const MANGEL_RES_DEFAULT = 32;
+let   MANGEL_RES         = MANGEL_RES_DEFAULT;
 const MANGEL_TICK_MS      = 1500;                        /* was 900 */
 const MANGEL_BATCH        = 2;                           /* was 4 */
 const MANGEL_ITER_CAP     = 384;                         /* ev87: was 4096 */
@@ -1570,9 +1575,29 @@ function _mangelPaletteFor(k, gene) {
   return pal;
 }
 
-/* ev87: shared 32×32 ImageData scratch — getCellMangelTexture rewrites
- * the .data array each call rather than allocating a fresh buffer. */
-const MANGEL_TMP_IMG  = new ImageData(MANGEL_RES, MANGEL_RES);
+/* ev87: shared ImageData scratch — getCellMangelTexture rewrites the
+ * .data array each call rather than allocating a fresh buffer.
+ * ev88: re-allocated by setMangelRes() when the user changes res. */
+let MANGEL_TMP_IMG = new ImageData(MANGEL_RES, MANGEL_RES);
+
+function setMangelRes(n) {
+  if (!MANGEL_RES_PRESETS.includes(n)) return;
+  if (n === MANGEL_RES) return;
+  MANGEL_RES    = n;
+  MANGEL_TMP_IMG = new ImageData(n, n);
+  /* All cached mangel tiles were rendered at the old resolution — drop
+   * them so the next paint rebuilds at the new size. */
+  cellMangelCache.clear();
+  setAction("mangel res " + n + " px");
+  needsRender = true;
+}
+
+function cycleMangelRes(dir) {
+  const i = MANGEL_RES_PRESETS.indexOf(MANGEL_RES);
+  const n = MANGEL_RES_PRESETS.length;
+  const j = (((i + dir) % n) + n) % n;
+  setMangelRes(MANGEL_RES_PRESETS[j]);
+}
 
 function spatialMangelTournamentRound() {
   if (!mangelOn || spatialGA.mangels.size === 0) return;
@@ -6019,6 +6044,21 @@ function handleKey(e) {
     cellTexCache.clear();
     setAction("mangeltiles " + (mangelOn ? "on" : "off (CA cells back)"));
     needsRender = true;
+    return;
+  }
+  /* ev88: Shift+R cycles mangeltile resolution up the preset ladder
+   * (16 → 24 → 32 → 48 → 64 → 96 → wrap).  Shift+E resets to the
+   * default 32 (1:1 with TILE_PX). */
+  if (e.shiftKey && (k === "r" || e.code === "KeyR")) {
+    e.preventDefault();
+    if (e.repeat) return;
+    cycleMangelRes(+1);
+    return;
+  }
+  if (e.shiftKey && (k === "e" || e.code === "KeyE")) {
+    e.preventDefault();
+    if (e.repeat) return;
+    setMangelRes(MANGEL_RES_DEFAULT);
     return;
   }
   if (e.shiftKey && (k === "x" || e.code === "KeyX")) {
