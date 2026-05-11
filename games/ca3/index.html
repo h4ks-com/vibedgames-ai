@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CA + Wang Tile Compression Pipeline — Proof of Concept</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0a0a0f; color: #e0e0e0; font-family: 'Courier New', monospace; overflow-x: hidden; }
+h1 { text-align: center; padding: 20px; font-size: 1.4em; color: #ff6b6b; background: #111; border-bottom: 2px solid #333; }
+h1 span { color: #4ecdc4; }
+.pipeline { display: flex; flex-direction: column; align-items: center; gap: 0; padding: 10px 20px; }
+.stage { width: 100%; max-width: 900px; background: #111; border: 1px solid #333; border-radius: 8px; padding: 15px; margin: 5px 0; }
+.stage h2 { font-size: 0.95em; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+.stage h2 .num { background: #ff6b6b; color: #000; width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 0.75em; font-weight: bold; }
+.stage h2 .tag { font-size: 0.7em; color: #888; font-weight: normal; }
+canvas { display: block; margin: 8px auto; border: 1px solid #333; background: #000; image-rendering: pixelated; }
+canvas.small { width: 400px; height: 400px; }
+canvas.medium { width: 400px; height: 200px; }
+.arrow { text-align: center; font-size: 1.5em; color: #4ecdc4; padding: 2px 0; }
+.controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: center; margin: 8px 0; }
+.controls label { font-size: 0.75em; color: #aaa; }
+.controls input[type=range] { width: 120px; }
+.controls button { background: #4ecdc4; color: #000; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 0.8em; font-weight: bold; }
+.controls button:hover { background: #45b7aa; }
+.controls select { background: #222; color: #e0e0e0; border: 1px solid #555; padding: 4px; font-family: inherit; }
+.stats { display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; margin: 6px 0; }
+.stat { text-align: center; }
+.stat .val { font-size: 1.3em; color: #ff6b6b; font-weight: bold; }
+.stat .lbl { font-size: 0.65em; color: #888; }
+.text-input { width: 100%; max-width: 860px; background: #0a0a0f; color: #4ecdc4; border: 1px solid #444; border-radius: 4px; padding: 8px; font-family: inherit; font-size: 0.8em; resize: vertical; min-height: 50px; }
+.comparison { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+.comp-box { text-align: center; }
+.comp-box h3 { font-size: 0.7em; margin-bottom: 4px; }
+.comp-box canvas { width: 180px; height: 180px; }
+.info-bar { background: #1a1a2e; border: 1px solid #333; border-radius: 6px; padding: 10px; margin: 8px 0; font-size: 0.72em; line-height: 1.5; color: #bbb; max-width: 860px; margin-left: auto; margin-right: auto; }
+.info-bar b { color: #ff6b6b; }
+.info-bar em { color: #4ecdc4; font-style: normal; }
+.tiles-legend { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin: 6px 0; }
+.tile-swatch { width: 24px; height: 24px; border-radius: 4px; border: 1px solid #555; }
+</style>
+</head>
+<body>
+<h1>CA + <span>Wang Tiles</span> Compression Pipeline</h1>
+
+<div class="pipeline">
+
+<div class="stage">
+  <h2><span class="num">1</span> Input Text <span class="tag">→ bitmap encoding</span></h2>
+  <textarea class="text-input" id="inputText">The pāṭimokkha rules govern monastic discipline in Theravāda Buddhism, comprising 227 rules for bhikkhus.</textarea>
+  <div class="controls">
+    <label>Grid: </label>
+    <select id="gridSize">
+      <option value="16">16×16</option>
+      <option value="24" selected>24×24</option>
+      <option value="32">32×32</option>
+      <option value="48">48×48</option>
+    </select>
+  </div>
+</div>
+
+<div class="arrow">⬇</div>
+
+<div class="stage">
+  <h2><span class="num">2</span> Text → Bitmap <span class="tag">each char = pixel brightness</span></h2>
+  <canvas id="bitmapCanvas" class="small"></canvas>
+  <div class="stats">
+    <div class="stat"><div class="val" id="inputBytes">-</div><div class="lbl">input bytes</div></div>
+    <div class="stat"><div class="val" id="bitmapCells">-</div><div class="lbl">bitmap cells</div></div>
+    <div class="stat"><div class="val" id="bitmapBits">-</div><div class="lbl">bits of data</div></div>
+  </div>
+</div>
+
+<div class="arrow">⬇</div>
+
+<div class="stage">
+  <h2><span class="num">3</span> Bitmap → Wang Tile Tiling <span class="tag">constraint-matching edges</span></h2>
+  <canvas id="wangCanvas" class="small"></canvas>
+  <div class="tiles-legend" id="tileLegend"></div>
+  <div class="stats">
+    <div class="stat"><div class="val" id="tileCount">-</div><div class="lbl">tiles placed</div></div>
+    <div class="stat"><div class="val" id="edgeColors">4</div><div class="lbl">edge colors</div></div>
+    <div class="stat"><div class="val" id="tileTypeCount">-</div><div class="lbl">unique tile types used</div></div>
+  </div>
+  <div class="info-bar">
+    <b>Wang tiles:</b> Each tile is a colored square whose edges must match adjacent tiles' edges.
+    With <em>4 colors</em> per edge and <em>4 edges</em> per tile, the theoretical max tile types is <em>256</em>.
+    We assign tile types based on the bitmap values — <em>the tile sequence IS the data</em>.
+  </div>
+</div>
+
+<div class="arrow">⬇</div>
+
+<div class="stage">
+  <h2><span class="num">4</span> Tile Sequence → CA Initial State <span class="tag">compact "seed" for LLM output</span></h2>
+  <canvas id="caStateCanvas" class="small"></canvas>
+  <div class="controls">
+    <label>LLM noise: </label>
+    <input type="range" id="noiseSlider" min="0" max="50" value="0">
+    <span id="noiseVal" style="color:#ff6b6b;font-size:0.8em;">0%</span>
+    <label> CA rule: </label>
+    <select id="caRule">
+      <option value="90">Rule 90</option>
+      <option value="110" selected>Rule 110</option>
+      <option value="30">Rule 30</option>
+      <option value="184">Rule 184</option>
+      <option value="150">Rule 150</option>
+    </select>
+    <label> Generations: </label>
+    <input type="range" id="genSlider" min="10" max="300" value="80">
+    <span id="genVal" style="color:#4ecdc4;font-size:0.8em;">80</span>
+    <button id="runBtn">▶ Run Pipeline</button>
+  </div>
+  <div class="stats">
+    <div class="stat"><div class="val" id="seedTokens">-</div><div class="lbl">"seed" tokens (hypothetical LLM output)</div></div>
+    <div class="stat"><div class="val" id="compressionRatio">-</div><div class="lbl">"compression ratio"</div></div>
+  </div>
+  <div class="info-bar">
+    <b>Key insight:</b> The "seed" the LLM must output is the Wang tile sequence + CA initial state.
+    That sequence contains <em>exactly as much information as the original bitmap</em> —
+    no compression has occurred. The Wang tiles don't help because <em>assigning a unique tile type
+    per cell value is just a 1:1 encoding</em>, not compression.
+  </div>
+</div>
+
+<div class="arrow">⬇</div>
+
+<div class="stage">
+  <h2><span class="num">5</span> CA Evolution <span class="tag">generations unfold over time</span></h2>
+  <canvas id="caEvolveCanvas" class="medium" style="width:800px;height:300px;"></canvas>
+</div>
+
+<div class="arrow">⬇</div>
+
+<div class="stage">
+  <h2><span class="num">6</span> Comparison: Expected vs Actual <span class="tag">side by side</span></h2>
+  <div class="comparison">
+    <div class="comp-box"><h3 style="color:#4ecdc4;">Original Bitmap</h3><canvas id="compareOrig" width="180" height="180"></canvas></div>
+    <div class="comp-box"><h3 style="color:#ff6b6b;">CA Output (after evolution)</h3><canvas id="compareCa" width="180" height="180"></canvas></div>
+    <div class="comp-box"><h3 style="color:#ffd93d;">Mismatch Map</h3><canvas id="compareDiff" width="180" height="180"></canvas></div>
+  </div>
+  <div class="stats">
+    <div class="stat"><div class="val" id="matchPercent">-</div><div class="lbl">pixel match %</div></div>
+    <div class="stat"><div class="val" id="hammingDist">-</div><div class="lbl">Hamming distance</div></div>
+    <div class="stat"><div class="val" id="decodedText">-</div><div class="lbl">decoded text</div></div>
+  </div>
+</div>
+
+<div class="info-bar" style="border-color:#ff6b6b;">
+  <b>Conclusion:</b> Even with Wang tiles + CA + GA, the "seed" the LLM outputs must contain
+  enough bits to uniquely specify the target data. <em>4-color Wang tiles are Turing complete —
+  meaning they can encode anything, but the encoding is never smaller than the data itself.</em>
+  This is the pigeonhole principle in action. The pipeline looks cool but achieves zero compression
+  for high-entropy data like natural language.
+</div>
+
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const bitmapCvs = $('bitmapCanvas'), wangCvs = $('wangCanvas');
+const caStateCvs = $('caStateCanvas'), caEvolveCvs = $('caEvolveCanvas');
+const compOrig = $('compareOrig'), compCa = $('compareCa'), compDiff = $('compareDiff');
+
+const WANG_COLORS = ['#ff6b6b','#4ecdc4','#45b7aa','#f7dc6f'];
+const WANG_BG = ['#3d1f1f','#1f3d3a','#1f3530','#3d3a1f'];
+
+function textToBitmap(text, size) {
+  const grid = [];
+  for (let y = 0; y < size; y++) {
+    grid[y] = [];
+    for (let x = 0; x < size; x++) {
+      const i = y * size + x;
+      const code = i < text.length ? text.charCodeAt(i) : 0;
+      grid[y][x] = code % 4; // 4-color quantization
+    }
+  }
+  return grid;
+}
+
+function drawBitmap(canvas, grid) {
+  const size = grid.length;
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  for (let y = 0; y < size; y++)
+    for (let x = 0; x < size; x++) {
+      ctx.fillStyle = WANG_COLORS[grid[y][x]];
+      ctx.fillRect(x, y, 1, 1);
+    }
+}
+
+function bitmapToWangTiles(grid) {
+  const size = grid.length;
+  const tiles = [];
+  const usedTypes = new Set();
+  for (let y = 0; y < size; y++) {
+    tiles[y] = [];
+    for (let x = 0; x < size; x++) {
+      // Each tile's 4 edges determined by its value
+      const v = grid[y][x];
+      // In a real Wang tiling, edges must match neighbors.
+      // Here we use the cell value to define all 4 edges — this IS the data.
+      const top = v, right = (v + 1) % 4, bottom = v, left = (v + 3) % 4;
+      const type = `${top}${right}${bottom}${left}`;
+      tiles[y][x] = { top, right, bottom, left, type };
+      usedTypes.add(type);
+    }
+  }
+  return { tiles, usedTypes };
+}
+
+function drawWangTiles(canvas, tiles) {
+  const size = tiles.length;
+  const tilePx = Math.max(2, Math.floor(400 / size));
+  canvas.width = canvas.height = size * tilePx;
+  const ctx = canvas.getContext('2d');
+  for (let y = 0; y < size; y++)
+    for (let x = 0; x < size; x++) {
+      const t = tiles[y][x];
+      const px = x * tilePx, py = y * tilePx;
+      // Fill tile background
+      ctx.fillStyle = WANG_BG[t.top];
+      ctx.fillRect(px, py, tilePx, tilePx);
+      // Draw colored edges
+      const ew = Math.max(1, Math.floor(tilePx / 4));
+      // Top
+      ctx.fillStyle = WANG_COLORS[t.top];
+      ctx.fillRect(px, py, tilePx, ew);
+      // Bottom
+      ctx.fillStyle = WANG_COLORS[t.bottom];
+      ctx.fillRect(px, py + tilePx - ew, tilePx, ew);
+      // Left
+      ctx.fillStyle = WANG_COLORS[t.left];
+      ctx.fillRect(px, py, ew, tilePx);
+      // Right
+      ctx.fillStyle = WANG_COLORS[t.right];
+      ctx.fillRect(px + tilePx - ew, py, ew, tilePx);
+    }
+}
+
+function wangToCASeed(tiles, noise) {
+  const size = tiles.length;
+  const seed = [];
+  for (let y = 0; y < size; y++) {
+    seed[y] = [];
+    for (let x = 0; x < size; x++) {
+      let v = tiles[y][x].top;
+      if (Math.random() * 100 < noise) v = (v + 1 + Math.floor(Math.random() * 3)) % 4;
+      seed[y][x] = v;
+    }
+  }
+  return seed;
+}
+
+function drawCAState(canvas, grid) {
+  drawBitmap(canvas, grid);
+}
+
+function evolveCA(grid, rule, generations) {
+  const h = grid.length, w = grid[0].length;
+  const history = [grid.map(r => [...r])];
+  let state = grid.map(r => [...r]);
+  for (let g = 0; g < generations; g++) {
+    const next = state.map(r => [...r]);
+    for (let y = 1; y < h - 1; y++)
+      for (let x = 0; x < w; x++) {
+        const l = state[y][(x - 1 + w) % w];
+        const c = state[y][x];
+        const r = state[y][(x + 1) % w];
+        const idx = (l << 2) | (c << 1) | r;
+        next[y][x] = (rule >> idx) & 1;
+      }
+    state = next;
+    history.push(state.map(r => [...r]));
+  }
+  return history;
+}
+
+function drawCAEvolution(canvas, history) {
+  const h = history[0].length, w = history[0][0].length;
+  const genH = Math.max(1, Math.floor(canvas.height / history.length));
+  canvas.width = w;
+  canvas.height = history.length;
+  const ctx = canvas.getContext('2d');
+  for (let g = 0; g < history.length; g++)
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        const v = history[g][y][x];
+        ctx.fillStyle = v ? WANG_COLORS[v % 4] : '#0a0a0f';
+        ctx.fillRect(x, g, 1, 1);
+      }
+}
+
+function hamming(a, b) {
+  let d = 0, total = 0;
+  for (let y = 0; y < a.length; y++)
+    for (let x = 0; x < a[0].length; x++) {
+      if (a[y][x] !== b[y][x]) d++;
+      total++;
+    }
+  return { d, total };
+}
+
+function drawComparison(orig, ca) {
+  const size = orig.length;
+  [compOrig, compCa, compDiff].forEach(c => { c.width = c.height = size; });
+  const ctxO = compOrig.getContext('2d');
+  const ctxC = compCa.getContext('2d');
+  const ctxD = compDiff.getContext('2d');
+  for (let y = 0; y < size; y++)
+    for (let x = 0; x < size; x++) {
+      ctxO.fillStyle = WANG_COLORS[orig[y][x]];
+      ctxO.fillRect(x, y, 1, 1);
+      ctxC.fillStyle = WANG_COLORS[ca[y][x]];
+      ctxC.fillRect(x, y, 1, 1);
+      const match = orig[y][x] === ca[y][x];
+      ctxD.fillStyle = match ? '#1a1a2e' : '#ff0040';
+      ctxD.fillRect(x, y, 1, 1);
+    }
+}
+
+function decodeText(grid) {
+  let s = '';
+  for (let y = 0; y < grid.length; y++)
+    for (let x = 0; x < grid[0].length; x++) {
+      const c = grid[y][x];
+      s += String.fromCharCode(c);
+      if (s.length >= 80) { s += '…'; return s; }
+    }
+  return s;
+}
+
+// Build tile legend
+WANG_COLORS.forEach((c, i) => {
+  const d = document.createElement('div');
+  d.className = 'tile-swatch';
+  d.style.background = c;
+  d.title = `Color ${i}`;
+  $('tileLegend').appendChild(d);
+});
+
+function runPipeline() {
+  const text = $('inputText').value || 'Hello World';
+  const size = parseInt($('gridSize').value);
+  const noise = parseInt($('noiseSlider').value);
+  const rule = parseInt($('caRule').value);
+  const gens = parseInt($('genSlider').value);
+
+  $('noiseVal').textContent = noise + '%';
+  $('genVal').textContent = gens;
+
+  // Step 2: Text → Bitmap
+  const bitmap = textToBitmap(text, size);
+  drawBitmap(bitmapCvs, bitmap);
+  $('inputBytes').textContent = new Blob([text]).size;
+  $('bitmapCells').textContent = size * size;
+  $('bitmapBits').textContent = (size * size * 2) + ' (2 bits/cell)';
+
+  // Step 3: Bitmap → Wang Tiles
+  const { tiles, usedTypes } = bitmapToWangTiles(bitmap);
+  drawWangTiles(wangCvs, tiles);
+  $('tileCount').textContent = size * size;
+  $('tileTypeCount').textContent = usedTypes.size + ' / 256';
+
+  // Step 4: Tiles → CA seed (with LLM noise simulation)
+  const seed = wangToCASeed(tiles, noise);
+  drawCAState(caStateCvs, seed);
+  $('seedTokens').textContent = '~' + Math.ceil(size * size * 2 / 4) + ' (same as input!)';
+  $('compressionRatio').textContent = '1.0:1 (no compression)';
+
+  // Step 5: CA evolution
+  const history = evolveCA(seed, rule, gens);
+  drawCAEvolution(caEvolveCvs, history);
+
+  // Step 6: Comparison
+  const final = history[history.length - 1];
+  drawComparison(bitmap, final);
+  const { d, total } = hamming(bitmap, final);
+  const pct = ((1 - d / total) * 100).toFixed(1);
+  $('matchPercent').textContent = pct + '%';
+  $('hammingDist').textContent = d + ' / ' + total;
+  $('decodedText').textContent = decodeText(final);
+}
+
+$('noiseSlider').addEventListener('input', () => { $('noiseVal').textContent = $('noiseSlider').value + '%'; });
+$('genSlider').addEventListener('input', () => { $('genVal').textContent = $('genSlider').value; });
+$('runBtn').addEventListener('click', runPipeline);
+$('inputText').addEventListener('input', runPipeline);
+$('gridSize').addEventListener('change', runPipeline);
+
+runPipeline();
+</script>
+</body>
+</html>
