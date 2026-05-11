@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>office rpg — hi-res · ev71</title>
+<title>office rpg — hi-res · ev72</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000;
                color: #ccc; font-family: ui-monospace, "SF Mono", Menlo,
@@ -490,6 +490,23 @@ JSON here (the .edges field) — or use the buttons below"
         per panel — walk the meta-overworld and the parameter space
         drifts under you.</span>
 
+      <h3 style="margin-top:18px;">Spatial GA (ev72)</h3>
+      <div class="anchor-row" id="spatialGARow" style="flex-wrap:wrap;">
+        <label><input type="checkbox" id="spatialGAToggle">
+          per-panel rulesets, neighbour-bred</label>
+        <button id="spatialGAReseedBtn" type="button">Reseed</button>
+        <span id="spatialGAStat" class="legend"></span>
+      </div>
+      <span class="legend">When on, every meta-overworld panel carries
+        its own ruleset.  New panels inherit a crossover of their
+        existing axial neighbours' rulesets (with a light mutation
+        pass), so genetic material spreads spatially and the world
+        looks cohesive instead of a patchwork.  The parent-tournament
+        cadence (Speed Settings · p-tourny) drives spatial breeds when
+        on — picks a random panel, crosses with a random neighbour,
+        keeps the fitter of the two.  Same gaFitness function as the
+        4-parent path; same period.</span>
+
       <h3 style="margin-top:18px;">Genome actions</h3>
       <button id="gaRandomBtn">Reset to random</button>
       <button id="gaCurrentBtn">Reset to game's current</button>
@@ -593,7 +610,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev71";
+const VERSION = "ev72";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -1124,6 +1141,158 @@ const ruleAt = new Uint8Array(TILE_W * TILE_H);   /* per-cell parent tag */
 const ruleTagScratch = new Uint8Array(MAP_W * MAP_H);
 let parentTournamentBest = [0, 0, 0, 0];          /* fitness of each parent */
 let parentTournamentRounds = 0;
+
+/* ── ev72: spatial GA (per-panel rulesets, neighbour-bred) ─────────
+ *
+ * Inspired by the s3lab Cellular sublab — each meta-overworld panel
+ * gets its own ruleset and breeds with its axial neighbours.  Genetic
+ * material flows spatially: when a never-visited panel comes into
+ * range, its initial ruleset is a crossover of the existing rulesets
+ * in its immediate axial neighbours (with mild mutation).  Result is
+ * smoothly-varying biome dynamics across the map rather than the
+ * mosaic of 4 globally-shared parents you get with the default mode.
+ *
+ * Storage: Map<"mx,my", Uint8Array(RULESET_BYTES)>.  Lazy init so we
+ * don't allocate for panels the player never reaches.  Toggle off
+ * (default) leaves the existing 4-parent system completely intact.
+ */
+const spatialGA = {
+  on:        false,
+  rulesets:  new Map(),    /* "mx,my" → Uint8Array(RULESET_BYTES) */
+  fitness:   new Map(),    /* "mx,my" → cached fitness number     */
+  rounds:    0,
+  /* Mutation rate for neighbour-bred children.  Lower than the 4-
+   * parent tournament's (which does 32..128 flips) — we want
+   * cohesion, not exploration. */
+  childFlips: 16,
+};
+
+function _spatialKey(mx, my) { return mx + ',' + my; }
+
+/* Pure-byte-array crossover at a random cut.  Returns a fresh
+ * Uint8Array(RULESET_BYTES). */
+function _crossover(rsA, rsB) {
+  const out = new Uint8Array(RULESET_BYTES);
+  const cut = (Math.random() * RULESET_BYTES) | 0;
+  for (let i = 0; i < cut; i++)            out[i] = rsA[i];
+  for (let i = cut; i < RULESET_BYTES; i++) out[i] = rsB[i];
+  return out;
+}
+
+function _mutateInPlace(rs, flips) {
+  for (let f = 0; f < flips; f++) {
+    rs[(Math.random() * RULESET_BYTES) | 0] = (Math.random() * 4) | 0;
+  }
+}
+
+/* Yield the 6 axial-neighbour coords of (mx, my).  Square offsets so
+ * the four cardinals are clear, plus two diagonals to round out an
+ * "axial-ish" 6-set; the population topology is purely conceptual
+ * since the meta-overworld is rectangular here. */
+const _SPATIAL_OFFS = [
+  [+1,  0], [-1,  0],
+  [ 0, +1], [ 0, -1],
+  [+1, -1], [-1, +1],
+];
+
+function _existingNeighbours(mx, my) {
+  const out = [];
+  for (const [dx, dy] of _SPATIAL_OFFS) {
+    const rs = spatialGA.rulesets.get(_spatialKey(mx + dx, my + dy));
+    if (rs) out.push(rs);
+  }
+  return out;
+}
+
+/* Return the ruleset for meta-panel (mx, my).  If one exists, return
+ * it; otherwise create one — crossover of two existing neighbours
+ * (preferred) or a clone of the current global `ruleset` (when this
+ * is the first spatial panel ever touched).  Cached on creation. */
+function spatialRulesetAt(mx, my) {
+  const k = _spatialKey(mx, my);
+  let rs = spatialGA.rulesets.get(k);
+  if (rs) return rs;
+  const neighs = _existingNeighbours(mx, my);
+  if (neighs.length >= 2) {
+    /* Pick two random distinct neighbours to cross. */
+    const a = neighs[(Math.random() * neighs.length) | 0];
+    let b;
+    do { b = neighs[(Math.random() * neighs.length) | 0]; }
+    while (b === a && neighs.length > 1);
+    rs = _crossover(a, b);
+    _mutateInPlace(rs, spatialGA.childFlips);
+  } else if (neighs.length === 1) {
+    /* Lone neighbour — copy + mutate.  Still spatially coherent. */
+    rs = new Uint8Array(neighs[0]);
+    _mutateInPlace(rs, spatialGA.childFlips);
+  } else {
+    /* No spatial context yet — seed from the current global ruleset,
+     * lightly perturbed so the very first spatial panels aren't all
+     * identical. */
+    rs = new Uint8Array(ruleset);
+    _mutateInPlace(rs, spatialGA.childFlips);
+  }
+  spatialGA.rulesets.set(k, rs);
+  return rs;
+}
+
+/* One spatial breeding round: pick a random known panel, pick a
+ * random existing neighbour, crossover with light mutation, replace
+ * the (less-fit of the two) with the (more-fit of {child, parent}).
+ * Wholly local — never touches the global ruleset or the 4-parent
+ * pool, so toggling Spatial GA off restores prior behaviour
+ * instantly. */
+function spatialTournamentRound() {
+  if (!spatialGA.on || spatialGA.rulesets.size === 0) return;
+  const keys = Array.from(spatialGA.rulesets.keys());
+  const k = keys[(Math.random() * keys.length) | 0];
+  const [mxS, myS] = k.split(',').map(Number);
+  /* Find an existing neighbour; if none, just mutate this panel. */
+  const neighbourKeys = _SPATIAL_OFFS
+    .map(([dx, dy]) => _spatialKey(mxS + dx, myS + dy))
+    .filter(nk => spatialGA.rulesets.has(nk));
+  const seed = currentWorldSeed();
+  const self = spatialGA.rulesets.get(k);
+  let challenger;
+  let neighbourKey = null;
+  if (neighbourKeys.length > 0) {
+    neighbourKey = neighbourKeys[(Math.random() * neighbourKeys.length) | 0];
+    const partner = spatialGA.rulesets.get(neighbourKey);
+    challenger = _crossover(self, partner);
+  } else {
+    challenger = new Uint8Array(self);
+  }
+  _mutateInPlace(challenger, spatialGA.childFlips);
+  const cFit = gaFitness(challenger, seed);
+  const sFit = (spatialGA.fitness.get(k)
+                ?? gaFitness(self, seed));
+  spatialGA.fitness.set(k, sFit);
+  spatialGA.rounds++;
+  if (cFit > sFit) {
+    spatialGA.rulesets.set(k, challenger);
+    spatialGA.fitness .set(k, cFit);
+    const stat = document.getElementById("spatialGAStat");
+    if (stat) {
+      stat.textContent =
+        '· ' + spatialGA.rounds + ' rounds · ' +
+        spatialGA.rulesets.size + ' panels · last swap (' + k +
+        ') ' + cFit.toFixed(2) + ' > ' + sFit.toFixed(2);
+    }
+  }
+}
+
+/* Clear all per-panel rulesets; the next regenPanel that needs one
+ * will re-seed from current global ruleset + spatial context as it
+ * does for first-touch panels.  Used by the workshop "Reseed" button
+ * and on toggle-on so the population starts fresh. */
+function spatialGAReseed() {
+  spatialGA.rulesets.clear();
+  spatialGA.fitness .clear();
+  spatialGA.rounds = 0;
+  const stat = document.getElementById("spatialGAStat");
+  if (stat) stat.textContent = '· reseeded';
+  if (typeof regenMosaic === 'function' && spatialGA.on) regenMosaic();
+}
 /* ev31: pacing constants for every non-terrain CA in the game are
  * exposed here as `let` so the unified Speed Settings modal (k) can
  * mutate them at runtime.  Declared up here (above SPEED_ROWS, which
@@ -2109,9 +2278,30 @@ function regenPanel(sx, sy) {
         mandelWorld.active ? (mandelWorld.directMode ? 0 : mandelWorld.steps)
       : imageWorld.active  ? imageWorld.steps
       : GEN_STEPS;
-  for (let t = 0; t < evolveSteps; t++) {
-    hexStepMulti(parentRulesets, ruleTagScratch, a, b, MAP_W, MAP_H);
-    [a, b] = [b, a];
+  /* ev72: when Spatial GA is on, step under THIS panel's own ruleset
+   * (drawn from / lazily inherited from spatial neighbours) instead
+   * of the 4-parent pool.  All cells in the panel use the same rule
+   * so the tag grid is forced to 0 here. */
+  if (spatialGA.on && evolveSteps > 0) {
+    const mx = (worldPos[0] + (sx - 1)) | 0;
+    const my = (worldPos[1] + (sy - 1)) | 0;
+    const panelRs = spatialRulesetAt(mx, my);
+    const onePool = [panelRs];
+    /* hexStepMulti reads tagGrid per cell; zero it so every cell
+     * uses parents[0] = panelRs.  Safe to clobber ruleTagScratch
+     * since the per-cell save at the bottom of regenPanel won't
+     * read it past this point in spatial mode (the world's ruleAt
+     * just records "0 everywhere" which is fine — no inner mixing). */
+    for (let i = 0; i < MAP_W * MAP_H; i++) ruleTagScratch[i] = 0;
+    for (let t = 0; t < evolveSteps; t++) {
+      hexStepMulti(onePool, ruleTagScratch, a, b, MAP_W, MAP_H);
+      [a, b] = [b, a];
+    }
+  } else {
+    for (let t = 0; t < evolveSteps; t++) {
+      hexStepMulti(parentRulesets, ruleTagScratch, a, b, MAP_W, MAP_H);
+      [a, b] = [b, a];
+    }
   }
   const subX = sx * MAP_W, subY = sy * MAP_H;
   for (let y = 0; y < MAP_H; y++) {
@@ -2167,7 +2357,14 @@ function parentTournamentRound() {
 function tickParentTournament(now) {
   if (now - lastParentTourneyMs < PARENT_TOURNAMENT_PERIOD_MS) return;
   lastParentTourneyMs = now;
-  parentTournamentRound();
+  /* ev72: same cadence drives spatial breeding when toggled on.
+   * Mutually exclusive — the spatial path replaces the 4-parent
+   * tournament so we don't double-spend the budget. */
+  if (spatialGA.on) {
+    spatialTournamentRound();
+  } else {
+    parentTournamentRound();
+  }
 }
 
 /* Initialise the 3 non-zero parents with random rulesets so
@@ -4876,6 +5073,29 @@ document.getElementById("gaRandomBtn").addEventListener("click", resetEditToRand
 document.getElementById("gaCurrentBtn").addEventListener("click", resetEditToCurrent);
 document.getElementById("gaApplyBtn").addEventListener("click", applyEditGenome);
 document.getElementById("gaCloseBtn").addEventListener("click", closeGaWorkshop);
+
+/* ev72: Spatial GA toggle + reseed.  Toggle on clears any existing
+ * per-panel rulesets so the first repopulation starts from current
+ * `ruleset` (the workshop's edited copy if you've been tinkering).
+ * Toggle off leaves the cached spatial rulesets in place — they
+ * just stop being consulted — so flipping back on is instant. */
+document.getElementById("spatialGAToggle").addEventListener("change", (e) => {
+  spatialGA.on = !!e.target.checked;
+  if (spatialGA.on) {
+    spatialGA.rulesets.clear();
+    spatialGA.fitness .clear();
+    spatialGA.rounds = 0;
+  }
+  const stat = document.getElementById("spatialGAStat");
+  if (stat) stat.textContent = spatialGA.on
+    ? '· armed · panels populate on next regen'
+    : '· off';
+  if (typeof regenMosaic === "function") regenMosaic();
+  needsRender = true;
+  setAction("spatial GA " + (spatialGA.on ? "ON" : "OFF"));
+});
+document.getElementById("spatialGAReseedBtn").addEventListener(
+  "click", spatialGAReseed);
 
 /* ── ev2: mother CA colour seeds + mutation-rate wiring ─── */
 function applyMotherColours() {
