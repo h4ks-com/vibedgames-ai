@@ -656,7 +656,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev85";
+const VERSION = "ev86";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -1399,6 +1399,19 @@ function spatialTournamentBatch(force) {
 let mangelOn = true;          /* ev85: CA tile cells off by default */
 
 const MANGEL_GENE_LEN = 17;
+/* ev86 perf knobs — mangeltiles run on a coarser agent grid than the
+ * CA tournament so their population (and tournament work) is ¼.  The
+ * per-cell mandel texture is rendered at ¼ pixel area (32 × 32 vs
+ * the CA's 64 × 64) so the cell-paint cost drops 4×.  Tournament
+ * cadence is independently slowed from 220 ms / batch 12 to 900 ms
+ * / batch 4 so the breeding loop stops hogging CPU. */
+const MANGEL_AGENT_SIZE  = 16;                           /* was AGENT_SIZE=8 */
+const MANGEL_AGENTS_PER_PANEL_AXIS =
+        (MAP_W / MANGEL_AGENT_SIZE) | 0;                 /* 4 */
+const MANGEL_RES          = 32;                          /* was MAP_W=64 */
+const MANGEL_TICK_MS      = 900;
+const MANGEL_BATCH        = 4;
+let   mangelLastTick      = 0;
 
 /* Curated "interesting" Mandelbrot centres — the same set the mangel
  * sprite sheet uses, so a fresh agent starts somewhere visually
@@ -1569,10 +1582,15 @@ function spatialMangelTournamentRound() {
   }
 }
 
+/* ev86: mangel tournament uses its own slower cadence so it doesn't
+ * piggy-back on the CA tournament's tight tickMs/batch and hog the
+ * frame budget.  MANGEL_TICK_MS=900 and MANGEL_BATCH=4 give ~4
+ * rounds per second across ~144 agents — slow enough to leave CPU
+ * for the render path. */
 function spatialMangelTournamentBatch(force) {
   if (!mangelOn || spatialGA.mangels.size === 0) return;
   if (spatialGA.paused && !force) return;
-  for (let i = 0; i < spatialGA.batch; i++) spatialMangelTournamentRound();
+  for (let i = 0; i < MANGEL_BATCH; i++) spatialMangelTournamentRound();
 }
 
 /* Build 256-entry truecolour palette as 4 ramps b0→b1→b2→b3→b0
@@ -1603,20 +1621,23 @@ function _mangelPaletteFromGene(g) {
  * one agent territory tile the agent's full view continuously. */
 const cellMangelCache = new Map();
 
+/* ev86: mangel uses its own (coarser) agent grid — MANGEL_AGENT_SIZE
+ * cells per axis (4 × 4 = 16 mangel agents per panel = 144 in the
+ * 3×3 mosaic, vs 576 for the CA tournament). */
 function _agentForWorldCell(wx, wy) {
   const sx = (wx / MAP_W) | 0;
   const sy = (wy / MAP_H) | 0;
   const localX = wx - sx * MAP_W;
   const localY = wy - sy * MAP_H;
-  const ax = (localX / AGENT_SIZE) | 0;
-  const ay = (localY / AGENT_SIZE) | 0;
+  const ax = (localX / MANGEL_AGENT_SIZE) | 0;
+  const ay = (localY / MANGEL_AGENT_SIZE) | 0;
   const panelMx = (worldPos[0] + (sx - 1)) | 0;
   const panelMy = (worldPos[1] + (sy - 1)) | 0;
   return [
-    panelMx * AGENTS_PER_PANEL_AXIS + ax,
-    panelMy * AGENTS_PER_PANEL_AXIS + ay,
-    localX - ax * AGENT_SIZE,           /* cell within agent: 0..7 */
-    localY - ay * AGENT_SIZE,
+    panelMx * MANGEL_AGENTS_PER_PANEL_AXIS + ax,
+    panelMy * MANGEL_AGENTS_PER_PANEL_AXIS + ay,
+    localX - ax * MANGEL_AGENT_SIZE,    /* cell within agent: 0..15 */
+    localY - ay * MANGEL_AGENT_SIZE,
   ];
 }
 
@@ -1629,7 +1650,7 @@ function getCellMangelTexture(wx, wy) {
   let off = cellMangelCache.get(cacheKey);
   if (off) return off;
 
-  const cellSpan = gene[2] / AGENT_SIZE;
+  const cellSpan = gene[2] / MANGEL_AGENT_SIZE;
   const cellCx   = gene[0] - gene[2] / 2 + (cellLx + 0.5) * cellSpan;
   const cellCy   = gene[1] - gene[2] / 2 + (cellLy + 0.5) * cellSpan;
   const mult     = gene[3] | 0;
@@ -1641,14 +1662,19 @@ function getCellMangelTexture(wx, wy) {
   let span2 = cellSpan;
   while (span2 < 1.0 && Iter < 4096) { Iter += 64; span2 *= 2.0; }
 
-  const img = new ImageData(MAP_W, MAP_H);
+  /* ev86: render at MANGEL_RES × MANGEL_RES (32 × 32 default = ¼
+   * area of the CA's 64 × 64), then return that smaller canvas.
+   * drawNotchedTile reads tex.width/tex.height so a 32×32 source
+   * still scales up to fit the screen tile. */
+  const RES  = MANGEL_RES;
+  const img  = new ImageData(RES, RES);
   const data = img.data;
-  const ds = cellSpan / MAP_W;
-  const ox = cellCx - ds * MAP_W * 0.5;
-  const oy = cellCy - ds * MAP_H * 0.5;
+  const ds = cellSpan / RES;
+  const ox = cellCx - ds * RES * 0.5;
+  const oy = cellCy - ds * RES * 0.5;
   let p = 0;
-  for (let y = 0; y < MAP_H; y++) {
-    for (let x = 0; x < MAP_W; x++, p += 4) {
+  for (let y = 0; y < RES; y++) {
+    for (let x = 0; x < RES; x++, p += 4) {
       const fx = ox + x * ds, fy = oy + y * ds;
       let zx = 0, zy = 0, x2 = 0, y2 = 0, i = 0;
       while (i < Iter && x2 + y2 < 4.0) {
@@ -1669,7 +1695,7 @@ function getCellMangelTexture(wx, wy) {
     }
   }
   off = document.createElement("canvas");
-  off.width = MAP_W; off.height = MAP_H;
+  off.width = RES; off.height = RES;
   off.getContext("2d").putImageData(img, 0, 0);
   /* Bound cache size; this is the hot loop on the render thread. */
   if (cellMangelCache.size > 8192) cellMangelCache.clear();
@@ -2953,13 +2979,19 @@ function tickParentTournament(now) {
    * rounds every ~220 ms) and skip the 4-parent tournament entirely.
    * 576 agents need many rounds per second to evolve visibly; the
    * 30-s parent cadence is far too slow for this population size. */
+  /* ev86: mangel tournament runs on its own slower clock so its work
+   * doesn't piggy-back on the CA tournament's tight tickMs.  Checked
+   * independently here — fires regardless of spatialGA.on so the
+   * mangel evolution keeps running even if the user toggled the CA
+   * tournament off. */
+  if (mangelOn && now - mangelLastTick >= MANGEL_TICK_MS) {
+    mangelLastTick = now;
+    spatialMangelTournamentBatch();
+  }
   if (spatialGA.on) {
     if (now - spatialGA.lastTick < spatialGA.tickMs) return;
     spatialGA.lastTick = now;
     spatialTournamentBatch();
-    /* ev85: mangeltile tournament runs alongside the CA tournament
-     * at the same cadence + batch size. */
-    if (mangelOn) spatialMangelTournamentBatch();
     return;
   }
   if (now - lastParentTourneyMs < PARENT_TOURNAMENT_PERIOD_MS) return;
