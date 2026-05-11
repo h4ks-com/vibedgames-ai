@@ -457,6 +457,39 @@ JSON here (the .edges field) — or use the buttons below"
         as a K×K torus, GEN_STEPS=5 still runs so the image gets
         CA-textured. Wikipedia <code>wiki/File:</code> URLs auto-resolve.</span>
 
+      <h3 style="margin-top:18px;">Mandelbrot world (seed CA from a fractal)</h3>
+      <div class="anchor-row" id="mandelWorldRow" style="flex-wrap:wrap;">
+        <label>cx<input type="number" id="mandelCx" value="-0.5" step="any"
+          style="width:120px;"></label>
+        <label>cy<input type="number" id="mandelCy" value="0" step="any"
+          style="width:120px;"></label>
+        <label>span<input type="number" id="mandelSpan" value="3" step="any"
+          min="0.0000001" style="width:120px;"></label>
+        <label>K (panels/side)<input type="number" id="mandelK" value="8"
+          min="1" max="32" style="width:56px;"></label>
+        <label><input type="checkbox" id="mandelDirect"> direct (skip CA)</label>
+        <label><input type="checkbox" id="mandelMeta"> meta (per-panel windows)</label>
+        <button id="mandelLoadBtn">Load</button>
+        <button id="mandelOffBtn">Off</button>
+      </div>
+      <div id="mandelStatus" class="legend">no mandel loaded</div>
+      <div class="anchor-row" id="mandelPresetRow" style="margin-top:6px;flex-wrap:wrap;">
+        <span class="legend" style="margin-right:4px;">Presets:</span>
+        <button type="button" data-mpreset="whole">Whole set</button>
+        <button type="button" data-mpreset="seahorse">Seahorse Valley</button>
+        <button type="button" data-mpreset="elephant">Elephant Valley</button>
+        <button type="button" data-mpreset="triple">Triple Spiral</button>
+        <button type="button" data-mpreset="minibrot">Mini-brot</button>
+        <button type="button" data-mpreset="lightning">Lightning</button>
+      </div>
+      <span class="legend">samples the Mandelbrot Set at (cx, cy) over
+        a horizontal span; histogram-equalises escape times into 4
+        terrain classes (interior=rock, outer=sand, mid=soil, near-
+        boundary=water). <em>Direct</em> skips CA evolution so the
+        fractal stays raw. <em>Meta</em> resamples a different window
+        per panel — walk the meta-overworld and the parameter space
+        drifts under you.</span>
+
       <h3 style="margin-top:18px;">Genome actions</h3>
       <button id="gaRandomBtn">Reset to random</button>
       <button id="gaCurrentBtn">Reset to game's current</button>
@@ -2021,8 +2054,39 @@ function regenPanel(sx, sy) {
     else              p = (dom + 3) & 3;
     ruleTagScratch[i] = p;
   }
-  /* Seed CA — random by default, or from image-world crop if active. */
-  if (imageWorld.active && imageWorld.cells) {
+  /* Seed CA — random by default, image-world crop, or Mandelbrot.
+   * ev68 adds mandelWorld: either a global atlas (same tiling as
+   * imageWorld) or per-panel resamples (meta mode), with an option
+   * to skip the CA evolution entirely (direct mode). */
+  if (mandelWorld.active && mandelWorld.metaMode) {
+    /* Meta mode: each panel resamples its own Mandelbrot window.
+     * The world position (mx, my) translates into a drift in the
+     * complex plane around the base (cx, cy).  metaSpan controls how
+     * tightly clustered the per-panel windows are. */
+    const mx = (worldPos[0] + (sx - 1)) | 0;
+    const my = (worldPos[1] + (sy - 1)) | 0;
+    const sp = mandelWorld.metaSpan;
+    const cx = mandelWorld.cx + mx * sp * 0.5;
+    const cy = mandelWorld.cy + my * sp * 0.5;
+    const iter = mandelIterFor(sp);
+    const raw = sampleMandelRect(cx, cy, sp, MAP_W, MAP_H, iter);
+    const q = quantiseMandelIter(raw, iter);
+    for (let i = 0; i < MAP_W * MAP_H; i++) scratchA[i] = q[i] & 3;
+  } else if (mandelWorld.active && mandelWorld.cells) {
+    /* Atlas mode: K×K toroidal crop, same recipe as imageWorld. */
+    const K = mandelWorld.K;
+    const wpx = ((worldPos[0] + (sx - 1)) % K + K) % K;
+    const wpy = ((worldPos[1] + (sy - 1)) % K + K) % K;
+    const stride = K * MAP_W;
+    const ox = wpx * MAP_W, oy = wpy * MAP_H;
+    for (let y = 0; y < MAP_H; y++) {
+      const srcRow = (oy + y) * stride + ox;
+      const dstRow = y * MAP_W;
+      for (let x = 0; x < MAP_W; x++) {
+        scratchA[dstRow + x] = mandelWorld.cells[srcRow + x] & 3;
+      }
+    }
+  } else if (imageWorld.active && imageWorld.cells) {
     /* World coord of this panel slot, mod K, picks the source tile. */
     const K = imageWorld.K;
     const wpx = ((worldPos[0] + (sx - 1)) % K + K) % K;
@@ -2041,7 +2105,10 @@ function regenPanel(sx, sy) {
       scratchA[i] = mulberryInt(st) & 3;
   }
   let a = scratchA, b = scratchB;
-  const evolveSteps = imageWorld.active ? imageWorld.steps : GEN_STEPS;
+  const evolveSteps =
+        mandelWorld.active ? (mandelWorld.directMode ? 0 : mandelWorld.steps)
+      : imageWorld.active  ? imageWorld.steps
+      : GEN_STEPS;
   for (let t = 0; t < evolveSteps; t++) {
     hexStepMulti(parentRulesets, ruleTagScratch, a, b, MAP_W, MAP_H);
     [a, b] = [b, a];
@@ -2852,11 +2919,17 @@ function bendCategory(catSlot) {
 }
 
 /* ── Live inner-CA animation (l toggle, k speeds) ─────────── */
+/* ev69: swap sand ↔ soil rates so the ordering matches real-world
+ * fluidity.  Sand is granular and flows readily once disturbed;
+ * soil's clay + organic + moisture content gives it cohesion that
+ * resists movement.  So: rock (solid) < soil (cohesive) < sand
+ * (granular) < water (fluid).  Old defaults had sand at 12 fpm and
+ * soil at 60, which read backwards on screen. */
 const terrainAnim = [
-  { fpm:   2, dflt:   2, acc: 0, on: 1 },     /* rock */
-  { fpm:  12, dflt:  12, acc: 0, on: 1 },     /* sand */
-  { fpm:  60, dflt:  60, acc: 0, on: 1 },     /* soil */
-  { fpm: 600, dflt: 600, acc: 0, on: 1 },     /* water */
+  { fpm:   2, dflt:   2, acc: 0, on: 1 },     /* rock — basically static */
+  { fpm:  60, dflt:  60, acc: 0, on: 1 },     /* sand — granular flow */
+  { fpm:  12, dflt:  12, acc: 0, on: 1 },     /* soil — slow settle */
+  { fpm: 600, dflt: 600, acc: 0, on: 1 },     /* water — every frame */
 ];
 let animating = false;
 const terrainStepFrame = new Int32Array(4);   /* per-terrain step count */
@@ -2867,7 +2940,8 @@ function animateTick() {
    * salt for cells of that terrain.  The next render rebuilds those
    * cells with a different inner-CA seed → visible shift.
    *   600 fpm = step every frame (water by default)
-   *    60 fpm = step every 10 frames (soil)
+   *    60 fpm = step every 10 frames (sand by default, ev69)
+   *    12 fpm = step every 50 frames (soil by default, ev69)
    *     2 fpm = step ~every 5 minutes at 60 fps (rock) */
   let anyStepped = false;
   for (let t = 0; t < 4; t++) {
@@ -5242,6 +5316,230 @@ document.querySelectorAll('#imgPresetRow button[data-preset]').forEach(btn => {
     if (!preset) return;
     document.getElementById('imgWorldUrl').value = preset.url;
     loadImageWorld(preset.url);
+  });
+});
+
+/* ── ev68: Mandelbrot world (seed CA from a fractal) ────────
+ * Sibling of imageWorld.  Samples the Mandelbrot Set at a chosen
+ * window (cx, cy, span), histogram-quantises escape times into the
+ * same 4-state palette regenPanel() consumes, and either lets the
+ * CA cook it (Seed mode) or hands it through unchanged (Direct).
+ *
+ * Meta mode is the interesting one: instead of one global atlas
+ * tiled K×K, every panel resamples its own Mandelbrot window
+ * derived from its world position — you literally walk through
+ * the parameter space, and a few crosses takes you from the main
+ * cardioid into seahorse valley.
+ */
+const mandelWorld = {
+  active: false,
+  cx: -0.5,
+  cy: 0.0,
+  span: 3.0,           /* horizontal extent in complex plane */
+  iter: 192,           /* base iter cap; auto-ramps with zoom */
+  K: 8,                /* atlas tile factor (K×K panels) */
+  steps: 5,            /* CA evolution after seed (0 in direct mode) */
+  directMode: false,   /* if true, regenPanel skips CA steps */
+  metaMode:   false,   /* if true, regenPanel resamples per-panel */
+  cells: null,         /* (K*MAP_W) × (K*MAP_H) Uint8Array, 0..3 */
+  metaSpan:   0.6,     /* meta-mode: span used per panel */
+};
+
+/* Canonical fractal palette installed when Mandelbrot loads.  Matches
+ * the 0=darkest..3=brightest convention so existing entity-spawn rules
+ * still see rock/sand/soil/water roles.  Interior of the set lands on
+ * 0 (rock), the rapidly-escaping outer band on 1 (sand), the slow-
+ * escape middle on 2 (soil), and the near-boundary chaos on 3. */
+const MANDEL_PALETTE = [
+  [ 18,  20,  46],   /* 0 interior   — deep navy   (rock) */
+  [232, 188,  68],   /* 1 outer band — warm gold   (sand) */
+  [ 64, 170,  86],   /* 2 mid band   — green       (soil) */
+  [196,  84, 196],   /* 3 chaos band — magenta     (water) */
+];
+
+function setMandelStatus(msg) {
+  const el = document.getElementById("mandelStatus");
+  if (el) el.textContent = msg;
+}
+
+/* Same algorithm as officemandel — integer iter count or -1 for
+ * in-set. Bailout 4.0 is enough since we don't smooth-colour. */
+function mandelIterAt(cx, cy, maxIter) {
+  let zx = 0, zy = 0, x2 = 0, y2 = 0, i = 0;
+  while (i < maxIter && x2 + y2 < 4.0) {
+    zy = 2 * zx * zy + cy;
+    zx = x2 - y2 + cx;
+    x2 = zx * zx; y2 = zy * zy;
+    i++;
+  }
+  return i === maxIter ? -1 : i;
+}
+
+/* Histogram-quantise an Int32Array of iter counts (-1 = in-set) into
+ * 4 buckets.  In-set always lands in bucket 0.  Escapees are spread
+ * across buckets 1, 2, 3 by equal-frequency tertiles so the visual
+ * weight of each terrain class stays roughly balanced regardless of
+ * what window we sampled (whole-set vs deep zoom).  Returns
+ * Uint8Array of the same length. */
+function quantiseMandelIter(raw, maxIter) {
+  const out = new Uint8Array(raw.length);
+  const hist = new Int32Array(maxIter + 1);
+  let escapees = 0;
+  for (let i = 0; i < raw.length; i++) {
+    const v = raw[i];
+    if (v >= 0) { hist[v]++; escapees++; }
+  }
+  if (escapees === 0) { out.fill(0); return out; }
+  /* Find tertile boundaries via running cumulative count. */
+  const t1Target = (escapees + 2) / 3;        /* ⅓ */
+  const t2Target = (2 * escapees + 1) / 3;    /* ⅔ */
+  let t1 = -1, t2 = -1, cum = 0;
+  for (let v = 0; v <= maxIter; v++) {
+    cum += hist[v];
+    if (t1 < 0 && cum >= t1Target) t1 = v;
+    if (t2 < 0 && cum >= t2Target) { t2 = v; break; }
+  }
+  if (t1 < 0) t1 = maxIter;
+  if (t2 < 0) t2 = maxIter;
+  for (let i = 0; i < raw.length; i++) {
+    const v = raw[i];
+    if (v < 0)         out[i] = 0;            /* interior  → rock     */
+    else if (v <= t1)  out[i] = 1;            /* quick escape → sand  */
+    else if (v <= t2)  out[i] = 2;            /* mid    → soil        */
+    else               out[i] = 3;            /* near boundary → water */
+  }
+  return out;
+}
+
+/* Iter ramps as you zoom in so deep regions don't go solid black. */
+function mandelIterFor(span) {
+  let it = 192;
+  let s = span;
+  while (s < 1.0 && it < 4096) { it += 64; s *= 2.0; }
+  return it;
+}
+
+/* Sample a Mandelbrot rectangle at W×H. Square pixels in the complex
+ * plane (sx == sy), so the vertical extent is span * (H/W). */
+function sampleMandelRect(cx, cy, span, W, H, iter) {
+  const raw = new Int32Array(W * H);
+  const s  = span / W;
+  const ox = cx - s * W * 0.5;
+  const oy = cy - s * H * 0.5;
+  for (let y = 0; y < H; y++) {
+    const py = oy + y * s;
+    for (let x = 0; x < W; x++) {
+      raw[y * W + x] = mandelIterAt(ox + x * s, py, iter);
+    }
+  }
+  return raw;
+}
+
+/* Build a (K*MAP_W) × (K*MAP_H) global atlas — sampled once at load,
+ * then regenPanel slices it like imageWorld.  Used in non-meta mode. */
+async function loadMandelWorld(opts) {
+  const cxRaw = parseFloat(document.getElementById("mandelCx").value);
+  const cyRaw = parseFloat(document.getElementById("mandelCy").value);
+  const spRaw = parseFloat(document.getElementById("mandelSpan").value);
+  const kRaw  = parseInt  (document.getElementById("mandelK")   .value, 10);
+  const cx = Number.isFinite(cxRaw) ? cxRaw : -0.5;
+  const cy = Number.isFinite(cyRaw) ? cyRaw :  0.0;
+  const sp = Number.isFinite(spRaw) && spRaw > 0 ? spRaw : 3.0;
+  const K  = Math.max(1, Math.min(32, kRaw | 0 || 8));
+  const direct = document.getElementById("mandelDirect").checked;
+  const meta   = document.getElementById("mandelMeta")  .checked;
+  const iter = mandelIterFor(sp);
+
+  mandelWorld.cx = cx;
+  mandelWorld.cy = cy;
+  mandelWorld.span = sp;
+  mandelWorld.iter = iter;
+  mandelWorld.K = K;
+  mandelWorld.directMode = direct;
+  mandelWorld.metaMode   = meta;
+  mandelWorld.steps = direct ? 0 : 5;
+
+  /* Install the fractal palette into TERRAIN_ANCHOR + UI pickers. */
+  for (let i = 0; i < 4; i++) {
+    TERRAIN_ANCHOR[i][0] = MANDEL_PALETTE[i][0];
+    TERRAIN_ANCHOR[i][1] = MANDEL_PALETTE[i][1];
+    TERRAIN_ANCHOR[i][2] = MANDEL_PALETTE[i][2];
+  }
+  if (typeof syncAnchorPickers === "function") syncAnchorPickers();
+
+  if (meta) {
+    /* Meta mode samples on the fly per-panel — no global atlas needed. */
+    mandelWorld.cells = null;
+    mandelWorld.active = true;
+    setMandelStatus("meta · " + (direct ? "direct" : "seed") +
+      " · base=(" + cx.toFixed(4) + "," + cy.toFixed(4) +
+      ") iter=" + iter);
+  } else {
+    setMandelStatus("sampling " + (K * MAP_W) + "×" + (K * MAP_H) +
+                    " (iter=" + iter + ")…");
+    await new Promise(r => setTimeout(r, 0));   /* let UI repaint */
+    const tw = K * MAP_W, th = K * MAP_H;
+    const raw = sampleMandelRect(cx, cy, sp, tw, th, iter);
+    mandelWorld.cells = quantiseMandelIter(raw, iter);
+    mandelWorld.active = true;
+    /* Tally for status line. */
+    const tally = [0, 0, 0, 0];
+    for (let i = 0; i < mandelWorld.cells.length; i++) tally[mandelWorld.cells[i]]++;
+    const pct = tally.map(t => Math.round(100 * t / mandelWorld.cells.length)).join("/");
+    setMandelStatus("atlas K=" + K + " · " + tw + "×" + th +
+      " · iter=" + iter + " · palette % " + pct +
+      " · " + (direct ? "direct" : "seed"));
+  }
+
+  /* Defeat any active imageWorld so the two don't fight. */
+  if (imageWorld.active) {
+    imageWorld.active = false;
+    imageWorld.cells = null;
+    setImgStatus("image world off (Mandelbrot took over)");
+  }
+
+  if (typeof applyMotherColours === "function") applyMotherColours();
+  if (typeof regenMosaic === "function") regenMosaic();
+  needsRender = true;
+  setAction("mandel world · " +
+    (meta ? "meta " : "atlas K=" + K) +
+    (direct ? " · direct" : " · seed"));
+}
+
+function disableMandelWorld() {
+  mandelWorld.active = false;
+  mandelWorld.cells = null;
+  setMandelStatus("mandel world off — back to procedural");
+  if (typeof applyMotherColours === "function") applyMotherColours();
+  if (typeof regenMosaic === "function") regenMosaic();
+  needsRender = true;
+  setAction("mandel world off");
+}
+
+/* Canon Mandelbrot regions — each is a recognised feature in the
+ * literature, so the names mean something to fractal-watchers. */
+const MANDEL_PRESETS = {
+  whole:     { label: 'Whole set',       cx: -0.5,         cy:  0.0,         span: 3.0    },
+  seahorse:  { label: 'Seahorse Valley', cx: -0.745,       cy:  0.105,       span: 0.04   },
+  elephant:  { label: 'Elephant Valley', cx:  0.275,       cy:  0.006,       span: 0.04   },
+  triple:    { label: 'Triple Spiral',   cx: -0.088,       cy:  0.654,       span: 0.014  },
+  minibrot:  { label: 'Mini-brot',       cx: -1.7494,      cy:  0.0,         span: 0.02   },
+  lightning: { label: 'Lightning',       cx: -1.255,       cy:  0.382,       span: 0.025  },
+};
+
+document.getElementById("mandelLoadBtn").addEventListener("click", () => {
+  loadMandelWorld();
+});
+document.getElementById("mandelOffBtn").addEventListener(
+  "click", disableMandelWorld);
+document.querySelectorAll('#mandelPresetRow button[data-mpreset]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const p = MANDEL_PRESETS[btn.dataset.mpreset];
+    if (!p) return;
+    document.getElementById('mandelCx').value   = p.cx;
+    document.getElementById('mandelCy').value   = p.cy;
+    document.getElementById('mandelSpan').value = p.span;
+    loadMandelWorld();
   });
 });
 
@@ -7782,6 +8080,16 @@ function buildShotState() {
                             ? !!musicStereo : true },
     flags:        { animating: !!animating,
                     minimapOn: !!minimapOn },
+    /* ev68: mandel world is small + parametric, so we save the params
+     * and re-derive cells on replay rather than blobbing the atlas. */
+    mandelWorld:  mandelWorld.active ? {
+                    cx: mandelWorld.cx, cy: mandelWorld.cy,
+                    span: mandelWorld.span, iter: mandelWorld.iter,
+                    K: mandelWorld.K, steps: mandelWorld.steps,
+                    direct: !!mandelWorld.directMode,
+                    meta:   !!mandelWorld.metaMode,
+                    metaSpan: mandelWorld.metaSpan,
+                  } : null,
   };
 }
 
@@ -7975,6 +8283,22 @@ function applyShot(state) {
   if (state.music && state.music.on !== undefined) {
     if (state.music.on && !musicOn) startMusic();
     else if (!state.music.on && musicOn) stopMusic();
+  }
+  /* ev68: restore Mandelbrot world if the shot recorded one.  Cells
+   * regenerate from the saved params, so the bundle stays small. */
+  if (state.mandelWorld) {
+    const mw = state.mandelWorld;
+    document.getElementById("mandelCx").value   = mw.cx;
+    document.getElementById("mandelCy").value   = mw.cy;
+    document.getElementById("mandelSpan").value = mw.span;
+    document.getElementById("mandelK").value    = mw.K;
+    document.getElementById("mandelDirect").checked = !!mw.direct;
+    document.getElementById("mandelMeta").checked   = !!mw.meta;
+    /* Fire-and-forget — the load is async (yields once for UI repaint).
+     * regenMosaic below will pick up the new world once cells land. */
+    loadMandelWorld();
+  } else if (mandelWorld.active) {
+    disableMandelWorld();
   }
   /* Caches keyed by old palettes/salts/rule are now stale. */
   if (typeof cellTexCache !== "undefined") cellTexCache.clear();
