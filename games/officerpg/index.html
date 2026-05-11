@@ -656,7 +656,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev80";
+const VERSION = "ev81";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -2176,10 +2176,14 @@ function snapshotPanelArchetypes(slot, panelSeedVal) {
     panelArchetypes[slot][cat] = sel;
   }
 }
+/* ev81: bumped on every archetype resnapshot so held-weapon thumb
+ * (and any future per-archetype caches) can detect library drift. */
+let archLibGen = 0;
 function snapshotAllPanels() {
   for (let slot = 0; slot < 9; slot++) snapshotPanelArchetypes(slot, panelSeed[slot]);
   spriteCache.clear();
   blockTexCache.clear();
+  archLibGen = (archLibGen + 1) | 0;
 }
 
 /* Build the (3 × height) palette-index grid + 4-colour palette for one
@@ -2983,6 +2987,17 @@ function playerHasItemType(type) {
   return false;
 }
 
+/* ev81: first variant index the player is carrying of `type`, or -1.
+ * Used by the avatar renderer to find which weapon to show holstered
+ * on the player's hip.  Lowest vidx wins so the held weapon is stable
+ * across pickups of the same type. */
+function firstHeldItemIdx(type) {
+  for (let v = 0; v < CAT_VARIANTS; v++) {
+    if (player.inv[v] > 0 && itemTypeFor(v) === type) return v;
+  }
+  return -1;
+}
+
 /* Consume the first available variant of the given type (decrement
  * its inv count, decrement invCount).  Returns the variant index
  * consumed, or -1 if none available. */
@@ -3049,6 +3064,14 @@ let   playerDir       = 0;
 let   playerDirT      = 0;
 let   playerCAEvolveT = 0;
 const playerTexCache  = new Map();
+
+/* ev81: cached held-weapon thumb (the first weapon-type variant in
+ * the player's inventory).  Recomputed only when vidx changes or the
+ * archetype library drifts; on every frame we just blit the cached
+ * canvas at the avatar's hip. */
+let heldWeaponVidx   = -1;
+let heldWeaponLibGen = -1;
+let heldWeaponThumb  = null;
 
 function initPlayerCAs() {
   /* Seed each of the 7 with a heavy mutation of the global ruleset,
@@ -4563,6 +4586,32 @@ function render() {
   ctx.drawImage(playerBodyTex,
                 (cx - bodyW / 2) | 0, (cy - bodyH / 2) | 0,
                 bodyW, bodyH);
+
+  /* ev81: held weapon — show the biolab thumbnail of the first
+   * weapon-type variant in the player's inventory holstered against
+   * the body sprite.  Cached by vidx + library generation so the
+   * L-system expansion runs only when the held weapon changes (or the
+   * archetype library drifts). */
+  {
+    const wIdx = firstHeldItemIdx("weapon");
+    if (wIdx >= 0) {
+      const libGen = (typeof archLibGen === "number") ? archLibGen : 0;
+      if (heldWeaponVidx !== wIdx || heldWeaponLibGen !== libGen) {
+        heldWeaponThumb  = inventoryThumb(wIdx);
+        heldWeaponVidx   = wIdx;
+        heldWeaponLibGen = libGen;
+      }
+      if (heldWeaponThumb) {
+        const wSz = (bodyW * 0.55) | 0;
+        const wx  = (cx + bodyW / 2 - wSz * 0.25) | 0;
+        const wy  = (cy - bodyH / 2 + bodyH * 0.35) | 0;
+        ctx.drawImage(heldWeaponThumb, wx, wy, wSz, wSz);
+      }
+    } else {
+      heldWeaponVidx = -1;
+      heldWeaponThumb = null;
+    }
+  }
 
   if (minimapOn) drawMinimap();
   renderHUD();
