@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>office rpg — hi-res · ev73</title>
+<title>office rpg — hi-res · ev74</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000;
                color: #ccc; font-family: ui-monospace, "SF Mono", Menlo,
@@ -490,23 +490,55 @@ JSON here (the .edges field) — or use the buttons below"
         per panel — walk the meta-overworld and the parameter space
         drifts under you.</span>
 
-      <h3 style="margin-top:18px;">Spatial GA — agent grid (ev73, default ON)</h3>
-      <div class="anchor-row" id="spatialGARow" style="flex-wrap:wrap;">
+      <h3 style="margin-top:18px;">Spatial GA — agent grid (ev74)</h3>
+      <div class="anchor-row" id="spatialGARow" style="flex-wrap:wrap;gap:14px;">
         <label><input type="checkbox" id="spatialGAToggle" checked>
-          per-territory agents, neighbour-bred</label>
-        <button id="spatialGAReseedBtn" type="button">Reseed</button>
-        <span id="spatialGAStat" class="legend"></span>
+          <strong>on</strong> (per-territory agents, neighbour-bred)</label>
+        <label><input type="checkbox" id="spatialGAPause">
+          pause breeding</label>
       </div>
-      <span class="legend">The default map gen as of ev73: every
-        8×8-cell territory is owned by its own agent carrying a
-        16,384-byte ruleset.  64 agents per panel, 576 agents in the
-        visible 192×192 mosaic.  New agents inherit a crossover of
-        their existing axial neighbours' rulesets (light 24-byte
-        mutation), so genetic material spreads spatially and the
-        world looks cohesive rather than patchwork.  Neighbour-bred
-        tournament fires a batch of 12 rounds every ~220 ms; same
-        gaFitness function as the 4-parent path.  Flip off to see the
-        legacy 4-parent CA.</span>
+      <div style="display:grid;grid-template-columns:auto 1fr auto;gap:6px 10px;
+                  align-items:center;margin-top:8px;font-family:ui-monospace,
+                  SFMono-Regular,Menlo,monospace;font-size:0.85rem;">
+        <span>mutation flips</span>
+        <input type="range" id="spatialGAFlips" min="1" max="128" value="24"
+               step="1" style="width:100%;">
+        <span id="spatialGAFlipsVal" style="min-width:3ch;text-align:right;">24</span>
+
+        <span>tick (ms)</span>
+        <input type="range" id="spatialGATickMs" min="50" max="2000" value="220"
+               step="10" style="width:100%;">
+        <span id="spatialGATickMsVal" style="min-width:5ch;text-align:right;">220</span>
+
+        <span>rounds/batch</span>
+        <input type="range" id="spatialGABatch" min="1" max="64" value="12"
+               step="1" style="width:100%;">
+        <span id="spatialGABatchVal" style="min-width:3ch;text-align:right;">12</span>
+      </div>
+      <div class="anchor-row" style="margin-top:10px;flex-wrap:wrap;gap:8px;">
+        <button id="spatialGAStepBtn"    type="button">+1 batch</button>
+        <button id="spatialGAConvergeBtn" type="button"
+          title="Copy the highest-fitness agent's ruleset into every other agent. Resets the population to a single dominant gene.">Converge to elite</button>
+        <button id="spatialGAShockBtn" type="button"
+          title="Heavy mutation (256 flips per agent) to break out of local minima.">Shock</button>
+        <button id="spatialGAReseedBtn" type="button">Reseed</button>
+      </div>
+      <div id="spatialGAStat" class="legend" style="margin-top:6px;
+           font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.8rem;"></div>
+      <span class="legend">8×8-cell territories, 64 agents per panel,
+        576 agents in the visible 192×192 mosaic.  New agents inherit
+        a crossover of their existing axial neighbours' rulesets
+        (mutation flips configurable above), so genetic material
+        spreads spatially and the world looks cohesive rather than
+        patchwork.  Same gaFitness as the 4-parent path
+        (class-4 / edge-of-chaos, peaked at avg activity 0.12).
+        <em>Pause</em> freezes breeding without disabling the spatial
+        mode — useful for inspecting a frame; <em>+1 batch</em> fires
+        one batch on demand while paused.  <em>Converge to elite</em>
+        floods the highest-fitness agent's ruleset across the
+        population; <em>Shock</em> heavily mutates every agent (256
+        flips each) to escape a local minimum.  Flip <em>on</em> off
+        to see the legacy 4-parent CA.</span>
 
       <h3 style="margin-top:18px;">Genome actions</h3>
       <button id="gaRandomBtn">Reset to random</button>
@@ -611,7 +643,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev73";
+const VERSION = "ev74";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -1185,15 +1217,15 @@ const spatialGA = {
    * canonical map gen.  Flip off in the workshop to see the legacy
    * 4-parent CA. */
   on:        true,
+  /* ev74: pause halts breeding without disabling spatial mode — the
+   * existing per-agent rulesets still drive regenPanel, only the
+   * tournament stops firing.  Live tuning of childFlips / tickMs /
+   * batch through the workshop sliders. */
+  paused:    false,
   rulesets:  new Map(),    /* "gx,gy" → Uint8Array(RULESET_BYTES) */
   fitness:   new Map(),    /* "gx,gy" → cached fitness number     */
   rounds:    0,
-  /* Mutation rate for neighbour-bred children.  Per-territory means
-   * many more breeds per second, so each can be smaller. */
   childFlips: 24,
-  /* Spatial breed cadence — independent of the 4-parent
-   * tournament's 30 s period.  Many small agents need many rounds
-   * per second to evolve visibly; fire a BATCH every tickMs. */
   tickMs:    220,
   batch:     12,
   lastTick:  0,
@@ -1305,16 +1337,91 @@ function spatialTournamentRound() {
 
 /* Run `batch` rounds and update the workshop status line.  Called
  * from the game loop at spatialGA.tickMs cadence; cheap per round
- * (~50 µs each) so a batch of 12 fits comfortably in a frame. */
-function spatialTournamentBatch() {
+ * (~50 µs each) so a batch of 12 fits comfortably in a frame.
+ * ev74: respects spatialGA.paused — when paused, the game loop
+ * still gets here but no rounds fire (the "+1 batch" button
+ * bypasses the pause to fire one batch on demand). */
+function spatialTournamentBatch(force) {
   if (!spatialGA.on || spatialGA.rulesets.size === 0) return;
+  if (spatialGA.paused && !force) return;
   for (let i = 0; i < spatialGA.batch; i++) spatialTournamentRound();
+  spatialGAUpdateStat();
+}
+
+/* ev74: refresh the status line — rounds, agent count, plus
+ * min/mean/max over cached fitness values.  Sampling cached
+ * fitness only (no fresh gaFitness calls) keeps this cheap. */
+function spatialGAUpdateStat() {
   const stat = document.getElementById("spatialGAStat");
-  if (stat) {
-    stat.textContent =
-      '· ' + spatialGA.rounds + ' rounds · ' +
-      spatialGA.rulesets.size + ' agents';
+  if (!stat) return;
+  const fits = Array.from(spatialGA.fitness.values());
+  let parts = '· ' + spatialGA.rounds + ' rounds · ' +
+              spatialGA.rulesets.size + ' agents';
+  if (fits.length > 0) {
+    let mn = fits[0], mx = fits[0], sum = 0;
+    for (const f of fits) {
+      if (f < mn) mn = f;
+      if (f > mx) mx = f;
+      sum += f;
+    }
+    const mean = sum / fits.length;
+    parts += ' · fit min ' + mn.toFixed(2) +
+             ' / mean ' + mean.toFixed(2) +
+             ' / max ' + mx.toFixed(2);
   }
+  if (spatialGA.paused) parts += ' · PAUSED';
+  stat.textContent = parts;
+}
+
+/* ev74: convergence — find the highest-fitness agent (testing any
+ * that haven't been scored yet) and overwrite every other agent's
+ * ruleset with a fresh copy of the elite.  Fitness cache reset so
+ * the next batch re-measures from the new uniform population. */
+function spatialGAConverge() {
+  if (!spatialGA.on || spatialGA.rulesets.size === 0) return;
+  const seed = currentWorldSeed();
+  let bestKey = null;
+  let bestFit = -Infinity;
+  for (const [k, rs] of spatialGA.rulesets) {
+    let f = spatialGA.fitness.get(k);
+    if (f === undefined) {
+      f = gaFitness(rs, seed);
+      spatialGA.fitness.set(k, f);
+    }
+    if (f > bestFit) { bestFit = f; bestKey = k; }
+  }
+  if (bestKey === null) return;
+  const elite = spatialGA.rulesets.get(bestKey);
+  /* Overwrite every other agent.  Copy the bytes so a later mutation
+   * on one agent doesn't ripple to its siblings (Uint8Arrays in JS
+   * are reference types). */
+  for (const k of spatialGA.rulesets.keys()) {
+    if (k === bestKey) continue;
+    const dst = new Uint8Array(elite);
+    spatialGA.rulesets.set(k, dst);
+    spatialGA.fitness .set(k, bestFit);
+  }
+  spatialGA.fitness.set(bestKey, bestFit);
+  spatialGAUpdateStat();
+  if (typeof regenMosaic === 'function') regenMosaic();
+  needsRender = true;
+  setAction('converged on agent ' + bestKey +
+            ' (fit ' + bestFit.toFixed(2) + ')');
+}
+
+/* ev74: shock — heavy mutation pass on every agent (256 flips each)
+ * to break out of a fitness plateau.  Wipes the fitness cache so the
+ * next batch re-measures everything. */
+function spatialGAShock() {
+  if (!spatialGA.on || spatialGA.rulesets.size === 0) return;
+  for (const rs of spatialGA.rulesets.values()) {
+    _mutateInPlace(rs, 256);
+  }
+  spatialGA.fitness.clear();
+  spatialGAUpdateStat();
+  if (typeof regenMosaic === 'function') regenMosaic();
+  needsRender = true;
+  setAction('shock — every agent mutated 256 flips');
 }
 
 /* Clear all per-agent rulesets; the next regenPanel that needs one
@@ -5127,10 +5234,10 @@ document.getElementById("gaCurrentBtn").addEventListener("click", resetEditToCur
 document.getElementById("gaApplyBtn").addEventListener("click", applyEditGenome);
 document.getElementById("gaCloseBtn").addEventListener("click", closeGaWorkshop);
 
-/* ev72: Spatial GA toggle + reseed.  Toggle on clears any existing
- * per-panel rulesets so the first repopulation starts from current
+/* ev72→ev74: Spatial GA controls.  Toggle ON clears any existing
+ * per-agent rulesets so the first repopulation starts from current
  * `ruleset` (the workshop's edited copy if you've been tinkering).
- * Toggle off leaves the cached spatial rulesets in place — they
+ * Toggle OFF leaves the cached spatial rulesets in place — they
  * just stop being consulted — so flipping back on is instant. */
 document.getElementById("spatialGAToggle").addEventListener("change", (e) => {
   spatialGA.on = !!e.target.checked;
@@ -5139,14 +5246,41 @@ document.getElementById("spatialGAToggle").addEventListener("change", (e) => {
     spatialGA.fitness .clear();
     spatialGA.rounds = 0;
   }
-  const stat = document.getElementById("spatialGAStat");
-  if (stat) stat.textContent = spatialGA.on
-    ? '· armed · panels populate on next regen'
-    : '· off';
+  spatialGAUpdateStat();
   if (typeof regenMosaic === "function") regenMosaic();
   needsRender = true;
   setAction("spatial GA " + (spatialGA.on ? "ON" : "OFF"));
 });
+document.getElementById("spatialGAPause").addEventListener("change", (e) => {
+  spatialGA.paused = !!e.target.checked;
+  spatialGAUpdateStat();
+  setAction("spatial GA " + (spatialGA.paused ? "paused" : "resumed"));
+});
+
+/* Live-tuning sliders.  Bind each range input to its corresponding
+ * spatialGA field + the readout span next to it.  `input` event so
+ * dragging updates in real time without waiting for mouseup. */
+function _wireRange(id, valId, key, fmt) {
+  const range  = document.getElementById(id);
+  const valEl  = document.getElementById(valId);
+  const apply  = () => {
+    const v = parseInt(range.value, 10);
+    spatialGA[key] = v;
+    valEl.textContent = fmt ? fmt(v) : v;
+  };
+  range.addEventListener("input", apply);
+  apply();
+}
+_wireRange("spatialGAFlips",  "spatialGAFlipsVal",  "childFlips");
+_wireRange("spatialGATickMs", "spatialGATickMsVal", "tickMs");
+_wireRange("spatialGABatch",  "spatialGABatchVal",  "batch");
+
+document.getElementById("spatialGAStepBtn").addEventListener(
+  "click", () => spatialTournamentBatch(true));   /* `force=true` ignores pause */
+document.getElementById("spatialGAConvergeBtn").addEventListener(
+  "click", spatialGAConverge);
+document.getElementById("spatialGAShockBtn").addEventListener(
+  "click", spatialGAShock);
 document.getElementById("spatialGAReseedBtn").addEventListener(
   "click", spatialGAReseed);
 
