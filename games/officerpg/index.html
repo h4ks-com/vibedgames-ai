@@ -656,7 +656,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev86";
+const VERSION = "ev87";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -1409,9 +1409,12 @@ const MANGEL_AGENT_SIZE  = 16;                           /* was AGENT_SIZE=8 */
 const MANGEL_AGENTS_PER_PANEL_AXIS =
         (MAP_W / MANGEL_AGENT_SIZE) | 0;                 /* 4 */
 const MANGEL_RES          = 32;                          /* was MAP_W=64 */
-const MANGEL_TICK_MS      = 900;
-const MANGEL_BATCH        = 4;
+const MANGEL_TICK_MS      = 1500;                        /* was 900 */
+const MANGEL_BATCH        = 2;                           /* was 4 */
+const MANGEL_ITER_CAP     = 384;                         /* ev87: was 4096 */
+const MANGEL_RENDER_BUDGET = 3;   /* ev87: max fresh tile renders per frame */
 let   mangelLastTick      = 0;
+let   mangelFrameRenderCt = 0;    /* ev87: budget counter, reset per rAF */
 
 /* Curated "interesting" Mandelbrot centres — the same set the mangel
  * sprite sheet uses, so a fresh agent starts somewhere visually
@@ -1435,6 +1438,7 @@ const MANGEL_MULTS = [5,7,11,13,17,19,23,29,31,37,41,43,47,53,59];
 spatialGA.mangels       = new Map();   /* "gx,gy" → Float64Array(17) */
 spatialGA.mangelFitness = new Map();
 spatialGA.mangelGen     = new Map();   /* "gx,gy" → int (cache key) */
+spatialGA.mangelPals    = new Map();   /* ev87: cached palette per agent */
 spatialGA.mangelRounds  = 0;
 
 function _mangelClamp(v) { return v < 0 ? 0 : v > 255 ? 255 : (v | 0); }
@@ -1550,8 +1554,25 @@ function spatialMangelAt(mx, my) {
   }
   spatialGA.mangels.set(k, g);
   spatialGA.mangelGen.set(k, (spatialGA.mangelGen.get(k) || 0) + 1);
+  spatialGA.mangelPals.delete(k);
   return g;
 }
+
+/* ev87: cached palette per agent.  Built once on first read (or
+ * after gene change), reused across all 256 cells in the agent's
+ * territory.  Saves ~30 redundant 768-byte palette rebuilds per
+ * visible-frame repaint. */
+function _mangelPaletteFor(k, gene) {
+  let pal = spatialGA.mangelPals.get(k);
+  if (pal) return pal;
+  pal = _mangelPaletteFromGene(gene);
+  spatialGA.mangelPals.set(k, pal);
+  return pal;
+}
+
+/* ev87: shared 32×32 ImageData scratch — getCellMangelTexture rewrites
+ * the .data array each call rather than allocating a fresh buffer. */
+const MANGEL_TMP_IMG  = new ImageData(MANGEL_RES, MANGEL_RES);
 
 function spatialMangelTournamentRound() {
   if (!mangelOn || spatialGA.mangels.size === 0) return;
@@ -1579,6 +1600,7 @@ function spatialMangelTournamentRound() {
     spatialGA.mangels.set(k, child);
     spatialGA.mangelFitness.set(k, cFit);
     spatialGA.mangelGen.set(k, (spatialGA.mangelGen.get(k) || 0) + 1);
+    spatialGA.mangelPals.delete(k);   /* ev87: stale palette */
   }
 }
 
@@ -1655,19 +1677,22 @@ function getCellMangelTexture(wx, wy) {
   const cellCy   = gene[1] - gene[2] / 2 + (cellLy + 0.5) * cellSpan;
   const mult     = gene[3] | 0;
   const offset   = gene[4] | 0;
-  const pal      = _mangelPaletteFromGene(gene);
+  /* ev87: palette is per-agent now (shared across 256 cells). */
+  const pal      = _mangelPaletteFor(key, gene);
 
-  /* Iter cap scales with cellSpan — deeper crops need more iters. */
+  /* ev87: iter cap clamped at MANGEL_ITER_CAP (was 4096) so deep
+   * zooms don't tank the frame rate.  Detail at extreme depth is
+   * sacrificed for steady-state perf. */
   let Iter = 192;
   let span2 = cellSpan;
-  while (span2 < 1.0 && Iter < 4096) { Iter += 64; span2 *= 2.0; }
+  while (span2 < 1.0 && Iter < MANGEL_ITER_CAP) { Iter += 64; span2 *= 2.0; }
+  if (Iter > MANGEL_ITER_CAP) Iter = MANGEL_ITER_CAP;
 
   /* ev86: render at MANGEL_RES × MANGEL_RES (32 × 32 default = ¼
-   * area of the CA's 64 × 64), then return that smaller canvas.
-   * drawNotchedTile reads tex.width/tex.height so a 32×32 source
-   * still scales up to fit the screen tile. */
+   * area of the CA's 64 × 64).  ev87: rewrite the shared scratch
+   * ImageData rather than alloc-per-call. */
   const RES  = MANGEL_RES;
-  const img  = new ImageData(RES, RES);
+  const img  = MANGEL_TMP_IMG;
   const data = img.data;
   const ds = cellSpan / RES;
   const ox = cellCx - ds * RES * 0.5;
@@ -1684,14 +1709,19 @@ function getCellMangelTexture(wx, wy) {
         i++;
       }
       if (i === Iter) {
+        /* ev87: in-set pixels become transparent so the underlying
+         * CA cell texture shows through.  The visible-boundary
+         * pixels stay opaque, so a Mandelbrot tile reads as the
+         * boundary detail floating over the CA backdrop. */
         data[p] = 0; data[p+1] = 0; data[p+2] = 0;
+        data[p+3] = 0;
       } else {
         const sl = ((i * mult + offset) >>> 0) & 0xff;
         data[p]   = pal[sl*3 + 0];
         data[p+1] = pal[sl*3 + 1];
         data[p+2] = pal[sl*3 + 2];
+        data[p+3] = 255;
       }
-      data[p+3] = 255;
     }
   }
   off = document.createElement("canvas");
@@ -4960,9 +4990,15 @@ function render() {
                - playerOddOff
                + panelOff - playerPanelRowOff;
       if (tx + TILE_PX < 0 || tx > W) continue;
-      const tex = mangelOn ? getCellMangelTexture(wx, wy)
-                           : getCellTexture(wx, wy);
-      drawNotchedTile(tex, tx, ty);
+      /* ev87: when mangelOn, paint the CA cell first then overlay
+       * the mangel tile.  Mangel pixels marked transparent (alpha 0,
+       * which we use for in-set black) reveal the CA underneath. */
+      if (mangelOn) {
+        drawNotchedTile(getCellTexture(wx, wy), tx, ty);
+        drawNotchedTile(getCellMangelTexture(wx, wy), tx, ty);
+      } else {
+        drawNotchedTile(getCellTexture(wx, wy), tx, ty);
+      }
     }
   }
 
