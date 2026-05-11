@@ -656,7 +656,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev79";
+const VERSION = "ev80";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -3170,6 +3170,18 @@ function spawnPlayer() {
 /* ── Movement + interactions ─────────────────────────────── */
 function moveStep(dir) {
   if (!player.alive) return false;
+  /* ev80: face the player in the direction of the attempted step,
+   * regardless of whether it succeeds (a wall still rotates the
+   * avatar's directional CA).  Lives here — not in the keyboard
+   * handler — so journey + autoplay movement also re-faces. */
+  {
+    const dirIdx = PLAYER_KEY_TO_DIR[dir];
+    if (dirIdx !== undefined) {
+      playerDir  = dirIdx;
+      playerDirT = (typeof performance !== "undefined")
+        ? performance.now() : Date.now();
+    }
+  }
   const odd = py & 1;
   let nx = px, ny = py;
   switch (dir) {
@@ -5054,11 +5066,15 @@ function frame() {
   /* ev79: revert avatar to "at rest" CA after idle threshold, and
    * fire one player-CA tournament round at the configured cadence.
    * Both are O(1) per frame except for the round itself (~50 µs at
-   * 1.5 s intervals) — well under the frame budget. */
+   * 1.5 s intervals) — well under the frame budget.
+   * ev80: CA evolution rides the same `animating` gate as terrain
+   * shimmer + sprite anim, so when the user pauses the world the
+   * avatar's CAs hold still too.  The idle-revert still fires (it's
+   * pure UI state, not generative). */
   {
     const now = performance.now();
     maybeRestPlayer(now);
-    evolvePlayerCAs(now);
+    if (animating) evolvePlayerCAs(now);
   }
   requestAnimationFrame(frame);
 }
@@ -5266,15 +5282,8 @@ function handleKey(e) {
     /* Manual movement always wins — turn off the journey planner
      * so the user takes the wheel. */
     if (autoplayOn) disableAutoplay("manual override");
-    /* ev79: set the directional CA state regardless of whether the
-     * step succeeded — pressing the key faces the player even when
-     * blocked by a wall, so the avatar visibly turns. */
-    const dirIdx = PLAYER_KEY_TO_DIR[k];
-    if (dirIdx !== undefined) {
-      playerDir  = dirIdx;
-      playerDirT = (typeof performance !== "undefined")
-        ? performance.now() : Date.now();
-    }
+    /* ev80: moveStep itself rotates the avatar's directional CA now,
+     * so journey + autoplay movement re-face too.  No dir-set here. */
     if (moveStep(k)) {
       lastHexMove = k;          /* ev20: maybeShift uses this for hex meta */
       pathTick(px, py);
