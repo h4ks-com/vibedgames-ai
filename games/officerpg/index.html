@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>office rpg — hi-res · ev75</title>
+<title>office rpg — hi-res · ev76</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000;
                color: #ccc; font-family: ui-monospace, "SF Mono", Menlo,
@@ -656,7 +656,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev75";
+const VERSION = "ev76";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -993,6 +993,15 @@ const catAt      = new Uint8Array(TILE_W * TILE_H);  /* 0=none, 1..4 */
 const idxAt      = new Uint8Array(TILE_W * TILE_H);  /* variant 0..63 */
 const hpAt       = new Uint8Array(TILE_W * TILE_H);  /* animal HP */
 const npcAt      = new Uint8Array(TILE_W * TILE_H);  /* head|body nibbles */
+/* ev76: NPC hit-points, lazily populated on first weapon strike
+ * (default 3 HP per NPC).  0 = "never touched with a weapon" so we
+ * can distinguish from "killed" (cell-clear handled by clearing
+ * npcAt instead). */
+const npcHpAt    = new Uint8Array(TILE_W * TILE_H);
+/* ev76: per-cell complexity — tool items reduce this on touch.
+ * Defaults to 0 (no lock).  Future drops (locked boxes, sealed
+ * doors) set this to 1..255 to require N tool-touches to open. */
+const complexityAt = new Uint8Array(TILE_W * TILE_H);
 const pathStep   = new Uint8Array(TILE_W * TILE_H);
 const pathId     = new Uint8Array(TILE_W * TILE_H);
 const panelSeed  = new Uint32Array(9);   /* world seed per sub-panel */
@@ -2757,7 +2766,236 @@ const player = {
   bendSkill: new Uint8Array(4),
   catBend:   new Uint8Array(4),
   alive: true,
+  /* ev76: D&D-style class + alignment.  Rolled at newGame() from the
+   * world seed so reloading the same world re-rolls identically. */
+  cls:       "fighter",
+  alignment: "true neutral",
 };
+
+/* ── ev76: item types (weapon / tool / magic / healing) ─────────
+ *
+ * Every one of the 64 inventory variants is permanently classified
+ * into one of four types via a stable hash of its variant index.
+ * The type drives interaction mechanics:
+ *
+ *   weapon   touch an animal or NPC → deal bonus damage (+3 per touch)
+ *   tool     touch an object with complexity > 0 → reduce complexity
+ *            by 1 (consumes the action but no inv loss).  Once
+ *            complexity hits 0, the object behaves normally.  Object
+ *            complexity itself is set by future content (locked
+ *            boxes, sealed doors, etc.); the framework lands now so
+ *            those drops integrate without further plumbing.
+ *   magic    `M` (shift-m) consumes ONE magic item and triggers a
+ *            random magic effect — these can alter ANY game variable
+ *            (player stats, world rules, music gain, anim rates, …).
+ *            Effects are curated in MAGIC_EFFECTS below so each one
+ *            does something legible to the player; the principle is
+ *            "anything is fair game" but each individual effect is
+ *            written to be observable, not silently destructive.
+ *   healing  `h` consumes ONE healing item and restores 5 HP.
+ *
+ * Hash is mulberry-style on (vidx+1)*GOLDEN so the same variant is
+ * always the same type across runs, but adjacent variant indices
+ * land in different types.  Pure function — call from any context. */
+const ITEM_TYPES = ["weapon", "tool", "magic", "healing"];
+function itemTypeFor(vidx) {
+  let h = ((vidx + 1) * 0x9e3779b9) | 0;
+  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  h = (h ^ (h >>> 16)) | 0;
+  return ITEM_TYPES[(h & 3)];
+}
+
+/* ev76: player + NPC classes (fighter / healer / thief / wizard).
+ * Each class pairs with one item type — using a matching item gives
+ * a bonus.  Player class is rolled at newGame() from the world seed
+ * so reloading the same world re-rolls deterministically; NPC class
+ * is hashed from the NPC's head-body packed byte. */
+const CLASSES = ["fighter", "healer", "thief", "wizard"];
+const CLASS_FOR_ITEM_TYPE = {
+  weapon:  "fighter",
+  healing: "healer",
+  tool:    "thief",
+  magic:   "wizard",
+};
+
+/* ev76: AD&D-style 9-alignment grid.  Orthogonal to class: any class
+ * can be any alignment.  Stored as a string for legibility.  Used
+ * cosmetically in the HUD + inventory for now; future content can
+ * gate dialogue or aggression behaviour by alignment. */
+const ALIGNMENTS = [
+  "lawful good",     "neutral good",    "chaotic good",
+  "lawful neutral",  "true neutral",    "chaotic neutral",
+  "lawful evil",     "neutral evil",    "chaotic evil",
+];
+
+function _hashByte(b, salt) {
+  let h = ((b + 1) * 0x9e3779b9) ^ (salt | 0);
+  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  return (h ^ (h >>> 16)) | 0;
+}
+
+function npcClassAt(i) {
+  const b = npcAt[i] | 0;
+  if (!b) return null;
+  return CLASSES[(_hashByte(b, 0x71e3) & 3)];
+}
+
+function npcAlignmentAt(i) {
+  const b = npcAt[i] | 0;
+  if (!b) return null;
+  /* >>> 2 to use different bits than class so the two axes don't
+   * correlate awkwardly (e.g. all fighters lawful good). */
+  return ALIGNMENTS[((_hashByte(b, 0xa5e1) >>> 2) % 9 + 9) % 9];
+}
+
+/* ev76: every overworld panel (meta-coord) carries its own alignment.
+ * Used to drive flavour text — evil realms make attacking "lawful",
+ * good realms make attacking "unlawful".  Hashed from the panel's
+ * world seed so the alignment is stable per location. */
+function panelAlignment(mx, my) {
+  const seed = (mx * 0x27d4eb2d) ^ (my * 0x165667b1) ^ 0xa173de01;
+  return ALIGNMENTS[((_hashByte(seed & 0xff, 0xb73c) >>> 1) % 9 + 9) % 9];
+}
+
+function currentPanelAlignment() {
+  return panelAlignment(worldPos[0] | 0, worldPos[1] | 0);
+}
+
+/* ev76: alignment behaviour axis.  Good = will try to help others,
+ * evil = will try to harm others, neutral = will neither help nor
+ * harm.  Returned as a short tag for HUD / flavour text.  Future
+ * NPC AI passes can switch on this directly. */
+function dispositionTag(alignment) {
+  if (!alignment) return null;
+  if (alignment.includes("evil"))  return "harms others";
+  if (alignment.includes("good"))  return "helps others";
+  return "neither helps nor harms";
+}
+
+/* True if the player's class pairs with this item type.  Drives the
+ * use-function bonuses below. */
+function classMatchesItemType(type) {
+  return player.cls === CLASS_FOR_ITEM_TYPE[type];
+}
+
+/* ev76: combine an NPC's own disposition with the realm's law axis
+ * and the NPC's own lawful/chaotic axis.
+ *
+ *   Disposition (from good/neutral/evil axis):
+ *     good    → wants to help the player
+ *     evil    → wants to harm the player
+ *     neutral → neither
+ *
+ *   Realm law (good/evil/neutral panel alignment):
+ *     evil realm   → attacking is lawful, helping is unlawful
+ *     good realm   → attacking is unlawful, helping is lawful
+ *     neutral realm → both neither lawful nor unlawful (unrestricted)
+ *
+ *   NPC law axis (lawful/neutral/chaotic):
+ *     lawful  → always follows the law (restrained when desire
+ *               is unlawful in the current realm)
+ *     neutral → SOMETIMES regards the law (coin-flip when desire is
+ *               unlawful — half the time they restrain, half free-act)
+ *     chaotic → has no problem breaking the law (acts on desire
+ *               freely regardless of what the realm forbids)
+ *
+ * Returns {act, tag}.  act ∈ {free-harm, free-help, restrained,
+ * neutral}.  tag is a short phrase for HUD / dialogue lines. */
+function npcStance(npcAlignment, realmAlignment) {
+  if (!npcAlignment) return { act: "neutral", tag: "" };
+  const wantsHarm  = npcAlignment.includes("evil");
+  const wantsHelp  = npcAlignment.includes("good");
+  const chaoticNpc = npcAlignment.includes("chaotic");
+  const realmEvil  = realmAlignment && realmAlignment.includes("evil");
+  const realmGood  = realmAlignment && realmAlignment.includes("good");
+  /* "Wanted action is unlawful here?" — based on the realm rule. */
+  const harmUnlawful = !!realmGood;   /* good realm forbids attack */
+  const helpUnlawful = !!realmEvil;   /* evil realm forbids help   */
+  const lawfulNpc  = npcAlignment.includes("lawful");
+  /* Neutral NPC: coin-flip whether they regard the law this time. */
+  const neutralLaw = !lawfulNpc && !chaoticNpc;
+  const obeysLaw =
+        lawfulNpc                ||
+        (neutralLaw && Math.random() < 0.5);
+  if (wantsHarm) {
+    if (!harmUnlawful || !obeysLaw)
+      return { act: "free-harm", tag: "harms others" };
+    return { act: "restrained", tag: "wants to harm (restrained by law)" };
+  }
+  if (wantsHelp) {
+    if (!helpUnlawful || !obeysLaw)
+      return { act: "free-help", tag: "helps others" };
+    return { act: "restrained", tag: "wants to help (restrained by law)" };
+  }
+  return { act: "neutral", tag: "neither helps nor harms" };
+}
+
+/* ev76: NPCs carry one of four responses (attack / flee / friend /
+ * wary) toward each of three target kinds: 'player', 'animal',
+ * 'npc'.  Derived deterministically from a hash of the NPC's
+ * head-body byte + the target kind, so the same NPC reacts the
+ * same way every time you encounter it but its behaviour varies
+ * across the population.  Class/alignment biases the distribution:
+ * evil + fighter weights toward "attack"; good + healer toward
+ * "friend"; thief toward "wary"; wizard toward "flee".  Returned
+ * as a short string — future AI passes can switch on it. */
+/* Response semantics (future AI passes will read these directly):
+ *   attack  — move toward target and strike on adjacency
+ *   flee    — move away from target each step
+ *   friend  — approach to within 2 hexes and idle; may offer help
+ *             if good-aligned and the realm permits
+ *   wary    — hold position, neither approach nor retreat, but on
+ *             being attacked the response flips to "flee"
+ * ev76 ships the classification; ev77 will plumb it into the
+ * per-tick wander/respawn loop so NPCs actually move on these. */
+const NPC_RESPONSES = ["attack", "flee", "friend", "wary"];
+function npcResponseTo(npcByte, npcClass, npcAlignment, targetKind) {
+  if (!npcByte) return null;
+  /* 12-entry distribution table biased by class+alignment.  Pick by
+   * mod-12 of the hash so the same NPC + target always yields the
+   * same response. */
+  const dist = [];
+  /* Baseline 3 of each */
+  for (const r of NPC_RESPONSES) for (let k = 0; k < 3; k++) dist.push(r);
+  /* Class skew: +3 toward the class-pref. */
+  const classPref = { fighter:"attack", healer:"friend",
+                      thief:"wary",    wizard:"flee" }[npcClass];
+  if (classPref) for (let k = 0; k < 3; k++) dist.push(classPref);
+  /* Alignment skew: evil → +2 attack, good → +2 friend. */
+  if (npcAlignment && npcAlignment.includes("evil"))
+    dist.push("attack", "attack");
+  if (npcAlignment && npcAlignment.includes("good"))
+    dist.push("friend", "friend");
+  const salt = targetKind === 'player' ? 0x1357
+             : targetKind === 'animal' ? 0x2468
+             : 0x9bdf;
+  const h = _hashByte(npcByte, salt);
+  return dist[((h % dist.length) + dist.length) % dist.length];
+}
+
+/* True if the player holds ≥1 of any variant of the given type. */
+function playerHasItemType(type) {
+  for (let v = 0; v < CAT_VARIANTS; v++) {
+    if (player.inv[v] > 0 && itemTypeFor(v) === type) return true;
+  }
+  return false;
+}
+
+/* Consume the first available variant of the given type (decrement
+ * its inv count, decrement invCount).  Returns the variant index
+ * consumed, or -1 if none available. */
+function consumeOneItemOfType(type) {
+  for (let v = 0; v < CAT_VARIANTS; v++) {
+    if (player.inv[v] > 0 && itemTypeFor(v) === type) {
+      player.inv[v]--;
+      player.invCount--;
+      return v;
+    }
+  }
+  return -1;
+}
 function panelSlotFor(globalX, globalY) {
   const sx = (globalX / MAP_W) | 0;
   const sy = (globalY / MAP_H) | 0;
@@ -3348,11 +3586,24 @@ function renderHUD() {
   const terrain = TERRAIN_NAMES[mapArr[i] & 3];
   const hpClass = player.hp <= player.maxHp / 4 ? "lo" : "";
   const mpClass = player.mp <= player.maxMp / 4 ? "lo" : "";
+  /* ev76: realm flag — evil = "attack is lawful here", good =
+   * "attack is unlawful here", neutral = "attack is neither
+   * lawful nor unlawful here". */
+  const realm = currentPanelAlignment();
+  let realmTag;
+  if (realm.includes("evil"))
+    realmTag = " · <em>evil realm (attack is lawful)</em>";
+  else if (realm.includes("good"))
+    realmTag = " · <em>good realm (attack is unlawful)</em>";
+  else
+    realmTag = " · <em>neutral realm (attack is neither)</em>";
   statsEl.innerHTML =
     `<span class="${hpClass}">HP ${player.hp}/${player.maxHp}</span> · ` +
     `<span class="${mpClass}">MP ${player.mp}/${player.maxMp}</span> · ` +
-    `inv ${player.invCount} · terrain ${terrain} · ` +
+    `inv ${player.invCount} · ${player.cls} · ${player.alignment} · ` +
+    `terrain ${terrain} · realm ${realm} · ` +
     `pos ${px},${py} · seed ${currentWorldSeed().toString(16)}` +
+    realmTag +
     (animating  ? " · <em>live</em>"    : "") +
     (musicOn    ? " · <em>♪</em>"      : "") +
     (autoplayOn ? " · <em>journey</em>" : "");
@@ -3360,19 +3611,254 @@ function renderHUD() {
 
 /* ── Modal: Inventory ────────────────────────────────────── */
 function showInventory() {
-  /* Names come from NAME_ALPHA (a-zA-Z0-9.-) — by construction
-   * none of those chars need HTML escaping. */
+  /* ev76: inventory rows now show item TYPE and a Use button per
+   * variant.  Names come from NAME_ALPHA (a-zA-Z0-9.-) — by
+   * construction none of those chars need HTML escaping. */
+  const TYPE_TINT = {
+    weapon:  '#f85149',
+    tool:    '#d4a72c',
+    magic:   '#a371f7',
+    healing: '#56d364',
+  };
   let html = "";
   for (let k = 0; k < CAT_VARIANTS; k++) {
     const n = player.inv[k];
     if (!n) continue;
     const name = player.invNames[k] || ("item v" + k.toString().padStart(2, "0"));
-    html += `<div class="row"><span>${name}</span><span>×${n}</span></div>`;
+    const type = itemTypeFor(k);
+    html += `<div class="row" data-vidx="${k}" style="display:grid;` +
+            `grid-template-columns:1fr auto auto auto;gap:10px;` +
+            `align-items:center;padding:3px 0;">` +
+            `<span>${name}</span>` +
+            `<span style="color:${TYPE_TINT[type]};font-size:0.78rem;` +
+            `padding:1px 8px;border:1px solid ${TYPE_TINT[type]};` +
+            `border-radius:4px;">${type}</span>` +
+            `<span style="opacity:0.75;">×${n}</span>` +
+            `<button class="invUse" data-vidx="${k}" ` +
+            `style="background:#1f6feb;color:#fff;border:0;` +
+            `border-radius:4px;padding:2px 10px;cursor:pointer;` +
+            `font:inherit;">use</button>` +
+            `</div>`;
   }
-  if (!html) html = `<div class="dim">(empty)</div>`;
+  if (!html) html = `<div class="dim">(empty — pick something up first)</div>`;
   invList.innerHTML = html;
   invModal.hidden = false;
   modalOpen = "inv";
+  /* Per-row Use button → consume + apply.  Stop the click from
+   * propagating so the modal-close keydown path isn't fooled into
+   * thinking the user wanted to dismiss. */
+  for (const btn of invList.querySelectorAll('button.invUse')) {
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const vidx = parseInt(btn.dataset.vidx, 10);
+      useInventoryItem(vidx);
+    });
+  }
+}
+
+/* ── ev76: item use dispatch ────────────────────────────────────
+ *
+ * Called from the inventory modal's per-row Use buttons.  Looks up
+ * the item's type and runs the corresponding effect.  All four
+ * types consume exactly one count from the variant slot on success;
+ * if the effect needs a target and none is available (weapon/tool/
+ * healing-someone-else), the call no-ops and the count is preserved.
+ */
+function useInventoryItem(vidx) {
+  if (!player.inv[vidx]) return;
+  const type = itemTypeFor(vidx);
+  const name = player.invNames[vidx] || ("item v" + vidx);
+  let used = false;
+  if (type === 'weapon')  used = useWeapon (vidx, name);
+  if (type === 'tool')    used = useTool   (vidx, name);
+  if (type === 'magic')   used = useMagic  (vidx, name);
+  if (type === 'healing') used = useHealing(vidx, name);
+  if (used) {
+    player.inv[vidx]--;
+    player.invCount--;
+  }
+  /* Re-render inventory so counts update; if empty, modal stays
+   * open showing "(empty)" until the user closes it. */
+  showInventory();
+  needsRender = true;
+}
+
+/* The six axial-r offsets that match wadezx hex movement on the
+ * outer game (odd-r layout).  Used by weapon/tool/healing to scan
+ * for adjacent targets. */
+function _adjacentCells(cx, cy) {
+  const odd = (cy & 1) ? 1 : 0;
+  return [
+    [cx + (odd ? 0 : -1), cy - 1],   /* NW (w) */
+    [cx + (odd ? 1 :  0), cy - 1],   /* NE (e) */
+    [cx - 1,              cy    ],   /* W  (a) */
+    [cx + 1,              cy    ],   /* E  (d) */
+    [cx + (odd ? 0 : -1), cy + 1],   /* SW (z) */
+    [cx + (odd ? 1 :  0), cy + 1],   /* SE (x) */
+  ].filter(([x, y]) =>
+    x >= 0 && x < TILE_W && y >= 0 && y < TILE_H);
+}
+
+function useWeapon(vidx, name) {
+  /* Scan the 6 hex neighbours for an animal OR an NPC.  First hit
+   * is the target; deal 4..7 damage (weapon "must touch" semantics
+   * via adjacency), +2 bonus if the player is a fighter.  If no
+   * target, abort without consuming. */
+  const bonus = classMatchesItemType("weapon") ? 2 : 0;
+  for (const [nx, ny] of _adjacentCells(px, py)) {
+    const i = ny * TILE_W + nx;
+    if (catAt[i] === RC_ANIMAL) {
+      const dmg = 4 + ((Math.random() * 4) | 0) + bonus;
+      let hp = hpAt[i];
+      hp = (hp > dmg) ? hp - dmg : 0;
+      hpAt[i] = hp;
+      const archName = archetypeNameFor(catAt[i], idxAt[i], panelSlotFor(nx, ny));
+      let msg = `swung ${name} at ${archName || 'animal'} for ${dmg}`;
+      if (hp === 0) {
+        catAt[i] = 0;
+        msg += '; killed!';
+      }
+      setAction(msg);
+      return true;
+    }
+    if (npcAt[i]) {
+      if (npcHpAt[i] === 0) npcHpAt[i] = 3;
+      const dmg = 1 + ((Math.random() * 3) | 0);
+      npcHpAt[i] = (npcHpAt[i] > dmg) ? npcHpAt[i] - dmg : 0;
+      let msg = `swung ${name} at NPC for ${dmg}`;
+      if (npcHpAt[i] === 0) {
+        npcAt[i] = 0;
+        msg += '; downed!';
+      }
+      setAction(msg);
+      return true;
+    }
+  }
+  setAction(`no adjacent target for ${name}`);
+  return false;
+}
+
+function useTool(vidx, name) {
+  /* Reduce complexity on an adjacent cell.  No-op if nothing
+   * adjacent has complexity > 0. */
+  for (const [nx, ny] of _adjacentCells(px, py)) {
+    const i = ny * TILE_W + nx;
+    if (complexityAt[i] > 0) {
+      complexityAt[i]--;
+      setAction(`${name} reduced complexity to ${complexityAt[i]}`);
+      return true;
+    }
+  }
+  setAction(`nothing nearby needs ${name}`);
+  return false;
+}
+
+/* ev76: magic effects pool.  Each entry can read or write ANY game
+ * variable — player stats, world rules, music gain, animation
+ * cadence, GA state, anything visible in this script.  The pool is
+ * curated so each effect is observable to the user (a setAction
+ * message names what changed).  More effects can be appended
+ * without disturbing the rest of the engine. */
+const MAGIC_EFFECTS = [
+  () => {                                          /* full HP heal */
+    player.hp = player.maxHp;
+    setAction("magic · HP restored");
+  },
+  () => {                                          /* full MP heal */
+    player.mp = player.maxMp;
+    setAction("magic · MP restored");
+  },
+  () => {                                          /* +5 max HP   */
+    player.maxHp += 5; player.hp = player.maxHp;
+    setAction("magic · max HP +5");
+  },
+  () => {                                          /* +5 max MP   */
+    player.maxMp += 5; player.mp = player.maxMp;
+    setAction("magic · max MP +5");
+  },
+  () => {                                          /* mutate ruleset */
+    for (let f = 0; f < 32; f++) {
+      ruleset[(Math.random() * RULESET_BYTES) | 0] = (Math.random() * 4) | 0;
+    }
+    if (typeof cellTexCache !== "undefined") cellTexCache.clear();
+    setAction("magic · the world's rules shifted");
+  },
+  () => {                                          /* shock spatial GA */
+    if (spatialGA.on && typeof spatialGAShock === "function") {
+      spatialGAShock();
+    } else {
+      setAction("magic · echoes (no GA to disturb)");
+    }
+  },
+  () => {                                          /* random anchor reroll */
+    const i = (Math.random() * 4) | 0;
+    TERRAIN_ANCHOR[i] = [
+      (Math.random() * 256) | 0,
+      (Math.random() * 256) | 0,
+      (Math.random() * 256) | 0,
+    ];
+    if (typeof applyMotherColours === "function") applyMotherColours();
+    setAction("magic · terrain " + i + " recoloured");
+  },
+  () => {                                          /* speed up an anim */
+    const t = (Math.random() * 4) | 0;
+    if (terrainAnim && terrainAnim[t]) {
+      terrainAnim[t].fpm = Math.min(1200, terrainAnim[t].fpm * 2 + 1);
+      setAction("magic · terrain " + t + " anim 2×");
+    }
+  },
+  () => {                                          /* bend skill bump */
+    const t = (Math.random() * 4) | 0;
+    if (player.bendSkill[t] < 9) {
+      player.bendSkill[t]++;
+      setAction("magic · bend skill " + t + " +1");
+    } else {
+      setAction("magic · echoes (bend skill maxed)");
+    }
+  },
+  () => {                                          /* MP refund + small HP */
+    player.mp = Math.min(player.maxMp, player.mp + 10);
+    player.hp = Math.min(player.maxHp, player.hp + 3);
+    setAction("magic · +10 MP, +3 HP");
+  },
+];
+
+function useMagic(vidx, name) {
+  const fn = MAGIC_EFFECTS[(Math.random() * MAGIC_EFFECTS.length) | 0];
+  fn();
+  /* Append the consumed name so the user sees the cause. */
+  const el = document.getElementById("actionLine");
+  if (el) el.textContent = (el.textContent || '') + '  [' + name + ']';
+  return true;
+}
+
+function useHealing(vidx, name) {
+  /* Prefer an injured adjacent animal or NPC; otherwise heal the
+   * player.  Heals 5 HP, clamped to max. */
+  const HEAL = 5;
+  for (const [nx, ny] of _adjacentCells(px, py)) {
+    const i = ny * TILE_W + nx;
+    if (catAt[i] === RC_ANIMAL) {
+      const max = cats[catAt[i]].hp || 20;
+      if (hpAt[i] < max) {
+        hpAt[i] = Math.min(max, hpAt[i] + HEAL);
+        setAction(`${name} healed animal · +${HEAL}`);
+        return true;
+      }
+    }
+    if (npcAt[i] && npcHpAt[i] > 0 && npcHpAt[i] < 3) {
+      npcHpAt[i] = Math.min(3, npcHpAt[i] + HEAL);
+      setAction(`${name} healed NPC`);
+      return true;
+    }
+  }
+  if (player.hp < player.maxHp) {
+    player.hp = Math.min(player.maxHp, player.hp + HEAL);
+    setAction(`${name} healed you · +${HEAL}`);
+    return true;
+  }
+  setAction(`${name} would heal but nothing is injured`);
+  return false;
 }
 
 /* ── Modal: Speed settings ───────────────────────────────
@@ -4425,6 +4911,15 @@ function newGame() {
   player.bendSkill.fill(0);
   player.catBend.fill(0);
   player.alive = true;
+  /* ev76: roll class + alignment from the world seed.  Same world =
+   * same hero. */
+  const seedHi = (currentWorldSeed() >>> 0);
+  player.cls       = CLASSES[(_hashByte(seedHi & 0xff, 0x4337) & 3)];
+  player.alignment = ALIGNMENTS[
+    (((_hashByte((seedHi >>> 8) & 0xff, 0xea91) >>> 2) % 9) + 9) % 9];
+  /* Wipe per-cell mortality state. */
+  if (typeof npcHpAt !== "undefined") npcHpAt.fill(0);
+  if (typeof complexityAt !== "undefined") complexityAt.fill(0);
   deathEl.hidden = true;
   /* Fresh game → fresh journey planner state (does not auto-engage). */
   autoplayOn = false;
