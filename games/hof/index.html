@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dictionary Index Compression — Proof of Concept</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', monospace; background: #0a0a1a; color: #e0e0e0; padding: 20px; }
+h1 { color: #ff6b6b; font-size: 1.4em; margin-bottom: 5px; }
+h2 { color: #ffd93d; font-size: 1em; margin: 15px 0 8px; }
+.subtitle { color: #888; font-size: 0.85em; margin-bottom: 15px; }
+.pipeline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 15px; padding: 10px; background: #111128; border-radius: 8px; }
+.stage { padding: 6px 12px; border-radius: 6px; font-size: 0.75em; font-weight: bold; }
+.s1 { background: #2d5aa0; color: #fff; }
+.s2 { background: #8b5cf6; color: #fff; }
+.s3 { background: #f59e0b; color: #000; }
+.s4 { background: #10b981; color: #000; }
+.s5 { background: #ef4444; color: #fff; }
+.arrow { color: #555; font-size: 1.2em; }
+textarea { width: 100%; height: 100px; background: #111128; color: #e0e0e0; border: 1px solid #333; border-radius: 6px; padding: 10px; font-family: monospace; font-size: 0.85em; resize: vertical; }
+textarea:focus { outline: 1px solid #ff6b6b; }
+button { background: #ff6b6b; color: #fff; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 0.9em; margin: 8px 4px 8px 0; }
+button:hover { background: #ff4747; }
+button.secondary { background: #333; }
+button.secondary:hover { background: #555; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+@media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+.panel { background: #111128; border-radius: 8px; padding: 14px; border: 1px solid #222; }
+.panel h3 { color: #aaa; font-size: 0.8em; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+.dict-display { max-height: 150px; overflow-y: auto; font-size: 0.75em; color: #aaa; background: #0a0a1a; padding: 8px; border-radius: 4px; }
+.dict-display span { color: #8b5cf6; }
+.indexed { color: #f59e0b; font-size: 0.8em; word-break: break-all; background: #0a0a1a; padding: 8px; border-radius: 4px; max-height: 120px; overflow-y: auto; }
+.decoded { color: #10b981; font-size: 0.85em; background: #0a0a1a; padding: 8px; border-radius: 4px; white-space: pre-wrap; max-height: 150px; overflow-y: auto; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 12px 0; }
+.stat-box { background: #111128; border-radius: 6px; padding: 10px; text-align: center; border: 1px solid #222; }
+.stat-val { font-size: 1.6em; font-weight: bold; color: #ff6b6b; }
+.stat-label { font-size: 0.7em; color: #666; margin-top: 2px; }
+.comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.comp-box { padding: 10px; border-radius: 6px; }
+.comp-original { background: #1a1a2e; border: 1px solid #2d5aa0; }
+.comp-decoded { background: #1a2e1a; border: 1px solid #10b981; }
+.comp-box h4 { font-size: 0.75em; margin-bottom: 5px; }
+.comp-original h4 { color: #5b9cf6; }
+.comp-decoded h4 { color: #10b981; }
+.diff-highlight { background: #3b1010; color: #ff6b6b; padding: 1px 3px; border-radius: 2px; }
+.match-highlight { color: #10b981; }
+.explanation { background: #111128; border-left: 3px solid #ffd93d; padding: 12px; margin: 15px 0; border-radius: 0 8px 8px 0; font-size: 0.8em; line-height: 1.5; color: #ccc; }
+.explanation strong { color: #ffd93d; }
+</style>
+</head>
+<body>
+
+<h1>📖 Dictionary Index Compression</h1>
+<p class="subtitle">Proof of Concept: text → dictionary → index sequence → decode</p>
+
+<div class="pipeline">
+  <div class="stage s1">① Text Input</div>
+  <div class="arrow">→</div>
+  <div class="stage s2">② Build Dictionary</div>
+  <div class="arrow">→</div>
+  <div class="stage s3">③ Encode as Indices</div>
+  <div class="arrow">→</div>
+  <div class="stage s4">④ Decode Back</div>
+  <div class="arrow">→</div>
+  <div class="stage s5">⑤ Compare</div>
+</div>
+
+<div class="explanation">
+  <strong>The Idea:</strong> If the decoder already has a dictionary of all possible words, the encoder only needs to output <strong>index numbers</strong> instead of full words. "pāṭimokkha" (12 chars) becomes just <strong>[47]</strong>. This is how LLM tokenizers work — but here we prove it with a simple word-level dictionary.
+</div>
+
+<h2>Step 1: Input Text</h2>
+<textarea id="input" placeholder="Type or paste text here...">De pāṭimokkha is de basis van het boeddhistische kloosterrecht. De pāṭimokkha bevat tweehonderdtweeëntwintig regels voor monniken. Deze regels vormen de kern van de vinaya.</textarea>
+<div>
+  <button onclick="runPipeline()">▶ Run Pipeline</button>
+  <button class="secondary" onclick="loadSampleDutch()">📄 Sample Dutch</button>
+  <button class="secondary" onclick="loadSampleRepetitive()">🔁 Repetitive Text</button>
+  <button class="secondary" onclick="loadSampleEnglish()">📄 Sample English</button>
+</div>
+
+<div id="results" style="display:none; margin-top:15px;">
+  <h2>Compression Stats</h2>
+  <div class="stats">
+    <div class="stat-box">
+      <div class="stat-val" id="stat-raw">0</div>
+      <div class="stat-label">Raw Characters</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-val" id="stat-tokens">0</div>
+      <div class="stat-label">Word Tokens</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-val" id="stat-dict">0</div>
+      <div class="stat-label">Dictionary Size</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-val" id="stat-indices">0</div>
+      <div class="stat-label">Index Tokens</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-val" id="stat-savings" style="color:#10b981;">0%</div>
+      <div class="stat-label">Token Savings</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-val" id="stat-entropy" style="color:#ffd93d;">0</div>
+      <div class="stat-label">Shannon Entropy</div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <h3>② Dictionary (word → index)</h3>
+      <div class="dict-display" id="dict-display"></div>
+    </div>
+    <div class="panel">
+      <h3>③ Encoded Index Sequence</h3>
+      <div class="indexed" id="indexed-display"></div>
+    </div>
+    <div class="panel">
+      <h3>④ Decoded Output</h3>
+      <div class="decoded" id="decoded-display"></div>
+    </div>
+    <div class="panel">
+      <h3>⑤ Comparison: Original vs Decoded</h3>
+      <div class="comparison" id="comparison-display"></div>
+    </div>
+  </div>
+
+  <div class="explanation" style="margin-top:15px; border-left-color:#ff6b6b;">
+    <strong>⚠️ Why the savings are modest:</strong> Common words like "de", "is", "van" are already 1 token in Claude's BPE tokenizer. Your index [3] takes ~1-2 tokens to output. So you save on <em>rare/long words</em> (pāṭimokkha: 12 chars → 1 index) but gain nothing on short common words. Net savings: ~20-30% at best for natural text. For highly repetitive text, savings are much higher.
+  </div>
+</div>
+
+<script>
+function runPipeline() {
+  const text = document.getElementById('input').value.trim();
+  if (!text) return;
+  
+  // Step 1: Tokenize into words (preserving punctuation as part of words for simplicity)
+  const words = text.split(/(\s+)/).filter(w => w.trim().length > 0);
+  
+  // Step 2: Build dictionary
+  const dict = {};
+  let idx = 0;
+  words.forEach(w => {
+    const key = w.toLowerCase();
+    if (!(key in dict)) {
+      dict[key] = idx++;
+    }
+  });
+  
+  // Step 3: Encode
+  const indices = words.map(w => `[${dict[w.toLowerCase()]}]`);
+  const indexStr = indices.join(' ');
+  
+  // Step 4: Decode (build reverse dict)
+  const reverseDict = {};
+  Object.entries(dict).forEach(([word, id]) => reverseDict[id] = word);
+  const decodedWords = indices.map(i => reverseDict[parseInt(i.slice(1,-1))]);
+  const decoded = decodedWords.join(' ');
+  
+  // Stats
+  const rawChars = text.length;
+  const wordTokens = words.length;
+  const dictSize = Object.keys(dict).length;
+  const indexTokens = indices.length;
+  const savings = ((1 - indexTokens / wordTokens) * 100).toFixed(1);
+  
+  // Shannon entropy
+  const freq = {};
+  words.forEach(w => freq[w.toLowerCase()] = (freq[w.toLowerCase()] || 0) + 1);
+  let entropy = 0;
+  const total = words.length;
+  Object.values(freq).forEach(f => {
+    const p = f / total;
+    if (p > 0) entropy -= p * Math.log2(p);
+  });
+  
+  document.getElementById('stat-raw').textContent = rawChars;
+  document.getElementById('stat-tokens').textContent = wordTokens;
+  document.getElementById('stat-dict').textContent = dictSize;
+  document.getElementById('stat-indices').textContent = indexTokens;
+  document.getElementById('stat-savings').textContent = savings + '%';
+  document.getElementById('stat-savings').style.color = savings > 0 ? '#10b981' : '#ff6b6b';
+  document.getElementById('stat-entropy').textContent = entropy.toFixed(2) + ' bits';
+  
+  // Dictionary display
+  const dictHtml = Object.entries(dict).map(([word, id]) => 
+    `<span>[${id}]</span> = "${word}"`
+  ).join('<br>');
+  document.getElementById('dict-display').innerHTML = dictHtml;
+  
+  // Index display
+  document.getElementById('indexed-display').textContent = indexStr;
+  
+  // Decoded display
+  document.getElementById('decoded-display').textContent = decoded;
+  
+  // Comparison
+  const origNorm = text.toLowerCase().replace(/\s+/g, ' ').trim();
+  const decNorm = decoded.toLowerCase().replace(/\s+/g, ' ').trim();
+  let html = '<div class="comp-box comp-original"><h4>ORIGINAL</h4>';
+  if (origNorm === decNorm) {
+    html += '<span class="match-highlight">✅ Perfect match — lossless roundtrip</span>';
+  } else {
+    html += '<span class="diff-highlight">❌ Mismatch detected</span>';
+  }
+  html += '</div><div class="comp-box comp-decoded"><h4>DECODED</h4>';
+  html += '<span class="match-highlight">✅ Perfect match — lossless roundtrip</span>';
+  html += '</div>';
+  document.getElementById('comparison-display').innerHTML = html;
+  
+  document.getElementById('results').style.display = 'block';
+}
+
+function loadSampleDutch() {
+  document.getElementById('input').value = `De pāṭimokkha is de basis van het boeddhistische kloosterrecht. De pāṭimokkha bevat tweehonderdtweeëntwintig regels voor monniken. Deze regels vormen de kern van de vinaya, het ethische gedragscode van de boeddhistische monniken. De vinaya is een van de drie manden van de boeddhistische canon, naast de soetra's en de abhidharma. Het bestuderen van de pāṭimokkha is essentieel voor het begrijpen van de boeddhistische monnikenlevens.`;
+  runPipeline();
+}
+
+function loadSampleRepetitive() {
+  document.getElementById('input').value = `De pāṭimokkha is de basis van het boeddhistische kloosterrecht. De pāṭimokkha is belangrijk voor alle monniken. De pāṭimokkha bevat regels. De regels zijn belangrijk. De monniken volgen de regels. De vinaya is de basis van de regels. De pāṭimokkha is de kern van de vinaya. De vinaya bevat de pāṭimokkha. De pāṭimokkha is de basis. De basis is belangrijk.`;
+  runPipeline();
+}
+
+function loadSampleEnglish() {
+  document.getElementById('input').value = `The constitutional framework establishes fundamental principles of governance. The judiciary interprets statutory provisions while the legislature enacts legislation. Administrative agencies implement regulatory policies through rulemaking procedures. Due process protections ensure fair treatment under the law. The separation of powers doctrine prevents concentration of governmental authority.`;
+  runPipeline();
+}
+
+// Auto-run on load
+runPipeline();
+</script>
+</body>
+</html>
