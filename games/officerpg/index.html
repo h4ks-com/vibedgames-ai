@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>office rpg — hi-res · ev74</title>
+<title>office rpg — hi-res · ev75</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000;
                color: #ccc; font-family: ui-monospace, "SF Mono", Menlo,
@@ -214,6 +214,19 @@
   <h2>Inventory</h2>
   <div id="invList"></div>
   <div class="hint">any key to close</div>
+</div>
+<div id="interiorModal" class="modal" hidden>
+  <h2 id="interiorTitle">Inside</h2>
+  <canvas id="interiorCanvas" width="520" height="520"
+          style="display:block;margin:0 auto;image-rendering:pixelated;
+                 background:#0d1117;border:1px solid #30363d;
+                 border-radius:6px;"></canvas>
+  <div id="interiorHud" class="hint" style="text-align:center;
+       font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+       font-size:0.85rem;margin-top:6px;color:#8b949e;"></div>
+  <div class="hint" style="text-align:center;margin-top:4px;">
+    wadezx hex move · step onto door (◆) to leave · q / Esc to leave
+  </div>
 </div>
 <div id="speedModal" class="modal" hidden>
   <h2>CA pacing — terrain textures + loop CAs</h2>
@@ -643,7 +656,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev74";
+const VERSION = "ev75";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -2856,6 +2869,13 @@ function moveStep(dir) {
       return false;
     }
     if (ec.blocking) {
+      /* ev75: buildings open an interior subscreen instead of just
+       * blocking.  Other blocking categories (plants, etc.) still
+       * stop the player at the door. */
+      if (ec.cat === 'B') {
+        enterBuilding(nx, ny, archName);
+        return false;
+      }
       setAction("blocked by " + ec.name);
       return false;
     }
@@ -4454,6 +4474,19 @@ function handleKey(e) {
      * music toggle, journey planner, etc. still work while the
      * terminal is up).  Movement-related keys above already
      * returned, so they won't double-fire. */
+  }
+
+  /* ev75: Building interior — claims movement + leave keys. */
+  if (interior.open) {
+    if (k === "Escape" || k === "q") {
+      e.preventDefault(); exitBuilding(); return;
+    }
+    if ("wadezx".indexOf(k) !== -1) {
+      e.preventDefault(); tryMoveInterior(k); return;
+    }
+    /* Other keys ignored — interior is a focused subscreen. */
+    e.preventDefault();
+    return;
   }
 
   /* Modal handling. */
@@ -7855,6 +7888,302 @@ function closeLiteTerm() {
   needsRender = true;
 }
 function toggleLiteTerm() { if (liteOpen) closeLiteTerm(); else openLiteTerm(); }
+
+/* ── ev75: building interiors (8×8 hex submap) ──────────────────────
+ *
+ * Touch any building cell from the overworld → step inside.  The
+ * interior is an 8×8 odd-r offset hex grid (same topology as the
+ * outer game) that lives in its own modal canvas.  Generation is
+ * deterministic from the building's worldHash + variant + archetype,
+ * so the same building always renders the same floor plan.
+ *
+ * Cell roles in the interior map:
+ *   0  floor      (walkable, plain stone tint)
+ *   1  wall       (blocking, dark)
+ *   2  door       (walkable; stepping onto it exits back to overworld)
+ *   3  furniture  (blocking, warm tint — table / chair / shelf)
+ *   4  loot       (walkable; pick up = +1 to a random inventory slot)
+ *   5  npc        (blocking; greet message; future: dialogue)
+ *
+ * Memory: 64-byte Uint8Array per interior, allocated only when the
+ * player enters one.  Discarded on exit (we re-derive from hash next
+ * time the same building is visited, so consistency is "for free"
+ * without a persistent cache).
+ *
+ * Render: an offset-r hex grid centred in a 520×520 canvas, pointy-
+ * top hexes with HEX_PX edge length.  No iso tilt — this is a top-
+ * down floorplan view, deliberately flat to read as "indoors". */
+
+const INT_W = 8;
+const INT_H = 8;
+const INT_HEX_PX = 30;
+const INT_FLOOR     = 0;
+const INT_WALL      = 1;
+const INT_DOOR      = 2;
+const INT_FURNITURE = 3;
+const INT_LOOT      = 4;
+const INT_NPC       = 5;
+
+const interior = {
+  open:    false,
+  map:     new Uint8Array(INT_W * INT_H),
+  px:      0,
+  py:      0,
+  /* Source building reference so leave-by-door restores the player
+   * adjacent to the building on the outer world. */
+  source:  { wx: 0, wy: 0, fromPx: 0, fromPy: 0, name: '' },
+  hud:     '',
+};
+
+/* Deterministic PRNG for interior gen — keyed on the cell-world hash
+ * so the same building always renders the same plan.  Mulberry-32
+ * matching the rest of the game. */
+function _interiorRng(seedU32) {
+  let s = (seedU32 | 0) || 0xdeadbeef;
+  return function () {
+    s = (s + 0x6d2b79f5) | 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/* Pick which perimeter cell becomes the door.  Bias toward the edge
+ * NEAREST the player's overworld approach so the door reads as the
+ * one they walked into.  fromPx/fromPy are the player's outer coords
+ * just before entry. */
+function _doorCellForApproach(fromPx, fromPy, buildingWx, buildingWy, rng) {
+  const dx = buildingWx - fromPx;
+  const dy = buildingWy - fromPy;
+  /* Approach from west (dx>0) → door on the WEST wall = x=0; etc. */
+  const candidates = [];
+  if (dx >= 0) for (let y = 1; y < INT_H - 1; y++) candidates.push([0,         y]);
+  if (dx <= 0) for (let y = 1; y < INT_H - 1; y++) candidates.push([INT_W - 1, y]);
+  if (dy >= 0) for (let x = 1; x < INT_W - 1; x++) candidates.push([x, 0        ]);
+  if (dy <= 0) for (let x = 1; x < INT_W - 1; x++) candidates.push([x, INT_H - 1]);
+  if (candidates.length === 0) candidates.push([0, INT_H >> 1]);
+  return candidates[(rng() * candidates.length) | 0];
+}
+
+function genInterior(wx, wy, fromPx, fromPy) {
+  const seed = cellWorldHash(wx, wy);
+  const rng  = _interiorRng(seed);
+  const m    = interior.map;
+  m.fill(INT_FLOOR);
+  /* Perimeter walls. */
+  for (let x = 0; x < INT_W; x++) {
+    m[0           * INT_W + x] = INT_WALL;
+    m[(INT_H - 1) * INT_W + x] = INT_WALL;
+  }
+  for (let y = 0; y < INT_H; y++) {
+    m[y * INT_W + 0           ] = INT_WALL;
+    m[y * INT_W + (INT_W - 1) ] = INT_WALL;
+  }
+  /* Carve a door on the entry side. */
+  const [dx, dy] = _doorCellForApproach(fromPx, fromPy, wx, wy, rng);
+  m[dy * INT_W + dx] = INT_DOOR;
+  /* Sprinkle 4..7 furniture cells in the interior 6×6, with a 50%
+   * chance each is two cells in a row to read as a "bench" or table. */
+  const nFurn = 4 + ((rng() * 4) | 0);
+  for (let i = 0; i < nFurn; i++) {
+    const fx = 1 + ((rng() * (INT_W - 2)) | 0);
+    const fy = 1 + ((rng() * (INT_H - 2)) | 0);
+    const idx = fy * INT_W + fx;
+    if (m[idx] !== INT_FLOOR) continue;
+    m[idx] = INT_FURNITURE;
+    if (rng() < 0.5 && fx + 1 < INT_W - 1) {
+      const idx2 = fy * INT_W + (fx + 1);
+      if (m[idx2] === INT_FLOOR) m[idx2] = INT_FURNITURE;
+    }
+  }
+  /* 1..2 loot piles. */
+  const nLoot = 1 + ((rng() * 2) | 0);
+  for (let i = 0; i < nLoot; i++) {
+    const lx = 1 + ((rng() * (INT_W - 2)) | 0);
+    const ly = 1 + ((rng() * (INT_H - 2)) | 0);
+    const idx = ly * INT_W + lx;
+    if (m[idx] === INT_FLOOR) m[idx] = INT_LOOT;
+  }
+  /* 30% of buildings host a friendly NPC inside (greets, blocks). */
+  if (rng() < 0.30) {
+    for (let tries = 0; tries < 16; tries++) {
+      const nx = 1 + ((rng() * (INT_W - 2)) | 0);
+      const ny = 1 + ((rng() * (INT_H - 2)) | 0);
+      const idx = ny * INT_W + nx;
+      if (m[idx] === INT_FLOOR) { m[idx] = INT_NPC; break; }
+    }
+  }
+  /* Spawn player one cell INSIDE from the door. */
+  let spawnX = dx, spawnY = dy;
+  if      (dx === 0)         spawnX = 1;
+  else if (dx === INT_W - 1) spawnX = INT_W - 2;
+  if      (dy === 0)         spawnY = 1;
+  else if (dy === INT_H - 1) spawnY = INT_H - 2;
+  /* If something blocks the spawn (rare — furniture rolled there),
+   * scan outward for the nearest floor cell. */
+  if (m[spawnY * INT_W + spawnX] !== INT_FLOOR) {
+    for (let r = 1; r < INT_W; r++) {
+      let found = false;
+      for (let yo = -r; yo <= r && !found; yo++) {
+        for (let xo = -r; xo <= r && !found; xo++) {
+          const tx = spawnX + xo, ty = spawnY + yo;
+          if (tx < 1 || tx > INT_W - 2 || ty < 1 || ty > INT_H - 2) continue;
+          if (m[ty * INT_W + tx] === INT_FLOOR) {
+            spawnX = tx; spawnY = ty; found = true;
+          }
+        }
+      }
+      if (found) break;
+    }
+  }
+  interior.px = spawnX;
+  interior.py = spawnY;
+}
+
+function _interiorHexCentre(cx, cy) {
+  /* Offset-r layout: odd rows shifted right by half a hex. */
+  const w = INT_HEX_PX * Math.sqrt(3);
+  const h = INT_HEX_PX * 1.5;
+  const ox = 260 - (INT_W * w / 2);
+  const oy = 260 - (INT_H * h / 2);
+  const px = ox + cx * w + (cy & 1 ? w / 2 : 0);
+  const py = oy + cy * h + INT_HEX_PX;
+  return { x: px + w / 2, y: py };
+}
+
+function renderInterior() {
+  const canvas = document.getElementById("interiorCanvas");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const FILL = {
+    [INT_FLOOR]:     "#262e36",
+    [INT_WALL]:      "#11161c",
+    [INT_DOOR]:      "#b07434",
+    [INT_FURNITURE]: "#5c4a2e",
+    [INT_LOOT]:      "#e0bf4f",
+    [INT_NPC]:       "#4a82c8",
+  };
+  const STROKE = "#30363d";
+  for (let cy = 0; cy < INT_H; cy++) {
+    for (let cx = 0; cx < INT_W; cx++) {
+      const c = _interiorHexCentre(cx, cy);
+      ctx.beginPath();
+      for (let k = 0; k < 6; k++) {
+        const a = Math.PI / 180 * (60 * k - 90);
+        const x = c.x + INT_HEX_PX * Math.cos(a);
+        const y = c.y + INT_HEX_PX * Math.sin(a);
+        if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      const role = interior.map[cy * INT_W + cx];
+      ctx.fillStyle   = FILL[role] || "#262e36";
+      ctx.strokeStyle = STROKE;
+      ctx.lineWidth   = 1;
+      ctx.fill();
+      ctx.stroke();
+      /* Glyph: ◆ on door, • on loot, ☻ on npc. */
+      if (role === INT_DOOR || role === INT_LOOT || role === INT_NPC) {
+        ctx.font = "bold 16px ui-monospace, SFMono-Regular, Menlo, monospace";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = "#0d1117";
+        ctx.fillText(
+          role === INT_DOOR ? "◆"
+          : role === INT_LOOT ? "•"
+          : "☻",
+          c.x, c.y);
+      }
+    }
+  }
+  /* Player marker on top. */
+  const pc = _interiorHexCentre(interior.px, interior.py);
+  ctx.beginPath();
+  ctx.arc(pc.x, pc.y, INT_HEX_PX * 0.45, 0, Math.PI * 2);
+  ctx.fillStyle = "#f8c537";
+  ctx.strokeStyle = "#0d1117";
+  ctx.lineWidth = 2;
+  ctx.fill();
+  ctx.stroke();
+  /* HUD line under canvas. */
+  const hud = document.getElementById("interiorHud");
+  if (hud) hud.textContent = interior.hud || '';
+}
+
+function enterBuilding(wx, wy, archName) {
+  if (interior.open) return;
+  interior.source.wx     = wx;
+  interior.source.wy     = wy;
+  interior.source.fromPx = px;
+  interior.source.fromPy = py;
+  interior.source.name   = archName || 'building';
+  genInterior(wx, wy, px, py);
+  document.getElementById("interiorTitle").textContent =
+    'Inside the ' + interior.source.name;
+  interior.hud = 'door ◆  ·  loot •  ·  NPC ☻';
+  document.getElementById("interiorModal").hidden = false;
+  interior.open = true;
+  renderInterior();
+  setAction("entered " + interior.source.name);
+}
+
+function exitBuilding() {
+  if (!interior.open) return;
+  document.getElementById("interiorModal").hidden = true;
+  interior.open = false;
+  setAction("left " + interior.source.name);
+  needsRender = true;
+}
+
+function tryMoveInterior(key) {
+  const odd = (interior.py & 1) ? 1 : 0;
+  let nx = interior.px, ny = interior.py;
+  switch (key) {
+    case 'w': ny = interior.py - 1; nx = interior.px + (odd ? 0 : -1); break;
+    case 'e': ny = interior.py - 1; nx = interior.px + (odd ? 1 : 0);  break;
+    case 'a': ny = interior.py;     nx = interior.px - 1;              break;
+    case 'd': ny = interior.py;     nx = interior.px + 1;              break;
+    case 'z': ny = interior.py + 1; nx = interior.px + (odd ? 0 : -1); break;
+    case 'x': ny = interior.py + 1; nx = interior.px + (odd ? 1 : 0);  break;
+    default: return false;
+  }
+  if (nx < 0 || nx >= INT_W || ny < 0 || ny >= INT_H) return false;
+  const role = interior.map[ny * INT_W + nx];
+  if (role === INT_WALL || role === INT_FURNITURE) {
+    interior.hud = 'blocked by ' +
+      (role === INT_WALL ? 'wall' : 'furniture');
+    renderInterior();
+    return false;
+  }
+  if (role === INT_NPC) {
+    interior.hud = 'a friendly resident: "stay a while, traveller."';
+    renderInterior();
+    return false;
+  }
+  /* Step is legal — advance. */
+  interior.px = nx;
+  interior.py = ny;
+  if (role === INT_LOOT) {
+    /* Convert to floor + drop into a random inventory slot.  Reuses
+     * the existing 64-variant inventory; flavour message gives the
+     * building a sense of payoff. */
+    interior.map[ny * INT_W + nx] = INT_FLOOR;
+    const slot = (Math.random() * 64) | 0;
+    player.inv[slot] = (player.inv[slot] + 1) & 0xff;
+    if (!player.invNames[slot]) player.invNames[slot] = 'trinket';
+    player.invCount++;
+    interior.hud = 'picked up a trinket';
+  } else if (role === INT_DOOR) {
+    /* Stepping onto the door exits. */
+    exitBuilding();
+    return true;
+  } else {
+    interior.hud = '';
+  }
+  renderInterior();
+  return true;
+}
 
 /* ── ev46: custom tile shape — Tilesmith profile or CA-derived ──
  *
