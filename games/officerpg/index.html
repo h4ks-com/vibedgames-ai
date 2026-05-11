@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>office rpg — hi-res · ev77</title>
+<title>office rpg — hi-res · ev78</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000;
                color: #ccc; font-family: ui-monospace, "SF Mono", Menlo,
@@ -656,7 +656,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev77";
+const VERSION = "ev78";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -3610,38 +3610,74 @@ function renderHUD() {
 }
 
 /* ── Modal: Inventory ────────────────────────────────────── */
+/* ev78: 36×36 thumbnail for an inventory variant.  Reuses the
+ * biolab's bioRenderThumb pipeline — same L-system expansion, same
+ * paint loop, just sized for an inventory row.  Pulls the archetype
+ * from the central panel's snapshotted set (panelArchetypes[4][cat])
+ * so the sprite matches what shows on the world map. */
+function inventoryThumb(vidx) {
+  const cat = RC_ITEM;
+  const slot = 4;
+  const [arch] = variantDecode(vidx);
+  const ec = cats[cat];
+  const archset = (typeof panelArchetypes !== "undefined" &&
+                   panelArchetypes[slot] && panelArchetypes[slot][cat]) || null;
+  const archetype = (archset && archset[arch]) ||
+                    { axiom: ec.axioms[arch], rule: ec.rules[arch] };
+  return bioRenderThumb(cat, archetype.axiom, archetype.rule,
+                        CAT_TINT[cat] || [240, 200, 80]);
+}
+
 function showInventory() {
   /* ev76: inventory rows now show item TYPE and a Use button per
-   * variant.  Names come from NAME_ALPHA (a-zA-Z0-9.-) — by
-   * construction none of those chars need HTML escaping. */
+   * variant.  ev78: prepend a 36×36 biolab-generated sprite of the
+   * item next to its name.  Names come from NAME_ALPHA (a-zA-Z0-9.-)
+   * — by construction none of those chars need HTML escaping. */
   const TYPE_TINT = {
     weapon:  '#f85149',
     tool:    '#d4a72c',
     magic:   '#a371f7',
     healing: '#56d364',
   };
-  let html = "";
+  invList.innerHTML = "";
+  let nonEmpty = false;
   for (let k = 0; k < CAT_VARIANTS; k++) {
     const n = player.inv[k];
     if (!n) continue;
+    nonEmpty = true;
     const name = player.invNames[k] || ("item v" + k.toString().padStart(2, "0"));
     const type = itemTypeFor(k);
-    html += `<div class="row" data-vidx="${k}" style="display:grid;` +
-            `grid-template-columns:1fr auto auto auto;gap:10px;` +
-            `align-items:center;padding:3px 0;">` +
-            `<span>${name}</span>` +
-            `<span style="color:${TYPE_TINT[type]};font-size:0.78rem;` +
-            `padding:1px 8px;border:1px solid ${TYPE_TINT[type]};` +
-            `border-radius:4px;">${type}</span>` +
-            `<span style="opacity:0.75;">×${n}</span>` +
-            `<button class="invUse" data-vidx="${k}" ` +
-            `style="background:#1f6feb;color:#fff;border:0;` +
-            `border-radius:4px;padding:2px 10px;cursor:pointer;` +
-            `font:inherit;">use</button>` +
-            `</div>`;
+    const row = document.createElement("div");
+    row.className = "row";
+    row.dataset.vidx = k;
+    row.style.cssText =
+      "display:grid;grid-template-columns:auto 1fr auto auto auto;" +
+      "gap:10px;align-items:center;padding:3px 0;";
+    /* Thumbnail cell — biolab-style sprite, dropped in as a real canvas. */
+    let thumb;
+    try {
+      thumb = inventoryThumb(k);
+    } catch (e) {
+      thumb = document.createElement("canvas");
+      thumb.width = 36; thumb.height = 36;
+    }
+    thumb.style.cssText = "border:1px solid #30363d;border-radius:3px;";
+    row.appendChild(thumb);
+    row.insertAdjacentHTML('beforeend',
+      `<span>${name}</span>` +
+      `<span style="color:${TYPE_TINT[type]};font-size:0.78rem;` +
+      `padding:1px 8px;border:1px solid ${TYPE_TINT[type]};` +
+      `border-radius:4px;">${type}</span>` +
+      `<span style="opacity:0.75;">×${n}</span>` +
+      `<button class="invUse" data-vidx="${k}" ` +
+      `style="background:#1f6feb;color:#fff;border:0;` +
+      `border-radius:4px;padding:2px 10px;cursor:pointer;` +
+      `font:inherit;">use</button>`);
+    invList.appendChild(row);
   }
-  if (!html) html = `<div class="dim">(empty — pick something up first)</div>`;
-  invList.innerHTML = html;
+  if (!nonEmpty) {
+    invList.innerHTML = `<div class="dim">(empty — pick something up first)</div>`;
+  }
   invModal.hidden = false;
   modalOpen = "inv";
   /* Per-row Use button → consume + apply.  Stop the click from
@@ -8585,31 +8621,54 @@ function genInterior(wx, wy, fromPx, fromPy) {
       if (m[idx] === INT_FLOOR) { m[idx] = INT_NPC; break; }
     }
   }
-  /* Spawn player one cell INSIDE from the door. */
-  let spawnX = dx, spawnY = dy;
-  if      (dx === 0)         spawnX = 1;
-  else if (dx === INT_W - 1) spawnX = INT_W - 2;
-  if      (dy === 0)         spawnY = 1;
-  else if (dy === INT_H - 1) spawnY = INT_H - 2;
-  /* If something blocks the spawn (rare — furniture rolled there),
-   * scan outward for the nearest floor cell. */
-  if (m[spawnY * INT_W + spawnX] !== INT_FLOOR) {
-    for (let r = 1; r < INT_W; r++) {
-      let found = false;
-      for (let yo = -r; yo <= r && !found; yo++) {
-        for (let xo = -r; xo <= r && !found; xo++) {
-          const tx = spawnX + xo, ty = spawnY + yo;
+  /* ev78: fix "buildings impossible to exit".  Previously a
+   * commercial/industrial building could roll furniture clusters
+   * adjacent to the door, sealing the player away from the only
+   * exit.  Now we force-clear all hex neighbours of the door to
+   * floor BEFORE picking the spawn, so the player always has a
+   * walkable path onto the door tile.  Esc / q still exits as a
+   * universal escape hatch. */
+  const doorOdd = (dy & 1) ? 1 : 0;
+  const doorNeighbours = [
+    [dx + (doorOdd ? 0 : -1), dy - 1],   /* NW */
+    [dx + (doorOdd ? 1 :  0), dy - 1],   /* NE */
+    [dx - 1,                  dy    ],   /* W  */
+    [dx + 1,                  dy    ],   /* E  */
+    [dx + (doorOdd ? 0 : -1), dy + 1],   /* SW */
+    [dx + (doorOdd ? 1 :  0), dy + 1],   /* SE */
+  ];
+  let spawnX = -1, spawnY = -1;
+  for (const [nx, ny] of doorNeighbours) {
+    if (nx < 1 || nx > INT_W - 2 || ny < 1 || ny > INT_H - 2) continue;
+    const idx = ny * INT_W + nx;
+    if (m[idx] === INT_DOOR || m[idx] === INT_WALL) continue;
+    /* Convert anything (furniture / loot / npc) here to floor so the
+     * player can step from inside onto the door unobstructed.  Drop
+     * any locked-loot intent flagged on this cell. */
+    if (m[idx] !== INT_FLOOR) {
+      interior.lockedLoot.delete(idx);
+      m[idx] = INT_FLOOR;
+    }
+    if (spawnX < 0) { spawnX = nx; spawnY = ny; }
+  }
+  /* Defensive: door range in _doorCellForApproach guarantees at
+   * least one inside neighbour, but fall back to a flood-search if
+   * something somehow stripped them all. */
+  if (spawnX < 0) {
+    for (let r = 1; r < INT_W && spawnX < 0; r++) {
+      for (let yo = -r; yo <= r && spawnX < 0; yo++) {
+        for (let xo = -r; xo <= r && spawnX < 0; xo++) {
+          const tx = dx + xo, ty = dy + yo;
           if (tx < 1 || tx > INT_W - 2 || ty < 1 || ty > INT_H - 2) continue;
           if (m[ty * INT_W + tx] === INT_FLOOR) {
-            spawnX = tx; spawnY = ty; found = true;
+            spawnX = tx; spawnY = ty;
           }
         }
       }
-      if (found) break;
     }
   }
-  interior.px = spawnX;
-  interior.py = spawnY;
+  interior.px = spawnX < 0 ? 1 : spawnX;
+  interior.py = spawnY < 0 ? 1 : spawnY;
 }
 
 function _interiorHexCentre(cx, cy) {
