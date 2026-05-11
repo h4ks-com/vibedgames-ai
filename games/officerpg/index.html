@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>office rpg — hi-res · ev78</title>
+<title>office rpg — hi-res · ev79</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000;
                color: #ccc; font-family: ui-monospace, "SF Mono", Menlo,
@@ -656,7 +656,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev78";
+const VERSION = "ev79";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -3019,6 +3019,141 @@ let playerHeadRgb  = [255, 227,   0];
 let playerBodyRgb  = [255,  58, 208];
 let playerHeadSalt = 0;
 let playerBodySalt = 0;
+
+/* ── ev79: 7-state directional player CAs ────────────────────────
+ *
+ * The avatar's head+body inner-CA texture is driven by ONE of 7
+ * rulesets, picked by the player's current movement state:
+ *
+ *   0 = at rest        — picked when no movement key has been
+ *                        pressed in the last PLAYER_REST_MS ms
+ *   1 = NW (w)         2 = NE (e)
+ *   3 = W  (a)         4 = E  (d)
+ *   5 = SW (z)         6 = SE (x)
+ *
+ * All 7 share the same colour palette (driven by playerHeadRgb /
+ * playerBodyRgb above) but each evolves independently — seeded
+ * with diverging mutations of the global ruleset, then a background
+ * tournament every PLAYER_CA_EVOLVE_MS keeps each walking toward
+ * its own edge-of-chaos under gaFitness.
+ */
+const PLAYER_DIR_NAMES = ["rest", "NW", "NE", "W", "E", "SW", "SE"];
+const PLAYER_KEY_TO_DIR = { w: 1, e: 2, a: 3, d: 4, z: 5, x: 6 };
+const PLAYER_REST_MS       = 700;
+const PLAYER_CA_EVOLVE_MS  = 1500;
+const PLAYER_CA_FLIPS      = 24;
+const playerCAs       = new Array(7);
+const playerCAFitness = new Array(7).fill(0);
+const playerCAGen     = new Uint32Array(7);
+let   playerDir       = 0;
+let   playerDirT      = 0;
+let   playerCAEvolveT = 0;
+const playerTexCache  = new Map();
+
+function initPlayerCAs() {
+  /* Seed each of the 7 with a heavy mutation of the global ruleset,
+   * salted distinctly per state.  256 flips ≈ 1.5% of the 16,384-
+   * byte rule space — enough to make each state visibly distinct
+   * while keeping a family resemblance to the world. */
+  for (let s = 0; s < 7; s++) {
+    const rs = new Uint8Array(ruleset);
+    const stateSalt = (s * 0x9e3779b9) ^ 0xb16beed0;
+    const st = newState((stateSalt | 1) >>> 0);
+    for (let f = 0; f < 256; f++) {
+      const idx = mulberryInt(st) % RULESET_BYTES;
+      rs[idx] = mulberryInt(st) & 3;
+    }
+    playerCAs[s] = rs;
+    playerCAFitness[s] =
+      gaFitness(rs, currentWorldSeed() ^ ((s + 1) * 0x9e3779b9));
+    playerCAGen[s]++;
+  }
+  playerTexCache.clear();
+}
+
+function evolvePlayerCAs(now) {
+  if (!playerCAs[0]) return;
+  if (now - playerCAEvolveT < PLAYER_CA_EVOLVE_MS) return;
+  playerCAEvolveT = now;
+  /* Tournament round on one random state.  Cheap (50 µs) so it's
+   * fine to fire every 1.5 s on a single state — the 7 take turns
+   * over a 10-second window. */
+  const s = (Math.random() * 7) | 0;
+  const parent = playerCAs[s];
+  const child = new Uint8Array(parent);
+  for (let f = 0; f < PLAYER_CA_FLIPS; f++) {
+    child[(Math.random() * RULESET_BYTES) | 0] = (Math.random() * 4) | 0;
+  }
+  const seed = currentWorldSeed() ^ ((s + 1) * 0x9e3779b9);
+  const cFit = gaFitness(child, seed);
+  if (cFit > playerCAFitness[s]) {
+    playerCAs[s] = child;
+    playerCAFitness[s] = cFit;
+    playerCAGen[s]++;
+  }
+}
+
+function maybeRestPlayer(now) {
+  if (playerDir !== 0 && now - playerDirT > PLAYER_REST_MS) {
+    playerDir = 0;
+    needsRender = true;
+  }
+}
+
+/* Same recipe as getBlockTexture but uses playerCAs[state] for the
+ * inner-CA stepping pass.  Cache key folds in state + per-state
+ * generation counter so each accepted mutation invalidates that
+ * state's cached tex on the next render. */
+function getPlayerBlockTex(seedRgb, salt, state, headOrBody) {
+  const rs  = playerCAs[state] || ruleset;
+  const gen = playerCAGen[state] | 0;
+  const key = "p:" + state + ":" + headOrBody + ":" + gen + ":" +
+              (salt >>> 0) + ":" + seedRgb[0] + "," + seedRgb[1] +
+              "," + seedRgb[2];
+  let off = playerTexCache.get(key);
+  if (off) return off;
+  const st = newState((salt | 1) ^ 0xc0ffeebb);
+  for (let i = 0; i < BLOCK_W * BLOCK_H; i++)
+    blockBufA[i] = (mulberryInt(st) >>> 30) & 3;
+  let a = blockBufA, b = blockBufB;
+  for (let t = 0; t < INNER_STEPS; t++) {
+    hexStep(rs, a, b, BLOCK_W, BLOCK_H);
+    [a, b] = [b, a];
+  }
+  const inner = a;
+  const pSt = newState(((salt + 1) | 1) ^ 0xbeefcace);
+  const pal = new Array(4);
+  for (let k = 0; k < 4; k++) {
+    const dr = ((mulberryInt(pSt) >>> 24) & 0x7f) - 64;
+    const dg = ((mulberryInt(pSt) >>> 24) & 0x7f) - 64;
+    const db = ((mulberryInt(pSt) >>> 24) & 0x7f) - 64;
+    pal[k] = [
+      clamp255(seedRgb[0] + dr),
+      clamp255(seedRgb[1] + dg),
+      clamp255(seedRgb[2] + db),
+    ];
+  }
+  const img = new ImageData(BLOCK_W, BLOCK_H);
+  const data = img.data;
+  for (let i = 0, p = 0; i < BLOCK_W * BLOCK_H; i++, p += 4) {
+    const c = inner[i] & 3;
+    data[p    ] = pal[c][0];
+    data[p + 1] = pal[c][1];
+    data[p + 2] = pal[c][2];
+    data[p + 3] = 255;
+  }
+  off = document.createElement("canvas");
+  off.width  = BLOCK_W;
+  off.height = BLOCK_H;
+  off.getContext("2d").putImageData(img, 0, 0);
+  /* Bounded cache: 7 states × 2 head/body × ~10 active gens = 140
+   * canvases tops in practice; cap higher than that to absorb
+   * mutation churn. */
+  if (playerTexCache.size > 256) playerTexCache.clear();
+  playerTexCache.set(key, off);
+  return off;
+}
+
 let px = TILE_W >> 1, py = TILE_H >> 1;
 let actionMsg = "";
 
@@ -3601,6 +3736,7 @@ function renderHUD() {
     `<span class="${hpClass}">HP ${player.hp}/${player.maxHp}</span> · ` +
     `<span class="${mpClass}">MP ${player.mp}/${player.maxMp}</span> · ` +
     `inv ${player.invCount} · ${player.cls} · ${player.alignment} · ` +
+    `dir ${PLAYER_DIR_NAMES[playerDir]} · ` +
     `terrain ${terrain} · realm ${realm} · ` +
     `pos ${px},${py} · seed ${currentWorldSeed().toString(16)}` +
     realmTag +
@@ -4402,10 +4538,13 @@ function render() {
   const headH = (TILE_PX * 0.42) | 0;
   const bodyW = (TILE_PX * 0.42) | 0;
   const bodyH = (TILE_PX * 0.5)  | 0;
-  const playerHeadTex = getBlockTexture(playerHeadRgb,
-                                         blockSalt("player_head", playerHeadSalt));
-  const playerBodyTex = getBlockTexture(playerBodyRgb,
-                                         blockSalt("player_body", playerBodySalt));
+  /* ev79: head + body textures driven by the playerCAs[state]
+   * ruleset corresponding to the current movement state (0..6).
+   * Same colour palette across states; CA dynamics differ. */
+  const playerHeadTex = getPlayerBlockTex(playerHeadRgb,
+        blockSalt("player_head", playerHeadSalt), playerDir, 0);
+  const playerBodyTex = getPlayerBlockTex(playerBodyRgb,
+        blockSalt("player_body", playerBodySalt), playerDir, 1);
   ctx.drawImage(playerHeadTex,
                 (cx - headW / 2) | 0, (cy - bodyH / 2 - headH) | 0,
                 headW, headH);
@@ -4912,6 +5051,15 @@ function frame() {
   /* ev42: feed the music's mood state from the player's current cell.
    * Cheap; safe to call every frame. */
   musicUpdateMood();
+  /* ev79: revert avatar to "at rest" CA after idle threshold, and
+   * fire one player-CA tournament round at the configured cadence.
+   * Both are O(1) per frame except for the round itself (~50 µs at
+   * 1.5 s intervals) — well under the frame budget. */
+  {
+    const now = performance.now();
+    maybeRestPlayer(now);
+    evolvePlayerCAs(now);
+  }
   requestAnimationFrame(frame);
 }
 
@@ -4956,6 +5104,13 @@ function newGame() {
   /* Wipe per-cell mortality state. */
   if (typeof npcHpAt !== "undefined") npcHpAt.fill(0);
   if (typeof complexityAt !== "undefined") complexityAt.fill(0);
+  /* ev79: re-seed the 7-state player CAs from the new ruleset so
+   * the avatar's directional textures match this world's dynamics
+   * family.  Each state gets its own divergent mutation pass. */
+  if (typeof initPlayerCAs === "function") {
+    playerDir = 0;
+    initPlayerCAs();
+  }
   deathEl.hidden = true;
   /* Fresh game → fresh journey planner state (does not auto-engage). */
   autoplayOn = false;
@@ -5111,6 +5266,15 @@ function handleKey(e) {
     /* Manual movement always wins — turn off the journey planner
      * so the user takes the wheel. */
     if (autoplayOn) disableAutoplay("manual override");
+    /* ev79: set the directional CA state regardless of whether the
+     * step succeeded — pressing the key faces the player even when
+     * blocked by a wall, so the avatar visibly turns. */
+    const dirIdx = PLAYER_KEY_TO_DIR[k];
+    if (dirIdx !== undefined) {
+      playerDir  = dirIdx;
+      playerDirT = (typeof performance !== "undefined")
+        ? performance.now() : Date.now();
+    }
     if (moveStep(k)) {
       lastHexMove = k;          /* ev20: maybeShift uses this for hex meta */
       pathTick(px, py);
