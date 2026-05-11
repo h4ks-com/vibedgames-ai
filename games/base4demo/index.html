@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Base-4 Block Encoding Demo</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0a0a0f; color: #e0e0e0; min-height: 100vh; }
+.container { max-width: 960px; margin: 0 auto; padding: 20px; }
+
+h1 { text-align: center; font-size: 1.6em; margin-bottom: 8px; color: #8cf; }
+h2 { font-size: 1.1em; color: #aaa; margin-bottom: 16px; text-align: center; font-weight: 400; }
+
+.pipeline { display: flex; align-items: center; justify-content: center; gap: 6px; margin-bottom: 24px; flex-wrap: wrap; }
+.pipe-stage { background: #1a1a2e; border: 1px solid #333; border-radius: 8px; padding: 8px 14px; font-size: 0.85em; text-align: center; }
+.pipe-stage.active { border-color: #8cf; box-shadow: 0 0 12px #8cf22; }
+.pipe-arrow { color: #555; font-size: 1.2em; }
+
+.controls { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+.controls label { font-size: 0.85em; color: #aaa; }
+.controls select, .controls input { background: #1a1a2e; border: 1px solid #333; color: #e0e0e0; padding: 6px 10px; border-radius: 6px; font-size: 0.9em; }
+.controls input[type=range] { width: 160px; accent-color: #8cf; }
+.btn { background: #1a1a2e; border: 1px solid #555; color: #e0e0e0; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.85em; }
+.btn:hover { border-color: #8cf; color: #8cf; }
+
+.stats-bar { display: flex; gap: 2px; margin-bottom: 16px; flex-wrap: wrap; }
+.stat { background: #1a1a2e; border: 1px solid #222; border-radius: 6px; padding: 10px 14px; flex: 1; min-width: 120px; text-align: center; }
+.stat .val { font-size: 1.4em; font-weight: 700; color: #8cf; }
+.stat .lbl { font-size: 0.7em; color: #777; margin-top: 2px; }
+
+.panel { background: #111118; border: 1px solid #222; border-radius: 8px; padding: 14px; margin-bottom: 14px; }
+.panel h3 { font-size: 0.85em; color: #888; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
+.panel pre { font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 0.8em; line-height: 1.5; white-space: pre-wrap; word-break: break-all; color: #bbb; max-height: 180px; overflow-y: auto; }
+
+.grid-row { display: flex; flex-wrap: wrap; gap: 2px; margin-bottom: 12px; }
+.cell { width: 28px; height: 28px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 0.65em; font-weight: 700; transition: all 0.2s; }
+.cell.c0 { background: #e74c3c; color: #fff; }
+.cell.c1 { background: #2ecc71; color: #fff; }
+.cell.c2 { background: #3498db; color: #fff; }
+.cell.c3 { background: #f1c40f; color: #000; }
+
+.block { display: inline-flex; border: 2px solid #555; border-radius: 6px; margin: 3px; padding: 2px; transition: all 0.3s; }
+.block:hover { border-color: #8cf; }
+
+.compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 600px) { .compare-grid { grid-template-columns: 1fr; } }
+
+.match { color: #2ecc71; }
+.nomatch { color: #e74c3c; }
+
+.color-legend { display: flex; gap: 12px; justify-content: center; margin-bottom: 14px; }
+.legend-item { display: flex; align-items: center; gap: 4px; font-size: 0.8em; }
+.legend-dot { width: 14px; height: 14px; border-radius: 3px; }
+
+.info-box { background: #1a1a2e; border-left: 3px solid #8cf; border-radius: 0 6px 6px 0; padding: 12px 16px; margin-bottom: 16px; font-size: 0.85em; line-height: 1.6; color: #aaa; }
+.info-box strong { color: #8cf; }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>🎮 Base-4 Block Encoding Demo</h1>
+<h2>Reading 4-color cells in groups — does bigger blocks = better compression?</h2>
+
+<div class="info-box">
+<strong>The idea:</strong> Instead of reading one 4-color cell at a time (4 possible values → tiny dictionary), read multiple cells as one symbol. 
+2 cells = 4² = 16 words, 3 cells = 64 words, 4 cells = 256 words. 
+<strong>The catch:</strong> Total information never changes — you're just slicing the same bits differently.
+</div>
+
+<div class="pipeline">
+<div class="pipe-stage" id="ps-input">📝 Input</div>
+<div class="pipe-arrow">→</div>
+<div class="pipe-stage" id="ps-dict">📚 Dictionary</div>
+<div class="pipe-arrow">→</div>
+<div class="pipe-stage" id="ps-colors">🎨 4-Color Grid</div>
+<div class="pipe-arrow">→</div>
+<div class="pipe-stage" id="ps-blocks">📦 Block Read</div>
+<div class="pipe-arrow">→</div>
+<div class="pipe-stage" id="ps-encode">🔢 Encode</div>
+<div class="pipe-arrow">→</div>
+<div class="pipe-stage" id="ps-decode">📖 Decode</div>
+</div>
+
+<div class="controls">
+<button class="btn" onclick="loadSample('vinaya')">📜 Vinaya</button>
+<button class="btn" onclick="loadSample('repetitive')">🔁 Repetitive</button>
+<button class="btn" onclick="loadSample('poetic')">🎭 Poetic</button>
+<button class="btn" onclick="loadSample('legal')">⚖️ Legal</button>
+<button class="btn" onclick="loadSample('custom')">✏️ Custom</button>
+</div>
+
+<div class="controls">
+<label>Block size:</label>
+<input type="range" id="blockSize" min="1" max="6" value="1" oninput="run()">
+<span id="blockSizeVal" style="color:#8cf; font-size:1.1em; font-weight:700; min-width:30px;">1</span>
+<label style="margin-left:12px;">Max words:</label>
+<span id="dictCap" style="color:#f1c40f; font-weight:700;">4</span>
+<label style="margin-left:4px;">(4^n)</label>
+</div>
+
+<div class="stats-bar">
+<div class="stat"><div class="val" id="s-dictsize">4</div><div class="lbl">Dictionary Size</div></div>
+<div class="stat"><div class="val" id="s-cells">0</div><div class="lbl">4-Color Cells</div></div>
+<div class="stat"><div class="val" id="s-blocks">0</div><div class="lbl">Block Indices</div></div>
+<div class="stat"><div class="val" id="s-bits">0</div><div class="lbl">Total Bits (same!)</div></div>
+<div class="stat"><div class="val" id="s-reduction">0%</div><div class="lbl">Index Reduction</div></div>
+<div class="stat"><div class="val" id="s-coverage">0%</div><div class="lbl">Vocab Coverage</div></div>
+</div>
+
+<div class="color-legend">
+<div class="legend-item"><div class="legend-dot" style="background:#e74c3c;"></div> 0</div>
+<div class="legend-item"><div class="legend-dot" style="background:#2ecc71;"></div> 1</div>
+<div class="legend-item"><div class="legend-dot" style="background:#3498db;"></div> 2</div>
+<div class="legend-item"><div class="legend-dot" style="background:#f1c40f;"></div> 3</div>
+</div>
+
+<div class="panel">
+<h3>🎨 4-Color Grid (with block grouping)</h3>
+<div id="gridDisplay"></div>
+</div>
+
+<div class="panel">
+<h3>📦 Block → Dictionary Mapping</h3>
+<pre id="mappingDisplay"></pre>
+</div>
+
+<div class="panel">
+<h3>🔢 Encoded Index Sequence</h3>
+<pre id="encodedDisplay"></pre>
+</div>
+
+<div class="panel">
+<h3>📖 Decoded Text</h3>
+<pre id="decodedDisplay"></pre>
+</div>
+
+<div class="compare-grid">
+<div class="panel">
+<h3>✅ Original</h3>
+<pre id="originalDisplay"></pre>
+</div>
+<div class="panel">
+<h3>🔄 Comparison</h3>
+<pre id="compareDisplay"></pre>
+</div>
+</div>
+
+<div class="info-box" id="insightBox" style="margin-top: 16px;">
+<strong>💡 Try it:</strong> Slide block size from 1 → 6 and watch the total bits stay <strong>exactly the same</strong> while the dictionary grows and index count shrinks. Shannon's theorem in action!
+</div>
+</div>
+
+<script>
+const samples = {
+vinaya: "De pāṭimokkha is de basis van het boeddhisme. De monniken volgen strikte regels. Elke regel dient om het pad te verhelderen. De vinaya bevat regels voor monniken en nonnen. Het boeddhistische monnikenleven draait om discipline en meditatie. De pāṭimokkha wordt elke twee weken gereciteerd. Deze recitatie versterkt de gemeenschap.",
+repetitive: "the the the the cat cat cat dog dog the the the cat cat the the the the the cat cat cat dog dog the the the cat cat the the the the the cat cat cat dog dog the the the cat cat",
+poetic: "In the garden of silence the flowers speak. Each petal a word, each stem a sentence. The wind carries meaning across fields of thought. Words bloom and wither like seasons. Language is the soil from which understanding grows.",
+legal: "The parties hereby agree to the following terms and conditions. Section one establishes the jurisdiction. Section two defines the obligations of each party. The parties hereby agree to the following terms and conditions. Section three outlines the dispute resolution process."
+};
+
+let currentText = samples.vinaya;
+
+function loadSample(key) {
+    if (key === 'custom') {
+        currentText = prompt('Enter your text:');
+        if (!currentText) return;
+    } else {
+        currentText = samples[key];
+    }
+    run();
+}
+
+function textToColors(text) {
+    const colors = [];
+    for (let i = 0; i < text.length; i++) {
+        colors.push(text.charCodeAt(i) % 4);
+    }
+    return colors;
+}
+
+function run() {
+    const bs = parseInt(document.getElementById('blockSize').value);
+    document.getElementById('blockSizeVal').textContent = bs;
+    const dictCap = Math.pow(4, bs);
+    document.getElementById('dictCap').textContent = dictCap.toLocaleString();
+
+    const words = currentText.split(/\s+/).filter(w => w.length > 0);
+    const uniqueWords = [...new Set(words)];
+    const dictWords = uniqueWords.slice(0, dictCap);
+
+    const colors = textToColors(currentText);
+
+    // Pad colors to be multiple of block size
+    while (colors.length % bs !== 0) colors.push(0);
+
+    // Build blocks
+    const blocks = [];
+    for (let i = 0; i < colors.length; i += bs) {
+        let idx = 0;
+        for (let j = 0; j < bs; j++) {
+            idx = idx * 4 + colors[i + j];
+        }
+        blocks.push(idx);
+    }
+
+    // Dictionary: map block indices to words
+    const dict = {};
+    dictWords.forEach((w, i) => {
+        if (i < dictCap) dict[i] = w;
+    });
+
+    // Decode
+    const decoded = blocks.map(b => dict[b % dictWords.length] || `[${b}]`).join(' ');
+
+    // Stats
+    const totalCells = colors.length;
+    const totalBits = totalCells * 2; // each 4-color cell = 2 bits
+    const singleBlocks = totalCells; // if block size = 1
+
+    document.getElementById('s-dictsize').textContent = dictCap.toLocaleString();
+    document.getElementById('s-cells').textContent = totalCells;
+    document.getElementById('s-blocks').textContent = blocks.length;
+    document.getElementById('s-bits').textContent = totalBits;
+    document.getElementById('s-reduction').textContent = ((1 - blocks.length / singleBlocks) * 100).toFixed(0) + '%';
+    document.getElementById('s-coverage').textContent = (dictWords.length / uniqueWords.length * 100).toFixed(0) + '%';
+
+    // Highlight stages
+    document.querySelectorAll('.pipe-stage').forEach(s => s.classList.remove('active'));
+    ['ps-input','ps-dict','ps-colors','ps-blocks','ps-encode','ps-decode'].forEach(id => {
+        document.getElementById(id).classList.add('active');
+    });
+
+    // Render grid with blocks
+    renderGrid(colors, bs);
+
+    // Render mapping
+    let mapHtml = '';
+    const shown = Math.min(dictWords.length, 20);
+    mapHtml += `Dictionary (${dictWords.length}/${uniqueWords.length} unique words, capacity ${dictCap}):\n`;
+    mapHtml += '─'.repeat(50) + '\n';
+    for (let i = 0; i < shown; i++) {
+        const colorsStr = Array.from({length: bs}, (_, j) => {
+            const c = Math.floor(i / Math.pow(4, bs - 1 - j)) % 4;
+            return c;
+        }).map(c => ['🔴','🟢','🔵','🟡'][c]).join('');
+        mapHtml += `  Block [${String(i).padStart(String(dictCap).length)}] = ${colorsStr} → "${dictWords[i]}"\n`;
+    }
+    if (dictWords.length > shown) mapHtml += `  ... and ${dictWords.length - shown} more\n`;
+    document.getElementById('mappingDisplay').textContent = mapHtml;
+
+    // Render encoded
+    let encHtml = `Block size ${bs}: ${bs} cells → ${dictCap} possible values\n`;
+    encHtml += `Each block encodes ${bs * 2} bits of information\n\n`;
+    encHtml += 'Indices: ';
+    const displayBlocks = blocks.slice(0, 60);
+    encHtml += displayBlocks.map(b => `[${b}]`).join(' ');
+    if (blocks.length > 60) encHtml += ` ... (+${blocks.length - 60} more)`;
+    document.getElementById('encodedDisplay').textContent = encHtml;
+
+    // Render decoded
+    document.getElementById('decodedDisplay').textContent = decoded;
+
+    // Original
+    document.getElementById('originalDisplay').textContent = currentText;
+
+    // Comparison
+    const origWords = currentText.split(/\s+/);
+    const decWords = decoded.split(/\s+/);
+    let cmpHtml = '';
+    const cmpLen = Math.min(origWords.length, decWords.length, 80);
+    for (let i = 0; i < cmpLen; i++) {
+        if (origWords[i] === decWords[i]) {
+            cmpHtml += `<span class="match">✓ ${origWords[i]}</span> `;
+        } else {
+            cmpHtml += `<span class="nomatch">✗ ${origWords[i]}→${decWords[i]}</span> `;
+        }
+    }
+    if (origWords.length > cmpLen) cmpHtml += '...';
+    document.getElementById('compareDisplay').innerHTML = cmpHtml;
+
+    // Insight
+    const blockSizes = [1,2,3,4,5,6];
+    let insight = '<strong>📊 Block Size Comparison</strong> (same text, same total bits):\n\n';
+    insight += 'Block Size | Dict Size | # Indices | Bits/Block | Total Bits\n';
+    insight += '─'.repeat(55) + '\n';
+    for (const s of blockSizes) {
+        const cap = Math.pow(4, s);
+        const nBlocks = Math.ceil(totalCells / s);
+        const marker = s === bs ? ' ◀ current' : '';
+        insight += `    ${s}     | ${String(cap).padStart(8)} | ${String(nBlocks).padStart(9)} |    ${s*2}     |    ${nBlocks * s * 2}${marker}\n`;
+    }
+    insight += '\n<strong>Total bits is always identical</strong> — you just pack more bits into each index.';
+    insight += '\n\n<strong>What actually changes:</strong>\n';
+    insight += '• Bigger blocks → bigger dictionary → fewer indices\n';
+    insight += '• Smaller blocks → smaller dictionary → more indices\n';
+    insight += '• Information content: UNCHANGED 🎯\n\n';
+    insight += bs >= 4 
+        ? '⚠️ With block size ≥4, your dictionary can hold 256+ words — enough for most vocabularies. But you\'re not compressing anything — just re-encoding.'
+        : '💡 At block size 1-2, your dictionary is tiny (4-16 words). Most words won\'t fit, so decoding quality drops — but you\'re not actually saving any information.';
+
+    document.getElementById('insightBox').innerHTML = insight;
+}
+
+function renderGrid(colors, bs) {
+    const container = document.getElementById('gridDisplay');
+    const maxShow = Math.min(colors.length, 120);
+    let html = '';
+
+    for (let i = 0; i < maxShow; i += bs) {
+        html += '<span class="block">';
+        for (let j = 0; j < bs && (i + j) < maxShow; j++) {
+            html += `<span class="cell c${colors[i+j]}">${colors[i+j]}</span>`;
+        }
+        html += '</span>';
+    }
+    if (colors.length > maxShow) html += `<span style="color:#666;font-size:0.8em;"> ... +${colors.length - maxShow} more cells</span>`;
+    container.innerHTML = html;
+}
+
+// Initial run
+loadSample('vinaya');
+</script>
+</body>
+</html>
