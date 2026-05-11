@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>office rpg — hi-res · ev70</title>
+<title>office rpg — hi-res · ev71</title>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #000;
                color: #ccc; font-family: ui-monospace, "SF Mono", Menlo,
@@ -593,7 +593,7 @@ JSON here (the .edges field) — or use the buttons below"
  * the GA + flower modal h2s and the browser tab title so it's
  * trivial to verify which build is loaded without inspecting
  * the served bytes.  AUTO-SHIP RULE: bump this when forking. */
-const VERSION = "ev70";
+const VERSION = "ev71";
 document.title = "officerpg · " + VERSION;
 {
   const a = document.getElementById("verBadgeGa");
@@ -5985,6 +5985,7 @@ const META_TIMBRE_C      = 32;
 
 let audioCtx        = null;
 let musicMaster     = null;
+let musicShelf      = null;            /* ev71: high-shelf taming harshness */
 let musicComp       = null;            /* ev70: limiter on the master bus */
 let musicLDest      = null;            /* ev47: L pan target */
 let musicRDest      = null;            /* ev47: R pan target */
@@ -6736,30 +6737,53 @@ function startMusic() {
     audioCtx = new Ctx();
   }
   if (audioCtx.state === "suspended") audioCtx.resume();
-  /* ev70: DynamicsCompressorNode sits between the master gain and the
-   * destination so the score/meta/cultural voices, which can sum to
-   * peaks well above 0 dB when many gain-masked steps land on the
-   * same bar boundary, get glued down instead of clipping.  Threshold
-   * −18 dB and ratio 4:1 give a gentle "musical" knee rather than
-   * brick-wall limiting; the 5 ms attack catches the bar-start
-   * stacked-onset transients without softening the actual notes;
-   * 200 ms release lets it breathe between bars.  Soft knee 20 dB
-   * smooths the transition into compression. */
+  /* ev70 + ev71: master-bus output chain.
+   *
+   *   pan → musicMaster (gain) → musicShelf (high-shelf cut) →
+   *         musicComp (compressor) → destination
+   *
+   * ev71 adds the high-shelf to tame harshness — user reported the
+   * music was painful to listen to, which is almost always high-
+   * frequency content slipping past a wide-band compressor.  Cutting
+   * everything above ~4 kHz by 8 dB takes the bite off the bar-start
+   * stacked-onset clusters without making the music dull.  The shelf
+   * sits BEFORE the compressor so the compressor sees the already-
+   * smoothed signal and doesn't pump on transients we've already
+   * tamed.  Compressor also slightly tightened (−22 dB threshold,
+   * 6:1 ratio, knee 18 dB) since the user wanted more reduction.
+   *
+   * Both nodes have a typeof guard so we degrade gracefully on
+   * old mobile builds that lacked them (in practice both are
+   * everywhere by now, but the fallbacks are cheap to keep). */
   musicMaster = audioCtx.createGain();
   musicMaster.gain.value = 0.55;
+
+  let chainTail = musicMaster;
+  if (typeof audioCtx.createBiquadFilter === "function") {
+    musicShelf = audioCtx.createBiquadFilter();
+    musicShelf.type = "highshelf";
+    const t = audioCtx.currentTime;
+    musicShelf.frequency.setValueAtTime(4000, t);
+    musicShelf.gain     .setValueAtTime( -8,  t);
+    chainTail.connect(musicShelf);
+    chainTail = musicShelf;
+  } else {
+    musicShelf = null;
+  }
+
   if (typeof audioCtx.createDynamicsCompressor === "function") {
     musicComp = audioCtx.createDynamicsCompressor();
     const t = audioCtx.currentTime;
-    musicComp.threshold.setValueAtTime(-18, t);
-    musicComp.knee     .setValueAtTime( 20, t);
-    musicComp.ratio    .setValueAtTime(  4, t);
+    musicComp.threshold.setValueAtTime(-22, t);
+    musicComp.knee     .setValueAtTime( 18, t);
+    musicComp.ratio    .setValueAtTime(  6, t);
     musicComp.attack   .setValueAtTime( 0.005, t);
     musicComp.release  .setValueAtTime( 0.20,  t);
-    musicMaster.connect(musicComp);
+    chainTail.connect(musicComp);
     musicComp.connect(audioCtx.destination);
   } else {
     musicComp = null;
-    musicMaster.connect(audioCtx.destination);
+    chainTail.connect(audioCtx.destination);
   }
   /* ev47: stereo bus.  Two StereoPannerNodes hard-panned −1 / +1
    * sit between the score/board voice graphs and the master gain.
@@ -6790,11 +6814,13 @@ function startMusic() {
   } else {
     musicSchedTimer = setInterval(musicSchedulerTick, MUSIC_SCHED_MS);
   }
-  setAction(musicStereo
-    ? ("music on (stereo · score-CA L / meta-CA R" +
-       (musicComp ? " · compressor" : "") + ")")
-    : ("music on (mono · stereo unsupported" +
-       (musicComp ? " · compressor" : "") + ")"));
+  {
+    const fx = (musicShelf ? " · hi-shelf" : "") +
+               (musicComp  ? " · compressor" : "");
+    setAction(musicStereo
+      ? "music on (stereo · score-CA L / meta-CA R" + fx + ")"
+      : "music on (mono · stereo unsupported"      + fx + ")");
+  }
 }
 function stopMusic() {
   if (!musicOn) return;
