@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3D Sign Language Visualizer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', sans-serif; background: #0a0a1a; color: #e0e0e0; overflow: hidden; }
+#canvas-container { width: 100vw; height: 100vh; }
+.ui-panel {
+  position: fixed; top: 10px; left: 10px;
+  background: rgba(15,15,30,0.92); border: 1px solid #333;
+  border-radius: 12px; padding: 14px; width: 280px;
+  max-height: calc(100vh - 20px); overflow-y: auto;
+  font-size: 13px; z-index: 100;
+}
+.ui-panel h2 { margin-bottom: 10px; color: #7af; font-size: 16px; }
+.ui-panel label { display: block; margin-top: 8px; color: #aaa; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+select, input[type="range"], button {
+  width: 100%; padding: 6px 8px; margin-top: 3px;
+  background: #1a1a2e; border: 1px solid #444; border-radius: 6px;
+  color: #ddd; font-size: 13px; cursor: pointer;
+}
+select:focus, input:focus { outline: none; border-color: #7af; }
+button { background: #2a4a7a; border-color: #5a8acf; font-weight: 600; margin-top: 10px; transition: all 0.2s; }
+button:hover { background: #3a6aaa; transform: translateY(-1px); }
+.btn-row { display: flex; gap: 6px; }
+.btn-row button { flex: 1; }
+.timeline-bar {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  height: 60px; background: rgba(15,15,30,0.95);
+  border-top: 1px solid #333; display: flex;
+  align-items: center; padding: 0 20px; gap: 15px; z-index: 100;
+}
+.timeline-bar label { color: #888; font-size: 11px; white-space: nowrap; }
+#timeline-slider { flex: 1; accent-color: #7af; height: 6px; }
+#frame-info { min-width: 80px; text-align: right; color: #7af; font-family: monospace; font-size: 14px; }
+.play-controls { display: flex; gap: 6px; align-items: center; }
+.play-btn { width: 36px; height: 36px; padding: 0; font-size: 16px; border-radius: 50%; }
+.info-badge {
+  position: fixed; top: 10px; right: 10px;
+  background: rgba(15,15,30,0.9); border: 1px solid #333;
+  border-radius: 8px; padding: 10px 14px; font-size: 11px; z-index: 100;
+}
+.info-badge span { color: #7af; }
+.help-text { color: #666; font-size: 10px; margin-top: 10px; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<div class="ui-panel">
+  <h2>✋ Sign Language 3D</h2>
+  
+  <label>Predefined Sign</label>
+  <select id="sign-select">
+    <option value="hello">Hello (Wave)</option>
+    <option value="thankyou">Thank You</option>
+    <option value="iloveyou">I Love You</option>
+    <option value="yes">Yes</option>
+    <option value="no">No</option>
+    <option value="please">Please</option>
+    <option value="sorry">Sorry</option>
+    <option value="help">Help</option>
+    <option value="abc">A-B-C (Fingerspell)</option>
+    <option value="fist">Closed Fist</option>
+    <option value="open">Open Hands</option>
+    <option value="point">Point Forward</option>
+  </select>
+  
+  <label>Animation Speed</label>
+  <input type="range" id="speed-slider" min="0.1" max="3" step="0.1" value="1">
+  
+  <label>Cylinder Size</label>
+  <input type="range" id="size-slider" min="0.3" max="2" step="0.1" value="1">
+  
+  <div class="btn-row">
+    <button onclick="resetCamera()">🎯 Reset View</button>
+    <button onclick="toggleWireframe()">📐 Wire</button>
+  </div>
+  
+  <div class="btn-row">
+    <button onclick="exportPose()">💾 Export Pose</button>
+    <button onclick="toggleLabels()">🏷️ Labels</button>
+  </div>
+  
+  <button onclick="randomSign()" style="background:#4a3a6a;border-color:#8a6acf;">🎲 Random Sign</button>
+  
+  <div class="help-text">
+    🖱️ Drag to rotate • Scroll to zoom<br>
+    Right-click drag to pan<br>
+    30 cylinders = 10 fingers × 3 segments
+  </div>
+</div>
+
+<div class="info-badge">
+  Segments: <span>30</span> | 
+  Hands: <span>2</span><br>
+  FPS: <span id="fps">--</span>
+</div>
+
+<div class="timeline-bar">
+  <div class="play-controls">
+    <button class="play-btn" onclick="skipToStart()">⏮</button>
+    <button class="play-btn" onclick="togglePlay()" id="play-btn">▶</button>
+    <button class="play-btn" onclick="skipToEnd()">⏭</button>
+  </div>
+  <label>Frame:</label>
+  <input type="range" id="timeline-slider" min="0" max="100" value="0" step="1">
+  <span id="frame-info">0 / 100</span>
+  <label>Speed:</label>
+  <input type="range" id="tl-speed" min="0.25" max="4" step="0.25" value="1" style="width:80px;">
+</div>
+
+<div id="canvas-container"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+// ===== SCENE SETUP =====
+const container = document.getElementById('canvas-container');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0a1a);
+
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.set(0, 2, 12);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+container.appendChild(renderer.domElement);
+
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true; controls.dampingFactor = 0.08;
+controls.target.set(0, 1, 0);
+
+// Lighting
+scene.add(new THREE.AmbientLight(0x404070, 0.6));
+const keyLight = new THREE.DirectionalLight(0xffffff, 0.8);
+keyLight.position.set(5, 10, 7); keyLight.castShadow = true; scene.add(keyLight);
+const fillLight = new THREE.DirectionalLight(0x6688ff, 0.3);
+fillLight.position.set(-5, 5, -5); scene.add(fillLight);
+const rimLight = new THREE.DirectionalLight(0xff8866, 0.2);
+rimLight.position.set(0, 5, -10); scene.add(rimLight);
+
+// Grid + helpers
+const gridHelper = new THREE.GridHelper(20, 20, 0x222244, 0x161630);
+gridHelper.position.y = -2; scene.add(gridHelper);
+
+// ===== HAND ANATOMY DATA =====
+// Each hand: thumb(3) + 4 fingers×3 = 15 segments per hand × 2 = 30
+const HAND_STRUCTURE = [
+  // Left hand (segments 0-14)
+  { name: 'L_Thumb_1', hand: 'left', finger: 'thumb', segment: 0, parent: 'palm_L', len: 0.35, radius: 0.12 },
+  { name: 'L_Thumb_2', hand: 'left', finger: 'thumb', segment: 1, parent: 'L_Thumb_1', len: 0.3, radius: 0.1 },
+  { name: 'L_Thumb_3', hand: 'left', finger: 'thumb', segment: 2, parent: 'L_Thumb_2', len: 0.25, radius: 0.08 },
+  { name: 'L_Index_1', hand: 'left', finger: 'index', segment: 0, parent: 'palm_L', len: 0.38, radius: 0.1 },
+  { name: 'L_Index_2', hand: 'left', finger: 'index', segment: 1, parent: 'L_Index_1', len: 0.32, radius: 0.085 },
+  { name: 'L_Index_3', hand: 'left', finger: 'index', segment: 2, parent: 'L_Index_2', len: 0.28, radius: 0.07 },
+  { name: 'L_Middle_1', hand: 'left', finger: 'middle', segment: 0, parent: 'palm_L', len: 0.42, radius: 0.105 },
+  { name: 'L_Middle_2', hand: 'left', finger: 'middle', segment: 1, parent: 'L_Middle_1', len: 0.36, radius: 0.09 },
+  { name: 'L_Middle_3', hand: 'left', finger: 'middle', segment: 2, parent: 'L_Middle_2', len: 0.3, radius: 0.075 },
+  { name: 'L_Ring_1', hand: 'left', finger: 'ring', segment: 0, parent: 'palm_L', len: 0.39, radius: 0.1 },
+  { name: 'L_Ring_2', hand: 'left', finger: 'ring', segment: 1, parent: 'L_Ring_1', len: 0.33, radius: 0.085 },
+  { name: 'L_Ring_3', hand: 'left', finger: 'ring', segment: 2, parent: 'L_Ring_2', len: 0.27, radius: 0.07 },
+  { name: 'L_Pinky_1', hand: 'left', finger: 'pinky', segment: 0, parent: 'palm_L', len: 0.3, radius: 0.085 },
+  { name: 'L_Pinky_2', hand: 'left', finger: 'pinky', segment: 1, parent: 'L_Pinky_1', len: 0.24, radius: 0.07 },
+  { name: 'L_Pinky_3', hand: 'left', finger: 'pinky', segment: 2, parent: 'L_Pinky_2', len: 0.2, radius: 0.06 },
+  // Right hand (segments 15-29)
+  { name: 'R_Thumb_1', hand: 'right', finger: 'thumb', segment: 0, parent: 'palm_R', len: 0.35, radius: 0.12 },
+  { name: 'R_Thumb_2', hand: 'right', finger: 'thumb', segment: 1, parent: 'R_Thumb_1', len: 0.3, radius: 0.1 },
+  { name: 'R_Thumb_3', hand: 'right', finger: 'thumb', segment: 2, parent: 'R_Thumb_2', len: 0.25, radius: 0.08 },
+  { name: 'R_Index_1', hand: 'right', finger: 'index', segment: 0, parent: 'palm_R', len: 0.38, radius: 0.1 },
+  { name: 'R_Index_2', hand: 'right', finger: 'index', segment: 1, parent: 'R_Index_1', len: 0.32, radius: 0.085 },
+  { name: 'R_Index_3', hand: 'right', finger: 'index', segment: 2, parent: 'R_Index_2', len: 0.28, radius: 0.07 },
+  { name: 'R_Middle_1', hand: 'right', finger: 'middle', segment: 0, parent: 'palm_R', len: 0.42, radius: 0.105 },
+  { name: 'R_Middle_2', hand: 'right', finger: 'middle', segment: 1, parent: 'R_Middle_1', len: 0.36, radius: 0.09 },
+  { name: 'R_Middle_3', hand: 'right', finger: 'middle', segment: 2, parent: 'R_Middle_2', len: 0.3, radius: 0.075 },
+  { name: 'R_Ring_1', hand: 'right', finger: 'ring', segment: 0, parent: 'palm_R', len: 0.39, radius: 0.1 },
+  { name: 'R_Ring_2', hand: 'right', finger: 'ring', segment: 1, parent: 'R_Ring_1', len: 0.33, radius: 0.085 },
+  { name: 'R_Ring_3', hand: 'right', finger: 'ring', segment: 2, parent: 'R_Ring_2', len: 0.27, radius: 0.07 },
+  { name: 'R_Pinky_1', hand: 'right', finger: 'pinky', segment: 0, parent: 'palm_R', len: 0.3, radius: 0.085 },
+  { name: 'R_Pinky_2', hand: 'right', finger: 'pinky', segment: 1, parent: 'R_Pinky_1', len: 0.24, radius: 0.07 },
+  { name: 'R_Pinky_3', hand: 'right', finger: 'pinky', segment: 2, parent: 'R_Pinky_2', len: 0.2, radius: 0.06 },
+];
+
+// Palm base positions for attachment points
+const PALM_ATTACHMENTS = {
+  palm_L:  { pos: [-0.8, 2.2, 0], rot: [0, 0, 0] },
+  palm_R:  { pos: [0.8, 2.2, 0], rot: [0, 0, 0] },
+  // Left finger bases on palm surface
+  L_Thumb_1:   { offset: [-1.05, 2.25, 0.15], baseRot: [0, 0, 0.4] },
+  L_Index_1:   { offset: [-0.95, 2.55, 0], baseRot: [0, 0, 0.05] },
+  L_Middle_1:  { offset: [-0.8, 2.58, 0], baseRot: [0, 0, 0] },
+  L_Ring_1:    { offset: [-0.65, 2.55, 0], baseRot: [0, 0, -0.05] },
+  L_Pinky_1:   { offset: [-0.52, 2.48, 0], baseRot: [0, 0, -0.15] },
+  R_Thumb_1:   { offset: [1.05, 2.25, 0.15], baseRot: [0, 0, -0.4] },
+  R_Index_1:   { offset: [0.95, 2.55, 0], baseRot: [0, 0, -0.05] },
+  R_Middle_1:  { offset: [0.8, 2.58, 0], baseRot: [0, 0, 0] },
+  R_Ring_1:    { offset: [0.65, 2.55, 0], baseRot: [0, 0, 0.05] },
+  R_Pinky_1:   { offset: [0.52, 2.48, 0], baseRot: [0, 0, 0.15] },
+};
+
+// Color palette for segments
+const COLORS = {
+  skin: 0xffcc99,
+  skinDark: 0xeebb88,
+  joint: 0xddaa77,
+  leftHand: 0x66aaff,
+  rightHand: 0xff6666,
+  thumb: 0xff9966,
+  index: 0x99ff99,
+  middle: 0xffff66,
+  ring: 0xff99ff,
+  pinky: 0x99ffff,
+};
+
+let useColorCoding = true;
+
+// ===== CREATE CYLINDERS =====
+const cylinders = []; // mesh objects
+const joints = [];    // joint spheres
+const labels = [];    // sprite labels
+
+const cylGeoCache = new Map();
+function getCylGeometry(len, radius) {
+  const key = `${len.toFixed(2)}_${radius.toFixed(3)}`;
+  if (!cylGeoCache.has(key)) {
+    cylGeoCache.set(key, new THREE.CylinderGeometry(radius, radius, len, 10));
+  }
+  return cylGeoCache.get(key);
+}
+
+const jointGeo = new THREE.SphereGeometry(0.06, 8, 8);
+
+HAND_STRUCTURE.forEach((seg, i) => {
+  const color = useColorCoding 
+    ? ([COLORS.thumb, COLORS.index, COLORS.middle, COLORS.ring, COLORS.pinky])[['thumb','index','middle','ring','pinky'].indexOf(seg.finger)]
+    : (seg.hand === 'left' ? COLORS.leftHand : COLORS.rightHand);
+  
+  const mat = new THREE.MeshPhongMaterial({ 
+    color, shininess: 30, specular: 0x444444 
+  });
+  const mesh = new THREE.Mesh(getCylGeometry(seg.len, seg.radius), mat);
+  mesh.castShadow = true;
+  mesh.userData = { segIndex: i, ...seg };
+  scene.add(mesh);
+  cylinders.push(mesh);
+  
+  // Joint sphere at base
+  const jMat = new THREE.MeshPhongMaterial({ color: COLORS.joint, shininess: 20 });
+  const joint = new THREE.Mesh(jointGeo, jMat);
+  joint.userData = { isJoint: true, segIndex: i };
+  scene.add(joint);
+  joints.push(joint);
+});
+
+// Palm indicators
+const palmMatL = new THREE.MeshPhongMaterial({ color: COLORS.leftHand, transparent: true, opacity: 0.15 });
+const palmMatR = new THREE.MeshPhongMaterial({ color: COLORS.rightHand, transparent: true, opacity: 0.15 });
+const palmGeo = new THREE.BoxGeometry(0.6, 0.15, 0.75);
+const palmL = new THREE.Mesh(palmGeo, palmMatL);
+palmL.position.set(-0.8, 2.15, 0);
+scene.add(palmL);
+const palmR = new THREE.Mesh(palmGeo, palmMatR);
+palmR.position.set(0.8, 2.15, 0);
+scene.add(palmR);
+
+// ===== POSE SYSTEM =====
+// A pose is array of 30 objects, each with { rx, ry, rz } rotation in radians
+// relative to parent segment's end
+
+function createDefaultPose() {
+  return HAND_STRUCTURE.map(seg => ({ rx: 0, ry: 0, rz: 0 }));
+}
+
+function lerpPose(a, b, t) {
+  return a.map((v, i) => ({
+    rx: v.rx + (b[i].rx - v.rx) * t,
+    ry: v.ry + (b[i].ry - v.ry) * t,
+    rz: v.rz + (b[i].rz - v.rz) * t,
+  }));
+}
+
+// ===== SIGN DEFINITIONS =====
+// Each sign: array of { pose, duration } frames
+const SIGNS = {};
+
+// Helper: create a pose from finger bend angles (in degrees)
+// fingers: { thumb:[bend,bend,bend], index:[bend,bend,bend], ... }
+// bends are in degrees, converted to radians
+function makeFingerPose(leftFingers, rightFingers, leftWrist={rx:0,ry:0,rz:0}, rightWrist={rx:0,ry:0,rz:0}) {
+  const fingerOrder = ['thumb','index','middle','ring','pinky'];
+  const pose = [];
+  
+  for (let h = 0; h < 2; h++) {
+    const fingers = h === 0 ? leftFingers : rightFingers;
+    const wrist = h === 0 ? leftWrist : rightWrist;
+    
+    for (const fi of fingerOrder) {
+      const bends = fingers[fi] || [0,0,0];
+      for (let s = 0; s < 3; s++) {
+        let bend = bends[s] || 0;
+        // Progressive bend: each segment adds to previous
+        if (fi === 'thumb') {
+          if (s === 0) pose.push({ rx: bend * Math.PI/180, ry: 0, rz: (bends[0]*0.3) * Math.PI/180 });
+          else if (s === 1) pose.push({ rx: bend * Math.PI/180, ry: 0, rz: 0 });
+          else pose.push({ rx: bend * Math.PI/180, ry: 0, rz: 0 });
+        } else {
+          // Fingers curl around X axis (flexion)
+          let rx = bend * Math.PI/180;
+          // Slight natural spread on Z for different fingers
+          let rz = 0;
+          if (s === 0) {
+            rz = (fi === 'index' ? 3 : fi === 'pinky' ? -5 : fi === 'ring' ? -2 : 0) * Math.PI/180;
+          }
+          pose.push({ rx, ry: 0, rz });
+        }
+      }
+    }
+  }
+  return pose;
+}
+
+// --- HELLO (wave) ---
+SIGNS.hello = {
+  frames: (() => {
+    const frames = [];
+    for (let f = 0; f <= 60; f++) {
+      const t = f / 60;
+      const waveAngle = Math.sin(t * Math.PI * 3) * 35 * (1 - t*0.3);
+      const openHand = { thumb:[10,5,0], index:[0,0,0], middle:[0,0,0], ring:[0,0,0], pinky:[5,0,0] };
+      const fist = { thumb:[30,20,10], index:[90,80,60], middle:[95,85,65], ring:[90,80,60], pinky:[85,75,55] };
+      
+      const blend = 0.7 + 0.3 * Math.abs(Math.sin(t * Math.PI * 3));
+      const leftF = {
+        thumb: [10*(1-blend)+30*blend, 5*(1-blend)+20*blend, 0+10*blend],
+        index: [0+90*blend, 0+80*blend, 0+60*blend],
+        middle: [0+95*blend, 0+85*blend, 0+65*blend],
+        ring: [0+90*blend, 0+80*blend, 0+60*blend],
+        pinky: [5+80*blend, 0+75*blend, 0+55*blend],
+      };
+      
+      frames.push({
+        pose: makeFingerPose(
+          leftF,
+          { thumb:[10,5,0], index:[0,0,0], middle:[0,0,0], ring:[0,0,0], pinky:[5,0,0] },
+          { rx: 0, ry: 0, rz: waveAngle * Math.PI/180 },
+          { rx: 0, ry: 0, rz: 0 }
+        ),
+        duration: 50
+      });
+    }
+    return frames;
+  })()
+};
+
+// --- THANK YOU ---
+SIGNS.thankyou = {
+  frames: (() => {
+    const frames = [];
+    // Start: flat open hand near chin, move forward and down to open palm
+    for (let f = 0; f <= 80; f++) {
+      const t = f / 80;
+      const openFlat = { thumb:[5,0,-5], index:[0,0,0], middle:[0,0,0], ring:[-2,0,0], pinky:[5,0,0] };
+      // Move from chin level down and forward
+      const yOff = (1-t) * 0.8;
+      const zOff = t * 1.5 - 0.3;
+      frames.push({
+        pose: makeFingerPose(
+          openFlat,
+          { thumb:[30,20,10], index:[90,80,60], middle:[95,85,65], ring:[90,80,60], pinky:[85,75,55] },
+          { rx: -20*t*Math.PI/180, ry: 0, rz: -10*Math.PI/180 },
+          { rx: 0, ry: 0, rz: 0 }
+        ),
+        duration: 50, handOffset: { left: [0, yOff, zOff] }
+      });
+    }
+    // Hold
+    for (let f = 0; f < 20; f++) {
+      frames.push({ ...frames[frames.length-1] });
+    }
+    return frames;
+  })()
+};
+
+// --- I LOVE YOU (hand shape: thumb+index+pink out, others down) ---
+SIGNS.iloveyou = {
+  frames: (() => {
+    const frames = [];
+    const ilyShape = { thumb:[5,0,-10], index:[0,0,0], middle:[90,90,80], ring:[90,80,70], pinky:[0,0,0] };
+    for (let f = 0; f <= 40; f++) {
+      const t = f / 40;
+      const shake = Math.sin(f * 0.3) * 3;
+      frames.push({
+        pose: makeFingerPose(
+          ilyShape,
+          { thumb:[30,20,10], index:[90,80,60], middle:[95,85,65], ring:[90,80,60], pinky:[85,75,55] },
+          { rx: 0, ry: shake*Math.PI/180, rz: 10*Math.PI/180 },
+          { rx: 0, ry: 0, rz: 0 }
+        ),
+        duration: 60
+      });
+    }
+    return frames;
+  })()
+};
+
+// --- YES (fist nodding like a head nod) ---
+SIGNS.yes = {
+  frames: (() => {
+    const frames = [];
+    const fist = { thumb:[30,20,10], index:[90,80,60], middle:[95,85,65], ring:[90,80,60], pinky:[85,75,55] };
+    for (let f = 0; f <= 60; f++) {
+      const t = f / 60;
+      const nod = Math.sin(t * Math.PI * 4) * 15;
+      frames.push({
+        pose: makeFingerPose(fist, fist,
+          { rx: nod * Math.PI/180, ry: 0, rz: 0 },
+          { rx: nod * Math.PI/180, ry: 0, rz: 0 }
+        ),
+        duration: 45
+      });
+    }
+    return frames;
+  })()
+};
+
+// --- NO (flat hand waves side to side) ---
+SIGNS.no = {
+  frames: (() => {
+    const frames = [];
+    const open = { thumb:[5,0,-5], index:[0,0,0], middle:[0,0,0], ring:[-2,0,0], pinky:[5,0,0] };
+    for (let f = 0; f <= 60; f++) {
+      const t = f / 60;
+      const wave = Math.sin(t * Math.PI * 4) * 25;
+      frames.push({
+        pose: makeFingerPose(open, open,
+          { rx: 0, ry: 0, rz: wave * Math.PI/180 },
+          { rx: 0, ry: 0, rz: wave * Math.PI/180 }
+        ),
+        duration: 45
+      });
+    }
+    return frames;
+  })()
+};
+
+// --- PLEASE (flat hand circles on chest) ---
+SIGNS.please = {
+  frames: (() => {
+    const frames = [];
+    const open = { thumb:[5,0,-5], index:[0,0,0], middle:[0,0,0], ring:[-2,0,0], pinky:[5,0,0] };
+    for (let f = 0; f <= 80; f++) {
+      const t = f / 80;
+      const angle = t * Math.PI * 2;
+      const cx = Math.sin(angle) * 0.3;
+      const cy = 2.6 + Math.cos(angle) * 0.2 - 0.4;
+      frames.push({
+        pose: makeFingerPose(open, { thumb:[30,20,10], index:[90,80,60], middle:[95,85,65], ring:[90,80,60], pinky:[85,75,55] },
+          { rx: -20*Math.PI/180, ry: 0, rz: 0 },
+          { rx: 0, ry: 0, rz: 0 }
+        ),
+        duration: 50, handOffset: { left: [cx-0.8, cy-2.2, 0] }
+      });
+    }
+    return frames;
+  })()
+};
+
+// --- SORRY (fist rubbed on chest in circles) ---
+SIGNS.sorry = {
+  frames: (() => {
+    const frames = [];
+    const fist = { thumb:[30,20,10], index:[90,80,60], middle:[95,85,65], ring:[90,80,60], pinky:[85,75,55] };
+    for (let f = 0; f <= 60; f++) {
+      const t = f / 60;
+      const angle = t * Math.PI * 2.5;
+      const cy = 2.5 + Math.sin(angle) * 0.15 - 0.3;
+      frames.push({
+        pose: makeFingerPose(fist, fist,
+          { rx: -30*Math.PI/180, ry: 0, rz: Math.sin(angle)*5*Math.PI/180 },
+          { rx: 0, ry: 0, rz: 0 }
+        ),
+        duration: 50, handOffset: { left: [-0.8, cy-2.2, 0.1] }
+      });
+    }
+    return frames;
+  })()
+};
+
+// --- HELP (both flat hands up, palms out, slight shake) ---
+SIGNS.help = {
+  frames: (() => {
+    const frames = [];
+    const open = { thumb:[5,0,-5], index:[0,0,0], middle:[0,0,0], ring:[-2,0,0], pinky:[5,0,0] };
+    for (let f = 0; f <= 50; f++) {
+      const t = f / 50;
+      const shake = Math.sin(f * 0.4) * 2;
+      frames.push({
+        pose: makeFingerPose(open, open,
+          { rx: -15*Math.PI/180, ry: shake*Math.PI/180, rz: 15*Math.PI/180 },
+          { rx: -15*Math.PI/180, ry: -shake*Math.PI/180, rz: -15*Math.PI/180 }
+        ),
+        duration: 55
+      });
+    }
+    return frames;
+  })()
+};
+
+// --- ABC Fingerspelling ---
+SIGNS.abc = {
+  frames: (() => {
+    const frames = [];
+    const letterPoses = [
+      // A: fist with thumb on side
+      { thumb:[0,0,0], index:[90,90,80], middle:[95,85,65], ring:[90,80,60], pinky:[85,75,55] },
+      // B: flat hand, thumb tucked
+      { thumb:[40,30,0], index:[0,0,0], middle:[0,0,0], ring:[0,0,0], pinky:[0,0,0] },
+      // C: curved open hand
+      { thumb:[10,5,0], index:[30,20,10], middle:[30,20,10], ring:[30,20,10], pinky:[30,20,10] },
+    ];
+    
+    for (let li = 0; li < letterPoses.length; li++) {
+      // Transition in
+      for (let f = 0; f <= 15; f++) {
+        const prev = li > 0 ? letterPoses[li-1] : letterPoses[0];
+        const curr = letterPoses[li];
+        const tf = f / 15;
+        const blended = {};
+        for (const k of Object.keys(curr)) {
+          blended[k] = curr[k].map((v,i) => prev[k][i] + (v - prev[k][i]) * easeOut(tf));
+        }
+        frames.push({
+          pose: makeFingerPose(blended, { thumb:[30,20,10], index:[90,80,60], middle:[95,85,65], ring:[90,80,60], pinky:[85,75,55] },
+            { rx: 0, ry: 0, rz: 0 }, { rx: 0, ry: 0, rz: 0 }),
+          duration: 55
+        });
+      }
+      // Hold
+      for (let f = 0; f < 15; f++) {
+        frames.push(frames[frames.length-1]);
+      }
+    }
+    return frames;
+  })()
+};
+
+// --- FIST ---
+SIGNS.fist = {
+  frames: Array.from({length: 30}, () => ({
+    pose: makeFingerPose(
+      { thumb:[30,20,10], index:[90,80,60], middle:[95,85,65], ring:[90,80,60], pinky:[85,75,55] },
+      { thumb:[30,20,10], index:[90,80,60], middle:[95,85,65], ring:[90,80,60], pinky:[85,75,55] }
+    ), duration: 50
+  }))
+};
+
+// --- OPEN HANDS ---
+SIGNS.open = {
+  frames: Array.from({length: 30}, () => ({
+    pose: makeFingerPose(
+      { thumb:[5,0,-5], index:[0,0,0], middle:[0,0,0], ring:[-2,0,0], pinky:[5,0,0] },
+      { thumb:[5,0,-5], index:[0,0,0], middle:[0,0,0], ring:[-2,0,0], pinky:[5,0,0] }
+    ), duration: 50
+  }))
+};
+
+// --- POINT FORWARD ---
+SIGNS.point = {
+  frames: (() => {
+    const frames = [];
+    const pointShape = { thumb:[20,10,0], index:[0,0,0], middle:[90,80,60], ring:[90,80,60], pinky:[85,75,55] };
+    for (let f = 0; f <= 40; f++) {
+      const t = f / 40;
+      const poke = Math.min(t * 1.5, 1) * 0.3;
+      frames.push({
+        pose: makeFingerPose(pointShape, pointShape,
+          { rx: -10*Math.PI/180, ry: 0, rz: 0 },
+          { rx: -10*Math.PI/180, ry: 0, rz: 0 }
+        ),
+        duration: 50, handOffset: { left: [0, 0, poke], right: [0, 0, poke] }
+      });
+    }
+    for (let f = 0; f < 20; f++) frames.push(frames[frames.length-1]);
+    return frames;
+  })()
+};
+
+function easeOut(t) { return 1 - Math.pow(1 - t, 3); }
+
+// ===== APPLY POSE TO MESHES =====
+function applyPose(pose, handOffset) {
+  // Build world positions for each segment using forward kinematics
+  const worldInfo = []; // { position, rotation } for each of 30 segments
+  
+  // For simplicity: we compute each cylinder's position based on chain
+  // Starting from palm attachment points
+  
+  for (let i = 0; i < 30; i++) {
+    const seg = HAND_STRUCTURE[i];
+    const p = pose[i];
+    const mesh = cylinders[i];
+    const joint = joints[i];
+    
+    // Get parent position
+    let parentPos, parentRotQ;
+    
+    if (seg.segment === 0) {
+      // First segment of finger — attach to palm
+      const attach = PALM_ATTACHMENTS[seg.name];
+      const palmX = seg.hand === 'left' ? -0.8 : 0.8;
+      parentPos = new THREE.Vector3(
+        (attach.offset || [palmX, 2.55, 0])[0] + (handOffset?.[seg.hand === 'left' ? 'left' : 'right']?.[0] || 0),
+        (attach.offset || [palmX, 2.55, 0])[1] + (handOffset?.[seg.hand === 'left' ? 'left' : 'right']?.[1] || 0),
+        (attach.offset || [palmX, 2.55, 0])[2] + (handOffset?.[seg.hand === 'left' ? 'left' : 'right']?.[2] || 0)
+      );
+      parentRotQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(
+        (attach.baseRot || [0,0,0])[0],
+        (attach.baseRot || [0,0,0])[1],
+        (attach.baseRot || [0,0,0])[2]
+      ));
+    } else {
+      // Child segment — attach to parent's tip
+      const parentIdx = i - 1;
+      parentPos = worldInfo[parentIdx]?.pos?.clone() || new THREE.Vector3();
+      parentRotQ = worldInfo[parentIdx]?.rot?.clone() || new THREE.Quaternion();
+    }
+    
+    // Apply this segment's rotation
+    const localRot = new THREE.Quaternion().setFromEuler(new THREE.Euler(p.rx, p.ry, p.rz, 'XYZ'));
+    const totalRot = parentRotQ.clone().multiply(localRot);
+    
+    // Cylinder orientation: default cylinder is Y-up, we want it along the rotated Y
+    const meshQ = totalRot.clone();
+    mesh.quaternion.copy(meshQ);
+    
+    // Position: at parent position + half-length along rotated Y axis
+    const halfLen = seg.len / 2;
+    const dir = new THREE.Vector3(0, halfLen, 0).applyQuaternion(totalRot);
+    mesh.position.copy(parentPos).add(dir);
+    
+    // Store tip position for children
+    const tipDir = new THREE.Vector3(0, seg.len, 0).applyQuaternion(totalRot);
+    const tipPos = parentPos.clone().add(tipDir);
+    
+    worldInfo[i] = { pos: tipPos, rot: totalRot.clone() };
+    
+    // Joint sphere at base
+    joint.position.copy(parentPos);
+  }
+  
+  // Apply wrist rotations (apply to entire hand groups)
+  if (pose._wristL || pose._wristR) {
+    // This is handled via the first-segment offsets already
+  }
+}
+
+// ===== ANIMATION STATE =====
+let currentSign = SIGNS.hello;
+let currentFrame = 0;
+let frameTime = 0;
+let isPlaying = true;
+let playbackSpeed = 1;
+let sizeMultiplier = 1;
+let showLabels = false;
+
+// Timeline
+const timelineSlider = document.getElementById('timeline-slider');
+const frameInfoEl = document.getElementById('frame-info');
+
+function updateTimeline() {
+  if (!currentSign.frames.length) return;
+  const maxFrame = currentSign.frames.length - 1;
+  timelineSlider.max = maxFrame;
+  timelineSlider.value = currentFrame;
+  frameInfoEl.textContent = `${currentFrame} / ${maxFrame}`;
+}
+
+// ===== RENDER LOOP =====
+let lastTime = performance.now();
+let frameCount = 0;
+let fpsTime = 0;
+
+function animate(time) {
+  requestAnimationFrame(animate);
+  
+  const dt = time - lastTime;
+  lastTime = time;
+  
+  // FPS counter
+  frameCount++;
+  fpsTime += dt;
+  if (fpsTime >= 1000) {
+    document.getElementById('fps').textContent = frameCount;
+    frameCount = 0;
+    fpsTime = 0;
+  }
+  
+  // Animation
+  if (isPlaying && currentSign.frames.length > 0) {
+    frameTime += dt * playbackSpeed * 0.001;
+    const frameData = currentSign.frames[currentFrame];
+    const targetDuration = (frameData.duration || 50) / 1000;
+    
+    if (frameTime >= targetDuration) {
+      frameTime = 0;
+      currentFrame++;
+      if (currentFrame >= currentSign.frames.length) {
+        currentFrame = 0; // Loop
+      }
+      updateTimeline();
+    }
+    
+    // Interpolate between frames
+    const t = targetDuration > 0 ? Math.min(frameTime / targetDuration, 1) : 1;
+    const fromPose = currentSign.frames[currentFrame].pose;
+    const nextFrame = currentSign.frames[(currentFrame + 1) % currentSign.frames.length];
+    const toPose = nextFrame.pose;
+    
+    const interpPose = lerpPose(fromPose, toPose, easeOut(t));
+    applyPose(interpPose, currentSign.frames[currentFrame].handOffset);
+  } else if (currentSign.frames.length > 0) {
+    applyPose(currentSign.frames[currentFrame].pose, currentSign.frames[currentFrame].handOffset);
+  }
+  
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+animate(performance.now());
+
+// ===== UI HANDLERS =====
+document.getElementById('sign-select').addEventListener('change', e => {
+  const name = e.target.value;
+  if (SIGNS[name]) {
+    currentSign = SIGNS[name];
+    currentFrame = 0;
+    frameTime = 0;
+    updateTimeline();
+  }
+});
+
+document.getElementById('speed-slider').addEventListener('input', e => {
+  playbackSpeed = parseFloat(e.target.value);
+});
+
+document.getElementById('size-slider').addEventListener('input', e => {
+  sizeMultiplier = parseFloat(e.target.value);
+  cylinders.forEach((mesh, i) => {
+    const seg = HAND_STRUCTURE[i];
+    mesh.scale.setScalar(sizeMultiplier);
+  });
+  joints.forEach(j => j.scale.setScalar(sizeMultiplier));
+});
+
+document.getElementById('tl-speed').addEventListener('input', e => {
+  playbackSpeed = parseFloat(e.target.value);
+});
+
+timelineSlider.addEventListener('input', e => {
+  currentFrame = parseInt(e.target.value);
+  frameTime = 0;
+  updateTimeline();
+});
+
+function togglePlay() {
+  isPlaying = !isPlaying;
+  document.getElementById('play-btn').textContent = isPlaying ? '⏸' : '▶';
+}
+
+function skipToStart() { currentFrame = 0; frameTime = 0; updateTimeline(); }
+function skipToEnd() { currentFrame = currentSign.frames.length - 1; frameTime = 0; updateTimeline(); }
+
+function resetCamera() {
+  camera.position.set(0, 2, 12);
+  controls.target.set(0, 1, 0);
+  controls.update();
+}
+
+let wireframeMode = false;
+function toggleWireframe() {
+  wireframeMode = !wireframeMode;
+  cylinders.forEach(m => m.material.wireframe = wireframeMode);
+}
+
+function toggleLabels() {
+  showLabels = !showLabels;
+  labels.forEach(l => l.visible = showLabels);
+}
+
+function exportPose() {
+  if (!currentSign.frames.length) return;
+  const pose = currentSign.frames[currentFrame].pose;
+  const data = JSON.stringify(pose.map((p,i) => ({
+    segment: HAND_STRUCTURE[i].name,
+    rx: (p.rx * 180/Math.PI).toFixed(1) + '°',
+    ry: (p.ry * 180/Math.PI).toFixed(1) + '°',
+    rz: (p.rz * 180/Math.PI).toFixed(1) + '°'
+  })), null, 2);
+  console.log(data);
+  const blob = new Blob([data], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download='pose.json'; a.click();
+  URL.revokeObjectURL(url);
+}
+
+function randomSign() {
+  const keys = Object.keys(SIGNS);
+  const pick = keys[Math.floor(Math.random() * keys.length)];
+  document.getElementById('sign-select').value = pick;
+  currentSign = SIGNS[pick];
+  currentFrame = 0; frameTime = 0;
+  updateTimeline();
+}
+
+// Resize handler
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// Initialize
+updateTimeline();
+
+</script>
+</body>
+</html>
