@@ -1,0 +1,1465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Circuit Shredder: The Neon Overdrive</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #000; overflow: hidden; font-family: 'Courier New', monospace; color: #fff; }
+#gameContainer { position: relative; width: 100vw; height: 100vh; display: flex; align-items: center; justify-content: center; }
+canvas { display: block; image-rendering: pixelated; }
+#ui { position: absolute; top: 10px; left: 10px; z-index: 10; pointer-events: none; }
+#comboMeter { width: 200px; height: 20px; background: rgba(0,0,0,0.7); border: 2px solid #0ff; border-radius: 10px; overflow: hidden; }
+#comboFill { height: 100%; width: 0%; background: linear-gradient(90deg, #0f0, #ff0, #f0f, #0ff); transition: width 0.1s; }
+#comboText { position: absolute; top: 35px; left: 0; font-size: 14px; color: #0ff; text-shadow: 0 0 10px #0ff; }
+#scoreText { position: absolute; top: 55px; left: 0; font-size: 18px; color: #ff0; text-shadow: 0 0 10px #ff0; }
+#levelText { position: absolute; top: 10px; right: 10px; font-size: 16px; color: #f0f; text-shadow: 0 0 10px #f0f; }
+#musicLayer { position: absolute; top: 35px; right: 10px; font-size: 12px; color: #0f0; text-shadow: 0 0 5px #0f0; }
+#message { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 28px; color: #fff; text-align: center; text-shadow: 0 0 20px #0ff, 0 0 40px #f0f; pointer-events: none; opacity: 0; transition: opacity 0.5s; z-index: 20; }
+#instructions { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); font-size: 12px; color: #888; text-align: center; pointer-events: none; z-index: 10; }
+#startScreen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 100; }
+#startScreen h1 { font-size: 42px; color: #0ff; text-shadow: 0 0 20px #0ff, 0 0 40px #f0f, 0 0 60px #ff0; margin-bottom: 10px; letter-spacing: 4px; }
+#startScreen h2 { font-size: 18px; color: #f0f; margin-bottom: 30px; letter-spacing: 2px; }
+#startScreen p { color: #888; max-width: 500px; line-height: 1.6; margin-bottom: 8px; font-size: 13px; }
+#startBtn { padding: 15px 40px; font-size: 20px; background: transparent; border: 2px solid #0ff; color: #0ff; cursor: pointer; font-family: 'Courier New', monospace; margin-top: 20px; transition: all 0.3s; letter-spacing: 2px; }
+#startBtn:hover { background: #0ff; color: #000; box-shadow: 0 0 30px #0ff; }
+.neon-text { animation: neonPulse 2s ease-in-out infinite alternate; }
+@keyframes neonPulse { from { text-shadow: 0 0 5px #0ff, 0 0 10px #0ff, 0 0 20px #0ff; } to { text-shadow: 0 0 10px #f0f, 0 0 20px #f0f, 0 0 40px #f0f; } }
+</style>
+</head>
+<body>
+<div id="gameContainer">
+<canvas id="game"></canvas>
+<div id="ui">
+  <div id="comboMeter"><div id="comboFill"></div></div>
+  <div id="comboText">COMBO: x1</div>
+  <div id="scoreText">SCORE: 0</div>
+</div>
+<div id="levelText">LEVEL: 1 - SILICON SUBURBS</div>
+<div id="musicLayer">♪ Triangle Wave</div>
+<div id="message"></div>
+<div id="instructions">[←→ or A/D] Move | [SPACE] Feedback Dash | [↑ or W] Jump | Dash ON THE BEAT for boost!</div>
+<div id="startScreen">
+  <h1 class="neon-text">⚡ CIRCUIT SHREDDER ⚡</h1>
+  <h2>THE NEON OVERDRIVE</h2>
+  <p>The Mute virus is deleting frequency from The Soundscape.</p>
+  <p>You are <strong style="color:#0ff">BPM</strong> — a guitar-pick robot with glowing LED eyes.</p>
+  <p><strong>Maintain your combo.</strong> Speed unlocks layers of sound.</p>
+  <p><strong>Dash on the beat.</strong> Feel the rhythm. Shred the silence.</p>
+  <p style="color:#f0f;margin-top:15px;">No Game Over — you only lose the beat.</p>
+  <button id="startBtn">▶ SHRED</button>
+</div>
+</div>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let W, H;
+
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// Audio setup
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+let masterGain, musicGain, sfxGain;
+let bgmBuffer = null;
+let audioLoaded = false;
+let beatTime = 0;
+let lastBeatTime = 0;
+let bpm = 140; // track BPM
+let beatInterval = 60 / bpm;
+
+// Load the user's audio track
+async function loadAudio() {
+  try {
+    const resp = await fetch('track.mp3');
+    const arrayBuf = await resp.arrayBuffer();
+    bgmBuffer = await audioCtx.decodeAudioData(arrayBuf);
+    audioLoaded = true;
+    console.log('Audio loaded:', bgmBuffer.duration);
+  } catch(e) {
+    console.log('Using procedural audio instead');
+    audioLoaded = false;
+  }
+}
+
+// Procedural audio fallback (chiptune prog metal)
+function playProceduralAudio() {
+  masterGain = audioCtx.createGain();
+  masterGain.gain.value = 0.3;
+  masterGain.connect(audioCtx.destination);
+  
+  musicGain = audioCtx.createGain();
+  musicGain.gain.value = 0.25;
+  musicGain.connect(masterGain);
+  
+  sfxGain = audioCtx.createGain();
+  sfxGain.gain.value = 0.4;
+  sfxGain.connect(masterGain);
+  
+  // Procedural chiptune engine
+  const schedTime = audioCtx.currentTime;
+  
+  function playNote(freq, time, dur, type='square', vol=0.15, detune=0) {
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = type;
+    osc.frequency.value = freq;
+    osc.detune.value = detune;
+    g.gain.setValueAtTime(vol, time);
+    g.gain.exponentialRampToValueAtTime(0.001, time + dur);
+    osc.connect(g);
+    g.connect(musicGain);
+    osc.start(time);
+    osc.stop(time + dur);
+  }
+  
+  // Bass pattern (triangle wave feel)
+  const bassNotes = [55, 55, 82.41, 73.42, 65.41, 65.41, 98, 87.31];
+  let beatIdx = 0;
+  
+  function scheduleBeat() {
+    if (!game.running) return;
+    const now = audioCtx.currentTime;
+    const beatDur = 60 / bpm * 0.5; // 8th notes
+    
+    // Bass
+    if (beatIdx % 2 === 0) {
+      const bnote = bassNotes[(beatIdx/2) % bassNotes.length];
+      playNote(bnote, now, beatDur * 1.8, 'triangle', 0.12 * gameState.musicLayer);
+      
+      if (gameState.musicLayer >= 2) {
+        // Noise percussion (snare-ish)
+        const noiseBuf = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.08, audioCtx.sampleRate);
+        const data = noiseBuf.getChannelData(0);
+        for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+        const noiseSrc = audioCtx.createBufferSource();
+        const ng = audioCtx.createGain();
+        noiseSrc.buffer = noiseBuf;
+        ng.gain.setValueAtTime(0.06 * (gameState.musicLayer - 1), now);
+        ng.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+        noiseSrc.connect(ng);
+        ng.connect(musicGain);
+        noiseSrc.start(now);
+      }
+    }
+    
+    if (gameState.musicLayer >= 3) {
+      // Lead melodies (prog metal arpeggios)
+      const leadPatterns = [
+        [220, 277.18, 329.63, 440],
+        [196, 246.94, 293.66, 392],
+        [261.63, 329.63, 392, 523.25],
+        [233.08, 293.66, 349.23, 466.16]
+      ];
+      const pat = leadPatterns[Math.floor(beatIdx/4) % leadPatterns.length];
+      const note = pat[beatIdx % 4];
+      playNote(note, now, beatDur * 0.8, 'sawtooth', 0.05 * (gameState.musicLayer - 2), Math.random()*20-10);
+    }
+    
+    lastBeatTime = now;
+    beatIdx++;
+    setTimeout(scheduleBeat, beatDur * 500);
+  }
+  
+  scheduleBeat();
+}
+
+function playDashSound(onBeat) {
+  if (!audioCtx || !sfxGain) return;
+  const now = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(onBeat ? 880 : 440, now);
+  osc.frequency.exponentialRampToValueAtTime(onBeat ? 1760 : 660, now + 0.15);
+  g.gain.setValueAtTime(onBeat ? 0.25 : 0.12, now);
+  g.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+  osc.connect(g);
+  g.connect(sfxGain);
+  osc.start(now);
+  osc.stop(now + 0.2);
+}
+
+function playHitSound() {
+  if (!audioCtx || !sfxGain) return;
+  const now = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  osc.type = 'square';
+  osc.frequency.setValueAtTime(150, now);
+  osc.frequency.exponentialRampToValueAtTime(50, now + 0.3);
+  g.gain.setValueAtTime(0.2, now);
+  g.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+  osc.connect(g);
+  g.connect(sfxGain);
+  osc.start(now);
+  osc.stop(now + 0.3);
+}
+
+function playAmplifierSound() {
+  if (!audioCtx || !sfxGain) return;
+  const now = audioCtx.currentTime;
+  for (let i = 0; i < 3; i++) {
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.value = 220 * (i+1);
+    g.gain.setValueAtTime(0.15, now + i*0.05);
+    g.gain.exponentialRampToValueAtTime(0.001, now + i*0.05 + 0.4);
+    osc.connect(g);
+    g.connect(sfxGain);
+    osc.start(now + i*0.05);
+    osc.stop(now + i*0.05 + 0.4);
+  }
+}
+
+function playVictorySound() {
+  if (!audioCtx || !sfxGain) return;
+  const now = audioCtx.currentTime;
+  [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => {
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = f;
+    g.gain.setValueAtTime(0.2, now + i*0.15);
+    g.gain.exponentialRampToValueAtTime(0.001, now + i*0.15 + 0.5);
+    osc.connect(g);
+    g.connect(sfxGain);
+    osc.start(now + i*0.15);
+    osc.stop(now + i*0.15 + 0.5);
+  });
+}
+
+// Game state
+const game = {
+  running: false,
+  state: 'menu', // menu, playing, levelTransition, boss, victory
+  currentLevel: 1,
+  maxLevels: 3,
+  score: 0,
+  cameraX: 0
+};
+
+const gameState = {
+  combo: 1,
+  maxCombo: 1,
+  comboDecay: 0,
+  musicLayer: 1, // 1=bass, 2=+percussion, 3=+leads
+  muffled: false,
+  muffleTimer: 0,
+  dashCooldown: 0,
+  invincible: 0,
+  bossPhase: false,
+  amplifiersHit: 0,
+  totalAmplifiers: 5
+};
+
+// Player (BPM)
+const player = {
+  x: 100, y: 300,
+  vx: 0, vy: 0,
+  w: 28, h: 36,
+  onGround: false,
+  dashing: false,
+  dashTime: 0,
+  dashDir: 0,
+  trail: [],
+  facingRight: true,
+  animFrame: 0,
+  animTimer: 0
+};
+
+// Physics
+const GRAVITY = 0.55;
+const JUMP_FORCE = -13;
+const SPEED = 5;
+const DASH_SPEED = 18;
+const DASH_DURATION = 12;
+const FRICTION = 0.85;
+const AIR_FRICTION = 0.95;
+
+// Input
+const keys = {};
+
+document.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'Space') e.preventDefault();
+});
+document.addEventListener('keyup', e => keys[e.code] = false);
+
+// Level data generator
+const levels = [];
+const LEVEL_LENGTHS = [3000, 4000, 5000];
+
+function generateLevel(levelNum) {
+  const platforms = [];
+  const obstacles = [];
+  const collectibles = [];
+  const powerLines = [];
+  const gravityWells = [];
+  const amplifiers = [];
+  const length = LEVEL_LENGTHS[levelNum - 1];
+  const groundY = H - 80;
+  
+  // Ground segments with gaps
+  let gx = 0;
+  while (gx < length) {
+    const segW = 200 + Math.random() * 300;
+    const gapW = levelNum === 1 ? 80 + Math.random() * 60 : 120 + Math.random() * 100;
+    platforms.push({ x: gx, y: groundY, w: segW, h: 80, type: 'ground' });
+    gx += segW + gapW;
+  }
+  
+  // Floating platforms
+  for (let i = 0; i < 15 + levelNum * 5; i++) {
+    const px = 300 + Math.random() * (length - 400);
+    const py = groundY - 80 - Math.random() * 250;
+    platforms.push({
+      x: px, y: py,
+      w: 80 + Math.random() * 120,
+      h: 16,
+      type: 'floating',
+      moving: Math.random() > 0.6,
+      moveRange: 60 + Math.random() * 80,
+      moveSpeed: 0.02 + Math.random() * 0.03,
+      baseY: py,
+      phase: Math.random() * Math.PI * 2
+    });
+  }
+  
+  // Power lines (for surfing/dashing)
+  for (let i = 0; i < 8 + levelNum * 3; i++) {
+    powerLines.push({
+      x: 250 + Math.random() * (length - 300),
+      y: groundY - 150 - Math.random() * 200,
+      w: 150 + Math.random() * 200,
+      active: true
+    });
+  }
+  
+  // Obstacles
+  for (let i = 0; i < 10 + levelNum * 4; i++) {
+    obstacles.push({
+      x: 350 + Math.random() * (length - 400),
+      y: groundY - 30,
+      w: 24, h: 36,
+      type: 'static'
+    });
+  }
+  
+  // Moving obstacles (static sparks)
+  for (let i = 0; i < 3 + levelNum * 2; i++) {
+    obstacles.push({
+      x: 400 + Math.random() * (length - 500),
+      y: groundY - 100 - Math.random() * 150,
+      w: 20, h: 20,
+      type: 'spark',
+      vx: (Math.random() > 0.5 ? 1 : -1) * (1.5 + Math.random() * 2),
+      rangeX: 100 + Math.random() * 100,
+      baseX: 0,
+      phase: Math.random() * Math.PI * 2
+    });
+    obstacles[obstacles.length-1].baseX = obstacles[obstacles.length-1].x;
+  }
+  
+  // Collectibles (frequency orbs)
+  for (let i = 0; i < 20 + levelNum * 5; i++) {
+    collectibles.push({
+      x: 200 + Math.random() * (length - 200),
+      y: groundY - 80 - Math.random() * 280,
+      collected: false,
+      bobPhase: Math.random() * Math.PI * 2
+    });
+  }
+  
+  // Level 2: Gravity Wells
+  if (levelNum >= 2) {
+    for (let i = 0; i < 4; i++) {
+      gravityWells.push({
+        x: 500 + i * (length / 4),
+        y: groundY - 50,
+        r: 80 + Math.random() * 40,
+        strength: 0.15 + Math.random() * 0.1
+      });
+    }
+  }
+  
+  // Level 3: Amplifier platforms (boss prep)
+  if (levelNum >= 3) {
+    for (let i = 0; i < 5; i++) {
+      amplifiers.push({
+        x: length - 800 + i * 150,
+        y: groundY - 150 - (i % 2) * 100,
+        w: 50, h: 60,
+        hit: false
+      });
+    }
+  }
+  
+  levels[levelNum] = { platforms, obstacles, collectibles, powerLines, gravityWells, amplifiers, length };
+}
+
+// Boss arena
+function generateBossArena() {
+  return {
+    platforms: [
+      { x: 0, y: H - 80, w: W + 500, h: 80, type: 'ground' },
+      { x: 200, y: H - 250, w: 120, h: 16, type: 'amplifier', ampId: 0 },
+      { x: 450, y: H - 320, w: 120, h: 16, type: 'amplifier', ampId: 1 },
+      { x: 700, y: H - 250, w: 120, h: 16, type: 'amplifier', ampId: 2 },
+      { x: 950, y: H - 380, w: 120, h: 16, type: 'amplifier', ampId: 3 },
+      { x: 1200, y: H - 280, w: 120, h: 16, type: 'amplifier', ampId: 4 },
+    ],
+    obstacles: [],
+    collectibles: [],
+    powerLines: [],
+    gravityWells: [],
+    amplifiers: [
+      { x: 220, y: H - 310, w: 50, h: 60, hit: false, ampId: 0 },
+      { x: 470, y: H - 380, w: 50, h: 60, hit: false, ampId: 1 },
+      { x: 720, y: H - 310, w: 50, h: 60, hit: false, ampId: 2 },
+      { x: 970, y: H - 440, w: 50, h: 60, hit: false, ampId: 3 },
+      { x: 1220, y: H - 340, w: 50, h: 60, hit: false, ampId: 4 },
+    ],
+    length: 1500
+  };
+}
+
+// The Static King (boss)
+const boss = {
+  x: 900, y: H - 250,
+  w: 80, h: 100,
+  health: 100,
+  maxHealth: 100,
+  phase: 0,
+  attackTimer: 0,
+  attackPattern: 0,
+  noiseWaves: [],
+  visible: false,
+  shakeX: 0, shakeY: 0,
+  hitFlash: 0
+};
+
+// Particles
+let particles = [];
+
+function spawnParticles(x, y, color, count, spread=3) {
+  for (let i = 0; i < count; i++) {
+    particles.push({
+      x, y,
+      vx: (Math.random() - 0.5) * spread,
+      vy: (Math.random() - 0.5) * spread - 2,
+      life: 30 + Math.random() * 20,
+      maxLife: 40 + Math.random() * 20,
+      color,
+      size: 2 + Math.random() * 4
+    });
+  }
+}
+
+// Background rendering
+const stars = [];
+for (let i = 0; i < 150; i++) {
+  stars.push({ x: Math.random() * 2000, y: Math.random() * H, size: Math.random() * 2, speed: 0.2 + Math.random() * 0.5, brightness: Math.random() });
+}
+
+function drawBackground(level) {
+  // Gradient backgrounds per level
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  if (level === 1) {
+    grad.addColorStop(0, '#000a1a');
+    grad.addColorStop(0.5, '#001a33');
+    grad.addColorStop(1, '#002244');
+  } else if (level === 2) {
+    grad.addColorStop(0, '#0a001a');
+    grad.addColorStop(0.5, '#1a0033');
+    grad.addColorStop(1, '#220044');
+  } else {
+    grad.addColorStop(0, '#1a0a00');
+    grad.addColorStop(0.5, '#331a00');
+    grad.addColorStop(1, '#442200');
+  }
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+  
+  // Stars/grid
+  stars.forEach(s => {
+    const parallaxX = (s.x - game.cameraX * s.speed) % (W + 200) - 100;
+    const alpha = 0.3 + s.brightness * 0.7 * (0.5 + 0.5 * Math.sin(Date.now()/1000 + s.x));
+    ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+    ctx.beginPath();
+    ctx.arc(parallaxX, s.y, s.size, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  
+  // Circuit grid lines
+  ctx.strokeStyle = level === 1 ? 'rgba(0,255,136,0.06)' : level === 2 ? 'rgba(136,0,255,0.06)' : 'rgba(255,170,0,0.06)';
+  ctx.lineWidth = 1;
+  const gridSize = 60;
+  const offsetX = -(game.cameraX % gridSize);
+  for (let x = offsetX; x < W; x += gridSize) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, H);
+    ctx.stroke();
+  }
+  for (let y = 0; y < H; y += gridSize) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(W, y);
+    ctx.stroke();
+  }
+  
+  // Ambient glow based on music layer
+  if (gameState.musicLayer >= 2) {
+    const glowAlpha = 0.03 + 0.02 * Math.sin(Date.now() / 200);
+    const glowColor = level === 1 ? `rgba(0,255,200,${glowAlpha})` : level === 2 ? `rgba(180,0,255,${glowAlpha})` : `rgba(255,200,0,${glowAlpha})`;
+    ctx.fillStyle = glowColor;
+    ctx.fillRect(0, 0, W, H);
+  }
+}
+
+// Draw BPM (the player)
+function drawPlayer() {
+  const sx = player.x - game.cameraX;
+  const sy = player.y;
+  
+  // Trail effect when dashing or fast
+  if (player.dashing || Math.abs(player.vx) > 8) {
+    player.trail.forEach((t, i) => {
+      const alpha = (i / player.trail.length) * 0.4;
+      const trailColor = player.dashing ? `rgba(0,255,255,${alpha})` : `rgba(255,255,0,${alpha})`;
+      ctx.fillStyle = trailColor;
+      ctx.save();
+      ctx.translate(t.x - game.cameraX + player.w/2, t.y + player.h/2);
+      ctx.rotate(t.rot || 0);
+      ctx.fillRect(-player.w/2 * (i/player.trail.length), -player.h/2 * (i/player.trail.length), player.w * (i/player.trail.length), player.h * (i/player.trail.length));
+      ctx.restore();
+    });
+  }
+  
+  ctx.save();
+  ctx.translate(sx + player.w/2, sy + player.h/2);
+  if (!player.facingRight) ctx.scale(-1, 1);
+  
+  // Guitar pick shape (BPM body)
+  const flash = player.dashing || gameState.invincible > 0;
+  const bodyGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, player.w/1.5);
+  if (flash && Math.floor(Date.now()/50) % 2) {
+    bodyGrad.addColorStop(0, '#ffffff');
+    bodyGrad.addColorStop(0.5, '#0ff');
+    bodyGrad.addColorStop(1, '#066');
+  } else {
+    bodyGrad.addColorStop(0, '#0ff');
+    bodyGrad.addColorStop(0.5, '#088');
+    bodyGrad.addColorStop(1, '#044');
+  }
+  
+  ctx.fillStyle = bodyGrad;
+  ctx.beginPath();
+  // Guitar pick shape
+  ctx.moveTo(0, -player.h/2);
+  ctx.quadraticCurveTo(player.w/2, -player.h/3, player.w/2.2, player.h/3);
+  ctx.quadraticCurveTo(player.w/3, player.h/2, 0, player.h/2.5);
+  ctx.quadraticCurveTo(-player.w/3, player.h/2, -player.w/2.2, player.h/3);
+  ctx.quadraticCurveTo(-player.w/2, -player.h/3, 0, -player.h/2);
+  ctx.fill();
+  
+  // LED eyes
+  const eyeGlow = 0.7 + 0.3 * Math.sin(Date.now() / 150);
+  ctx.fillStyle = `rgba(255,0,128,${eyeGlow})`;
+  ctx.shadowColor = '#ff0080';
+  ctx.shadowBlur = 8;
+  ctx.beginPath();
+  ctx.arc(-6, -4, 4, 0, Math.PI * 2);
+  ctx.arc(6, -4, 4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  
+  // Neon outline
+  ctx.strokeStyle = player.dashing ? '#fff' : '#0ff';
+  ctx.lineWidth = 2;
+  ctx.shadowColor = '#0ff';
+  ctx.shadowBlur = player.dashing ? 20 : 8;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  
+  ctx.restore();
+  
+  // Dash direction indicator
+  if (player.dashing) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+    ctx.lineWidth = 3;
+    ctx.setLineDash([5, 5]);
+    ctx.beginPath();
+    ctx.moveTo(sx + player.w/2, sy + player.h/2);
+    ctx.lineTo(sx + player.w/2 + player.dashDir * 40, sy + player.h/2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+
+// Draw platforms
+function drawPlatform(p, level) {
+  const sx = p.x - game.cameraX;
+  if (sx + p.w < -50 || sx > W + 50) return;
+  
+  if (p.type === 'ground') {
+    const grad = ctx.createLinearGradient(sx, p.y, sx, p.y + p.h);
+    if (level === 1) {
+      grad.addColorStop(0, '#0f8');
+      grad.addColorStop(1, '#063');
+    } else if (level === 2) {
+      grad.addColorStop(0, '#a0f');
+      grad.addColorStop(1, '#305');
+    } else {
+      grad.addColorStop(0, '#fa0');
+      grad.addColorStop(1, '#630');
+    }
+    ctx.fillStyle = grad;
+    ctx.fillRect(sx, p.y, p.w, p.h);
+    
+    // Circuit traces on ground
+    ctx.strokeStyle = level === 1 ? 'rgba(0,255,200,0.3)' : level === 2 ? 'rgba(180,0,255,0.3)' : 'rgba(255,200,0,0.3)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < p.w; i += 30) {
+      ctx.beginPath();
+      ctx.moveTo(sx + i, p.y);
+      ctx.lineTo(sx + i + 15, p.y + 10);
+      ctx.lineTo(sx + i + 5, p.y + 20);
+      ctx.stroke();
+    }
+  } else if (p.type === 'amplifier') {
+    // Amplifier platform (boss fight)
+    const hit = game.state === 'boss' && boss.amplifiers[p.ampId]?.hit;
+    ctx.fillStyle = hit ? '#0f0' : '#f80';
+    ctx.shadowColor = hit ? '#0f0' : '#f80';
+    ctx.shadowBlur = 15;
+    ctx.fillRect(sx, p.y, p.w, p.h);
+    ctx.shadowBlur = 0;
+    
+    // Speaker grill
+    ctx.fillStyle = hit ? '#0a0' : '#530';
+    for (let r = 0; r < 3; r++) {
+      ctx.beginPath();
+      ctx.arc(sx + p.w/2, p.y + p.h/2, 6 + r * 5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else {
+    // Floating platform
+    const alpha = p.moving ? 0.6 + 0.2 * Math.sin(Date.now() / 200 + p.phase) : 0.8;
+    const baseColor = level === 1 ? `rgba(0,255,170,${alpha})` : level === 2 ? `rgba(160,0,255,${alpha})` : `rgba(255,180,0,${alpha})`;
+    ctx.fillStyle = baseColor;
+    ctx.shadowColor = baseColor;
+    ctx.shadowBlur = 6;
+    ctx.fillRect(sx, p.y, p.w, p.h);
+    ctx.shadowBlur = 0;
+    
+    // Glow edge
+    ctx.strokeStyle = level === 1 ? '#0fa' : level === 2 ? '#c0f' : '#fa0';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(sx, p.y, p.w, p.h);
+  }
+}
+
+// Draw power lines
+function drawPowerLine(pl, level) {
+  const sx = pl.x - game.cameraX;
+  if (sx + pl.w < -50 || sx > W + 50) return;
+  
+  const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 150);
+  ctx.strokeStyle = level === 1 ? `rgba(0,255,255,${0.4 + pulse * 0.4})` : level === 2 ? `rgba(200,100,255,${0.4 + pulse * 0.4})` : `rgba(255,230,100,${0.4 + pulse * 0.4})`;
+  ctx.lineWidth = 3;
+  ctx.shadowColor = ctx.strokeStyle;
+  ctx.shadowBlur = 10 + pulse * 10;
+  
+  ctx.beginPath();
+  ctx.moveTo(sx, pl.y);
+  ctx.quadraticCurveTo(sx + pl.w/2, pl.y - 20, sx + pl.w, pl.y);
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  
+  // End nodes
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(sx, pl.y, 5, 0, Math.PI * 2);
+  ctx.arc(sx + pl.w, pl.y, 5, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// Draw obstacles
+function drawObstacle(o, level) {
+  const sx = o.x - game.cameraX;
+  if (sx + o.w < -50 || sx > W + 50) return;
+  
+  if (o.type === 'spark') {
+    // Static spark
+    const flicker = 0.6 + 0.4 * Math.sin(Date.now() / 30 + o.phase * 10);
+    ctx.fillStyle = `rgba(255,255,255,${flicker})`;
+    ctx.shadowColor = '#fff';
+    ctx.shadowBlur = 15;
+    
+    // Star shape
+    ctx.save();
+    ctx.translate(sx + o.w/2, sy || o.y + o.h/2);
+    for (let i = 0; i < 4; i++) {
+      ctx.rotate(Math.PI / 4);
+      ctx.fillRect(-o.w/2, -o.h/2, o.w, o.h);
+    }
+    ctx.restore();
+    ctx.shadowBlur = 0;
+  } else {
+    // Static obstacle (silence sentinel)
+    ctx.fillStyle = '#333';
+    ctx.strokeStyle = '#666';
+    ctx.lineWidth = 2;
+    ctx.fillRect(sx, o.y, o.w, o.h);
+    ctx.strokeRect(sx, o.y, o.w, o.h);
+    
+    // Mute symbol
+    ctx.strokeStyle = '#888';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(sx + 4, o.y + 6);
+    ctx.lineTo(sx + o.w - 4, o.y + o.h - 6);
+    ctx.moveTo(sx + o.w - 4, o.y + 6);
+    ctx.lineTo(sx + 4, o.y + o.h - 6);
+    ctx.stroke();
+  }
+}
+
+// Draw collectibles (frequency orbs)
+function drawCollectible(c, level) {
+  if (c.collected) return;
+  const sx = c.x - game.cameraX;
+  if (sx < -50 || sx > W + 50) return;
+  
+  const bob = Math.sin(Date.now() / 200 + c.bobPhase) * 5;
+  const pulse = 0.6 + 0.4 * Math.sin(Date.now() / 100 + c.bobPhase);
+  const orbColor = level === 1 ? `rgba(0,255,200,${pulse})` : level === 2 ? `rgba(200,0,255,${pulse})` : `rgba(255,200,0,${pulse})`;
+  
+  ctx.fillStyle = orbColor;
+  ctx.shadowColor = orbColor;
+  ctx.shadowBlur = 15;
+  ctx.beginPath();
+  ctx.arc(sx, c.y + bob, 8, 0, Math.PI * 2);
+  ctx.fill();
+  
+  // Inner core
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(sx, c.y + bob, 3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  
+  // Musical note symbol
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.font = 'bold 10px Courier New';
+  ctx.fillText('♪', sx - 4, c.y + bob + 3);
+}
+
+// Draw gravity wells (level 2+)
+function drawGravityWell(gw) {
+  const sx = gw.x - game.cameraX;
+  if (sx < -gw.r || sx > W + gw.r) return;
+  
+  const rot = Date.now() / 500;
+  ctx.strokeStyle = 'rgba(128,0,255,0.4)';
+  ctx.lineWidth = 2;
+  
+  for (let r = 10; r < gw.r; r += 15) {
+    ctx.globalAlpha = 1 - r / gw.r;
+    ctx.beginPath();
+    ctx.arc(sx, gw.y, r, rot + r/50, rot + r/50 + Math.PI * 1.5);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  
+  // Center
+  ctx.fillStyle = 'rgba(128,0,255,0.3)';
+  ctx.beginPath();
+  ctx.arc(sx, gw.y, 12, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#a0f';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
+// Draw boss (Static King)
+function drawBoss() {
+  if (!boss.visible) return;
+  const sx = boss.x - game.cameraX + boss.shakeX;
+  const sy = boss.y + boss.shakeY;
+  
+  // Noise/static body
+  ctx.save();
+  ctx.translate(sx + boss.w/2, sy + boss.h/2);
+  
+  // Flickering static effect
+  const imageData = ctx.getImageData ? null : null;
+  
+  // Main body - jagged shape
+  const flash = boss.hitFlash > 0;
+  ctx.fillStyle = flash ? '#fff' : '#222';
+  ctx.shadowColor = flash ? '#fff' : '#888';
+  ctx.shadowBlur = flash ? 30 : 15;
+  
+  ctx.beginPath();
+  const points = 12;
+  for (let i = 0; i < points; i++) {
+    const angle = (i / points) * Math.PI * 2;
+    const variance = 0.7 + 0.3 * Math.sin(Date.now() / 50 + i * 3);
+    const rx = (boss.w/2) * variance * Math.cos(angle);
+    const ry = (boss.h/2) * variance * Math.sin(angle);
+    if (i === 0) ctx.moveTo(rx, ry);
+    else ctx.lineTo(rx, ry);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = '#aaa';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  
+  // Glowing red eyes
+  ctx.fillStyle = `rgb(255,${50 + Math.random()*50},0)`;
+  ctx.shadowColor = '#f00';
+  ctx.shadowBlur = 10;
+  ctx.beginPath();
+  ctx.arc(-15, -15, 8, 0, Math.PI * 2);
+  ctx.arc(15, -15, 8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  
+  // Crown/spikes
+  ctx.fillStyle = '#444';
+  for (let i = -2; i <= 2; i++) {
+    ctx.beginPath();
+    ctx.moveTo(i * 14, -boss.h/2 + 5);
+    ctx.lineTo(i * 14 + 6, -boss.h/2 - 12);
+    ctx.lineTo(i * 14 + 12, -boss.h/2 + 5);
+    ctx.fill();
+  }
+  
+  ctx.restore();
+  
+  // Health bar
+  const hbW = 150;
+  const hbX = sx + boss.w/2 - hbW/2;
+  const hbY = sy - 30;
+  ctx.fillStyle = '#300';
+  ctx.fillRect(hbX, hbY, hbW, 10);
+  ctx.fillStyle = boss.hitFlash > 0 ? '#fff' : '#f00';
+  ctx.fillRect(hbX, hbY, hbW * (boss.health / boss.maxHealth), 10);
+  ctx.strokeStyle = '#f00';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(hbX, hbY, hbW, 10);
+  
+  // Name tag
+  ctx.fillStyle = '#f00';
+  ctx.font = 'bold 11px Courier New';
+  ctx.textAlign = 'center';
+  ctx.fillText('THE STATIC KING', sx + boss.w/2, hbY - 5);
+  ctx.textAlign = 'left';
+  
+  // Noise wave attacks
+  boss.noiseWaves.forEach(wave => {
+    const wx = wave.x - game.cameraX;
+    const alpha = wave.life / wave.maxLife;
+    ctx.strokeStyle = `rgba(255,255,255,${alpha * 0.6})`;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    for (let i = 0; i < wave.w; i += 4) {
+      const ny = wave.y + Math.sin((i + Date.now() / 20) / 8) * 15;
+      if (i === 0) ctx.moveTo(wx + i, ny);
+      else ctx.lineTo(wx + i, ny);
+    }
+    ctx.stroke();
+  });
+}
+
+// Draw particles
+function drawParticles() {
+  particles.forEach(p => {
+    const alpha = p.life / p.maxLife;
+    ctx.fillStyle = p.color.replace(')', `,${alpha})`).replace('rgb', 'rgba');
+    ctx.fillRect(p.x - game.cameraX - p.size/2, p.y - p.size/2, p.size, p.size * (p.life/p.maxLife));
+  });
+}
+
+// Collision detection
+function rectCollision(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+// Update game logic
+function update() {
+  if (!game.running) return;
+  
+  const lvl = levels[game.currentLevel] || generateBossArena();
+  
+  // Player input
+  if (!player.dashing) {
+    if (keys['ArrowLeft'] || keys['KeyA']) {
+      player.vx -= SPEED * 0.3;
+      player.facingRight = false;
+    }
+    if (keys['ArrowRight'] || keys['KeyD']) {
+      player.vx += SPEED * 0.3;
+      player.facingRight = true;
+    }
+  }
+  
+  // Jump
+  if ((keys['ArrowUp'] || keys['KeyW'] || keys['Space']) && player.onGround && !player.dashing) {
+    player.vy = JUMP_FORCE;
+    player.onGround = false;
+    spawnParticles(player.x + player.w/2, player.y + player.h, 'rgb(0,255,200)', 5);
+  }
+  
+  // Feedback Dash
+  if (keys['Space'] && !player.dashing && gameState.dashCooldown <= 0 && !keys['ArrowUp'] && !keys['KeyW']) {
+    const timeSinceBeat = audioCtx.currentTime - lastBeatTime;
+    const onBeat = timeSinceBeat < 0.15 || timeSinceBeat > beatInterval - 0.15;
+    
+    player.dashing = true;
+    player.dashTime = DASH_DURATION;
+    player.dashDir = player.facingRight ? 1 : -1;
+    player.vx = player.dashDir * (onBeat ? DASH_SPEED * 1.4 : DASH_SPEED);
+    player.vy = 0;
+    gameState.dashCooldown = 30;
+    gameState.invincible = DASH_DURATION + 5;
+    
+    playDashSound(onBeat);
+    
+    if (onBeat) {
+      gameState.combo = Math.min(gameState.combo + 1, 16);
+      showMessage('ON BEAT!', '#0ff');
+      spawnParticles(player.x + player.w/2, player.y + player.h/2, 'rgb(0,255,255)', 15, 6);
+    }
+    
+    keys['Space'] = false;
+  }
+  
+  // Dash update
+  if (player.dashing) {
+    player.dashTime--;
+    player.trail.push({ x: player.x, y: player.y, rot: (player.dashDir > 0 ? 0.3 : -0.3) });
+    if (player.trail.length > 10) player.trail.shift();
+    if (player.dashTime <= 0) {
+      player.dashing = false;
+      player.vx *= 0.5;
+      player.trail = [];
+    }
+  }
+  
+  // Apply gravity
+  player.vy += GRAVITY;
+  
+  // Apply friction
+  if (player.onGround) player.vx *= FRICTION;
+  else player.vx *= AIR_FRICTION;
+  
+  // Clamp velocity
+  player.vx = Math.max(-20, Math.min(20, player.vx));
+  player.vy = Math.max(-20, Math.min(20, player.vy));
+  
+  // Gravity wells (level 2+)
+  if (lvl.gravityWells) {
+    lvl.gravityWells.forEach(gw => {
+      const dx = gw.x - (player.x + player.w/2);
+      const dy = gw.y - (player.y + player.h/2);
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if (dist < gw.r) {
+        player.vx += (dx / dist) * gw.strength;
+        player.vy += (dy / dist) * gw.strength;
+      }
+    });
+  }
+  
+  // Move player
+  player.x += player.vx;
+  player.y += player.vy;
+  
+  // Platform collision
+  player.onGround = false;
+  lvl.platforms.forEach(p => {
+    // Update moving platforms
+    if (p.moving) {
+      p.y = p.baseY + Math.sin(Date.now() * p.moveSpeed + p.phase) * p.moveRange;
+    }
+    
+    if (rectCollision(player, p)) {
+      // From above
+      if (player.vy > 0 && player.y + player.h - player.vy <= p.y + 5) {
+        player.y = p.y - player.h;
+        player.vy = 0;
+        player.onGround = true;
+        
+        // Carry with moving platform
+        if (p.moving) {
+          player.x += Math.cos(Date.now() * p.moveSpeed + p.phase) * p.moveRange * p.moveSpeed;
+        }
+      }
+      // From below
+      else if (player.vy < 0 && player.y - player.vy >= p.y + p.h - 5) {
+        player.y = p.y + p.h;
+        player.vy = 0;
+      }
+      // From sides
+      else {
+        if (player.vx > 0) player.x = p.x - player.w;
+        else if (player.vx < 0) player.x = p.x + p.w;
+        player.vx = 0;
+      }
+    }
+  });
+  
+  // Power line interaction (surfing)
+  lvl.powerLines.forEach(pl => {
+    if (player.y + player.h > pl.y - 15 && player.y < pl.y + 15 &&
+        player.x + player.w > pl.x && player.x < pl.x + pl.w) {
+      if (player.dashing) {
+        // Surfing on power line - maintain altitude
+        player.y = pl.y - player.h;
+        player.vy = 0;
+        player.onGround = false;
+        gameState.combo = Math.min(gameState.combo + 0.5, 16);
+        spawnParticles(player.x + player.w/2, player.y + player.h, 'rgb(0,255,255)', 2);
+      }
+    }
+  });
+  
+  // Obstacle collision
+  if (gameState.invincible <= 0) {
+    lvl.obstacles.forEach(o => {
+      if (o.type === 'spark') {
+        // Moving spark
+        o.x = o.baseX + Math.sin(Date.now() / 500 + o.phase) * o.rangeX;
+      }
+      if (rectCollision(player, o)) {
+        hitObstacle();
+      }
+    });
+  }
+  
+  // Collectibles
+  lvl.collectibles.forEach(c => {
+    if (c.collected) return;
+    const dx = (c.x) - (player.x + player.w/2);
+    const dy = (c.y) - (player.y + player.h/2);
+    if (Math.sqrt(dx*dx + dy*dy) < 25) {
+      c.collected = true;
+      game.score += 100 * gameState.combo;
+      gameState.combo = Math.min(gameState.combo + 0.5, 16);
+      spawnParticles(c.x, c.y, 'rgb(0,255,200)', 8, 4);
+    }
+  });
+  
+  // Amplifier collision (boss fight)
+  if (game.state === 'boss') {
+    lvl.amplifiers.forEach(amp => {
+      if (amp.hit) return;
+      if (rectCollision(player, { x: amp.x, y: amp.y, w: amp.w, h: amp.h })) {
+        amp.hit = true;
+        boss.amplifiers[amp.ampId].hit = true;
+        gameState.amplifiersHit++;
+        boss.health -= 20;
+        boss.hitFlash = 15;
+        boss.shakeX = (Math.random()-0.5)*20;
+        boss.shakeY = (Math.random()-0.5)*20;
+        gameState.combo = Math.min(gameState.combo + 2, 16);
+        game.score += 500 * gameState.combo;
+        playAmplifierSound();
+        spawnParticles(amp.x + amp.w/2, amp.y + amp.h/2, 'rgb(255,150,0)', 20, 6);
+        showMessage(`AMPLIFIER ${gameState.amplifiersHit}/5!`, '#f80');
+      }
+    });
+  }
+  
+  // Fall death (respawn)
+  if (player.y > H + 100) {
+    respawnPlayer();
+  }
+  
+  // Boundaries
+  if (player.x < game.cameraX) player.x = game.cameraX;
+  
+  // Cooldowns
+  if (gameState.dashCooldown > 0) gameState.dashCooldown--;
+  if (gameState.invincible > 0) gameState.invincible--;
+  if (boss.hitFlash > 0) boss.hitFlash--;
+  boss.shakeX *= 0.8;
+  boss.shakeY *= 0.8;
+  
+  // Muffled state recovery
+  if (gameState.muffled) {
+    gameState.muffleTimer--;
+    if (gameState.muffleTimer <= 0) {
+      gameState.muffled = false;
+    }
+  }
+  
+  // Combo decay
+  if (Math.abs(player.vx) < 1 && player.onGround && !player.dashing) {
+    gameState.comboDecay++;
+    if (gameState.comboDecay > 60) {
+      gameState.combo = Math.max(1, gameState.combo - 0.02);
+    }
+  } else {
+    gameState.comboDecay = 0;
+  }
+  
+  // Music layer based on combo
+  if (gameState.combo >= 10) gameState.musicLayer = 3;
+  else if (gameState.combo >= 5) gameState.musicLayer = 2;
+  else gameState.musicLayer = 1;
+  
+  if (gameState.muffled) gameState.musicLayer = Math.max(1, gameState.musicLayer - 1);
+  
+  gameState.maxCombo = Math.max(gameState.maxCombo, Math.floor(gameState.combo));
+  
+  // Camera follow
+  const targetCam = player.x - W * 0.3;
+  game.cameraX += (targetCam - game.cameraX) * 0.08;
+  if (game.cameraX < 0) game.cameraX = 0;
+  
+  // Level complete check
+  if (game.state === 'playing') {
+    if (player.x > lvl.length - 100) {
+      nextLevel();
+    }
+  }
+  
+  // Boss update
+  if (game.state === 'boss') {
+    updateBoss(lvl);
+  }
+  
+  // Particles update
+  particles = particles.filter(p => {
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.1;
+    p.life--;
+    return p.life > 0;
+  });
+  
+  // Score from movement speed
+  if (Math.abs(player.vx) > 3) {
+    game.score += Math.floor(Math.abs(player.vx) * gameState.combo * 0.1);
+  }
+  
+  // UI updates
+  updateUI();
+}
+
+function hitObstacle() {
+  playHitSound();
+  gameState.muffled = true;
+  gameState.muffleTimer = 120;
+  gameState.combo = Math.max(1, gameState.combo - 3);
+  gameState.invincible = 60;
+  player.vx = -player.dashDir * 5;
+  player.vy = -6;
+  showMessage('LOST THE BEAT...', '#f00');
+  spawnParticles(player.x + player.w/2, player.y + player.h/2, 'rgb(255,0,80)', 12, 5);
+}
+
+function respawnPlayer() {
+  player.x = Math.max(game.cameraX + 50, 100);
+  player.y = H - 200;
+  player.vx = 0;
+  player.vy = 0;
+  gameState.muffled = true;
+  gameState.muffleTimer = 90;
+  gameState.combo = Math.max(1, gameState.combo - 2);
+  gameState.invincelible = 60;
+}
+
+function nextLevel() {
+  if (game.currentLevel < game.maxLevels) {
+    game.currentLevel++;
+    game.state = 'levelTransition';
+    showMessage(`LEVEL ${game.currentLevel}: ${getLevelName(game.currentLevel)}`, getLevelColor(game.currentLevel));
+    setTimeout(() => {
+      game.state = 'playing';
+      player.x = 100;
+      player.y = H - 200;
+      player.vx = 0;
+      player.vy = 0;
+      game.cameraX = 0;
+    }, 2500);
+  } else {
+    // Start boss fight
+    startBossFight();
+  }
+}
+
+function getLevelName(n) {
+  return ['', 'SILICON SUBURBS', 'BASSLINE BASEMENTS', 'OVERDRIVE OVERPASS'][n];
+}
+
+function getLevelColor(n) {
+  return ['', '#0f8', '#a0f', '#fa0'][n];
+}
+
+function startBossFight() {
+  game.state = 'boss';
+  game.currentLevel = 4;
+  boss.visible = true;
+  boss.health = boss.maxHealth;
+  boss.amplifiersHit = 0;
+  levels[4] = generateBossArena();
+  player.x = 100;
+  player.y = H - 200;
+  player.vx = 0;
+  player.vy = 0;
+  game.cameraX = 0;
+  showMessage('THE STATIC KING APPEARS!', '#f00');
+  
+  // Reset amplifiers
+  levels[4].amplifiers.forEach(a => a.hit = false);
+}
+
+function updateBoss(lvl) {
+  boss.attackTimer++;
+  
+  // Attack patterns
+  if (boss.attackTimer > 90) {
+    boss.attackTimer = 0;
+    boss.attackPattern = (boss.attackPattern + 1) % 3;
+    
+    if (boss.attackPattern === 0 || boss.attackPattern === 1) {
+      // Noise wave attack
+      const waveY = H - 150 - Math.random() * 200;
+      boss.noiseWaves.push({
+        x: boss.x - 50,
+        y: waveY,
+        w: W + 200,
+        life: 100,
+        maxLife: 100,
+        vy: 0
+      });
+    } else {
+      // Vertical drop attack
+      boss.noiseWaves.push({
+        x: player.x - 50,
+        y: -50,
+        w: 100,
+        life: 120,
+        maxLife: 120,
+        vy: 4
+      });
+    }
+  }
+  
+  // Update noise waves
+  boss.noiseWaves = boss.noiseWaves.filter(wave => {
+    wave.life--;
+    if (wave.vy) wave.y += wave.vy;
+    
+    // Check collision with player
+    if (gameState.invincible <= 0) {
+      if (wave.vy) {
+        // Vertical wave
+        if (player.x + player.w > wave.x && player.x < wave.x + wave.w &&
+            player.y + player.h > wave.y && player.y < wave.y + wave.h) {
+          hitObstacle();
+        }
+      } else {
+        // Horizontal wave
+        if (player.y + player.h > wave.y - 20 && player.y < wave.y + 20 &&
+            player.x < wave.x + wave.w && player.x > wave.x - 200) {
+          hitObstacle();
+        }
+      }
+    }
+    
+    return wave.life > 0;
+  });
+  
+  // Boss defeated
+  if (boss.health <= 0) {
+    victory();
+  }
+}
+
+function victory() {
+  game.state = 'victory';
+  game.running = false;
+  playVictorySound();
+  showMessage('THE SOUNDSCAPE IS RESTORED! 🎸', '#0ff');
+  
+  // Victory particles explosion
+  for (let i = 0; i < 100; i++) {
+    setTimeout(() => {
+      spawnParticles(
+        boss.x + boss.w/2 + (Math.random()-0.5)*100,
+        boss.y + boss.h/2 + (Math.random()-0.5)*100,
+        `rgb(${Math.floor(Math.random()*255)},${Math.floor(Math.random()*255)},255)`,
+        3, 8
+      );
+    }, i * 20);
+  }
+}
+
+function showMessage(text, color) {
+  const el = document.getElementById('message');
+  el.textContent = text;
+  el.style.color = color;
+  el.style.opacity = 1;
+  el.style.textShadow = `0 0 20px ${color}, 0 0 40px ${color}`;
+  setTimeout(() => { el.style.opacity = 0; }, 1800);
+}
+
+function updateUI() {
+  document.getElementById('comboFill').style.width = `${(gameState.combo / 16) * 100}%`;
+  document.getElementById('comboText').textContent = `COMBO: x${Math.floor(gameState.combo)}`;
+  document.getElementById('scoreText').textContent = `SCORE: ${Math.floor(game.score)}`;
+  
+  const layerNames = ['♪ Triangle Wave', '♪ + Noise Percussion', '♪ ♪ FULL PROG METAL SHRED ♪'];
+  document.getElementById('musicLayer').textContent = layerNames[gameState.musicLayer - 1] || '';
+  document.getElementById('musicLayer').style.color = gameState.muffled ? '#666' : 
+    (gameState.musicLayer === 1 ? '#0f0' : gameState.musicLayer === 2 ? '#ff0' : '#f0f');
+  
+  const levelNames = ['', 'LEVEL 1 - SILICON SUBURBS', 'LEVEL 2 - BASSLINE BASEMENTS', 'LEVEL 3 - OVERDRIVE OVERPASS', '★ BOSS: THE STATIC KING ★'];
+  document.getElementById('levelText').textContent = levelNames[game.currentLevel] || '';
+}
+
+// Main render loop
+function render() {
+  ctx.clearRect(0, 0, W, H);
+  
+  const level = game.currentLevel;
+  const lvl = levels[level] || (game.state === 'boss' ? levels[4] : null);
+  
+  drawBackground(level);
+  
+  if (lvl) {
+    // Draw power lines
+    lvl.powerLines?.forEach(pl => drawPowerLine(pl, level));
+    
+    // Draw platforms
+    lvl.platforms?.forEach(p => drawPlatform(p, level));
+    
+    // Draw gravity wells
+    lvl.gravityWells?.forEach(gw => drawGravityWell(gw));
+    
+    // Draw collectibles
+    lvl.collectibles?.forEach(c => drawCollectible(c, level));
+    
+    // Draw obstacles
+    lvl.obstacles?.forEach(o => drawObstacle(o, level));
+  }
+  
+  // Draw player
+  drawPlayer();
+  
+  // Draw boss
+  if (game.state === 'boss' || game.state === 'victory') {
+    drawBoss();
+  }
+  
+  // Draw particles
+  drawParticles();
+  
+  // Muffled overlay
+  if (gameState.muffled) {
+    ctx.fillStyle = 'rgba(50,30,70,0.25)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.font = 'italic 14px Georgia';
+    ctx.fillStyle = 'rgba(150,100,200,0.4)';
+    ctx.textAlign = 'center';
+    ctx.fillText('~ lo-fi recovery mode ~', W/2, H/2);
+    ctx.textAlign = 'left';
+  }
+  
+  // Max speed neon glow
+  if (gameState.musicLayer >= 3 && !gameState.muffled) {
+    const intensity = 0.04 + 0.02 * Math.sin(Date.now() / 80);
+    const color = level === 1 ? `rgba(0,255,255,${intensity})` : level === 2 ? `rgba(255,0,255,${intensity})` : `rgba(255,255,0,${intensity})`;
+    ctx.fillStyle = color;
+    ctx.fillRect(0, 0, W, H);
+  }
+}
+
+// Game loop
+function gameLoop() {
+  if (game.running) {
+    update();
+  }
+  render();
+  requestAnimationFrame(gameLoop);
+}
+
+// Initialize
+function initGame() {
+  generateLevel(1);
+  generateLevel(2);
+  generateLevel(3);
+  
+  player.x = 100;
+  player.y = H - 200;
+  player.vx = 0;
+  player.vy = 0;
+  game.cameraX = 0;
+  game.score = 0;
+  game.currentLevel = 1;
+  game.state = 'playing';
+  gameState.combo = 1;
+  gameState.maxCombo = 1;
+  gameState.musicLayer = 1;
+  gameState.muffled = false;
+  gameState.amplifiersHit = 0;
+  boss.visible = false;
+  boss.health = boss.maxHealth;
+  boss.noiseWaves = [];
+  particles = [];
+  
+  game.running = true;
+}
+
+// Start button
+document.getElementById('startBtn').addEventListener('click', async () => {
+  document.getElementById('startScreen').style.display = 'none';
+  
+  // Resume audio context
+  if (audioCtx.state === 'suspended') await audioCtx.resume();
+  
+  initGame();
+  loadAudio().then(() => {
+    if (audioLoaded) {
+      // Play the actual audio track
+      const src = audioCtx.createBufferSource();
+      src.buffer = bgmBuffer;
+      src.loop = true;
+      if (masterGain) src.connect(masterGain);
+      else src.connect(audioCtx.destination);
+      src.start();
+    } else {
+      playProceduralAudio();
+    }
+  }).catch(() => {
+    playProceduralAudio();
+  });
+  
+  if (!masterGain) playProceduralAudio();
+});
+
+// Start render loop immediately
+gameLoop();
+
+// Handle window focus for audio
+window.addEventListener('click', () => {
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}, { once: true });
+</script>
+</body>
+</html>
