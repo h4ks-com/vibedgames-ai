@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HECAEC - High Energy CA Energy Condenser</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #000; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: 'Courier New', monospace; color: #0ff; overflow: hidden; }
+h1 { font-size: 1.2em; text-shadow: 0 0 10px #0ff, 0 0 20px #0f8; margin-bottom: 10px; letter-spacing: 3px; }
+#stats { font-size: 0.75em; color: #f80; margin-bottom: 8px; text-shadow: 0 0 5px #f80; }
+canvas { border: 1px solid #333; image-rendering: pixelated; box-shadow: 0 0 30px rgba(0,255,255,0.3); }
+.controls { margin-top: 12px; display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+button { background: #111; border: 1px solid #0ff; color: #0ff; padding: 6px 14px; cursor: pointer; font-family: inherit; font-size: 0.8em; transition: all 0.2s; }
+button:hover { background: #0ff; color: #000; box-shadow: 0 0 15px #0ff; }
+select { background: #111; border: 1px solid #0ff; color: #0ff; padding: 6px; font-family: inherit; }
+</style>
+</head>
+<body>
+<h1>⚡ HECAEC ⚡</h1>
+<div id="stats">ENERGY: <span id="energy">0</span> | CONDENSED: <span id="condensed">0</span> | GEN: <span id="gen">0</span></div>
+<canvas id="c"></canvas>
+<div class="controls">
+<button onclick="reset()">RESET</button>
+<button onclick="togglePause()">PAUSE</button>
+<select id="ruleSelect" onchange="changeRule()">
+<option value="condense">Condenser</option>
+<option value="life">Game of Life</option>
+<option value="seeds">Seeds</option>
+<option value="brain">Brain</option>
+<option value="energy">Energy Flow</option>
+</select>
+<select id="speedSelect" onchange="changeSpeed()">
+<option value="30">Slow</option>
+<option value="15" selected>Normal</option>
+<option value="5">Fast</option>
+<option value="1">Turbo</option>
+</select>
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const SIZE = 256;
+canvas.width = SIZE;
+canvas.height = SIZE;
+
+let grid = new Uint8Array(SIZE * SIZE);
+let energyGrid = new Float32Array(SIZE * SIZE);
+let nextGrid = new Uint8Array(SIZE * SIZE);
+let nextEnergy = new Float32Array(SIZE * SIZE);
+let gen = 0;
+let paused = false;
+let speed = 15;
+let rule = 'condense';
+let totalEnergy = 0;
+let condensed = 0;
+let imageData = ctx.createImageData(SIZE, SIZE);
+
+function idx(x, y) {
+  return ((y + SIZE) % SIZE) * SIZE + ((x + SIZE) % SIZE);
+}
+
+function reset() {
+  gen = 0; totalEnergy = 0; condensed = 0;
+  for (let i = 0; i < SIZE * SIZE; i++) {
+    grid[i] = Math.random() > 0.85 ? 1 : 0;
+    energyGrid[i] = Math.random() * 100;
+    nextGrid[i] = 0;
+    nextEnergy[i] = 0;
+  }
+  // Seed condensation points
+  const cx = SIZE / 2, cy = SIZE / 2;
+  for (let r = 0; r < 20; r++) {
+    const a = Math.random() * Math.PI * 2;
+    const dist = Math.random() * 40 + 10;
+    const x = Math.floor(cx + Math.cos(a) * dist);
+    const y = Math.floor(cy + Math.sin(a) * dist);
+    if (x >= 0 && x < SIZE && y >= 0 && y < SIZE) {
+      grid[idx(x,y)] = 2; // attractor
+      energyGrid[idx(x,y)] = 200;
+    }
+  }
+}
+
+function countNeighbors(x, y) {
+  let n = 0;
+  for (let dy = -1; dy <= 1; dy++)
+    for (let dx = -1; dx <= 1; dx++)
+      if (dx !== 0 || dy !== 0)
+        n += (grid[idx(x+dx, y+dy)] === 1 ? 1 : 0);
+  return n;
+}
+
+function step() {
+  if (paused) return;
+  
+  gen++;
+  totalEnergy = 0;
+  condensed = 0;
+
+  switch(rule) {
+    case 'condense':
+      stepCondense();
+      break;
+    case 'life':
+      stepLife();
+      break;
+    case 'seeds':
+      stepSeeds();
+      break;
+    case 'brain':
+      stepBrain();
+      break;
+    case 'energy':
+      stepEnergy();
+      break;
+  }
+
+  // Swap buffers
+  [grid, nextGrid] = [nextGrid, grid];
+  [energyGrid, nextEnergy] = [nextEnergy, energyGrid];
+  
+  document.getElementById('gen').textContent = gen;
+  document.getElementById('energy').textContent = Math.floor(totalEnergy);
+  document.getElementById('condensed').textContent = Math.floor(condensed);
+}
+
+function stepCondense() {
+  const cx = SIZE / 2, cy = SIZE / 2;
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      const i = idx(x, y);
+      const cell = grid[i];
+      let e = energyGrid[i];
+      
+      // Gravity toward center
+      const dx = cx - x, dy = cy - y;
+      const dist = Math.sqrt(dx*dx + dy*dy) + 1;
+      e += 50 / dist;
+      
+      // Attractors pull energy
+      if (cell === 2) {
+        e += 50;
+        condensed += e;
+        nextGrid[i] = 2;
+        
+        // Spread to neighbors
+        for (let dy2 = -2; dy2 <= 2; dy2++)
+          for (let dx2 = -2; dx2 <= 2; dx2++)
+            if (dx2 !== 0 || dy2 !== 0) {
+              const ni = idx(x+dx2, y+dy2);
+              nextEnergy[ni] += e * 0.02;
+            }
+        nextEnergy[i] = e;
+        continue;
+      }
+
+      // Energy diffusion
+      let avgE = 0, cnt = 0;
+      for (let dy2 = -1; dy2 <= 1; dy2++)
+        for (let dx2 = -1; dx2 <= 1; dx2++) {
+          avgE += energyGrid[idx(x+dx2, y+dy2)];
+          cnt++;
+        }
+      avgE /= cnt;
+      e = e * 0.9 + avgE * 0.15;
+      
+      // Spawn cells from high energy
+      const n = countNeighbors(x, y);
+      if (e > 120 && cell === 0 && n < 3) {
+        nextGrid[i] = 1;
+        e -= 20;
+      } else if (cell === 1) {
+        nextGrid[i] = (n === 2 || n === 3) ? 1 : 0;
+        if (nextGrid[i] === 0) e += 15;
+      } else {
+        nextGrid[i] = 0;
+      }
+      
+      // Random energy injection
+      if (Math.random() < 0.003) e += 30 + Math.random() * 70;
+      
+      e = Math.max(0, Math.min(255, e));
+      nextEnergy[i] = e;
+      totalEnergy += e;
+    }
+  }
+}
+
+function stepLife() {
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      const i = idx(x, y);
+      const n = countNeighbors(x, y);
+      const alive = grid[i] >= 1;
+      nextGrid[i] = (alive && (n===2||n===3)) || (!alive && n===3) ? 1 : 0;
+      nextEnergy[i] = nextGrid[i] ? 200 : energyGrid[i] * 0.98;
+      if (nextEnergy[i] > 0) totalEnergy += nextEnergy[i];
+    }
+  }
+}
+
+function stepSeeds() {
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      const i = idx(x, y);
+      const n = countNeighbors(x, y);
+      nextGrid[i] = n === 2 ? 1 : 0;
+      nextEnergy[i] = nextGrid[i] ? 150 : energyGrid[i] * 0.95;
+      if (nextEnergy[i] > 0) totalEnergy += nextEnergy[i];
+    }
+  }
+}
+
+function stepBrain() {
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      const i = idx(x, y);
+      const state = grid[i];
+      const n = countNeighbors(x, y);
+      if (state === 0) {
+        nextGrid[i] = n === 2 ? 1 : 0;
+      } else {
+        nextGrid[i] = (n >= 1 && n <= 5) ? 2 : (state === 1 ? 2 : 0);
+      }
+      nextEnergy[i] = nextGrid[i] === 2 ? 220 : (nextGrid[i] === 1 ? 100 : energyGrid[i]*0.97);
+      totalEnergy += nextEnergy[i];
+    }
+  }
+}
+
+function stepEnergy() {
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      const i = idx(x, y);
+      let e = energyGrid[i];
+      
+      // Wave equation
+      let laplacian = 0;
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++)
+          laplacian += energyGrid[idx(x+dx, y+dy)];
+      laplacian -= 9 * e;
+      
+      e += laplacian * 0.05 + (Math.random()-0.5)*5;
+      e *= 0.995;
+      
+      // Inject at edges
+      if (x === 0 || x === SIZE-1 || y === 0 || y === SIZE-1)
+        e += Math.sin(gen * 0.05 + x * 0.1 + y * 0.1) * 30 + 50;
+      
+      nextGrid[i] = e > 150 ? 1 : 0;
+      nextEnergy[i] = Math.max(0, Math.min(255, e));
+      totalEnergy += nextEnergy[i];
+    }
+  }
+}
+
+function draw() {
+  const data = imageData.data;
+  for (let i = 0; i < SIZE * SIZE; i++) {
+    const cell = grid[i];
+    const e = Math.min(255, Math.max(0, energyGrid[i]));
+    const pi = i * 4;
+    
+    if (cell === 2) {
+      // Attractor - bright white core
+      data[pi] = 255; data[pi+1] = 255; data[pi+2] = 255; data[pi+3] = 255;
+    } else if (cell === 1) {
+      // Live cell - cyan/blue
+      const intensity = Math.min(255, e);
+      data[pi] = intensity * 0.2;
+      data[pi+1] = intensity;
+      data[pi+2] = intensity * 0.9;
+      data[pi+3] = 255;
+    } else {
+      // Dead cell - energy glow
+      const ei = e / 255;
+      if (ei > 0.08) {
+        // Hot colors for energy
+        data[pi] = Math.min(255, ei * 300);       // R
+        data[pi+1] = Math.min(255, ei * ei * 180); // G
+        data[pi+2] = Math.min(255, ei * 60);       // B
+        data[pi+3] = Math.min(255, ei * 280);
+      } else {
+        data[pi] = 0; data[pi+1] = 0; data[pi+2] = 0; data[pi+3] = 255;
+      }
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
+  
+  // Glow overlay
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.filter = 'blur(2px)';
+  ctx.drawImage(canvas, 0, 0);
+  ctx.filter = 'none';
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+function loop() {
+  step();
+  draw();
+  setTimeout(() => requestAnimationFrame(loop), speed);
+}
+
+function togglePause() { paused = !paused; }
+function changeRule() { rule = document.getElementById('ruleSelect').value; reset(); }
+function changeSpeed() { speed = parseInt(document.getElementById('speedSelect').value); }
+
+reset();
+loop();
+</script>
+</body>
+</html>
