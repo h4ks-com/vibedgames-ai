@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>OpenJSCAD → Three.js Live Editor</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; color: #e0e0e0; height: 100vh; display: flex; }
+  
+  /* Left panel - editor */
+  #editor-panel {
+    width: 45%; min-width: 320px;
+    display: flex; flex-direction: column;
+    background: #16213e; border-right: 1px solid #0f3460;
+  }
+  .panel-header {
+    padding: 10px 16px; background: #0f3460;
+    font-weight: 700; font-size: 14px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .panel-header span { color: #e94560; }
+  #editor {
+    flex: 1; width: 100%;
+    background: #1a1a2e; color: #00ff9d;
+    border: none; outline: none; resize: none;
+    padding: 12px 16px; font-family: 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 13px; line-height: 1.5; tab-size: 2;
+  }
+  .btn-row { padding: 8px 12px; display: flex; gap: 8px; flex-wrap: wrap; background: #16213e; border-top: 1px solid #0f3460; }
+  button {
+    padding: 7px 14px; border: none; border-radius: 6px;
+    cursor: pointer; font-size: 12px; font-weight: 600;
+    transition: all 0.15s;
+  }
+  .btn-run { background: #e94560; color: white; }
+  .btn-run:hover { background: #c73650; transform: scale(1.03); }
+  .btn-preset { background: #0f3460; color: #a0c4ff; }
+  .btn-preset:hover { background: #1a4480; }
+  .btn-wire { background: #533483; color: white; }
+  .btn-wire.active { background: #8b5fbf; box-shadow: 0 0 8px #8b5fbf80; }
+  .btn-export { background: #00b894; color: white; }
+
+  /* Right panel - viewer */
+  #viewer-panel {
+    width: 55%; display: flex; flex-direction: column;
+  }
+  #viewer-container {
+    flex: 1; position: relative;
+    background: radial-gradient(ellipse at center, #1f2940 0%, #0d1117 100%);
+  }
+  canvas { display: block; width: 100% !important; height: 100% !important; }
+  #status-bar {
+    padding: 6px 16px; background: #0f3460;
+    font-size: 11px; color: #8899aa;
+    display: flex; gap: 20px;
+  }
+  #status-bar b { color: #e94560; }
+  #error-log {
+    max-height: 120px; overflow-y: auto;
+    background: #2d1515; color: #ff6b6b;
+    font-family: monospace; font-size: 11px;
+    padding: 8px 12px; display: none;
+    border-top: 2px solid #e94560;
+  }
+  #error-log.show { display: block; }
+  #loading-overlay {
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(13,17,23,0.92);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 100; transition: opacity 0.3s;
+  }
+  #loading-overlay.hidden { opacity: 0; pointer-events: none; }
+  .spinner {
+    width: 40px; height: 40px; border: 3px solid #0f3460;
+    border-top-color: #e94560; border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div id="editor-panel">
+  <div class="panel-header"><span>◇</span> JSCAD Editor <span style="font-weight:400;color:#8899aa;font-size:11px">Ctrl+Enter = Run</span></div>
+  <textarea id="editor" spellcheck="false">// === OpenJSCAD Live Editor ===
+// Write your model in main()
+// Available: cuboid, sphere, cylinder, subtract, union, intersect
+// All from @jscad/modeling CSG library
+
+const { primitives, booleans, transforms, extrusions } = jscadModeling
+
+function main() {
+  // A bolt head — cube with sphere carved out
+  const body = primitives.cuboid({ size: [20, 20, 12] })
+  const cutout = transforms.translate(
+    [0, 0, 6],
+    primitives.sphere({ radius: 8, segments: 32 })
+  )
+  return booleans.subtract(body, cutout)
+}</textarea>
+  <div class="btn-row">
+    <button class="btn-run" onclick="runCode()">▶ Run (Ctrl+Enter)</button>
+    <button class="btn-wire" id="wireBtn" onclick="toggleWireframe()">◯ Wireframe</button>
+    <button class="btn-export" onclick="exportSTL()">💾 Export STL</button>
+    <button class="btn-preset" onclick="loadPreset('gear')">⚙ Gear</button>
+    <button class="btn-preset" onclick="loadPreset('bracket')">🔩 Bracket</button>
+    <button class="btn-preset" onclick="loadPreset('stand')">📱 Stand</button>
+    <button class="btn-preset" onclick="loadPreset('ring')">💍 Ring</button>
+    <button class="btn-preset" onclick="loadPreset('pipe')">🔧 Pipe</button>
+  </div>
+</div>
+
+<div id="viewer-panel">
+  <div class="panel-header"><span>◆</span> 3D Preview (Three.js)</div>
+  <div id="viewer-container">
+    <div id="loading-overlay">
+      <div style="text-align:center">
+        <div class="spinner"></div>
+        <p style="margin-top:12px;color:#8899aa;font-size:13px">Loading engine...</p>
+      </div>
+    </div>
+  </div>
+  <div id="status-bar">
+    <span>Vertices: <b id="stat-v">—</b></span>
+    <span>Faces: <b id="stat-f">—</b></span>
+    <span>Objects: <b id="stat-o">—</b></span>
+    <span>Render: <b id="stat-ms">—</b>ms</span>
+  </div>
+  <div id="error-log"></div>
+</div>
+
+<!-- Three.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<!-- JSCAD Modeling (CSG) -->
+<script src="https://unpkg.com/@jscad/modeling@2.13.0/dist/jscad-modeling.min.js"></script>
+
+<script>
+// ─── Three.js Setup ──────────────────────────────────────
+let scene, camera, renderer, controls, currentMesh, wireMesh
+let isWireframe = false
+
+function initThree() {
+  const container = document.getElementById('viewer-container')
+  const w = container.clientWidth
+  const h = container.clientHeight
+
+  scene = new THREE.Scene()
+
+  camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 2000)
+  camera.position.set(40, 30, 40)
+
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
+  renderer.setSize(w, h)
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+  renderer.setClearColor(0x000000, 0)
+  container.appendChild(renderer.domElement)
+
+  controls = new THREE.OrbitControls(camera, renderer.domElement)
+  controls.enableDamping = true
+  controls.dampingFactor = 0.08
+
+  // Lights
+  scene.add(new THREE.AmbientLight(0xffffff, 0.5))
+  const dl = new THREE.DirectionalLight(0xffffff, 0.8)
+  dl.position.set(20, 40, 20)
+  scene.add(dl)
+  const dl2 = new THREE.DirectionalLight(0x6699ff, 0.3)
+  dl2.position.set(-20, -10, -20)
+  scene.add(dl2)
+
+  // Grid
+  const grid = new THREE.GridHelper(80, 20, 0x1a365d, 0x0d1b33)
+  grid.position.y = -15
+  scene.add(grid)
+
+  // Axes helper
+  // const axes = new THREE.AxesHelper(20)
+  // scene.add(axes)
+
+  window.addEventListener('resize', () => {
+    const c = document.getElementById('viewer-container')
+    camera.aspect = c.clientWidth / c.clientHeight
+    camera.updateProjectionMatrix()
+    renderer.setSize(c.clientWidth, c.clientHeight)
+  })
+
+  animate()
+}
+
+function animate() {
+  requestAnimationFrame(animate)
+  controls.update()
+  renderer.render(scene, camera)
+}
+
+// ─── JSCAD geom3 → Three.js BufferGeometry ──────────────
+
+function geom3ToBufferGeometry(geom3) {
+  if (!geom3 || !geom3.polygons) throw new Error('No polygons in geometry')
+
+  const positions = []
+  const normals = []
+
+  for (const poly of geom3.polygons) {
+    if (poly.vertices.length < 3) continue
+
+    // Calculate face normal
+    const v0 = poly.vertices[0]
+    const v1 = poly.vertices[1]
+    const v2 = poly.vertices[2]
+    let nx = (v1[0] - v0[0]) * (v2[1] - v0[1]) - (v1[1] - v0[1]) * (v2[0] - v0[0])
+    let ny = (v1[1] - v0[1]) * (v2[2] - v0[2]) - (v1[2] - v0[2]) * (v2[1] - v0[1])
+    let nz = (v1[2] - v0[2]) * (v2[0] - v0[0]) - (v1[0] - v0[0]) * (v2[2] - v0[2])
+    const len = Math.sqrt(nx*nx + ny*ny + nz*nz) || 1
+    nx /= len; ny /= len; nz /= len
+
+    // Fan triangulation
+    for (let i = 1; i < poly.vertices.length - 1; i++) {
+      const a = poly.vertices[0], b = poly.vertices[i], c = poly.vertices[i + 1]
+      positions.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2])
+      normals.push(nx, ny, nz, nx, ny, nz, nx, ny, nz)
+    }
+  }
+
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3))
+  geo.computeVertexNormals()
+  return geo
+}
+
+// ─── Run user code ───────────────────────────────────────
+
+function runCode() {
+  const code = document.getElementById('editor').value
+  const errLog = document.getElementById('error-log')
+
+  try {
+    // Create function from user code
+    const fn = new Function('jscadModeling', `
+      "use strict";
+      ${code};
+      return typeof main === 'function' ? main() : null;
+    `)
+
+    const result = fn(jscadModeling)
+
+    if (!result) {
+      showError('main() returned nothing. Make sure to return a geometry.')
+      return
+    }
+
+    // Handle single geom3 or array of geom3
+    const geoms = Array.isArray(result) ? result : [result]
+
+    // Remove old mesh
+    if (currentMesh) { scene.remove(currentMesh); currentMesh.geometry.dispose(); currentMesh.material.dispose() }
+    if (wireMesh) { scene.remove(wireMesh); wireMesh.geometry.dispose(); wireMesh.material.dispose() }
+
+    // Merge all geometries into one
+    const allPositions = []
+    const allNormals = []
+    let totalFaces = 0
+
+    for (const g of geoms) {
+      const bg = geom3ToBufferGeometry(g)
+      const pos = bg.attributes.position.array
+      const norm = bg.attributes.normal.array
+      allPositions.push(...pos)
+      allNormals.push(...norm)
+      totalFaces += pos.length / 9
+      bg.dispose()
+    }
+
+    const mergedGeo = new THREE.BufferGeometry()
+    mergedGeo.setAttribute('position', new THREE.Float32BufferAttribute(allPositions, 3))
+    mergedGeo.setAttribute('normal', new THREE.Float32BufferAttribute(allNormals, 3))
+
+    // Material with nice colors
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0xe94560,
+      metalness: 0.3,
+      roughness: 0.5,
+      flatShading: false,
+      side: THREE.DoubleSide
+    })
+
+    currentMesh = new THREE.Mesh(mergedGeo, mat)
+    scene.add(currentMesh)
+
+    // Wireframe overlay
+    const wireMat = new THREE.MeshBasicMaterial({
+      color: 0x00ff9d,
+      wireframe: true,
+      transparent: true,
+      opacity: 0
+    })
+    wireMesh = new THREE.Mesh(mergedGeo.clone(), wireMat)
+    scene.add(wireMesh)
+
+    // Stats
+    const verts = allPositions.length / 3
+    updateStats(verts, totalFaces, geoms.length)
+    hideError()
+
+    // Auto-frame camera
+    mergedGeo.computeBoundingBox()
+    const bbox = mergedGeo.boundingBox
+    const center = new THREE.Vector3()
+    bbox.getCenter(center)
+    const size = new THREE.Vector3()
+    bbox.getSize(size)
+    const maxDim = Math.max(size.x, size.y, size.z) || 30
+    camera.position.set(center.x + maxDim * 1.2, center.y + maxDim * 0.8, center.z + maxDim * 1.2)
+    controls.target.copy(center)
+    controls.update()
+
+  } catch (err) {
+    showError(err.message)
+  }
+}
+
+// ─── UI Helpers ──────────────────────────────────────────
+
+function toggleWireframe() {
+  isWireframe = !isWireframe
+  wireMesh.material.opacity = isWireframe ? 0.25 : 0
+  document.getElementById('wireBtn').classList.toggle('active', isWireframe)
+}
+
+function showError(msg) {
+  const el = document.getElementById('error-log')
+  el.textContent = '❌ Error: ' + msg
+  el.classList.add('show')
+}
+function hideError() {
+  document.getElementById('error-log').classList.remove('show')
+}
+
+function updateStats(v, f, o) {
+  t0 = performance.now()
+  document.getElementById('stat-v').textContent = v.toLocaleString()
+  document.getElementById('stat-f').textContent = f.toLocaleString()
+  document.getElementById('stat-o').textContent = o
+  setTimeout(() => {
+    document.getElementById('stat-ms').textContent = (performance.now() - t0).toFixed(1)
+  }, 0)
+}
+let t0 = 0
+
+function exportSTL() {
+  if (!currentMesh) return alert('Nothing to export!')
+  const pos = currentMesh.geometry.attributes.position.array
+  let stl = 'solid model\n'
+  for (let i = 0; i < pos.length; i += 9) {
+    stl += 'facet normal 0 0 0\n  outer loop\n'
+    stl += `    vertex ${pos[i]} ${pos[i+1]} ${pos[i+2]}\n`
+    stl += `    vertex ${pos[i+3]} ${pos[i+4]} ${pos[i+5]}\n`
+    stl += `    vertex ${pos[i+6]} ${pos[i+7]} ${pos[i+8]}\n`
+    stl += '  endloop\nendfacet\n'
+  }
+  stl += 'endsolid model\n'
+  const blob = new Blob([stl], { type: 'application/sla' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a'); a.href = url; a.download = 'model.stl'; a.click()
+  URL.revokeObjectURL(url)
+}
+
+// ─── Presets ─────────────────────────────────────────────
+
+const PRESETS = {
+  gear: `// ⚙ Gear
+const { primitives, booleans, transforms, extrusions } = jscadModeling
+
+function main() {
+  const teeth = 12
+  const rOuter = 20
+  const rInner = 14
+  const toothH = 3
+  const thickness = 6
+  const parts = []
+  for (let i = 0; i < teeth; i++) {
+    const angle = (i / teeth) * Math.PI * 2
+    const tx = Math.cos(angle) * rInner, ty = Math.sin(angle) * rInner
+    parts.push(transforms.translate([tx, ty, 0],
+      primitives.cuboid({ size: [toothH, 4, thickness] })
+    ))
+  }
+  const wheel = primitives.cylinder({ radius: rInner, height: thickness, segments: 48 })
+  const hole = transforms.translate([0, 0, -1],
+    primitives.cylinder({ radius: 5, height: thickness + 2, segments: 24 })
+  )
+  parts.push(wheel)
+  return booleans.subtract(booleans.union(...parts), hole)
+}`,
+
+  bracket: `// 🔩 Mounting Bracket
+const { primitives, booleans, transforms } = jscadModeling
+
+function main() {
+  const base = primitives.cuboid({ size: [40, 24, 4] })
+  const upright = transforms.translate([0, 0, 18],
+    primitives.cuboid({ size: [8, 24, 36])
+  })
+  const hole1 = transforms.translate([-12, 0, -1],
+    primitives.cylinder({ radius: 3, height: 6, segments: 24 })
+  )
+  const hole2 = transforms.translate([12, 0, -1],
+    primitives.cylinder({ radius: 3, height: 6, segments: 24 })
+  )
+  const hole3 = transforms.translate([0, 0, 28],
+    primitives.cylinder({ radius: 3, height: 12, segments: 24 })
+  )
+  return booleans.subtract(
+    booleans.union(base, upright),
+    booleans.union(hole1, hole2, hole3)
+  )
+}`,
+
+  stand: `// 📱 Phone Stand
+const { primitives, booleans, transforms } = jscadModeling
+
+function main() {
+  const base = transforms.translate([0, 0, 2],
+    primitives.cuboid({ size: [60, 40, 4] })
+  )
+  const ramp = transforms.translate([0, -5, 18],
+    primitives.cuboid({ size: [50, 8, 32] })
+  )
+  // Cut angle
+  const cutAngle = transforms.translate([28, -10, 8],
+    primitives.cuboid({ size: [30, 20, 30] })
+  )
+  const lip = transforms.translate([0, 12, 31],
+    primitives.cuboid({ size: [44, 4, 4] })
+  )
+  return booleans.subtract(
+    booleans.union(base, ramp, lip),
+    cutAngle
+  )
+}`,
+
+  ring: `// 💍 Ring
+const { primitives, booleans, transforms } = jscadModeling
+
+function main() {
+  const outerR = 10
+  const innerR = 7
+  const thickness = 3
+  const band = transforms.translate([0, 0, thickness / 2],
+    primitives.cylinder({ radius: outerR, height: thickness, segments: 48 })
+  )
+  const innerCut = transforms.translate([0, 0, -1],
+    primitives.cylinder({ radius: innerR, height: thickness + 2, segments: 36 })
+  )
+  // Gem on top
+  const gem = transforms.translate([0, 0, thickness + 2.5],
+    primitives.sphere({ radius: 3.5, segments: 24 })
+  )
+  return booleans.union(
+    booleans.subtract(band, innerCut),
+    gem
+  )
+}`,
+
+  pipe: `// 🔧 Pipe Elbow
+const { primitives, booleans, transforms } = jscadModeling
+
+function main() {
+  const len = 22
+  const outerR = 6
+  const innerR = 4.5
+  const segV = 32, segH = 48
+  
+  const pipe1 = transforms.translate([0, 0, len / 2],
+    primitives.cylinder({ radius: outerR, height: len, segments: segH })
+  )
+  const pipe2 = transforms.translate([len / 2, 0, 0],
+    primitives.cylinder({ radius: outerR, height: len, segments: segH })
+  )
+  const bendCore = transforms.translate([len / 2, 0, len / 2],
+    primitives.sphere({ radius: outerR * 1.3, segments: 32 })
+  )
+  
+  const hollow1 = transforms.translate([0, 0, len / 2],
+    primitives.cylinder({ radius: innerR, height: len + 2, segments: segH })
+  )
+  const hollow2 = transforms.translate([len / 2, 0, 0],
+    primitives.cylinder({ radius: innerR, height: len + 2, segments: segH })
+  )
+  
+  const shape = booleans.union(pipe1, pipe2, bendCore)
+  const holes = booleans.union(hollow1, hollow2)
+  return booleans.subtract(shape, holes)
+}`
+}
+
+function loadPreset(name) {
+  if (PRESETS[name]) {
+    document.getElementById('editor').value = PRESETS[name]
+    runCode()
+  }
+}
+
+// ─── Init ────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  initThree()
+  // Hide loading after a moment
+  setTimeout(() => {
+    document.getElementById('loading-overlay').classList.add('hidden')
+    runCode()
+  }, 600)
+})
+
+// Ctrl+Enter shortcut
+document.getElementById('editor').addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    e.preventDefault()
+    runCode()
+  }
+})
+</script>
+</body>
+</html>
