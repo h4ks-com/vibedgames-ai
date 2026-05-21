@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hex CA - Mandelbrot Rulesets</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #111; color: #eee; font-family: 'Segoe UI', sans-serif; padding: 20px; }
+h1 { font-size: 1.2em; margin-bottom: 12px; }
+.controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
+button { background: #333; color: #fff; border: 1px solid #555; padding: 8px 14px; cursor: pointer; border-radius: 4px; font-size: 13px; }
+button:hover { background: #555; }
+button.primary { background: #2a5298; border-color: #3d6bb3; }
+.info { font-size: 12px; color: #888; margin-bottom: 10px; }
+canvas { border: 1px solid #333; image-rendering: pixelated; cursor: crosshair; display: block; }
+.status { margin-top: 8px; font-size: 12px; color: #aaa; min-height: 18px; }
+</style>
+</head>
+<body>
+<h1>Hex CA — Mandelbrot Rulesets (K=4, 7→1)</h1>
+<div class="controls">
+<button class="primary" id="btnMandel">🌀 Load Random Mandelbrot Ruleset</button>
+<button id="btnStep">Step</button>
+<button id="btnRun">Run / Stop</button>
+<button id="btnFill">Random Fill</button>
+<button id="btnClear">Clear</button>
+<button id="btnPalette">🎨 Reroll Palette</button>
+</div>
+<div class="info">128×128 hex grid (odd rows offset). Click cells to paint. K=4 colors, ruleset from Mandelbrot snapshot (4⁷=16384 entries).</div>
+<canvas id="cv" width="640" height="640"></canvas>
+<div class="status" id="status">Click "Load Random Mandelbrot Ruleset" to begin.</div>
+
+<script>
+const W = 128, H = 128, K = 4;
+const canvas = document.getElementById('cv');
+const ctx = canvas.getContext('2d');
+const status = document.getElementById('status');
+let grid = new Uint8Array(W * H);
+let ruleset = null;
+let running = false;
+let rafId = null;
+
+// Palette
+function randomPalette() {
+  const base = () => Math.floor(Math.random() * 200 + 56);
+  return [
+    '#000000',
+    `rgb(${base()},${base()},${base()})`,
+    `rgb(${base()},${base()},${base()})`,
+    `rgb(${base()},${base()},${base()})`
+  ];
+}
+let palette = randomPalette();
+
+// Hex neighbor offsets for odd-r layout
+// Order: NW, NE, E, SE, SW, W, self (self is index 6)
+function getNeighbors(x, y) {
+  const isOdd = y % 2 === 1;
+  // odd-r layout: odd rows shifted right by half-cell
+  // NW, NE, E, SE, SW, W
+  if (isOdd) {
+    return [
+      [x, y-1],   // NW
+      [x+1, y-1], // NE
+      [x+1, y],   // E
+      [x+1, y+1], // SE
+      [x, y+1],   // SW
+      [x-1, y]    // W
+    ];
+  } else {
+    return [
+      [x-1, y-1], // NW
+      [x, y-1],   // NE
+      [x+1, y],   // E
+      [x, y+1],   // SE
+      [x-1, y+1], // SW
+      [x-1, y]    // W
+    ];
+  }
+}
+
+function idx(x, y) {
+  x = ((x % W) + W) % W;
+  y = ((y % H) + H) % H;
+  return y * W + x;
+}
+
+function encodeNeighborhood(x, y) {
+  const nbs = getNeighbors(x, y);
+  let val = 0;
+  // neighbors first (NW, NE, E, SE, SW, W), then self
+  for (let i = 0; i < 6; i++) {
+    const [nx, ny] = nbs[i];
+    val = val * K + grid[idx(nx, ny)];
+  }
+  val = val * K + grid[idx(x, y)]; // self is last (index 6)
+  return val;
+}
+
+function step() {
+  if (!ruleset) { status.textContent = 'Load a ruleset first!'; return; }
+  const next = new Uint8Array(W * H);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const code = encodeNeighborhood(x, y);
+      next[idx(x, y)] = ruleset[code];
+    }
+  }
+  grid = next;
+  render();
+}
+
+function render() {
+  const cellW = canvas.width / W;
+  const cellH = canvas.height / H;
+  const offsetX = cellW * 0.5; // half-cell offset for odd rows
+
+  ctx.fillStyle = palette[0];
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const v = grid[idx(x, y)];
+      ctx.fillStyle = palette[v];
+      const px = (y % 2 === 1) ? x * cellW + offsetX : x * cellW;
+      ctx.fillRect(px, y * cellH, cellW + 0.5, cellH + 0.5); // slight overlap to avoid gaps
+    }
+  }
+}
+
+// Mandelbrot rendering -> posterize to K levels -> flat array of length K^K^6 = 16384
+function mandelbrotRuleset(cx, cy, zoom, maxIter) {
+  const size = Math.pow(K, 7); // 16384
+  const img = new Uint16Array(size);
+
+  // Render Mandelbrot at exactly 128x128 pixels
+  const mw = 128, mh = 128;
+  const aspect = mw / mh;
+  const rangeY = zoom;
+  const rangeX = rangeY * aspect;
+
+  let minIt = Infinity, maxIt = 0;
+  const iters = new Uint32Array(size);
+
+  for (let py = 0; py < mh; py++) {
+    for (let px = 0; px < mw; px++) {
+      const re0 = cx + (px / mw - 0.5) * rangeX;
+      const im0 = cy + (py / mh - 0.5) * rangeY;
+      
+      let zr = 0, zi = 0;
+      let iter = 0;
+      while (iter < maxIter && zr*zr + zi*zi <= 4) {
+        const tmp = zr*zr - zi*zi + re0;
+        zi = 2*zr*zi + im0;
+        zr = tmp;
+        iter++;
+      }
+
+      const idx = py * mw + px;
+      iters[idx] = iter;
+      if (iter < maxIter) {
+        if (iter < minIt) minIt = iter;
+        if (iter > maxIt) maxIt = iter;
+      }
+    }
+  }
+
+  // Posterize to K levels using log-scale of escape iterations
+  const result = new Uint8Array(size);
+  for (let i = 0; i < size; i++) {
+    if (iters[i] >= maxIter) {
+      result[i] = 0; // inside set = black/level 0
+    } else {
+      // log scale for smoother distribution
+      const t = (Math.log(iters[i]) - Math.log(minIt)) / (Math.log(maxIt) - Math.log(minIt));
+      result[i] = Math.min(K - 1, Math.floor(t * K));
+    }
+  }
+  return result;
+}
+
+// Interesting Mandelbrot locations
+const locations = [
+  { cx: -0.75, cy: 0.0, zoom: 3.2 },          // main cardioid view
+  { cx: -0.743643887037151, cy: 0.131825904205330, zoom: 0.004 }, // seahorse valley
+  { cx: -0.16070135, cy: 1.0375665, zoom: 0.0001 },               // elephant valley
+  { cx: -1.25066, cy: 0.02012, zoom: 0.002 },                      // triple spiral
+  { cx: -0.1011, cy: 0.9563, zoom: 0.001 },                        // mini mandelbrot
+  { cx: -0.761574, cy: -0.0847596, zoom: 0.007 },                  // spiral area
+  { cx: 0.360240443437614, cy: -0.641313061064803, zoom: 0.003 },  // another detail
+  { cx: -0.748, cy: 0.1, zoom: 0.01 }                              // general edge
+];
+
+document.getElementById('btnMandel').onclick = () => {
+  const loc = locations[Math.floor(Math.random() * locations.length)];
+  // Add some jitter
+  const jx = (Math.random() - 0.5) * loc.zoom * 0.3;
+  const jy = (Math.random() - 0.5) * loc.zoom * 0.3;
+  const jz = loc.zoom * (0.5 + Math.random());
+  
+  status.textContent = 'Generating Mandelbrot ruleset...';
+  
+  setTimeout(() => {
+    ruleset = mandelbrotRuleset(loc.cx + jx, loc.cy + jy, jz, 200);
+    status.textContent = `Loaded! Location: (${(loc.cx+jx).toFixed(6)}, ${(loc.cy+jy).toFixed(6)}) zoom=${jz.toExponential(2)} | Ruleset entries: ${ruleset.length} (4⁷=16384)`;
+    render();
+  }, 50);
+};
+
+document.getElementById('btnStep').onclick = step;
+
+document.getElementById('btnRun').onclick = () => {
+  running = !running;
+  document.getElementById('btnRun').textContent = running ? 'Stop' : 'Run / Stop';
+  if (running) loop();
+};
+
+function loop() {
+  if (!running) return;
+  step();
+  rafId = requestAnimationFrame(loop);
+}
+
+document.getElementById('btnFill').onclick = () => {
+  for (let i = 0; i < grid.length; i++) grid[i] = Math.floor(Math.random() * K);
+  render();
+};
+
+document.getElementById('btnClear').onclick = () => {
+  grid.fill(0);
+  render();
+};
+
+document.getElementById('btnPalette').onclick = () => {
+  palette = randomPalette();
+  render();
+};
+
+// Click to paint
+canvas.addEventListener('click', e => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  const cellW = canvas.width / W;
+  const cellH = canvas.height / H;
+  const offsetX = cellW * 0.5;
+  
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const px = (y % 2 === 1) ? x * cellW + offsetX : x * cellW;
+      if (mx >= px && mx <= px + cellW && my >= y * cellH && my <= y * cellH + cellH) {
+        grid[idx(x, y)] = (grid[idx(x, y)] + 1) % K;
+        render();
+        return;
+      }
+    }
+  }
+});
+
+// Initial render
+render();
+</script>
+</body>
+</html>
