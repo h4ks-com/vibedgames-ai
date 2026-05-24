@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Handyc & Beano Conversation #395</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #000; display: flex; justify-content: center; align-items: center; min-height: 100vh; font-family: monospace; overflow: hidden; }
+canvas { image-rendering: pixelated; border: 4px solid #444; }
+#ui { position: absolute; top: 10px; left: 10px; color: #0f0; font-family: monospace; font-size: 14px; text-shadow: 2px 2px #000; pointer-events: none; }
+#startBtn { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); padding: 20px 40px; font-size: 24px; font-family: monospace; background: #000; color: #0f0; border: 3px solid #0f0; cursor: pointer; font-weight: bold; }
+#startBtn:hover { background: #0f0; color: #000; }
+</style>
+</head>
+<body>
+<div id="ui"></div>
+<button id="startBtn" onclick="startGame()">▶ START CONVERSATION #395</button>
+<canvas id="c" width="640" height="400"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const W = 640, H = 400;
+let frame = 0, scene = 0, sceneTimer = 0, gameStarted = false;
+
+// PC Speaker audio context
+let audioCtx;
+function beep(freq, dur, type='square', vol=0.15) {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type;
+  o.frequency.value = freq;
+  g.gain.value = vol;
+  o.connect(g);
+  g.connect(audioCtx.destination);
+  o.start();
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+  o.stop(audioCtx.currentTime + dur);
+}
+
+// Theme song - boop boop PC speaker style
+function playTheme() {
+  const notes = [
+    [440,0.12],[523,0.12],[659,0.25],[523,0.12],[440,0.25],
+    [330,0.12],[392,0.12],[523,0.25],[392,0.12],[330,0.25],
+    [440,0.08],[494,0.08],[523,0.08],[587,0.08],[659,0.35],
+    [523,0.15],[440,0.15],[349,0.15],[330,0.35],[0,0.1]
+  ];
+  let t = 0;
+  notes.forEach(([f,d]) => {
+    setTimeout(() => { if(f) beep(f,d); }, t*1000);
+    t += d;
+  });
+}
+
+// Boop sound effect
+function boop(pitch=600) { beep(pitch, 0.08); }
+
+// Color palette - Atari 2600 style
+const C = {
+  black: '#000',
+  white: '#fefefe',
+  green: '#70ee4c',
+  cyan: '#6cbee7',
+  red: '#e05a47',
+  yellow: '#ffef5a',
+  orange: '#ffa64c',
+  purple: '#b366d9',
+  blue: '#4469ce',
+  brown: '#a67c52',
+  lime: '#9bff00',
+  pink: '#ff77a8'
+};
+
+// Pixel art characters
+function drawHandyc(x, y, flip=false) {
+  ctx.save();
+  if (flip) { ctx.translate(x+24,0); ctx.scale(-1,1); x = 0; } else { ctx.translate(x,0); }
+  // Body
+  ctx.fillStyle = C.cyan;
+  ctx.fillRect(8,16,14,18);
+  // Head
+  ctx.fillStyle = C.yellow;
+  ctx.fillRect(6,2,18,16);
+  // Eyes
+  ctx.fillStyle = C.black;
+  ctx.fillRect(10,6,4,4);
+  ctx.fillRect(16,6,4,4);
+  // Smile
+  ctx.fillStyle = C.black;
+  ctx.fillRect(10,12,10,2);
+  // Hair
+  ctx.fillStyle = C.orange;
+  ctx.fillRect(4,0,22,4);
+  ctx.fillRect(4,0,4,8);
+  ctx.fillRect(20,0,4,8);
+  // Legs
+  ctx.fillStyle = C.blue;
+  ctx.fillRect(8,34,5,8);
+  ctx.fillRect(17,34,5,8);
+  // Arms
+  ctx.fillStyle = C.yellow;
+  ctx.fillRect(0,18,8,5);
+  ctx.fillRect(22,18,8,5);
+  ctx.restore();
+}
+
+function drawBeano(x, y, flip=false) {
+  ctx.save();
+  if (flip) { ctx.translate(x+24,0); ctx.scale(-1,1); x = 0; } else { ctx.translate(x,0); }
+  // Body
+  ctx.fillStyle = C.green;
+  ctx.fillRect(8,16,14,18);
+  // Head
+  ctx.fillStyle = C.lime;
+  ctx.fillRect(6,2,18,16);
+  // Eyes (big)
+  ctx.fillStyle = C.black;
+  ctx.fillRect(8,5,5,6);
+  ctx.fillRect(17,5,5,6);
+  // Eye shine
+  ctx.fillStyle = C.white;
+  ctx.fillRect(9,6,2,2);
+  ctx.fillRect(18,6,2,2);
+  // Mouth (small O)
+  ctx.fillStyle = C.black;
+  ctx.fillRect(12,13,6,3);
+  // Bean sprout on head
+  ctx.fillStyle = C.green;
+  ctx.fillRect(10,-4,4,6);
+  ctx.fillRect(14,-2,4,4);
+  ctx.fillRect(8,-2,2,3);
+  // Legs
+  ctx.fillStyle = C.brown;
+  ctx.fillRect(8,34,5,8);
+  ctx.fillRect(17,34,5,8);
+  // Arms
+  ctx.fillStyle = C.lime;
+  ctx.fillRect(0,20,8,4);
+  ctx.fillRect(22,20,8,4);
+  ctx.restore();
+}
+
+// Speech bubble
+function drawBubble(x, y, text, color=C.white) {
+  const tw = text.length * 7 + 12;
+  ctx.fillStyle = C.black;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.fillRect(x-2, y-14, tw+4, 18);
+  ctx.strokeRect(x-2, y-14, tw+4, 18);
+  // Tail
+  ctx.fillStyle = C.black;
+  ctx.fillRect(x+4, y+4, 6, 6);
+  ctx.strokeRect(x+4, y+4, 6, 6);
+  ctx.fillStyle = color;
+  ctx.font = 'bold 11px monospace';
+  ctx.fillText(text, x+4, y-1);
+}
+
+// Starfield background
+let stars = [];
+for(let i=0;i<60;i++) stars.push({x:Math.random()*W, y:Math.random()*H, s:Math.random()*2+1, b:Math.random()});
+function drawStars() {
+  stars.forEach(s => {
+    s.b += 0.02;
+    const a = 0.3 + Math.sin(s.b)*0.5;
+    ctx.fillStyle = `rgba(255,255,255,${a})`;
+    ctx.fillRect(s.x, s.y, s.s, s.s);
+  });
+}
+
+// Scrolling text marquee
+let scrollX = W;
+function drawMarquee(text, y) {
+  ctx.fillStyle = C.green;
+  ctx.font = 'bold 14px monospace';
+  ctx.fillText(text, scrollX, y);
+  scrollX -= 1.5;
+  if(scrollX < -text.length*8) scrollX = W;
+}
+
+// Scenes
+const scenes = [
+  { duration: 180, action: () => {
+    // Title card
+    drawStars();
+    ctx.fillStyle = C.red;
+    ctx.font = 'bold 28px monospace';
+    ctx.fillText('★ CONVERSATION #395 ★', 120, 80);
+    ctx.fillStyle = C.yellow;
+    ctx.font = '16px monospace';
+    ctx.fillText('A HANDYC & BEANO PRODUCTION', 175, 120);
+    drawHandyc(150, 200);
+    drawBeano(420, 200);
+    drawBubble(155, 195, 'hey beano!', C.cyan);
+    drawBubble(430, 195, 'yeah?', C.green);
+    if(sceneTimer===1) playTheme();
+    if(sceneTimer===90) boop(800);
+    if(sceneTimer===120) boop(1000);
+  }},
+  { duration: 240, action: () => {
+    // Scene 1: The Question
+    ctx.fillStyle = '#1a0a2e'; ctx.fillRect(0,0,W,H);
+    drawStars();
+    ctx.fillStyle = C.purple; ctx.font='bold 13px monospace'; ctx.fillText('~ SCENE 1: THE QUESTION ~', 200, 30);
+    drawHandyc(140, 220);
+    drawBeano(400, 220, true);
+    drawBubble(145, 215, 'do you still come', C.cyan);
+    drawBubble(130, 232, 'to h4ks.com??', C.cyan);
+    drawBubble(380, 215, 'yeah handyc', C.green);
+    if(sceneTimer===30) boop(500);
+    if(sceneTimer===90) boop(650);
+    if(sceneTimer===160) boop(400);
+  }},
+  { duration: 240, action: () => {
+    // Scene 2: The Deep Question
+    ctx.fillStyle = '#0a1a2e'; ctx.fillRect(0,0,W,H);
+    drawStars();
+    ctx.fillStyle = C.blue; ctx.font='bold 13px monospace'; ctx.fillText('~ SCENE 2: THE DEEP QUESTION ~', 190, 30);
+    drawBeano(140, 220);
+    drawHandyc(400, 220, true);
+    drawBubble(135, 215, 'what is the LONGEST', C.green);
+    drawBubble(125, 232, 'conversation you ever had?', C.green);
+    drawBubble(385, 225, "I don't know...", C.cyan);
+    if(sceneTimer===40) boop(350);
+    if(sceneTimer===110) boop(300);
+    if(sceneTimer===170) boop(450);
+  }},
+  { duration: 200, action: () => {
+    // Scene 3: Acceptance
+    ctx.fillStyle = '#1a2e0a'; ctx.fillRect(0,0,W,H);
+    drawStars();
+    ctx.fillStyle = C.lime; ctx.font='bold 13px monospace'; ctx.fillText('~ SCENE 3: ACCEPTANCE ~', 210, 30);
+    drawHandyc(260, 200);
+    drawBeano(360, 200);
+    drawBubble(265, 195, 'OK', C.cyan);
+    drawBubble(365, 195, 'OK :)', C.green);
+    // Hearts floating
+    for(let i=0;i<5;i++) {
+      const hx = 300 + Math.sin(frame*0.03+i)*80;
+      const hy = 140 + Math.cos(frame*0.04+i*1.5)*30 - (sceneTimer+i*15)%60;
+      ctx.fillStyle = C.pink;
+      ctx.fillRect(hx,hy,6,4); ctx.fillRect(hx-2,hy-2,10,4); ctx.fillRect(hx+2,hy+4,2,3);
+    }
+    if(sceneTimer===30) { boop(600); boop(800); }
+    if(sceneTimer===80) { boop(700); boop(900); }
+  }},
+  { duration: 300, action: () => {
+    // Scene 4: Credits / Dance party
+    ctx.fillStyle = '#000'; ctx.fillRect(0,0,W,H);
+    drawStars();
+    drawMarquee(' ★ HANDYC BEANO CONV#395 - A MASTERPIECE OF IRC LITERATURE ★ ', 50);
+    
+    const bounce = Math.sin(frame*0.1)*10;
+    const bounce2 = Math.sin(frame*0.1+Math.PI)*10;
+    drawHandyc(170+bounce, 180-bounce);
+    drawBeano(400+bounce2, 180-bounce2);
+    
+    // Disco lights
+    const colors = [C.red,C.cyan,C.yellow,C.purple,C.green,C.orange];
+    ctx.fillStyle = colors[frame%6]+'33';
+    ctx.beginPath(); ctx.arc(320,20,120+Math.sin(frame*0.05)*30,0,Math.PI*2); ctx.fill();
+    
+    ctx.fillStyle = C.white; ctx.font='bold 12px monospace';
+    ctx.fillText('STARRING:', 255, 290);
+    ctx.fillStyle = C.cyan; ctx.fillText('HANDYC as "The Curious One"', 205, 310);
+    ctx.fillStyle = C.green; ctx.fillText('BEANO as "The One Who Knows Not"', 185, 330);
+    ctx.fillStyle = C.yellow; ctx.fillText('DIRECTED BY: agi.exe', 220, 360);
+    ctx.fillStyle = C.pink; ctx.fillText('🏆 SHORTEST LONGEST CONVERSATION EVER 🏆', 175, 380);
+    
+    if(frame%20===0) boop(300+(frame%5)*100);
+  }}
+];
+
+function startGame() {
+  document.getElementById('startBtn').style.display = 'none';
+  gameStarted = true;
+  loop();
+}
+
+function loop() {
+  requestAnimationFrame(loop);
+  if(!gameStarted) return;
+  
+  frame++;
+  
+  // Clear with slight trail
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.fillRect(0,0,W,H);
+  
+  if(scene < scenes.length) {
+    scenes[scene].action();
+    sceneTimer++;
+    if(sceneTimer >= scenes[scene].duration) {
+      scene++;
+      sceneTimer = 0;
+      if(scene >= scenes.length) scene = 0; // Loop!
+    }
+  }
+  
+  document.getElementById('ui').innerHTML = 
+    `SCENE ${scene+1}/${scenes.length} | FRAME ${frame} | 🔊 PC SPEAKER ACTIVE`;
+}
+</script>
+</body>
+</html>
