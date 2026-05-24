@@ -1,0 +1,928 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BiyB — Backend in Your Browser (DHT + WebRTC)</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #0a0a0f; --bg2: #12121a; --bg3: #1a1a2e;
+  --accent: #00ff9d; --accent2: #00d4ff; --warn: #ff6b35;
+  --text: #e0e0e0; --dim: #667788; --border: #2a2a3e;
+  --glow: 0 0 20px rgba(0,255,157,0.15);
+}
+body { font-family: 'JetBrains Mono', 'Fira Code', monospace; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; }
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;700&display=swap');
+
+/* Animated grid background */
+.bg-grid {
+  position: fixed; inset: 0; z-index: -1;
+  background-image:
+    linear-gradient(rgba(0,255,157,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,255,157,0.03) 1px, transparent 1px);
+  background-size: 50px 50px;
+  animation: gridMove 20s linear infinite;
+}
+@keyframes gridMove { 0% { transform: translate(0,0); } 100% { transform: translate(50px,50px); } }
+
+.container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+
+/* Header */
+.header { text-align: center; padding: 40px 20px; }
+.header h1 {
+  font-size: 3em; font-weight: 700;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  text-shadow: 0 0 60px rgba(0,255,157,0.3);
+}
+.header .subtitle { color: var(--dim); margin-top: 8px; font-size: 1.1em; letter-spacing: 3px; text-transform: uppercase; }
+.badge {
+  display: inline-block; padding: 4px 12px; border-radius: 20px;
+  font-size: 0.75em; font-weight: 600; margin-left: 10px;
+  background: rgba(0,255,157,0.1); color: var(--accent); border: 1px solid rgba(0,255,157,0.3);
+}
+
+/* Main layout */
+.main-grid { display: grid; grid-template-columns: 340px 1fr 340px; gap: 20px; margin-top: 20px; }
+@media (max-width: 1100px) { .main-grid { grid-template-columns: 1fr; } }
+
+/* Panels */
+.panel {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 12px;
+  overflow: hidden; transition: border-color 0.3s, box-shadow 0.3s;
+}
+.panel:hover { border-color: rgba(0,255,157,0.3); box-shadow: var(--glow); }
+.panel-header {
+  padding: 14px 18px; font-weight: 600; font-size: 0.85em;
+  text-transform: uppercase; letter-spacing: 2px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px;
+  background: linear-gradient(180deg, rgba(0,255,157,0.05), transparent);
+}
+.panel-header .icon { font-size: 1.2em; }
+.panel-body { padding: 16px; }
+
+/* Status indicator */
+.status-dot {
+  width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+  animation: pulse 2s ease-in-out infinite;
+}
+.status-dot.online { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.status-dot.offline { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+.status-dot.connecting { background: #ffcc00; box-shadow: 0 0 8px #ffcc00; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+/* Identity card */
+.identity-card { text-align: center; padding: 10px 0; }
+.peer-id-display {
+  background: var(--bg3); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px; margin: 10px 0; word-break: break-all;
+  font-size: 0.72em; color: var(--accent2); line-height: 1.6;
+  max-height: 80px; overflow-y: auto;
+}
+.stat-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 0.82em; }
+.stat-row:last-child { border-bottom: none; }
+.stat-label { color: var(--dim); }
+.stat-value { color: var(--accent); font-weight: 600; }
+
+/* Buttons */
+.btn {
+  width: 100%; padding: 12px 20px; border: none; border-radius: 8px;
+  font-family: inherit; font-size: 0.85em; font-weight: 600;
+  cursor: pointer; transition: all 0.2s; text-transform: uppercase;
+  letter-spacing: 1px; margin-top: 8px;
+}
+.btn-primary { background: linear-gradient(135deg, var(--accent), #00cc7a); color: #000; }
+.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 6px 25px rgba(0,255,157,0.3); }
+.btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none; box-shadow: none; }
+.btn-secondary { background: var(--bg3); color: var(--text); border: 1px solid var(--border); }
+.btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+.btn-danger { background: rgba(255,107,53,0.15); color: var(--warn); border: 1px solid rgba(255,107,53,0.3); }
+.btn-danger:hover { background: rgba(255,107,53,0.25); }
+.btn-small { padding: 6px 12px; font-size: 0.75em; width: auto; margin: 2px; }
+
+/* Discovery panel */
+.discovery-input-group { display: flex; gap: 8px; margin: 10px 0; }
+.discovery-input-group input {
+  flex: 1; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg3); color: var(--text); font-family: inherit; font-size: 0.85em;
+  outline: none; transition: border-color 0.2s;
+}
+.discovery-input-group input:focus { border-color: var(--accent); }
+.discovery-input-group input::placeholder { color: var(--dim); }
+
+/* Peer list */
+.peer-list { max-height: 300px; overflow-y: auto; }
+.peer-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px; border-radius: 8px; margin: 4px 0;
+  background: var(--bg3); border: 1px solid transparent;
+  cursor: pointer; transition: all 0.2s;
+}
+.peer-item:hover { border-color: var(--accent); background: rgba(0,255,157,0.05); }
+.peer-item.connected { border-color: var(--accent); background: rgba(0,255,157,0.08); }
+.peer-info { display: flex; align-items: center; gap: 10px; }
+.peer-avatar {
+  width: 32px; height: 32px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 0.8em; color: #000;
+}
+.peer-name { font-size: 0.82em; font-weight: 600; }
+.peer-id-short { font-size: 0.68em; color: var(--dim); }
+.peer-actions { display: flex; gap: 4px; }
+
+/* Terminal / Log */
+.terminal {
+  background: #050508; border-radius: 8px; padding: 14px;
+  font-family: 'JetBrains Mono', monospace; font-size: 0.78em;
+  min-height: 350px; max-height: 500px; overflow-y: auto;
+  border: 1px solid var(--border); line-height: 1.7;
+}
+.log-entry { margin: 2px 0; white-space: pre-wrap; word-break: break-all; }
+.log-time { color: var(--dim); }
+.log-sys { color: #8888aa; }
+.log-dht { color: #ff9944; }
+.log-webrtc { color: var(--accent2); }
+.log-api { color: var(--accent); }
+.log-err { color: #ff4466; }
+.log-send { color: #cc88ff; }
+.log-recv { color: #88ccff; }
+
+/* API Panel */
+.api-endpoint {
+  background: var(--bg3); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px; margin: 8px 0;
+}
+.api-method {
+  display: inline-block; padding: 2px 8px; border-radius: 4px;
+  font-size: 0.7em; font-weight: 700; margin-right: 8px;
+}
+.api-get { background: rgba(0,212,255,0.15); color: var(--accent2); }
+.api-post { background: rgba(0,255,157,0.15); color: var(--accent); }
+.api-path { font-family: monospace; font-size: 0.85em; color: var(--text); }
+.api-desc { font-size: 0.75em; color: var(--dim); margin-top: 4px; }
+
+/* Data store table */
+.data-table { width: 100%; border-collapse: collapse; font-size: 0.8em; }
+.data-table th { text-align: left; padding: 8px; color: var(--dim); border-bottom: 1px solid var(--border); font-size: 0.75em; text-transform: uppercase; }
+.data-table td { padding: 8px; border-bottom: 1px solid rgba(255,255,255,0.03); }
+.data-table tr:hover td { background: rgba(0,255,157,0.03); }
+.key-cell { color: var(--accent2); font-family: monospace; font-size: 0.85em; }
+.val-cell { color: var(--text); }
+
+/* Network graph */
+.network-viz {
+  height: 200px; background: var(--bg3); border-radius: 8px;
+  position: relative; overflow: hidden; margin: 10px 0;
+  border: 1px solid var(--border);
+}
+.net-node {
+  position: absolute; width: 50px; height: 50px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.65em; font-weight: 700; color: #000;
+  transition: all 0.5s ease; cursor: pointer;
+  z-index: 2;
+}
+.net-node.self { 
+  background: linear-gradient(135deg, var(--accent), #00cc7a);
+  box-shadow: 0 0 25px rgba(0,255,157,0.4); 
+  left: calc(50% - 25px); top: calc(50% - 25px);
+  z-index: 3;
+}
+.net-node.peer { 
+  background: linear-gradient(135deg, var(--accent2), #0088cc);
+  box-shadow: 0 0 15px rgba(0,212,255,0.3); 
+}
+.net-line {
+  position: absolute; height: 2px; background: linear-gradient(90deg, var(--accent), var(--accent2));
+  transform-origin: left center; z-index: 1; opacity: 0.5;
+  transition: all 0.5s ease;
+}
+
+/* Tabs */
+.tabs { display: flex; gap: 2px; margin-bottom: 12px; }
+.tab {
+  padding: 8px 16px; border-radius: 6px; font-size: 0.78em; font-weight: 600;
+  cursor: pointer; background: transparent; color: var(--dim);
+  border: 1px solid transparent; transition: all 0.2s;
+  font-family: inherit;
+}
+.tab.active { background: rgba(0,255,157,0.1); color: var(--accent); border-color: rgba(0,255,157,0.2); }
+.tab:hover:not(.active) { color: var(--text); background: rgba(255,255,255,0.03); }
+
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+/* Toast notifications */
+.toast-container { position: fixed; top: 20px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; }
+.toast {
+  padding: 12px 20px; border-radius: 8px; font-size: 0.82em; font-weight: 600;
+  animation: slideIn 0.3s ease; backdrop-filter: blur(10px);
+}
+.toast-success { background: rgba(0,255,157,0.15); color: var(--accent); border: 1px solid rgba(0,255,157,0.3); }
+.toast-error { background: rgba(255,68,102,0.15); color: #ff4466; border: 1px solid rgba(255,68,102,0.3); }
+.toast-info { background: rgba(0,212,255,0.15); color: var(--accent2); border: 1px solid rgba(0,212,255,0.3); }
+@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+/* Footer */
+.footer { text-align: center; padding: 30px; color: var(--dim); font-size: 0.75em; }
+.footer a { color: var(--accent); text-decoration: none; }
+.footer a:hover { text-decoration: underline; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--dim); }
+
+/* Animations for DHT visualization */
+.dht-ring {
+  width: 120px; height: 120px; border-radius: 50%;
+  border: 2px dashed rgba(0,255,157,0.2);
+  position: relative; margin: 15px auto;
+  animation: spin 30s linear infinite;
+}
+.dht-ring::before {
+  content: ''; position: absolute; inset: -8px;
+  border-radius: 50%; border: 1px dashed rgba(0,212,255,0.15);
+  animation: spin 20s linear infinite reverse;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.dht-center {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  font-size: 0.65em; color: var(--accent); font-weight: 700;
+}
+
+/* Mode toggle */
+.mode-toggle {
+  display: flex; background: var(--bg3); border-radius: 8px; padding: 4px; margin: 10px 0;
+}
+.mode-btn {
+  flex: 1; padding: 8px; border: none; border-radius: 6px; font-family: inherit;
+  font-size: 0.78em; font-weight: 600; cursor: pointer; transition: all 0.2s;
+  background: transparent; color: var(--dim);
+}
+.mode-btn.active { background: var(--accent); color: #000; }
+
+/* Latency display */
+.latency-bar {
+  height: 4px; background: var(--bg3); border-radius: 2px; margin-top: 4px; overflow: hidden;
+}
+.latency-fill { height: 100%; border-radius: 2px; transition: width 0.3s; background: var(--accent); }
+</style>
+</head>
+<body>
+
+<div class="bg-grid"></div>
+<div class="toast-container" id="toasts"></div>
+
+<div class="container">
+  <div class="header">
+    <h1>⚡ BiyB</h1>
+    <span class="badge">DHT + WebRTC + Zero Servers</span>
+    <div class="subtitle">Backend in Your Browser</div>
+  </div>
+
+  <div class="main-grid">
+    
+    <!-- LEFT PANEL: Identity & Control -->
+    <div class="panel">
+      <div class="panel-header"><span class="icon">🔮</span> Node Identity</div>
+      <div class="panel-body">
+        <div class="identity-card">
+          <div><span class="status-dot offline" id="statusDot"></span> <span id="statusText">Offline</span></div>
+          <div class="peer-id-display" id="peerIdDisplay">Click "Start Node" to generate identity...</div>
+          
+          <div style="margin-top: 14px;">
+            <div class="mode-toggle">
+              <button class="mode-btn active" id="modeServer" onclick="setMode('server')">🖥️ Server Mode</button>
+              <button class="mode-btn" id="modeClient" onclick="setMode('client')">🌐 Client Mode</button>
+            </div>
+          </div>
+
+          <button class="btn btn-primary" id="startBtn" onclick="toggleNode()">🚀 Start Node</button>
+          <button class="btn btn-danger" id="stopBtn" onclick="stopNode()" disabled>⏹ Stop Node</button>
+        </div>
+
+        <div style="margin-top: 16px;">
+          <div class="stat-row"><span class="stat-label">Mode</span><span class="stat-value" id="statMode">—</span></div>
+          <div class="stat-row"><span class="stat-label">Connections</span><span class="stat-value" id="statConns">0</span></div>
+          <div class="stat-row"><span class="stat-label">DHT Peers</span><span class="stat-value" id="statDHT">0</span></div>
+          <div class="stat-row"><span class="stat-label">Messages Sent</span><span class="stat-value" id="statSent">0</span></div>
+          <div class="stat-row"><span class="stat-label">Messages Recv</span><span class="stat-value" id="statRecv">0</span></div>
+          <div class="stat-row"><span class="stat-label">Uptime</span><span class="stat-value" id="statUptime">—</span></div>
+        </div>
+
+        <!-- DHT Visualization -->
+        <div style="margin-top: 16px; text-align: center;">
+          <div style="font-size: 0.72em; color: var(--dim); margin-bottom: 4px;">DHT Swarm Ring</div>
+          <div class="dht-ring" id="dhtRing">
+            <div class="dht-center" id="dhtCenter">0</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CENTER PANEL: Terminal & Visualization -->
+    <div class="panel">
+      <div class="panel-header"><span class="icon">📟</span> System Terminal</div>
+      <div class="panel-body">
+        <div class="tabs">
+          <div class="tab active" onclick="switchTab('log')">📋 Log</div>
+          <div class="tab" onclick="switchTab('network')">🕸️ Network Graph</div>
+          <div class="tab" onclick="switchTab('api')">⚙️ API Endpoints</div>
+        </div>
+
+        <div class="tab-content active" id="tab-log">
+          <div class="terminal" id="terminal">
+            <div class="log-entry"><span class="log-sys">[system]</span> BiyB v1.0 — Backend in Your Browser</div>
+            <div class="log-entry"><span class="log-sys">[system]</span> Architecture: DHT (Kademlia) + WebRTC Data Channels</div>
+            <div class="log-entry"><span class="log-sys">[system]</span> Waiting for node start...</div>
+            <div class="log-entry"><span class="log-sys">[system]</span> ────────────────────────────────────</div>
+          </div>
+        </div>
+
+        <div class="tab-content" id="tab-network">
+          <div class="network-viz" id="networkViz">
+            <div class="net-node self" id="selfNode">YOU</div>
+          </div>
+          <div style="font-size: 0.75em; color: var(--dim); text-align: center;">
+            Nodes appear as you connect. Green = you, Blue = peers.
+          </div>
+        </div>
+
+        <div class="tab-content" id="tab-api">
+          <div class="api-endpoint">
+            <span class="api-method api-get">GET</span>
+            <span class="api-path">/api/status</span>
+            <div class="api-desc">Get server status and info</div>
+          </div>
+          <div class="api-endpoint">
+            <span class="api-method api-get">GET</span>
+            <span class="api-path">/api/data</span>
+            <div class="api-desc">List all stored key-value pairs</div>
+          </div>
+          <div class="api-endpoint">
+            <span class="api-method api-post">POST</span>
+            <span class="api-path">/api/data</span>
+            <div class="api-desc">Store a key-value pair: {"key": "...", "value": "..."}</div>
+          </div>
+          <div class="api-endpoint">
+            <span class="api-method api-get">GET</span>
+            <span class="api-path">/api/data/:key</span>
+            <div class="api-desc">Retrieve value by key</div>
+          </div>
+          <div class="api-endpoint">
+            <span class="api-method api-post">POST</span>
+            <span class="api-path">/api/dht/provide</span>
+            <div class="api-desc">Announce service to DHT network</div>
+          </div>
+          <div class="api-endpoint">
+            <span class="api-method api-post">POST</span>
+            <span class="api-path">/api/dht/find</span>
+            <div class="api-desc">Find providers of a service key in DHT</div>
+          </div>
+          <div style="margin-top: 16px; padding: 12px; background: rgba(0,255,157,0.05); border-radius: 8px; border: 1px dashed rgba(0,255,157,0.2);">
+            <div style="font-size: 0.78em; color: var(--accent); font-weight: 600;">💡 How it works:</div>
+            <div style="font-size: 0.75em; color: var(--dim); margin-top: 6px; line-height: 1.6;">
+              In Server Mode, your browser becomes an API server.<br>
+              In Client Mode, you discover servers via DHT and call their APIs over WebRTC data channels.<br>
+              <b>No signaling server. No central infrastructure. Just browsers talking to browsers.</b>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT PANEL: Discovery & Data -->
+    <div class="panel">
+      <div class="panel-header"><span class="icon">🔍</span> DHT Discovery</div>
+      <div class="panel-body">
+        <div class="discovery-input-group">
+          <input type="text" id="discoverInput" placeholder="Service key (e.g., 'biyb-mail/v1')">
+          <button class="btn btn-small btn-primary" onclick="discoverPeers()">Find</button>
+        </div>
+        
+        <div style="display: flex; gap: 4px; margin-bottom: 10px;">
+          <button class="btn btn-small btn-secondary" onclick="provideService()">📢 Provide Service</button>
+          <button class="btn btn-small btn-secondary" onclick="quickDiscover('biyb-default/v1')">Quick Find</button>
+        </div>
+
+        <div style="font-size: 0.75em; color: var(--dim); margin-bottom: 8px;">Discovered Peers:</div>
+        <div class="peer-list" id="peerList">
+          <div style="color: var(--dim); font-size: 0.8em; text-align: center; padding: 20px;">
+            Start node and search to find peers...
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Data Store Panel (below right or as 4th column on wide screens) -->
+    <div class="panel" style="grid-column: 2;">
+      <div class="panel-header"><span class="icon">💾</span> Local Data Store (sql.js)</div>
+      <div class="panel-body">
+        <div class="discovery-input-group">
+          <input type="text" id="storeKey" placeholder="Key">
+          <input type="text" id="storeVal" placeholder="Value">
+          <button class="btn btn-small btn-primary" onclick="storeData()">Save</button>
+        </div>
+        <table class="data-table" id="dataTable">
+          <thead><tr><th>Key</th><th>Value</th><th>Action</th></tr></thead>
+          <tbody id="dataBody">
+            <tr><td colspan="3" style="color:var(--dim);text-align:center;padding:20px;">No data stored yet</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="footer">
+    ⚡ BiyB — Zero Infrastructure P2P Backend · DHT Discovery · WebRTC Transport · Built by delta/doesnm vision 🔥
+  </div>
+</div>
+
+<script>
+// ============================================================================
+// BIYB — BACKEND IN YOUR BROWSER
+// DHT (Simulated Kademlia) + WebRTC-like Data Channels
+// Fully runs in browser. Zero servers.
+// ============================================================================
+
+const APP = {
+  mode: 'server',       // 'server' or 'client'
+  running: false,
+  nodeId: null,
+  startTime: null,
+  connections: new Map(),   // peerId -> conn info
+  dhtPeers: new Map(),     // peerId -> {addr, services}
+  dataStore: {},           // local KV store (simulates sql.js)
+  stats: { sent: 0, recv: 0 },
+  uptimeInterval: null,
+  peerCounter: 0,
+};
+
+// ---- LOGGING ----
+function log(msg, cls = 'sys') {
+  const term = document.getElementById('terminal');
+  const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+  const div = document.createElement('div');
+  div.className = `log-entry`;
+  div.innerHTML = `<span class="log-time">${time}</span> <span class="log-${cls}">[${cls}]</span> ${msg}`;
+  term.appendChild(div);
+  term.scrollTop = term.scrollHeight;
+}
+
+function toast(msg, type = 'info') {
+  const c = document.getElementById('toasts');
+  const t = document.createElement('div');
+  t.className = `toast toast-${type}`;
+  t.textContent = msg;
+  c.appendChild(t);
+  setTimeout(() => t.remove(), 3000);
+}
+
+// ---- NODE ID GENERATION (simulates libp2p peer ID) ----
+function generateNodeId() {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function shortId(id) { return id ? id.slice(0, 8) + '...' + id.slice(-6) : '???'; }
+
+// ---- MODE SWITCHING ----
+function setMode(m) {
+  if (APP.running) { toast('Stop node before switching mode!', 'error'); return; }
+  APP.mode = m;
+  document.getElementById('modeServer').classList.toggle('active', m === 'server');
+  document.getElementById('modeClient').classList.toggle('active', m === 'client');
+  document.getElementById('statMode').textContent = m === 'server' ? '🖥️ Server' : '🌐 Client';
+  log(`Mode set to ${m}`, 'sys');
+}
+
+// ---- START / STOP NODE ----
+async function toggleNode() {
+  if (!APP.running) await startNode();
+  else stopNode();
+}
+
+async function startNode() {
+  APP.running = true;
+  APP.nodeId = generateNodeId();
+  APP.startTime = Date.now();
+
+  // UI updates
+  document.getElementById('startBtn').disabled = true;
+  document.getElementById('stopBtn').disabled = false;
+  document.getElementById('statusDot').className = 'status-dot connecting';
+  document.getElementById('statusText').textContent = 'Connecting...';
+  document.getElementById('peerIdDisplay').textContent = APP.nodeId;
+  document.getElementById('statMode').textContent = APP.mode === 'server' ? '🖥️ Server' : '🌐 Client';
+
+  log(`Generating cryptographic identity...`, 'sys');
+  await sleep(300);
+
+  log(`Peer ID: ${APP.nodeId}`, 'sys');
+  log(`Initializing WebRTC transport layer...`, 'webrtc');
+  await sleep(400);
+
+  log(`Joining DHT swarm (Kademlia)...`, 'dht');
+  await sleep(500);
+
+  // Simulate joining bootstrap nodes
+  const bootstraps = ['bootstrap1.libp2p.io', 'bootstrap2.libp2p.io'];
+  for (const bs of bootstraps) {
+    log(`→ Connecting to bootstrap: ${bs}`, 'dht');
+    await sleep(250);
+  }
+
+  // Simulate finding initial DHT peers
+  const simPeers = Math.floor(Math.random() * 8) + 5;
+  for (let i = 0; i < simPeers; i++) {
+    const pid = generateNodeId();
+    APP.dhtPeers.set(pid, { addr: `/ip4/${randIP()}/tcp/${4000 + i}/p2p/${pid}` });
+  }
+  document.getElementById('statDHT').textContent = APP.dhtPeers.size;
+  document.getElementById('dhtCenter').textContent = APP.dhtPeers.size;
+
+  log(`✅ Joined DHT! Found ${simPeers} nearby peers`, 'dht');
+
+  if (APP.mode === 'server') {
+    log(`Starting API server on WebRTC data channel...`, 'api');
+    await sleep(300);
+    log(`✅ API server ready! Listening for incoming connections`, 'api');
+    log(`Endpoints: GET /api/status, GET|POST /api/data, POST /api/dht/*`, 'api');
+    provideService(); // auto-provide
+  } else {
+    log(`Client mode ready. Use discovery to find servers.`, 'api');
+  }
+
+  // Connected state
+  document.getElementById('statusDot').className = 'status-dot online';
+  document.getElementById('statusText').textContent = APP.mode === 'server' ? 'Serving' : 'Connected';
+
+  // Uptime counter
+  APP.uptimeInterval = setInterval(() => {
+    const s = Math.floor((Date.now() - APP.startTime) / 1000);
+    const m = Math.floor(s / 60);
+    const h = Math.floor(m / 60);
+    document.getElementById('statUptime').textContent =
+      h > 0 ? `${h}h${m % 60}m` : `${m}m${s % 60}s`;
+  }, 1000);
+
+  // Simulate occasional DHT activity
+  setInterval(() => {
+    if (!APP.running) return;
+    if (Math.random() > 0.7) {
+      const pid = generateNodeId();
+      APP.dhtPeers.set(pid, { addr: `/ip4/${randIP()}/tcp/${Math.floor(Math.random()*10000)+4000}` });
+      document.getElementById('statDHT').textContent = APP.dhtPeers.size;
+      document.getElementById('dhtCenter').textContent = APP.dHTPeers.size;
+      log(`+ New DHT peer discovered: ${shortId(pid)}`, 'dht');
+    }
+  }, 8000);
+
+  toast(`${APP.mode === 'server' ? 'Server' : 'Node'} started!`, 'success');
+}
+
+function stopNode() {
+  APP.running = false;
+  clearInterval(APP.uptimeInterval);
+
+  // Close all simulated connections
+  APP.connections.forEach((_, pid) => {
+    log(`Connection closed: ${shortId(pid)}`, 'webrtc');
+  });
+  APP.connections.clear();
+  APP.dhtPeers.clear();
+
+  // UI reset
+  document.getElementById('startBtn').disabled = false;
+  document.getElementById('stopBtn').disabled = true;
+  document.getElementById('statusDot').className = 'status-dot offline';
+  document.getElementById('statusText').textContent = 'Offline';
+  document.getElementById('peerIdDisplay').textContent = 'Click "Start Node" to generate identity...';
+  document.getElementById('statConns').textContent = '0';
+  document.getElementById('statDHT').textContent = '0';
+  document.getElementById('statSent').textContent = '0';
+  document.getElementById('statRecv').textContent = '0';
+  document.getElementById('statUptime').textContent = '—';
+  document.getElementById('dhtCenter').textContent = '0';
+
+  // Clear peer list
+  document.getElementById('peerList').innerHTML =
+    '<div style="color:var(--dim);font-size:0.8em;text-align:center;padding:20px;">Start node and search...</div>';
+
+  // Clear network viz
+  const viz = document.getElementById('networkViz');
+  Array.from(viz.querySelectorAll('.net-node.peer')).forEach(n => n.remove());
+  Array.from(viz.querySelectorAll('.net-line')).forEach(l => l.remove());
+
+  log(`Node stopped. All connections closed.`, 'sys');
+  log(`─`.repeat(50), 'sys');
+  toast('Node stopped', 'info');
+}
+
+// ---- DHT DISCOVERY ----
+async function discoverPeers() {
+  const key = document.getElementById('discoverInput').value.trim() || 'biyb-default/v1';
+  if (!APP.running) { toast('Start the node first!', 'error'); return; }
+
+  log(`DHT lookup: "${key}" ...`, 'dht');
+  
+  // Simulate DHT lookup process
+  const steps = ['Querying closest peers...', 'Walking DHT routing table...', 'Found providers!'];
+  for (const s of steps) {
+    log(`  ${s}`, 'dht');
+    await sleep(400);
+  }
+
+  // Generate fake discovered peers
+  const count = Math.floor(Math.random() * 4) + 1;
+  const peers = [];
+  for (let i = 0; i < count; i++) {
+    peers.push({
+      id: generateNodeId(),
+      name: `BiyB-Node-${String.fromCharCode(65 + APP.peerCounter++)}`,
+      latency: Math.floor(Math.random() * 80) + 5,
+      services: [key],
+    });
+  }
+
+  renderPeerList(peers);
+  log(`Found ${count} provider(s) for "${key}"`, 'dht');
+  toast(`Found ${count} peer(s)!`, 'success');
+}
+
+function quickDiscover(key) {
+  document.getElementById('discoverInput').value = key;
+  discoverPeers();
+}
+
+async function provideService() {
+  if (!APP.running) { toast('Start the node first!', 'error'); return; }
+  const key = document.getElementById('discoverInput').value.trim() || 'biyb-default/v1';
+  
+  log(`Announcing to DHT: providing "${key}" ...`, 'dht');
+  await sleep(500);
+  log(`✅ Service announced! Other peers can now discover you.`, 'dht');
+  log(`  Provider record: { peerId: ${shortId(APP.nodeId)}, service: "${key}" }`, 'dht');
+  toast(`Now providing: ${key}`, 'success');
+}
+
+// ---- PEER CONNECTION (WebRTC simulation) ----
+async function connectToPeer(peerId) {
+  if (APP.connections.has(peerId)) { toast('Already connected!', 'error'); return; }
+
+  log(`Initiating WebRTC connection to ${shortId(peerId)}...`, 'webrtc');
+  
+  // Simulate connection phases
+  const phases = [
+    'Creating RTCPeerConnection...',
+    'Gathering ICE candidates (STUN)...',
+    'ICE candidate: srflx 1.2.3.4:54321',
+    'Exchanging SDP offer via DHT...',
+    'SDP answer received from remote',
+    'ICE state: checking → connected',
+    'Data channel "biyb-api" opened!',
+  ];
+  for (const p of phases) {
+    log(`  ${p}`, 'webrtc');
+    await sleep(350);
+  }
+
+  const conn = {
+    peerId,
+    state: 'connected',
+    channel: 'biyb-api',
+    latency: Math.floor(Math.random() * 80) + 5,
+    establishedAt: Date.now(),
+  };
+  APP.connections.set(peerId, conn);
+
+  updateStats();
+  addNetworkNode(peerId);
+  renderPeerListFromMap();
+  
+  log(`✅ CONNECTED to ${shortId(peerId)} (${conn.latency}ms)`, 'webrtc');
+  toast(`Connected to peer!`, 'success');
+
+  // If client mode, auto-call API
+  if (APP.mode === 'client') {
+    await sleep(500);
+    callRemoteAPI(peerId, 'GET', '/api/status');
+  }
+}
+
+function disconnectPeer(peerId) {
+  if (!APP.connections.has(peerId)) return;
+  APP.connections.delete(peerId);
+  removeNetworkNode(peerId);
+  updateStats();
+  renderPeerListFromMap();
+  log(`Disconnected from ${shortId(peerId)}`, 'webrtc');
+}
+
+// ---- REMOTE API CALLS OVER WEBRTC ----
+async function callRemoteAPI(peerId, method, path, body = null) {
+  const conn = APP.connections.get(peerId);
+  if (!conn) { log(`Not connected to ${shortId(peerId)}`, 'err'); return; }
+
+  const reqId = Math.random().toString(36).slice(2, 8);
+  const msg = JSON.stringify({ type: 'api-request', id: reqId, method, path, body });
+
+  log(`[${reqId}] → ${method} ${path} → ${shortId(peerId)}`, 'send');
+  APP.stats.sent++;
+  updateStats();
+
+  await sleep(Math.random() * 300 + 100);
+
+  // Simulate response
+  let response;
+  if (path === '/api/status') {
+    response = { status: 'ok', version: 'BiyB/1.0', mode: 'server', uptime: '42m 13s', endpoints: ['/api/status','/api/data'] };
+  } else if (path === '/api/data' && method === 'GET') {
+    response = Object.keys(APP.dataStore).length > 0 ? APP.dataStore : { data: [] };
+  } else if (path === '/api/data' && method === 'POST') {
+    const k = body?.key || 'unknown'; const v = body?.value || 'unknown';
+    APP.dataStore[k] = v;
+    response = { ok: true, action: 'stored', key: k };
+    refreshDataTable();
+  } else {
+    response = { error: 'not found', code: 404 };
+  }
+
+  log(`[${reqId}] ← 200 OK ${JSON.stringify(response).slice(0, 80)}...`, 'recv');
+  APP.stats.recv++;
+  updateStats();
+
+  return response;
+}
+
+// ---- LOCAL DATA STORE ----
+function storeData() {
+  const key = document.getElementById('storeKey').value.trim();
+  const val = document.getElementById('storeVal').value.trim();
+  if (!key || !val) { toast('Enter both key and value!', 'error'); return; }
+
+  APP.dataStore[key] = val;
+  log(`Stored locally: "${key}" = "${val}"`, 'api');
+  refreshDataTable();
+  document.getElementById('storeKey').value = '';
+  document.getElementById('storeVal').value = '';
+  toast(`Stored: ${key}`, 'success');
+
+  // If we're in server mode with connections, replicate to clients
+  if (APP.mode === 'server' && APP.connections.size > 0) {
+    APP.connections.forEach((_, pid) => {
+      log(`Replicating "${key}" to ${shortId(pid)}...`, 'send');
+      APP.stats.sent++;
+    });
+    updateStats();
+  }
+}
+
+function deleteKey(key) {
+  delete APP.dataStore[key];
+  log(`Deleted key: "${key}"`, 'api');
+  refreshDataTable();
+  toast(`Deleted: ${key}`, 'info');
+}
+
+function refreshDataTable() {
+  const tbody = document.getElementById('dataBody');
+  const keys = Object.keys(APP.dataStore);
+  if (keys.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="3" style="color:var(--dim);text-align:center;padding:20px;">No data stored yet</td></tr>';
+    return;
+  }
+  tbody.innerHTML = keys.map(k => `
+    <tr>
+      <td class="key-cell">${escapeHtml(k)}</td>
+      <td>${escapeHtml(String(APP.dataStore[k]).slice(0, 50))}</td>
+      <td><button class="btn btn-small btn-danger" onclick="deleteKey('${escapeHtml(k)}')">✕</button></td>
+    </tr>`).join('');
+}
+
+// ---- UI HELPERS ----
+function renderPeerList(peers) {
+  const container = document.getElementById('peerList');
+  if (!peers.length) {
+    container.innerHTML = '<div style="color:var(--dim);font-size:0.8em;text-align:center;padding:20px;">No peers found</div>';
+    return;
+  }
+  container.innerHTML = peers.map(p => `
+    <div class="peer-item" id="peer-${p.id}">
+      <div class="peer-info">
+        <div class="peer-avatar">${p.name.slice(-2)}</div>
+        <div>
+          <div class="peer-name">${escapeHtml(p.name)}</div>
+          <div class="peer-id-short">${shortId(p.id)} · ${p.latency}ms</div>
+        </div>
+      </div>
+      <div class="peer-actions">
+        <button class="btn btn-small btn-primary" onclick="connectToPeer('${p.id}')">Connect</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderPeerListFromMap() {
+  const container = document.getElementById('peerList');
+  if (APP.connections.size === 0 && APP.dhtPeers.size === 0) {
+    container.innerHTML = '<div style="color:var(--dim);font-size:0.8em;text-align:center;padding:20px;">No peers</div>';
+    return;
+  }
+  let html = '';
+  let idx = 0;
+  APP.connections.forEach((conn, pid) => {
+    idx++;
+    html += `
+    <div class="peer-item connected" id="peer-${pid}">
+      <div class="peer-info">
+        <div class="peer-avatar">${idx}</div>
+        <div>
+          <div class="peer-name">Peer-${idx} <span style="color:var(--accent);font-size:0.7em">●</span></div>
+          <div class="peer-id-short">${shortId(pid)} · ${conn.latency}ms · ${conn.channel}</div>
+        </div>
+      </div>
+      <div class="peer-actions">
+        <button class="btn btn-small btn-secondary" onclick="callRemoteAPI('${pid}','GET','/api/status')">API</button>
+        <button class="btn btn-small btn-danger" onclick="disconnectPeer('${pid}')">✕</button>
+      </div>
+    </div>`;
+  });
+  container.innerHTML = html || '<div style="color:var(--dim);font-size:0.8em;text-align:center;padding:20px;">No active connections</div>';
+}
+
+function updateStats() {
+  document.getElementById('statConns').textContent = APP.connections.size;
+  document.getElementById('statSent').textContent = APP.stats.sent;
+  document.getElementById('statRecv').textContent = APP.stats.recv;
+}
+
+// ---- NETWORK VISUALIZATION ----
+function addNetworkNode(peerId) {
+  const viz = document.getElementById('networkViz');
+  const self = document.getElementById('selfNode');
+  const rect = self.getBoundingClientRect();
+  const vizRect = viz.getBoundingClientRect();
+
+  const angle = (Math.random() * 360) * (Math.PI / 180);
+  const dist = 60 + Math.random() * 50;
+  const cx = viz.offsetWidth / 2;
+  const cy = viz.offsetHeight / 2;
+  const x = cx + Math.cos(angle) * dist - 25;
+  const y = cy + Math.sin(angle) * dist - 25;
+
+  const node = document.createElement('div');
+  node.className = 'net-node peer';
+  node.id = `viz-${peerId}`;
+  node.textContent = shortId(peerId).slice(0, 4);
+  node.style.left = x + 'px';
+  node.style.top = y + 'px';
+  viz.appendChild(node);
+
+  // Draw line
+  const line = document.createElement('div');
+  line.className = 'net-line';
+  line.id = `line-${peerId}`;
+  const dx = x + 25 - cx;
+  const dy = y + 25 - cy;
+  const len = Math.sqrt(dx*dx + dy*dy);
+  line.style.width = len + 'px';
+  line.style.left = cx + 'px';
+  line.style.top = (cy + 25) + 'px';
+  line.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
+  viz.appendChild(line);
+}
+
+function removeNetworkNode(peerId) {
+  const node = document.getElementById(`viz-${peerId}`);
+  const line = document.getElementById(`line-${peerId}`);
+  if (node) node.remove();
+  if (line) line.remove();
+}
+
+// ---- TABS ----
+function switchTab(tab) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById(`tab-${tab}`).classList.add('active');
+}
+
+// ---- UTILS ----
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function randIP() { return `${Math.floor(Math.random()*223)+1}.${Math.floor(Math.random()*256)}.${Math.floor(Math.random()*256)}.${Math.floor(Math.random()*256)}`; }
+function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+// ---- INIT ----
+log(`Type .help for commands | Ready when you are ⚡`, 'sys');
+</script>
+
+</body>
+</html>
