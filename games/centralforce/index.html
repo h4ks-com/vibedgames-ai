@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Central Force Lab</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;min-height:100vh;background:#0d1117;color:#c9d1d9;
+font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+overflow-x:hidden;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+.ctn{max-width:500px;margin:0 auto;padding:12px}
+h1{font-size:1.25rem;font-weight:700;text-align:center;margin-bottom:8px;color:#f0f6fc;letter-spacing:-.02em}
+h1 em{font-style:normal;color:#58a6ff}
+.tabs{display:flex;flex-wrap:wrap;gap:5px;justify-content:center;margin-bottom:10px}
+.tab{padding:5px 10px;border-radius:14px;background:#21262d;border:1px solid #30363d;
+color:#8b949e;font-size:.7rem;cursor:pointer;transition:all .15s;white-space:nowrap;user-select:none}
+.tab.on{background:#1f6feb;border-color:#1f6feb;color:#fff}
+.cw{position:relative;width:100%;background:#0d1117;border-radius:10px;
+border:1px solid #21262d;overflow:hidden;margin-bottom:8px}
+.cw canvas{display:block;width:100%;height:auto}
+.sl{font-size:.65rem;color:#484f58;text-transform:uppercase;letter-spacing:.06em;margin:4px 0 3px 4px}
+.ctrl{background:#161b22;border-radius:10px;border:1px solid #21262d;padding:10px 12px;margin-bottom:8px}
+.sr{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.sr:last-child{margin-bottom:0}
+.sn{font-size:.78rem;color:#8b949e;min-width:14px;font-weight:600;font-family:'SF Mono',Menlo,monospace}
+.sv{font-size:.78rem;color:#58a6ff;min-width:38px;text-align:right;font-variant-numeric:tabular-nums;
+font-family:'SF Mono',Menlo,monospace}
+input[type=range]{flex:1;-webkit-appearance:none;appearance:none;height:4px;background:#30363d;
+border-radius:2px;outline:none}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;border-radius:50%;
+background:#58a6ff;cursor:pointer;border:2px solid #0d1117;box-shadow:0 0 6px rgba(88,166,255,.4)}
+input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;
+background:#58a6ff;cursor:pointer;border:2px solid #0d1117}
+.br{display:flex;gap:8px;margin-bottom:8px}
+.btn{flex:1;padding:10px 14px;border-radius:8px;border:1px solid #30363d;background:#21262d;
+color:#c9d1d9;font-size:.85rem;cursor:pointer;transition:all .1s;text-align:center;user-select:none}
+.btn:active{background:#30363d;transform:scale(.97)}
+.btn.p{background:#1f6feb;border-color:#1f6feb;color:#fff}
+.warn{background:#3d1e08;border:1px solid #bd561d;border-radius:8px;padding:8px 12px;
+color:#f0883e;font-size:.8rem;margin-bottom:8px;display:none}
+.info{background:#161b22;border-radius:10px;border:1px solid #21262d;padding:12px;margin-bottom:24px}
+.ot{font-size:.95rem;font-weight:700;color:#3fb950;margin-bottom:2px}
+.od{font-size:.8rem;color:#c9d1d9;line-height:1.4}
+.pd{color:#8b949e;font-size:.72rem;margin-top:8px;line-height:1.5;border-top:1px solid #21262d;padding-top:8px}
+</style>
+</head>
+<body>
+<div class="ctn">
+<h1>⚛️ <em>Central Force</em> Lab</h1>
+<div class="tabs" id="tabs"></div>
+<div class="sl">Orbit</div>
+<div class="cw"><canvas id="cOrb" width="800" height="800"></canvas></div>
+<div class="sl">Effective Potential V<sub>eff</sub>(r)</div>
+<div class="cw"><canvas id="cVeff" width="800" height="400"></canvas></div>
+<div class="ctrl" id="ctrl"></div>
+<div class="br">
+<button class="btn p" id="bPlay">▶ Trace</button>
+<button class="btn" id="bReset">↺ Reset View</button>
+</div>
+<div class="warn" id="warn"></div>
+<div class="info">
+<div class="ot" id="oType">—</div>
+<div class="od" id="oDet">Adjust parameters to explore orbits.</div>
+<div class="pd" id="oDesc"></div>
+</div>
+</div>
+<script>
+// Colors
+const CL={bg:'#0d1117',grid:'#21262d',center:'#f0f6fc',orb:'#58a6ff',orbDim:'rgba(88,166,255,0.12)',
+dot:'#79c0ff',glow:'rgba(88,166,255,0.35)',V:'#e3b341',cent:'#58a6ff',veff:'#f78166',
+E:'#3fb950',forbid:'rgba(248,81,73,0.07)',allow:'rgba(63,185,80,0.06)',tp:'#f0883e'};
+
+// Potential definitions
+const POTS={
+kepler:{
+  name:'Gravity',f:'V = −k/r',
+  V:(r,p)=>-p.k/r,
+  F:(r,p)=>-p.k/(r*r),
+  prm:[{id:'k',l:'k',min:.1,max:5,st:.1,v:1}],
+  dL:1,dE:-.4,
+  desc:'Kepler/gravitational potential. Produces conic sections — circles, ellipses, parabolas, hyperbolas. One of only two central potentials where all bound orbits are closed (Bertrand\'s theorem).'
+},
+harmonic:{
+  name:'Harmonic',f:'V = ½kr²',
+  V:(r,p)=>.5*p.k*r*r,
+  F:(r,p)=>-p.k*r,
+  prm:[{id:'k',l:'k',min:.1,max:5,st:.1,v:1}],
+  dL:1,dE:2,
+  desc:'Isotropic harmonic oscillator. All bound orbits are closed ellipses centered at the origin. The second of Bertrand\'s two potentials with this property.'
+},
+yukawa:{
+  name:'Yukawa',f:'V = −ke⁻ᵅʳ/r',
+  V:(r,p)=>-p.k*Math.exp(-p.a*r)/r,
+  F:(r,p)=>-p.k*Math.exp(-p.a*r)*(1+p.a*r)/(r*r),
+  prm:[{id:'k',l:'k',min:.1,max:5,st:.1,v:1},{id:'a',l:'α',min:.05,max:2,st:.05,v:.3}],
+  dL:1,dE:-.1,
+  desc:'Screened Coulomb (Yukawa) potential. Models short-range nuclear forces. Orbits precess — the ellipse slowly rotates, forming rosette patterns.'
+},
+lj:{
+  name:'Lennard-Jones',f:'V = 4ε[(σ/r)¹²−(σ/r)⁶]',
+  V:(r,p)=>{const s=Math.pow(p.s/r,6);return 4*p.e*(s*s-s)},
+  F:(r,p)=>{const s=Math.pow(p.s/r,6);return 24*p.e/r*(2*s*s-s)},
+  prm:[{id:'e',l:'ε',min:.1,max:3,st:.1,v:1},{id:'s',l:'σ',min:.3,max:2,st:.1,v:1}],
+  dL:1,dE:-.3,
+  desc:'Lennard-Jones molecular potential. Steep repulsive core + attractive well. Rich orbit structure from near-circular to wildly precessing.'
+},
+power:{
+  name:'Power Law',f:'V = krⁿ',
+  V:(r,p)=>p.k*Math.pow(Math.max(r,1e-6),p.n),
+  F:(r,p)=>-p.k*p.n*Math.pow(Math.max(r,1e-6),p.n-1),
+  prm:[{id:'k',l:'k',min:-3,max:3,st:.1,v:1},{id:'n',l:'n',min:-2.5,max:3,st:.1,v:1.5}],
+  dL:1,dE:2,
+  desc:'General power-law. n=−1 with k<0 → Kepler. n=2 with k>0 → harmonic. Only these give all closed orbits. Try other values for open rosettes or scattering.'
+},
+log:{
+  name:'Log',f:'V = k·ln r',
+  V:(r,p)=>p.k*Math.log(Math.max(r,1e-6)),
+  F:(r,p)=>-p.k/Math.max(r,1e-6),
+  prm:[{id:'k',l:'k',min:.1,max:3,st:.1,v:1}],
+  dL:1,dE:1,
+  desc:'Logarithmic potential. Used in galactic dynamics to model flat rotation curves. All orbits are bound — they precess forming rosette patterns.'
+}
+};
+
+// State
+const S={pot:'kepler',p:{},L:1,E:-.4,orbit:[],ri:0,ro:0,ai:0,anim:false,afid:null};
+
+// Physics
+function veff(r){const P=POTS[S.pot];return P.V(r,S.p)+S.L*S.L/(2*r*r)}
+
+function findTP(){
+  const rs=.02,re=80,N=3000,dr=(re-rs)/N;
+  let inner=null,outer=null,pastMin=false;
+  let pr=rs,pv=veff(rs);
+  for(let i=1;i<=N;i++){
+    const r=rs+i*dr,v=veff(r);
+    if(inner===null&&pv>=S.E&&v<S.E){
+      let lo=pr,hi=r;
+      for(let j=0;j<50;j++){const m=(lo+hi)/2;if(veff(m)>S.E)lo=m;else hi=m;}
+      inner=(lo+hi)/2;
+    }
+    if(v>pv)pastMin=true;
+    if(pastMin&&outer===null&&pv<=S.E&&v>S.E){
+      let lo=pr,hi=r;
+      for(let j=0;j<50;j++){const m=(lo+hi)/2;if(veff(m)<S.E)lo=m;else hi=m;}
+      outer=(lo+hi)/2;
+    }
+    pr=r;pv=v;
+  }
+  return{inner,outer};
+}
+
+function computeOrbit(){
+  const P=POTS[S.pot],tp=findTP();
+  S.ri=tp.inner;S.ro=tp.outer;
+  if(!tp.inner){S.orbit=[];return}
+  const r0=tp.inner;
+  let x=r0,y=0,vx=0,vy=S.L/r0;
+  const dt=.003,maxS=60000,pts=[{x,y}];
+  const rmx=tp.outer?tp.outer*4:150;
+  for(let i=0;i<maxS;i++){
+    const r=Math.sqrt(x*x+y*y);
+    if(r<.003||r>rmx)break;
+    const Fr=P.F(r,S.p),ax=Fr*x/r,ay=Fr*y/r;
+    const xn=x+vx*dt+.5*ax*dt*dt,yn=y+vy*dt+.5*ay*dt*dt;
+    const rn=Math.sqrt(xn*xn+yn*yn);
+    if(rn<.003)break;
+    const Frn=P.F(rn,S.p),axn=Frn*xn/rn,ayn=Frn*yn/rn;
+    vx+=.5*(ax+axn)*dt;vy+=.5*(ay+ayn)*dt;
+    x=xn;y=yn;
+    if(i%3===0)pts.push({x,y});
+  }
+  S.orbit=pts;
+}
+
+// Nice step for axes
+function ns(r){const p=Math.pow(10,Math.floor(Math.log10(Math.max(r,1e-10))));
+const f=r/p;if(f<=1.5)return p;if(f<=3)return 2*p;if(f<=7)return 5*p;return 10*p}
+
+// Draw orbit canvas
+function drawOrb(){
+  const cv=document.getElementById('cOrb'),c=cv.getContext('2d');
+  const W=cv.width,H=cv.height;
+  c.clearRect(0,0,W,H);c.fillStyle=CL.bg;c.fillRect(0,0,W,H);
+
+  if(!S.orbit.length){
+    c.fillStyle='#484f58';c.font='15px sans-serif';c.textAlign='center';
+    c.fillText('No valid orbit — adjust E above V_eff minimum',W/2,H/2);return;
+  }
+
+  let x0=Infinity,x1=-Infinity,y0=Infinity,y1=-Infinity;
+  for(const p of S.orbit){x0=Math.min(x0,p.x);x1=Math.max(x1,p.x);
+  y0=Math.min(y0,p.y);y1=Math.max(y1,p.y)}
+  const cx=(x0+x1)/2,cy=(y0+y1)/2;
+  const span=Math.max(x1-x0,y1-y0,1)*1.5;
+  const sc=W/span,ox=W/2-cx*sc,oy=H/2+cy*sc;
+  const tx=x=>x*sc+ox,ty=y=>-y*sc+oy;
+
+  // Grid circles
+  const gs=ns(span/5);
+  c.strokeStyle=CL.grid;c.lineWidth=.5;
+  for(let r=gs;r<span;r+=gs){c.beginPath();c.arc(tx(0),ty(0),r*sc,0,Math.PI*2);c.stroke()}
+
+  // Axes
+  c.beginPath();c.moveTo(0,ty(0));c.lineTo(W,ty(0));c.moveTo(tx(0),0);c.lineTo(tx(0),H);
+  c.strokeStyle='#1c2028';c.lineWidth=1;c.stroke();
+
+  const n=S.anim?Math.min(S.ai,S.orbit.length):S.orbit.length;
+
+  // Dim preview if animating
+  if(S.anim&&S.orbit.length>1){
+    c.beginPath();c.moveTo(tx(S.orbit[0].x),ty(S.orbit[0].y));
+    for(let i=1;i<S.orbit.length;i++)c.lineTo(tx(S.orbit[i].x),ty(S.orbit[i].y));
+    c.strokeStyle=CL.orbDim;c.lineWidth=1.5;c.stroke();
+  }
+
+  // Bright trace
+  if(n>1){
+    c.beginPath();c.moveTo(tx(S.orbit[0].x),ty(S.orbit[0].y));
+    for(let i=1;i<n;i++)c.lineTo(tx(S.orbit[i].x),ty(S.orbit[i].y));
+    c.strokeStyle=CL.orb;c.lineWidth=2;c.stroke();
+  }
+
+  // Particle
+  if(S.anim&&S.ai>0&&S.ai<S.orbit.length){
+    const p=S.orbit[Math.min(S.ai,S.orbit.length-1)];
+    const px=tx(p.x),py=ty(p.y);
+    const g=c.createRadialGradient(px,py,0,px,py,14);
+    g.addColorStop(0,CL.glow);g.addColorStop(1,'transparent');
+    c.fillStyle=g;c.fillRect(px-14,py-14,28,28);
+    c.beginPath();c.arc(px,py,4.5,0,Math.PI*2);c.fillStyle=CL.dot;c.fill();
+  }
+
+  // Force center
+  c.beginPath();c.arc(tx(0),ty(0),3.5,0,Math.PI*2);c.fillStyle=CL.center;c.fill();
+
+  // Scale
+  c.fillStyle='#484f58';c.font='11px monospace';c.textAlign='left';
+  c.fillText('grid: '+gs.toFixed(2),8,H-8);
+}
+
+// Draw Veff canvas
+function drawVeff(){
+  const cv=document.getElementById('cVeff'),c=cv.getContext('2d');
+  const W=cv.width,H=cv.height;
+  c.clearRect(0,0,W,H);c.fillStyle=CL.bg;c.fillRect(0,0,W,H);
+  const P=POTS[S.pot];
+
+  let rs=.05,re=25;
+  if(S.ri)rs=Math.max(.02,S.ri*.25);
+  if(S.ro)re=Math.min(80,S.ro*3);
+  else if(S.ri)re=Math.min(80,S.ri*12);
+
+  const N=600,dr=(re-rs)/N;
+  const rA=[],vA=[],cA=[],veA=[];
+  let vn=Infinity,vx=-Infinity;
+  for(let i=0;i<=N;i++){
+    const r=rs+i*dr,v=P.V(r,S.p),cf=S.L*S.L/(2*r*r),ve=v+cf;
+    rA.push(r);vA.push(v);cA.push(cf);veA.push(ve);
+    if(isFinite(ve)){vn=Math.min(vn,ve,v);vx=Math.max(vx,ve,v)}
+  }
+  vn=Math.min(vn,S.E);vx=Math.max(vx,S.E);
+  // Clamp extremes
+  const vLim=Math.max(Math.abs(vn),Math.abs(vx),5)*1.5;
+  vn=Math.max(vn,-vLim);vx=Math.min(vx,vLim);
+  const vp=(vx-vn)*.15;
+  const yMin=vn-vp,yMax=vx+vp,ySp=yMax-yMin;
+
+  const pad={l:42,r:12,t:12,b:24};
+  const pw=W-pad.l-pad.r,ph=H-pad.t-pad.b;
+  const tx=r=>pad.l+(r-rs)/(re-rs)*pw;
+  const ty=v=>pad.t+(yMax-v)/ySp*ph;
+
+  // Forbidden bg
+  c.fillStyle=CL.forbid;c.fillRect(pad.l,pad.t,pw,ph);
+
+  // Allowed region
+  c.beginPath();let inA=false;
+  for(let i=0;i<=N;i++){
+    if(veA[i]<S.E){
+      if(!inA){c.moveTo(tx(rA[i]),ty(S.E));c.lineTo(tx(rA[i]),ty(veA[i]));inA=true}
+      else c.lineTo(tx(rA[i]),ty(veA[i]));
+    }else if(inA){c.lineTo(tx(rA[i-1]),ty(S.E));inA=false}
+  }
+  if(inA)c.lineTo(tx(rA[N]),ty(S.E));
+  c.closePath();c.fillStyle=CL.allow;c.fill();
+
+  // Grid
+  c.strokeStyle='#1c2028';c.lineWidth=.5;
+  const yStep=ns(ySp/4);
+  c.font='10px monospace';c.textAlign='right';c.fillStyle='#484f58';
+  for(let v=Math.ceil(yMin/yStep)*yStep;v<=yMax;v+=yStep){
+    c.beginPath();c.moveTo(pad.l,ty(v));c.lineTo(pad.l+pw,ty(v));c.stroke();
+    c.fillText(v.toFixed(1),pad.l-4,ty(v)+3);
+  }
+  c.textAlign='center';
+  const xStep=ns((re-rs)/5);
+  for(let r=Math.ceil(rs/xStep)*xStep;r<=re;r+=xStep){
+    c.fillText(r.toFixed(1),tx(r),pad.t+ph+14);
+  }
+
+  // Axes
+  c.strokeStyle='#30363d';c.lineWidth=1;
+  c.beginPath();c.moveTo(pad.l,pad.t);c.lineTo(pad.l,pad.t+ph);c.lineTo(pad.l+pw,pad.t+ph);c.stroke();
+
+  // Curves helper
+  function curve(arr,col,w,dash){
+    c.beginPath();let st=false;
+    for(let i=0;i<arr.length;i++){
+      if(!isFinite(arr[i])){st=false;continue}
+      const y=ty(arr[i]);
+      if(y<pad.t-60||y>pad.t+ph+60){st=false;continue}
+      const x=tx(rA[i]);
+      if(!st){c.moveTo(x,y);st=true}else c.lineTo(x,y);
+    }
+    c.strokeStyle=col;c.lineWidth=w;
+    if(dash)c.setLineDash([5,3]);else c.setLineDash([]);
+    c.stroke();c.setLineDash([]);
+  }
+
+  curve(vA,CL.V,1,true);       // V(r)
+  curve(cA,CL.cent,1,true);    // centrifugal
+  curve(veA,CL.veff,2.5,false);// V_eff
+
+  // E line
+  c.beginPath();c.moveTo(pad.l,ty(S.E));c.lineTo(pad.l+pw,ty(S.E));
+  c.strokeStyle=CL.E;c.lineWidth=1.5;c.setLineDash([6,4]);c.stroke();c.setLineDash([]);
+  c.fillStyle=CL.E;c.font='bold 11px monospace';c.textAlign='left';
+  c.fillText('E',pad.l+pw+3,ty(S.E)+4);
+
+  // Turning points
+  if(S.ri){c.beginPath();c.arc(tx(S.ri),ty(S.E),5,0,Math.PI*2);c.fillStyle=CL.tp;c.fill();
+    c.fillStyle=CL.tp;c.font='10px monospace';c.textAlign='center';
+    c.fillText('r₁',tx(S.ri),ty(S.E)+16)}
+  if(S.ro){c.beginPath();c.arc(tx(S.ro),ty(S.E),5,0,Math.PI*2);c.fillStyle=CL.tp;c.fill();
+    c.fillStyle=CL.tp;c.font='10px monospace';c.textAlign='center';
+    c.fillText('r₂',tx(S.ro),ty(S.E)+16)}
+
+  // Legend
+  c.font='10px sans-serif';c.textAlign='left';
+  [{c:CL.veff,l:'V_eff',d:0},{c:CL.V,l:'V(r)',d:1},{c:CL.cent,l:'L²/2r²',d:1},{c:CL.E,l:'E',d:1}]
+  .reduce((lx,o)=>{
+    c.beginPath();c.moveTo(lx,15);c.lineTo(lx+14,15);c.strokeStyle=o.c;c.lineWidth=o.d?1:2;
+    if(o.d)c.setLineDash([4,3]);c.stroke();c.setLineDash([]);
+    c.fillStyle=o.c;c.fillText(o.l,lx+18,19);return lx+c.measureText(o.l).width+32;
+  },pad.l+6);
+
+  // r label
+  c.fillStyle='#484f58';c.font='11px sans-serif';c.textAlign='center';
+  c.fillText('r',pad.l+pw/2,H-2);
+}
+
+// Update orbit info
+function updateInfo(){
+  const P=POTS[S.pot],w=document.getElementById('warn');
+  const ot=document.getElementById('oType'),od=document.getElementById('oDet'),
+    ds=document.getElementById('oDesc');
+  ds.textContent=P.desc;
+
+  if(!S.ri){
+    w.style.display='block';w.textContent='No valid orbit: E is below V_eff minimum. Raise E or adjust L.';
+    ot.textContent='No orbit';ot.style.color='#f85149';
+    od.textContent='';return;
+  }
+  w.style.display='none';
+
+  if(S.ro){
+    ot.style.color='#3fb950';
+    // Kepler classification
+    if(S.pot==='kepler'){
+      const a=(S.ri+S.ro)/2;
+      const e=(S.ro-S.ri)/(S.ro+S.ri);
+      if(e<.02){ot.textContent='Circular orbit'}
+      else{ot.textContent='Elliptical orbit'}
+      od.textContent=`r₁ = ${S.ri.toFixed(3)}  r₂ = ${S.ro.toFixed(3)}  a = ${a.toFixed(3)}  e = ${e.toFixed(3)}`;
+    }else{
+      ot.textContent='Bound orbit (precessing)';
+      od.textContent=`Perihelion r₁ = ${S.ri.toFixed(3)}  Aphelion r₂ = ${S.ro.toFixed(3)}`;
+    }
+  }else{
+    ot.style.color='#f0883e';ot.textContent='Scattering (unbound)';
+    od.textContent=`Closest approach r₁ = ${S.ri.toFixed(3)}`;
+  }
+}
+
+// Build UI
+function buildTabs(){
+  const el=document.getElementById('tabs');el.innerHTML='';
+  for(const k in POTS){
+    const t=document.createElement('div');t.className='tab'+(k===S.pot?' on':'');
+    t.textContent=POTS[k].name;t.dataset.k=k;
+    t.addEventListener('click',()=>switchPot(k));
+    el.appendChild(t);
+  }
+}
+
+function buildSliders(){
+  const el=document.getElementById('ctrl');el.innerHTML='';
+  const P=POTS[S.pot];
+
+  // L slider
+  addSlider(el,'L',S.L,.1,5,.05,v=>{S.L=v;refresh()});
+  // E slider
+  addSlider(el,'E',S.E,-5,8,.05,v=>{S.E=v;refresh()});
+  // Potential params
+  for(const p of P.prm){
+    addSlider(el,p.l,S.p[p.id],p.min,p.max,p.st,v=>{S.p[p.id]=v;refresh()});
+  }
+}
+
+function addSlider(el,label,val,min,max,step,cb){
+  const row=document.createElement('div');row.className='sr';
+  const lbl=document.createElement('span');lbl.className='sn';lbl.textContent=label;
+  const inp=document.createElement('input');inp.type='range';inp.min=min;inp.max=max;inp.step=step;inp.value=val;
+  const vl=document.createElement('span');vl.className='sv';vl.textContent=Number(val).toFixed(2);
+  inp.addEventListener('input',()=>{const v=parseFloat(inp.value);vl.textContent=v.toFixed(2);cb(v)});
+  row.append(lbl,inp,vl);el.appendChild(row);
+}
+
+function switchPot(k){
+  S.pot=k;const P=POTS[k];
+  S.p={};for(const p of P.prm)S.p[p.id]=p.v;
+  S.L=P.dL;S.E=P.dE;
+  stopAnim();
+  buildTabs();buildSliders();refresh();
+}
+
+function refresh(){
+  stopAnim();
+  computeOrbit();drawOrb();drawVeff();updateInfo();
+}
+
+// Animation
+function startAnim(){
+  if(S.anim)return;if(!S.orbit.length)return;
+  S.anim=true;S.ai=0;
+  document.getElementById('bPlay').textContent='⏸ Pause';
+  tick();
+}
+function stopAnim(){
+  S.anim=false;S.ai=0;if(S.afid)cancelAnimationFrame(S.afid);S.afid=null;
+  document.getElementById('bPlay').textContent='▶ Trace';
+  drawOrb();
+}
+function tick(){
+  if(!S.anim)return;
+  S.ai+=80;
+  if(S.ai>=S.orbit.length)S.ai=0;
+  drawOrb();
+  S.afid=requestAnimationFrame(tick);
+}
+
+// Init
+buildTabs();
+S.p={};for(const p of POTS[S.pot].prm)S.p[p.id]=p.v;
+S.L=POTS[S.pot].dL;S.E=POTS[S.pot].dE;
+buildSliders();refresh();
+
+document.getElementById('bPlay').addEventListener('click',()=>{
+  if(S.anim)stopAnim();else startAnim();
+});
+document.getElementById('bReset').addEventListener('click',()=>{stopAnim();drawOrb()});
+</script>
+</body>
+</html>
