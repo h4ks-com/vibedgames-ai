@@ -1,0 +1,907 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Universal Node Network Generator</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, sans-serif; background: #0a0e17; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+.topbar { background: #111827; padding: 8px 16px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid #1f2937; z-index: 10; flex-shrink: 0; }
+.topbar label { font-size: 12px; color: #9ca3af; }
+.topbar input[type="number"] { width: 60px; padding: 4px 8px; background: #1f2937; border: 1px solid #374151; color: #fff; border-radius: 4px; font-size: 13px; }
+.topbar select { padding: 4px 8px; background: #1f2937; border: 1px solid #374151; color: #fff; border-radius: 4px; font-size: 13px; }
+
+.btn { padding: 6px 14px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; transition: all 0.2s; }
+.btn-gen { background: linear-gradient(135deg,#6366f1,#8b5cf6); color: #fff; }
+.btn-gen:hover { transform: scale(1.05); box-shadow: 0 0 15px rgba(99,102,241,0.5); }
+.btn-path { background: linear-gradient(135deg,#10b981,#059669); color: #fff; }
+.btn-path:hover { transform: scale(1.05); box-shadow: 0 0 15px rgba(16,185,129,0.5); }
+.btn-exec { background: linear-gradient(135deg,#f59e0b,#d97706); color: #000; }
+.btn-exec:hover { transform: scale(1.05); box-shadow: 0 0 15px rgba(245,158,11,0.5); }
+
+.main-area { display: flex; flex: 1; overflow: hidden; }
+.canvas-wrap { flex: 1; position: relative; overflow: hidden; }
+#canvas { width: 100%; height: 100%; display: block; cursor: grab; }
+#canvas:active { cursor: grabbing; }
+
+.sidebar { width: 280px; min-width: 280px; background: #111827; border-left: 1px solid #1f2937; display: flex; flex-direction: column; overflow-y: auto; padding: 12px; gap: 10px; }
+
+.sidebar-section { background: #1f2937; border-radius: 8px; padding: 10px; }
+.sidebar-section h3 { font-size: 12px; margin-bottom: 8px; color: #38ef7d; text-transform: uppercase; letter-spacing: 0.5px; }
+
+.data-input-box { width: 100%; height: 80px; background: #0a0e17; border: 1px solid #374151; border-radius: 6px; color: #e0e0e0; padding: 8px; font-size: 12px; resize: vertical; font-family: monospace; }
+.data-input-box:focus { outline: none; border-color: #38ef7d; }
+.data-input-box::placeholder { color: #4b5563; }
+
+.exec-btn-wrap { margin-top: 8px; text-align: center; }
+
+.results-area { background: #0a0e17; border: 1px solid #1f2937; border-radius: 8px; padding: 10px; max-height: 300px; overflow-y: auto; }
+.results-area h3 { color: #38ef7d; font-size: 11px; margin-bottom: 6px; }
+.exec-step { font-size: 11px; padding: 6px 8px; margin: 4px 0; background: #1f2937; border-radius: 4px; border-left: 3px solid #38ef7d; line-height: 1.5; }
+.exec-step .step-node { color: #818cf8; font-weight: bold; }
+.exec-step .step-data { color: #fbbf24; word-break: break-all; }
+
+.node-detail { background: #1f2937; border-radius: 8px; padding: 10px; }
+.node-detail h4 { color: #818cf8; font-size: 12px; margin-bottom: 6px; }
+.detail-row { font-size: 11px; padding: 3px 0; color: #9ca3af; border-bottom: 1px solid #374151; }
+.detail-edge { display: flex; justify-content: space-between; font-size: 11px; padding: 2px 4px; margin: 2px 0; background: #111827; border-radius: 3px; }
+
+.stats-content { font-size: 11px; line-height: 1.7; color: #9ca3af; }
+.stat-line { display: flex; justify-content: space-between; }
+.stat-line span:last-child { color: #38ef7d; font-weight: bold; }
+
+.badge-start { background: #22c55e; color: #000; font-size: 9px; padding: 1px 5px; border-radius: 3px; vertical-align: middle; margin-left: 4px; }
+.badge-end { background: #ef4444; color: #fff; font-size: 9px; padding: 1px 5px; border-radius: 3px; vertical-align: middle; margin-left: 4px; }
+</style>
+</head>
+<body>
+
+<div class="topbar" id="topbar">
+  <label>Nodes:</label>
+  <input type="number" id="node-count" value="20" min="2" max="200">
+  <label>Type:</label>
+  <select id="topology-type">
+    <option value="random">Random Directed</option>
+    <option value="tree">Tree (LCRS)</option>
+    <option value="dag">DAG (Acyclic)</option>
+    <option value="scalefree">Scale-Free</option>
+    <option value="smallworld">Small World</option>
+  </select>
+  <button class="btn btn-gen" onclick="generateNetwork()">⚡ Generate</button>
+  <button class="btn btn-path" onclick="showPath()">🔍 Show Path</button>
+  <button class="btn btn-exec" onclick="executeFlow()">▶ Execute Flow</button>
+</div>
+
+<div class="main-area">
+  <div class="canvas-wrap" id="canvas-wrap">
+    <canvas id="canvas"></canvas>
+  </div>
+
+  <div class="sidebar" id="sidebar">
+
+    <!-- DATA INPUT -->
+    <div class="sidebar-section data-section" id="data-section">
+      <h3>⚡ Data Through Network</h3>
+      <textarea class="data-input-box" id="data-input" placeholder="Enter data to send through network...&#10;&#10;Examples:&#10;- hello world&#10;- 42&#10;- any text"></textarea>
+      <div class="exec-btn-wrap">
+        <button class="btn btn-exec" onclick="executeFlow()">▶ Execute (Start → End)</button>
+      </div>
+    </div>
+
+    <!-- EXECUTION RESULTS -->
+    <div class="results-area" id="exec-results" style="display:none;">
+      <h3>📋 Execution Log</h3>
+      <div id="results-content"></div>
+    </div>
+
+    <!-- NODE DETAIL -->
+    <div class="node-detail" id="node-detail" style="display:none;">
+      <h4 id="detail-title">Node Info</h4>
+      <div id="detail-content"></div>
+    </div>
+
+    <!-- STATS -->
+    <div class="sidebar-section" style="margin-top:auto;">
+      <h3>Stats</h3>
+      <div id="stats-content"><em>Generate a network first</em></div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ============================================================
+// UNIVERSAL NODE GRAPH LIBRARY (JS)
+// ============================================================
+
+var EdgeType = {
+  CHILD: 0,
+  SIBLING: 1,
+  FORWARD: 2,
+  BACK: 3,
+  RESIDUAL: 4
+};
+
+function Link(target, type, weight) {
+  this.target = target;
+  this.next = null;
+  this.type = type;
+  this.weight = weight || 1;
+}
+
+function Node(label, data) {
+  this.firstLink = null;
+  this.payload = { label: label, data: data, id: Node._nextId++ };
+  this.x = 0;
+  this.y = 0;
+  this.vx = 0;
+  this.vy = 0;
+}
+Node._nextId = 0;
+
+function Graph() {
+  this.nodes = [];
+}
+
+Graph.prototype.addNode = function(label, data) {
+  var n = new Node(label, data);
+  this.nodes.push(n);
+  return n;
+};
+
+Graph.prototype.find = function(label) {
+  for (var i = 0; i < this.nodes.length; i++) {
+    if (this.nodes[i].payload.label === label) return this.nodes[i];
+  }
+  return null;
+};
+
+function connect(src, dst, type, weight) {
+  var l = new Link(dst, type, weight);
+  l.next = src.firstLink;
+  src.firstLink = l;
+  return l;
+}
+
+function neighbors(node, filterType) {
+  var result = [];
+  for (var l = node.firstLink; l; l = l.next) {
+    if (filterType === undefined || l.type === filterType) result.push(l);
+  }
+  return result;
+}
+
+function edgeCount(node, filterType) {
+  var c = 0;
+  for (var l = node.firstLink; l; l = l.next) {
+    if (filterType === undefined || l.type === filterType) c++;
+  }
+  return c;
+}
+
+function bfs(start, endNode, maxDepth) {
+  var visited = {};
+  var parentMap = {};
+  var queue = [{ node: start, depth: 0 }];
+  visited[start.payload.id] = true;
+
+  while (queue.length > 0) {
+    var cur = queue.shift();
+    if (cur.node === endNode) break;
+    if (maxDepth && cur.depth >= maxDepth) continue;
+
+    var nbrs = neighbors(cur.node);
+    for (var i = 0; i < nbrs.length; i++) {
+      var nid = nbrs[i].target.payload.id;
+      if (!visited[nid]) {
+        visited[nid] = true;
+        parentMap[nid] = cur.node;
+        queue.push({ node: nbrs[i].target, depth: cur.depth + 1 });
+      }
+    }
+  }
+
+  // Reconstruct path
+  var path = [];
+  var current = endNode;
+  while (current && current !== start) {
+    path.unshift(current);
+    current = parentMap[current.payload.id];
+  }
+  if (current === start) path.unshift(start);
+
+  return path.length > 0 ? path : null;
+}
+
+function detectCycle(graph) {
+  var WHITE = 0, GRAY = 1, BLACK = 2;
+  var color = {};
+  var parent = {};
+
+  for (var i = 0; i < graph.nodes.length; i++) {
+    color[graph.nodes[i].payload.id] = WHITE;
+  }
+
+  function dfsCycle(u) {
+    color[u.payload.id] = GRAY;
+    for (var l = u.firstLink; l; l = l.next) {
+      var v = l.target;
+      if (!color[v.payload.id]) color[v.payload.id] = WHITE;
+      if (color[v.payload.id] === GRAY) {
+        var cycle = [v];
+        var c = u;
+        while (c && c !== v) { cycle.push(c); c = parent[c.payload.id]; }
+        cycle.push(v);
+        cycle.reverse();
+        return cycle;
+      }
+      if (color[v.payload.id] === WHITE) {
+        parent[v.payload.id] = u;
+        var found = dfsCycle(v);
+        if (found) return found;
+      }
+    }
+    color[u.payload.id] = BLACK;
+    return null;
+  }
+
+  for (var j = 0; j < graph.nodes.length; j++) {
+    if (color[graph.nodes[j].payload.id] === WHITE) {
+      var cyc = dfsCycle(graph.nodes[j]);
+      if (cyc) return cyc;
+    }
+  }
+  return null;
+}
+
+// ============================================================
+// TOPOLOGY GENERATORS
+// ============================================================
+
+function generateRandom(n, g) {
+  for (var i = 0; i < n; i++) g.addNode('N' + i);
+  for (var i = 0; i < n; i++) {
+    var numEdges = Math.floor(Math.random() * 3) + 1;
+    for (var e = 0; e < numEdges; e++) {
+      var target = Math.floor(Math.random() * n);
+      if (target !== i) connect(g.nodes[i], g.nodes[target], EdgeType.FORWARD, parseFloat((Math.random() * 5).toFixed(2)));
+    }
+  }
+}
+
+function generateTree(n, g) {
+  for (var i = 0; i < n; i++) g.addNode('N' + i);
+  // Build LCRS tree
+  for (var i = 1; i < n; i++) {
+    var parentIdx = Math.floor((i - 1) / 2);
+    if (parentIdx * 2 + 1 === i) {
+      connect(g.nodes[parentIdx], g.nodes[i], EdgeType.CHILD);
+    } else {
+      var siblingIdx = parentIdx * 2 + 1;
+      if (siblingIdx < n) connect(g.nodes[siblingIdx], g.nodes[i], EdgeType.SIBLING);
+      else connect(g.nodes[parentIdx], g.nodes[i], EdgeType.CHILD);
+    }
+  }
+}
+
+function generateDAG(n, g) {
+  for (var i = 0; i < n; i++) g.addNode('N' + i);
+  for (var i = 0; i < n; i++) {
+    for (var j = i + 1; j < n; j++) {
+      if (Math.random() < 0.25) connect(g.nodes[i], g.nodes[j], EdgeType.FORWARD, parseFloat((Math.random() * 3).toFixed(2)));
+    }
+  }
+}
+
+function generateScaleFree(n, g) {
+  for (var i = 0; i < n; i++) g.addNode('N' + i);
+  // Barabasi-Albert: preferential attachment
+  var degrees = [];
+  for (var i = 0; i < n; i++) degrees.push(0);
+  // Start with small connected core
+  connect(g.nodes[0], g.nodes[1], EdgeType.FORWARD);
+  connect(g.nodes[1], g.nodes[0], EdgeType.FORWARD);
+  degrees[0]++; degrees[1]++;
+  for (var i = 2; i < n; i++) {
+    var totalDeg = 0;
+    for (var k = 0; k < i; k++) totalDeg += degrees[k];
+    var m = Math.min(2, i);
+    for (var e = 0; e < m; e++) {
+      var r = Math.random() * totalDeg;
+      var cumul = 0;
+      for (var k = 0; k < i; k++) {
+        cumul += degrees[k];
+        if (cumul >= r) {
+          connect(g.nodes[k], g.nodes[i], EdgeType.FORWARD, parseFloat((Math.random() * 2).toFixed(2)));
+          degrees[k]++; degrees[i]++;
+          break;
+        }
+      }
+    }
+  }
+}
+
+function generateSmallWorld(n, g) {
+  for (var i = 0; i < n; i++) g.addNode('N' + i);
+  var k = 4; // each node connects to k nearest neighbors
+  for (var i = 0; i < n; i++) {
+    for (var j = 1; j <= Math.floor(k / 2); j++) {
+      var target = (i + j) % n;
+      connect(g.nodes[i], g.nodes[target], EdgeType.SIBLING, 1.0);
+    }
+  }
+  // Rewire some edges with probability p
+  var p = 0.15;
+  for (var i = 0; i < n; i++) {
+    var nextL = g.nodes[i].firstLink;
+    while (nextL) {
+      if (Math.random() < p) {
+        var newTarget = Math.floor(Math.random() * n);
+        if (newTarget !== i && newTarget !== nextL.target.payload.id) {
+          nextL.target = g.nodes[newTarget];
+          nextL.type = EdgeType.FORWARD;
+        }
+      }
+      nextL = nextL.next;
+    }
+  }
+}
+
+// ============================================================
+// CANVAS RENDERING
+// ============================================================
+
+var canvas, ctx;
+var currentGraph = null;
+var startNode = null;
+var endNode = null;
+var pathNodes = [];
+var draggingNode = null;
+var panX = 0, panY = 0, zoom = 1;
+var lastMouseX, lastMouseY, isPanning = false;
+
+function initCanvas() {
+  canvas = document.getElementById('canvas');
+  ctx = canvas.getContext('2d');
+  resizeCanvas();
+  window.addEventListener('resize', resizeCanvas);
+
+  canvas.addEventListener('mousedown', onMouseDown);
+  canvas.addEventListener('mousemove', onMouseMove);
+  canvas.addEventListener('mouseup', onMouseUp);
+  canvas.addEventListener('wheel', onWheel);
+  canvas.addEventListener('click', onClick);
+}
+
+function resizeCanvas() {
+  var wrap = document.getElementById('canvas-wrap');
+  canvas.width = wrap.clientWidth;
+  canvas.height = wrap.clientHeight;
+  render();
+}
+
+function onMouseDown(e) {
+  var pos = screenToGraph(e.offsetX, e.offsetY);
+  var hit = hitTest(pos.x, pos.y);
+  if (hit) {
+    draggingNode = hit;
+  } else {
+    isPanning = true;
+    lastMouseX = e.clientX;
+    lastMouseY = e.clientY;
+  }
+}
+
+function onMouseMove(e) {
+  if (draggingNode) {
+    var pos = screenToGraph(e.offsetX, e.offsetY);
+    draggingNode.x = pos.x;
+    draggingNode.y = pos.y;
+    render();
+  } else if (isPanning) {
+    panX += (e.clientX - lastMouseX) / zoom;
+    panY += (e.clientY - lastMouseY) / zoom;
+    lastMouseX = e.clientX;
+    lastMouseY = e.clientY;
+    render();
+  }
+}
+
+function onMouseUp(e) {
+  draggingNode = null;
+  isPanning = false;
+}
+
+function onWheel(e) {
+  e.preventDefault();
+  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+  zoom *= delta;
+  if (zoom < 0.1) zoom = 0.1;
+  if (zoom > 5) zoom = 5;
+  render();
+}
+
+function onClick(e) {
+  if (draggingNode) return;
+  var pos = screenToGraph(e.offsetX, e.offsetY);
+  var hit = hitTest(pos.x, pos.y);
+  if (hit) showNodeDetail(hit);
+  else hideNodeDetail();
+}
+
+function screenToGraph(sx, sy) {
+  return { x: sx / zoom - panX, y: sy / zoom - panY };
+}
+
+function graphToScreen(gx, gy) {
+  return { x: (gx + panX) * zoom, y: (gy + panY) * zoom };
+}
+
+function hitTest(gx, gy) {
+  if (!currentGraph) return null;
+  var r = 14 / zoom;
+  for (var i = 0; i < currentGraph.nodes.length; i++) {
+    var n = currentGraph.nodes[i];
+    var dx = gx - n.x, dy = gy - n.y;
+    if (dx * dx + dy * dy < r * r) return n;
+  }
+  return null;
+}
+
+function assignPositions() {
+  if (!currentGraph) return;
+  var w = canvas.width, h = canvas.height;
+  var cx = w / 2, cy = h / 2;
+  var spread = Math.min(w, h) * 0.35;
+
+  for (var i = 0; i < currentGraph.nodes.length; i++) {
+    var angle = (2 * Math.PI * i) / currentGraph.nodes.length;
+    currentGraph.nodes[i].x = cx + Math.cos(angle) * spread;
+    currentGraph.nodes[i].y = cy + Math.sin(angle) * spread;
+  }
+
+  // Force simulation steps
+  for (var step = 0; step < 50; step++) {
+    simulateForces(w, h);
+  }
+}
+
+function simulateForces(w, h) {
+  if (!currentGraph) return;
+  var nodes = currentGraph.nodes;
+  var len = nodes.length;
+
+  // Repulsion between all pairs
+  for (var i = 0; i < len; i++) {
+    for (var j = i + 1; j < len; j++) {
+      var dx = nodes[j].x - nodes[i].x;
+      var dy = nodes[j].y - nodes[i].y;
+      var dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      var force = 3000 / (dist * dist);
+      var fx = (dx / dist) * force;
+      var fy = (dy / dist) * force;
+      nodes[i].vx -= fx;
+      nodes[i].vy -= fy;
+      nodes[j].vx += fx;
+      nodes[j].vy += fy;
+    }
+  }
+
+  // Attraction along edges
+  for (var i = 0; i < len; i++) {
+    for (var link = nodes[i].firstLink; link; link = link.next) {
+      var dx = link.target.x - nodes[i].x;
+      var dy = link.target.y - nodes[i].y;
+      var dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      var force = (dist - 100) * 0.03;
+      var fx = (dx / dist) * force;
+      var fy = (dy / dist) * force;
+      nodes[i].vx += fx;
+      nodes[i].vy += fy;
+      link.target.vx -= fx;
+      link.target.vy -= fy;
+    }
+  }
+
+  // Apply velocities with damping
+  for (var i = 0; i < len; i++) {
+    nodes[i].vx *= 0.85;
+    nodes[i].vy *= 0.85;
+    nodes[i].x += nodes[i].vx;
+    nodes[i].y += nodes[i].vy;
+    // Keep in bounds
+    nodes[i].x = Math.max(50, Math.min(w - 50, nodes[i].x));
+    nodes[i].y = Math.max(50, Math.min(h - 50, nodes[i].y));
+  }
+}
+
+function render() {
+  if (!ctx || !canvas) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Background grid
+  ctx.save();
+  drawGrid();
+  ctx.restore();
+
+  if (!currentGraph) {
+    ctx.fillStyle = '#4b5563';
+    ctx.font = '16px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Click ⚡ Generate to create a network', canvas.width / 2, canvas.height / 2);
+    return;
+  }
+
+  ctx.save();
+  ctx.translate(panX * zoom, panY * zoom);
+  ctx.scale(zoom, zoom);
+
+  // Draw edges
+  for (var i = 0; i < currentGraph.nodes.length; i++) {
+    var n = currentGraph.nodes[i];
+    for (var l = n.firstLink; l; l = l.next) {
+      drawEdge(n, l.target, l.type, l.weight);
+    }
+  }
+
+  // Draw path highlight
+  if (pathNodes.length > 1) {
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = 'rgba(56,239,125,0.35)';
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    var sp = graphToScreen(pathNodes[0].x, pathNodes[0].y);
+    ctx.moveTo(pathNodes[0].x, pathNodes[0].y);
+    for (var p = 1; p < pathNodes.length; p++) {
+      ctx.lineTo(pathNodes[p].x, pathNodes[p].y);
+    }
+    ctx.stroke();
+
+    // Path arrows
+    for (var p = 0; p < pathNodes.length - 1; p++) {
+      drawArrow(pathNodes[p].x, pathNodes[p].y, pathNodes[p+1].x, pathNodes[p+1].y, '#38ef7d', 1.5);
+    }
+  }
+
+  // Draw nodes
+  for (var i = 0; i < currentGraph.nodes.length; i++) {
+    drawNode(currentGraph.nodes[i]);
+  }
+
+  ctx.restore();
+}
+
+function drawGrid() {
+  var step = 40 * zoom;
+  var ox = ((panX * zoom) % step);
+  var oy = ((panY * zoom) % step);
+  ctx.strokeStyle = '#1a2035';
+  ctx.lineWidth = 0.5;
+  ctx.beginPath();
+  for (var x = ox; x < canvas.width; x += step) { ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); }
+  for (var y = oy; y < canvas.height; y += step) { ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); }
+  ctx.stroke();
+}
+
+var EDGE_COLORS = {};
+EDGE_COLORS[EdgeType.CHILD] = '#3b82f6';
+EDGE_COLORS[EdgeType.SIBLING] = '#eab308';
+EDGE_COLORS[EdgeType.FORWARD] = '#a855f7';
+EDGE_COLORS[EdgeType.BACK] = '#ef4444';
+EDGE_COLORS[EdgeType.RESIDUAL] = '#22c55e';
+
+function drawEdge(from, to, type, weight) {
+  var color = EDGE_COLORS[type] || '#6b7280';
+  var sx = from.x, sy = from.y;
+  var ex = to.x, ey = to.y;
+
+  // Curved edge for self-loops or same-direction neighbors
+  var dx = ex - sx, dy = ey - sy;
+  var dist = Math.sqrt(dx * dx + dy * dy);
+
+  ctx.lineWidth = type === EdgeType.BACK ? 2 : 1.5;
+  ctx.strokeStyle = color;
+  ctx.globalAlpha = 0.7;
+  ctx.beginPath();
+  ctx.moveTo(sx, sy);
+  ctx.lineTo(ex, ey);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  // Arrow head
+  drawArrow(sx, sy, ex, ey, color, 1.2);
+
+  // Weight label
+  if (weight !== undefined && weight !== 1 && dist > 30) {
+    var mx = (sx + ex) / 2, my = (sy + ey) / 2;
+    ctx.fillStyle = '#9ca3af';
+    ctx.font = '9px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(weight.toString(), mx, my - 5);
+  }
+}
+
+function drawArrow(x1, y1, x2, y2, color, size) {
+  var angle = Math.atan2(y2 - y1, x2 - x1);
+  var len = size * 6;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(x2 - len * Math.cos(angle - 0.35), y2 - len * Math.sin(angle - 0.35));
+  ctx.lineTo(x2 - len * Math.cos(angle + 0.35), y2 - len * Math.sin(angle + 0.35));
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawNode(n) {
+  var isStart = (n === startNode);
+  var isEnd = (n === endNode);
+  var isOnPath = (pathNodes.indexOf(n) >= 0);
+  var r = 12;
+
+  // Glow for special nodes
+  if (isStart) {
+    ctx.shadowColor = '#22c55e'; ctx.shadowBlur = 20;
+  } else if (isEnd) {
+    ctx.shadowColor = '#ef4444'; ctx.shadowBlur = 20;
+  } else if (isOnPath) {
+    ctx.shadowColor = '#38ef7d'; ctx.shadowBlur = 12;
+  }
+
+  // Fill
+  ctx.beginPath();
+  ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+  if (isStart) ctx.fillStyle = '#166534';
+  else if (isEnd) ctx.fillStyle = '#991b1b';
+  else if (isOnPath) ctx.fillStyle = '#064e3b';
+  else ctx.fillStyle = '#1f2937';
+  ctx.fill();
+
+  // Border
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = isStart ? '#22c55e' : (isEnd ? '#ef4444' : (isOnPath ? '#38ef7d' : '#6b7280'));
+  ctx.lineWidth = isStart || isEnd ? 2.5 : 1.5;
+  ctx.stroke();
+
+  // Label
+  ctx.fillStyle = '#e0e0e0';
+  ctx.font = 'bold 10px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(n.payload.label, n.x, n.y);
+
+  // Badge
+  if (isStart) {
+    ctx.fillStyle = '#22c55e'; ctx.fillRect(n.x + 10, n.y - 16, 28, 12);
+    ctx.fillStyle = '#000'; ctx.font = 'bold 8px sans-serif'; ctx.fillText('START', n.x + 24, n.y - 10);
+  }
+  if (isEnd) {
+    ctx.fillStyle = '#ef4444'; ctx.fillRect(n.x + 10, n.y - 4, 24, 12);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 8px sans-serif'; ctx.fillText('END', n.x + 22, n.y + 2);
+  }
+}
+
+// ============================================================
+// NODE DETAIL PANEL
+// ============================================================
+
+function showNodeDetail(n) {
+  var panel = document.getElementById('node-detail');
+  var title = document.getElementById('detail-title');
+  var content = document.getElementById('detail-content');
+
+  var badge = '';
+  if (n === startNode) badge += ' <span class="badge-start">🟢 START</span>';
+  if (n === endNode) badge += ' <span class="badge-end">🔴 END</span>';
+
+  title.innerHTML = 'Node: ' + n.payload.label + badge;
+
+  var html = '<div class="detail-row">ID: ' + n.payload.id + '</div>';
+  html += '<div class="detail-row">Outgoing edges: ' + edgeCount(n) + '</div>';
+  html += '<div style="font-size:10px;color:#6b7280;margin:6px 0;">Edges:</div>';
+
+  var nbrs = neighbors(n);
+  if (nbrs.length === 0) {
+    html += '<div class="detail-row" style="color:#4b5563;">No outgoing edges</div>';
+  } else {
+    for (var i = 0; i < nbrs.length; i++) {
+      var l = nbrs[i];
+      var typeName = ['child','sibling','fwd','back','resid'][l.type] || ('type'+l.type);
+      html += '<div class="detail-edge">';
+      html += '<span style="color:' + (EDGE_COLORS[l.type]||'#888') + '">→ ' + l.target.payload.label + '</span>';
+      html += '<span>' + typeName + (l.weight!==1?' ('+l.weight+')':'') + '</span>';
+      html += '</div>';
+    }
+  }
+
+  content.innerHTML = html;
+  panel.style.display = 'block';
+}
+
+function hideNodeDetail() {
+  document.getElementById('node-detail').style.display = 'none';
+}
+
+// ============================================================
+// STATS
+// ============================================================
+
+function updateStats() {
+  var el = document.getElementById('stats-content');
+  if (!currentGraph) { el.innerHTML = '<em>Generate a network first</em>'; return; }
+
+  var n = currentGraph.nodes.length;
+  var edges = 0;
+  for (var i = 0; i < n; i++) edges += edgeCount(currentGraph.nodes[i]);
+
+  var cycle = detectCycle(currentGraph);
+  var density = (edges / (n * (n - 1)) * 100).toFixed(1);
+
+  var html = '<div class="stat-line"><span>Nodes</span><span>' + n + '</span></div>';
+  html += '<div class="stat-line"><span>Edges</span><span>' + edges + '</span></div>';
+  html += '<div class="stat-line"><span>Density</span><span>' + density + '%</span></div>';
+  html += '<div class="stat-line"><span>Cycle</span><span>' + (cycle ? 'Yes 🔴' : 'No 🟢') + '</span></div>';
+  if (startNode) html += '<div class="stat-line"><span>Start Node</span><span style="color:#22c55e">' + startNode.payload.label + '</span></div>';
+  if (endNode) html += '<div class="stat-line"><span>End Node</span><span style="color:#ef4444">' + endNode.payload.label + '</span></div>';
+  if (pathNodes.length > 0) html += '<div class="stat-line"><span>Path Length</span><span>' + pathNodes.length + ' nodes</span></div>';
+
+  el.innerHTML = html;
+}
+
+// ============================================================
+// MAIN ACTIONS
+// ============================================================
+
+function generateNetwork() {
+  var countInput = document.getElementById('node-count');
+  var n = parseInt(countInput.value) || 20;
+  if (n < 2) n = 2;
+  if (n > 200) n = 200;
+  countInput.value = n;
+
+  var type = document.getElementById('topology-type').value;
+
+  Node._nextId = 0;
+  currentGraph = new Graph();
+  startNode = null;
+  endNode = null;
+  pathNodes = [];
+
+  switch (type) {
+    case 'tree': generateTree(n, currentGraph); break;
+    case 'dag': generateDAG(n, currentGraph); break;
+    case 'scalefree': generateScaleFree(n, currentGraph); break;
+    case 'smallworld': generateSmallWorld(n, currentGraph); break;
+    default: generateRandom(n, currentGraph); break;
+  }
+
+  // Find start (most outgoing) and end (sink)
+  var maxOut = -1, minOut = 9999;
+  for (var i = 0; i < currentGraph.nodes.length; i++) {
+    var ec = edgeCount(currentGraph.nodes[i]);
+    if (ec > maxOut) { maxOut = ec; startNode = currentGraph.nodes[i]; }
+    if (ec < minOut) { minOut = ec; endNode = currentGraph.nodes[i]; }
+  }
+
+  assignPositions();
+  updateStats();
+  hideNodeDetail();
+  document.getElementById('exec-results').style.display = 'none';
+
+  render();
+}
+
+function showPath() {
+  if (!currentGraph || !startNode || !endNode) {
+    alert('Generate a network first!');
+    return;
+  }
+  pathNodes = bfs(startNode, endNode);
+  if (!pathNodes || pathNodes.length < 2) {
+    alert('No path found from Start to End! Try generating again.');
+    pathNodes = [];
+  }
+  updateStats();
+  render();
+}
+
+function executeFlow() {
+  if (!currentGraph || !startNode || !endNode) {
+    alert('Generate a network first!');
+    return;
+  }
+
+  var inputEl = document.getElementById('data-input');
+  var inputData = inputEl.value.trim();
+  if (!inputData) {
+    inputEl.placeholder = "⚠️ Type something here first!";
+    inputEl.style.borderColor = '#ef4444';
+    setTimeout(function() { inputEl.style.borderColor = ''; }, 1500);
+    return;
+  }
+
+  // Ensure we have a path
+  if (pathNodes.length < 2) {
+    pathNodes = bfs(startNode, endNode);
+    if (!pathNodes || pathNodes.length < 2) {
+      alert('No path from Start to End!');
+      return;
+    }
+  }
+
+  var resultsDiv = document.getElementById('results-content');
+  var resultsPanel = document.getElementById('exec-results');
+  var html = '';
+
+  var currentData = inputData;
+
+  for (var i = 0; i < pathNodes.length; i++) {
+    var node = pathNodes[i];
+    var isLast = (i === pathNodes.length - 1);
+
+    // Find the edge used to get here
+    var edgeInfo = '';
+    var edgeWeight = 1;
+    if (i > 0) {
+      var prevNode = pathNodes[i - 1];
+      for (var l = prevNode.firstLink; l; l = l.next) {
+        if (l.target === node) {
+          edgeWeight = l.weight;
+          var tname = ['child','sibling','fwd','back','resid'][l.type] || ''+l.type;
+          edgeInfo = 'edge: ' + tname + ' (weight=' + edgeWeight + ')';
+          break;
+        }
+      }
+    }
+
+    // Transform data at this node
+    var transformedData;
+    if (isLast) {
+      transformedData = '[OUTPUT] ' + currentData;
+    } else {
+      // Apply transformation based on node properties
+      var hash = 0;
+      for (var c = 0; c < node.payload.label.length; c++) {
+        hash = ((hash << 5) - hash) + node.payload.label.charCodeAt(c);
+        hash |= 0;
+      }
+      var seed = Math.abs(hash) % 1000;
+      var prefix = '[' + node.payload.label + '] ';
+      transformedData = prefix + currentData + ' → ×' + edgeWeight.toFixed(2) + ' (seed:' + seed + ')';
+    }
+
+    html += '<div class="exec-step">';
+    html += '<span class="step-node">Step ' + (i + 1) + ': ' + node.payload.label + '</span>';
+    if (edgeInfo) html += '<br><span style="color:#6b7280;font-size:10px">' + edgeInfo + '</span>';
+    html += '<br><span class="step-data">' + escapeHtml(transformedData) + '</span>';
+    html += '</div>';
+
+    currentData = transformedData;
+  }
+
+  resultsDiv.innerHTML = html;
+  resultsPanel.style.display = 'block';
+  updateStats();
+}
+
+function escapeHtml(str) {
+  var div = document.createElement('div');
+  div.appendChild(document.createTextNode(str));
+  return div.innerHTML;
+}
+
+// ============================================================
+// INIT
+// ============================================================
+
+window.addEventListener('load', function() {
+  initCanvas();
+  render();
+});
+</script>
+
+</body>
+</html>
