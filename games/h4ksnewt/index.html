@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>H.4.K.S. — The Newt Chronicles: Black Notebook Saga</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0a0f0a; color: #c8e6c9; font-family: 'Courier New', monospace; overflow: hidden; display: flex; flex-direction: column; align-items: center; }
+canvas { image-rendering: pixelated; border: 2px solid #2e7d32; cursor: crosshair; }
+#ui { position: absolute; top: 10px; left: 10px; z-index: 10; pointer-events: none; text-shadow: 1px 1px 3px #000; }
+#inventory { position: absolute; top: 10px; right: 10px; z-index: 10; background: rgba(0,20,0,0.85); padding: 12px; border: 2px solid #2e7d32; border-radius: 6px; min-width: 200px; }
+#minimap { position: absolute; bottom: 60px; right: 10px; z-index: 10; border: 2px solid #2e7d32; display: none; background: #051005; }
+#message { position: absolute; bottom: 15px; left: 50%; transform: translateX(-50%); z-index: 10; font-size: 18px; font-weight: bold; color: #81c784; text-shadow: 2px 2px 4px #000; transition: opacity 0.5s; text-align: center; max-width: 700px; }
+#controls-hint { position: absolute; bottom: 5px; left: 50%; transform: translateX(-50%); z-index: 9; font-size: 11px; color: #558b5f; opacity: 0.7; }
+.inv-item { margin: 4px 0; padding: 4px 8px; background: rgba(46,125,50,0.3); border-radius: 3px; font-size: 13px; }
+.notebook-item { border-left: 3px solid #ffd700; }
+.sword-item { border-left: 3px solid #ff5722; }
+h3 { color: #81c784; margin-bottom: 8px; font-size: 14px; border-bottom: 1px solid #2e7d32; padding-bottom: 4px; }
+</style>
+</head>
+<body>
+
+<div id="ui"><div id="pos" style="font-size:13px;">Position: (0, 0)</div><div id="terrain" style="font-size:12px;color:#a5d6a7;"></div></div>
+<div id="inventory"><h3>🦎 INVENTORY</h3><div id="inv-list"><em>Empty...</em></div></div>
+<canvas id="game"></canvas>
+<div id="minimap"></div>
+<div id="message"></div>
+<div id="controls-hint">W E A D Z X = Hex Move | SPACE = Interact | M = Minimap | R = Restart</div>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+canvas.width = Math.min(window.innerWidth, 1200);
+canvas.height = Math.min(window.innerHeight, 800);
+
+// === HEX CONSTANTS ===
+const HEX_SIZE = 28;
+// Pointy-top hex directions: W=NW, E=NE, A=W, D=E, Z=SW, X=SE
+const HEX_DIRS = {
+  'w': { q: 0, r: -1 },   // North
+  'e': { q: 1, r: -1 },   // NE
+  'a': { q: -1, r: 0 },   // W
+  'd': { q: 1, r: 0 },    // E
+  'z': { q: -1, r: 1 },   // SW
+  'x': { q: 0, r: 1 }     // S
+};
+
+function hexToPixel(q, r) {
+  const x = HEX_SIZE * (Math.sqrt(3) * q + Math.sqrt(3)/2 * r);
+  const y = HEX_SIZE * (3/2 * r);
+  return { x: x + canvas.width/2, y: y + canvas.height/2 };
+}
+
+function drawHex(cx, cy, size, fillColor, strokeColor) {
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const angle = Math.PI / 180 * (60 * i - 30);
+    const px = cx + size * Math.cos(angle);
+    const py = cy + size * Math.sin(angle);
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fillStyle = fillColor;
+  ctx.fill();
+  ctx.strokeStyle = strokeColor;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
+
+// === TERRAIN ===
+const TERRAIN = {
+  moorland:    { color: '#1b4d1b', walkable: true,  name: 'Moorland' },
+  pond:        { color: '#1565c0', walkable: false, name: 'Pond ❌' },
+  swamp:       { color: '#556b2f', walkable: true,  name: 'Newt Swamp' },
+  ruins:       { color: '#424242', walkable: true,  name: 'Ruins' },
+  void:        { color: '#4a148c', walkable: false, name: 'The Void ❌' },
+  spacecraft:  { color: '#263238', walkable: true,  name: '🛸 Alien Spacecraft' },
+};
+
+function getTerrain(q, r) {
+  const n = hashFnv(`${q},${r}`);
+  // Spacecraft at far corner
+  if (q > 35 && r > 25 && q < 42 && r < 32) return 'spacecraft';
+  if (n % 100 < 40) return 'moorland';
+  if (n % 100 < 52) return 'pond';
+  if (n % 100 < 72) return 'swamp';
+  if (n % 100 < 85) return 'ruins';
+  return 'void';
+}
+
+function hashFnv(s) {
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < s.length; i++) h = (h ^ s.charCodeAt(i)) * 16777619 >>> 0;
+  return h;
+}
+
+// === L-SYSTEM TREES ===
+function generateLSystem(axiom, rules, iterations) {
+  let s = axiom;
+  for (let i = 0; i < iterations; i++) {
+    let ns = '';
+    for (const c of s) ns += rules[c] || c;
+    s = ns;
+  }
+  return s;
+}
+
+function drawLTree(x, y, angle, len, instructions, idx) {
+  const stack = [];
+  let cx = x, cy = y, ca = angle;
+  let drawn = 0;
+  while (idx < instructions.length && drawn < 600) {
+    const ch = instructions[idx++];
+    switch(ch) {
+      case 'F':
+        const nx = cx + len * Math.cos(ca);
+        const ny = cy + len * Math.sin(ca);
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(nx, ny);
+        ctx.strokeStyle = `rgb(${34+drawn/6}, ${100+drawn/10}, ${34})`;
+        ctx.lineWidth = Math.max(1.5, 3.5 - drawn / 200);
+        ctx.stroke();
+        cx = nx; cy = ny; drawn++;
+        break;
+      case '+': ca -= (0.35 + (hashFnv(String(idx)) % 20) / 100); break;
+      case '-': ca += (0.35 + (hashFnv(String(idx)) % 20) / 100); break;
+      case '[': stack.push([cx, cy, ca, len]); len *= 0.73; break;
+      case ']':
+        if (stack.length > 0) { [cx, cy, ca, len] = stack.pop(); }
+        break;
+    }
+  }
+}
+
+const L_RULES = { 'F': 'F[+F]F[-F]F', '+': '+', '-': '-', '[': '[', ']' : ']' };
+let lSystemStr = null;
+
+// === NOTEBOOKS ===
+const NOTEBOOKS = [
+  { q: 8,  r: -5, collected: false,
+    quote: "Being and Time is not an answer but a question.", title: "Seinsfrage" },
+  { q: -12, r: 7, collected: false,
+    quote: "Language is the house of Being.", title: "Sprache" },
+  { q: 18,  r: 3, collected: false,
+    quote: "The thing things. World worlds.", title: "Das Ding" },
+  { q: -6,  r: 14, collected: false,
+    quote: "Anxiety reveals the Nothing.", title: "Angst" },
+  { q: 25,  r: -8, collected: false,
+    quote: "We are thrown into the world.", title: "Geworfenheit" },
+  { q: -18, r: -9, collected: false,
+    quote: "Technology is not something we do to the world — it is a way of revealing.", title: "Technik" },
+  { q: 5,  r: 19, collected: false,
+    quote: "To dwell is to care for the fourfold: earth, sky, mortals, divinities.", title: "Bauen Wohnen Denken" },
+];
+
+// === SWORD ===
+const SWORD = { q: -22, r: 12, found: false };
+
+// === PLAYER ===
+const player = { q: 0, r: 0, frame: 0, dir: 1 };
+const inventory = [];
+let messageText = '';
+let messageTimer = null;
+
+function showMessage(text, duration) {
+  document.getElementById('message').textContent = text;
+  document.getElementById('message').style.opacity = '1';
+  clearTimeout(messageTimer);
+  messageTimer = setTimeout(() => {
+    document.getElementById('message').style.opacity = '0';
+  }, duration || 3000);
+}
+
+// === INPUT ===
+const keysDown = {};
+document.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  keysDown[k] = true;
+
+  if ('weadzx'.includes(k)) {
+    e.preventDefault();
+    tryMove(k);
+  }
+
+  if (k === ' ') interact();
+  if (k === 'm') toggleMinimap();
+  if (k === 'r') location.reload();
+});
+
+document.addEventListener('keyup', e => {
+  keysDown[e.key.toLowerCase()] = false;
+});
+
+function tryMove(key) {
+  const dir = HEX_DIRS[key];
+  if (!dir) return;
+  const nq = player.q + dir.q;
+  const nr = player.r + dir.r;
+  const terrain = getTerrain(nq, nr);
+  if (!TERRAIN[terrain].walkable) {
+    showMessage(TERRAIN[terrain].name + ' — cannot pass!', 1500);
+    return;
+  }
+  player.q = nq;
+  player.r = nr;
+  player.dir = key === 'a' || key === 'z' ? -1 : (key === 'd' || key === 'e' ? 1 : player.dir);
+  updateUI();
+}
+
+function interact() {
+  // Check notebooks
+  for (const nb of NOTEBOOKS) {
+    if (!nb.collected && nb.q === player.q && nb.r === player.r) {
+      nb.collected = true;
+      inventory.push({ type: 'notebook', ...nb });
+      showMessage(`📓 Black Notebook found: "${nb.title}"\n"${nb.quote}"`, 5000);
+      updateInventory();
+      checkWin();
+      return;
+    }
+  }
+  // Check sword
+  if (!SWORD.found && SWORD.q === player.q && SWORD.r === player.r) {
+    SWORD.found = true;
+    inventory.push({ type: 'sword', name: '⚔️ Cardboard Sword' });
+    showMessage('⚔️ You found the Cardboard Sword! It hums with ancient power...', 4000);
+    updateInventory();
+    return;
+  }
+  // Check spacecraft
+  const t = getTerrain(player.q, player.r);
+  if (t === 'spacecraft') {
+    const collectedCount = NOTEBOOKS.filter(n => n.collected).length;
+    const hasSword = SWORD.found;
+    if (collectedCount >= 7 && hasSword) {
+      showMessage('🛸🎉 VICTORY! All 7 Notebooks + Cardboard Sword delivered!\nThe alien spacecraft accepts your offering.\nHeidegger\'s philosophy transcends this plane of existence.', 8000);
+    } else {
+      const missing = 7 - collectedCount;
+      let msg = '🛸 The Alien Spacecraft demands:';
+      if (!hasSword) msg += '\n⚔️ The Cardboard Sword';
+      if (missing > 0) msg += `\n📓 ${missing} more Black Notebook${missing>1?'s':''}`;
+      msg += '\n\nFind them all, newt.';
+      showMessage(msg, 5000);
+    }
+    return;
+  }
+  showMessage('Nothing here... keep searching, newt 🦎', 1500);
+}
+
+function checkWin() {
+  const allCollected = NOTEBOOKS.every(n => n.collected);
+  if (allCollected && SWORD.found) {
+    showMessage('🎉 All items collected! Now find the Alien Spacecraft! 🛸', 4000);
+  } else if (allCollected) {
+    showMessage('📓 All 7 Notebooks collected! Find the ⚔️ Cardboard Sword, then the 🛸 Spacecraft!', 4000);
+  }
+}
+
+function updateUI() {
+  document.getElementById('pos').textContent = `Hex Position: (${player.q}, ${player.r})`;
+  const t = TERRAIN[getTerrain(player.q, player.r)];
+  document.getElementById('terrain').textContent = t.name;
+}
+function updateInventory() {
+  const el = document.getElementById('inv-list');
+  if (inventory.length === 0) { el.innerHTML = '<em>Empty...</em>'; return; }
+  el.innerHTML = inventory.map(item =>
+    `<div class="inv-item ${item.type==='notebook'?'notebook-item':'sword-item'}">${item.type==='notebook'?`📓 ${item.title}`:item.name}</div>`
+  ).join('');
+}
+
+// === MINIMAP ===
+let minimapVisible = false;
+function toggleMinimap() {
+  minimapVisible = !minimapVisible;
+  const mm = document.getElementById('minimap');
+  mm.style.display = minimapVisible ? 'block' : 'none';
+  if (minimapVisible) renderMinimap();
+}
+
+function renderMinimap() {
+  const mm = document.getElementById('minimap');
+  const size = 220;
+  mm.width = size;
+  mm.height = size;
+  if (!mm.getContext) return;
+  const mctx = mm.getContext('2d');
+  const scale = 2.5;
+  mctx.fillStyle = '#050f05'; mctx.fillRect(0, 0, size, size);
+
+  const range = Math.floor(size / scale / HEX_SIZE) + 2;
+  for (let dq = -range; dq <= range; dq++) {
+    for (let dr = -range; dr <= range; dr++) {
+      const tq = player.q + dq, tr = player.r + dr;
+      const pos = hexToPixel(dq * scale, dr * scale);
+      const ter = getTerrain(tq, tr);
+      drawHexMM(mctx, size/2 + pos.x - canvas.width/2, size/2 + pos.y - canvas.height/2, scale * 1.4, TERRAIN[ter].color, '#111');
+
+      // Notebooks on map
+      for (const nb of NOTEBOOKS) {
+        if (!nb.collected && nb.q === tq && nb.r === tr) {
+          mctx.fillStyle = '#ffd700'; mctx.font = '8px monospace'; mctx.fillText('📓', size/2 + pos.x - canvas.width/2 - 4, size/2 + pos.y - canvas.height/2 + 3);
+        }
+      }
+      // Sword on map
+      if (!SWORD.found && SORD.q === tq && SWORD.r === tr) {
+        mctx.fillStyle = '#ff5722'; mctx.font = '8px monospace'; mctx.fillText('⚔', size/2 + pos.x - canvas.width/2 - 4, size/2 + pos.y - canvas.height/2 + 3);
+      }
+    }
+  }
+  // Player dot
+  mctx.fillStyle = '#00ff00'; mctx.beginPath(); mctx.arc(size/2, size/2, 4, 0, Math.PI*2); mctx.fill();
+}
+
+function drawHexMM(c, cx, cy, sz, fill, stroke) {
+  c.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = Math.PI / 180 * (60 * i - 30);
+    const px = cx + sz * Math.cos(a), py = cy + sz * Math.sin(a);
+    i === 0 ? c.moveTo(px,py) : c.lineTo(px,py);
+  }
+  c.closePath(); c.fillStyle = fill; c.fill(); c.strokeStyle = stroke; c.lineWidth = 0.5; c.stroke();
+}
+
+// === DRAW NEWT ===
+function drawNewt(x, y, facing, animFrame) {
+  const bounce = Math.sin(animFrame * 0.15) * 2;
+  const tailWag = Math.sin(animFrame * 0.2) * 0.3;
+  ctx.save(); ctx.translate(x, y + bounce); ctx.scale(facing, 1);
+
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.beginPath(); ctx.ellipse(0, 16, 14, 6, 0, 0, Math.PI*2); ctx.fill();
+
+  // Tail
+  ctx.strokeStyle = '#388e3c'; ctx.lineWidth = 5; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(-10, 8); ctx.quadraticCurveTo(-22 + tailWag*10, 4 + tailWag*8, -28 + tailWag*15, 10 + tailWag*5); ctx.stroke();
+  ctx.strokeStyle = '#66bb6a'; ctx.lineWidth = 2; ctx.stroke();
+
+  // Body
+  ctx.fillStyle = '#4caf50'; ctx.beginPath(); ctx.ellipse(0, 6, 14, 11, 0, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#66bb6a'; ctx.beginPath(); ctx.ellipse(-2, 2, 10, 7, 0, 0, Math.PI*2); ctx.fill();
+
+  // Belly
+  ctx.fillStyle = '#c8e6c9'; ctx.beginPath(); ctx.ellipse(2, 9, 8, 6, 0, 0, Math.PI*2); ctx.fill();
+
+  // Head
+  ctx.fillStyle = '#4caf50'; ctx.beginPath(); ctx.ellipse(12, -2, 10, 9, 0.2, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#81c784'; ctx.beginPath(); ctx.ellipse(14, -4, 7, 6, 0.2, 0, Math.PI*2); ctx.fill();
+
+  // Eyes
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.ellipse(16, -6, 5, 5.5, 0.1, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.ellipse(10, -6, 4, 4.5, -0.1, 0, Math.PI*2); ctx.fill();
+  // Pupils
+  ctx.fillStyle = '#1a1a1a'; ctx.beginPath(); ctx.ellipse(17, -5.5, 2, 3, 0.1, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#1a1a1a'; ctx.beginPath(); ctx.ellipse(10.5, -5.5, 1.8, 2.5, -0.1, 0, Math.PI*2); ctx.fill();
+  // Eye shine
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(17.5, -6.5, 1.2, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(11, -6.5, 1, 0, Math.PI*2); ctx.fill();
+
+  // Mouth (small smile)
+  ctx.strokeStyle = '#2e7d32'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(14, 0, 3, 0.2, Math.PI-0.2); ctx.stroke();
+
+  // Legs
+  const legKick = Math.abs(Math.sin(animFrame * 0.12)) * 3;
+  // Front legs
+  ctx.fillStyle = '#388e3c'; ctx.beginPath(); ctx.ellipse(6, 14, 4, 6 + legKick, 0.3, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#388e3c'; ctx.beginPath(); ctx.ellipse(-4, 14, 4, 5.5 - legKick*0.5, -0.2, 0, Math.PI*2); ctx.fill();
+  // Back legs
+  ctx.fillStyle = '#388e3c'; ctx.beginPath(); ctx.ellipse(-8, 13, 4, 5 + legKick*0.5, -0.3, 0, Math.PI*2); ctx.fill();
+
+  // Arms
+  ctx.fillStyle = '#4caf50'; ctx.beginPath(); ctx.ellipse(5, 8, 3, 5, 0.5, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#4caf50'; ctx.beginPath(); ctx.ellipse(-5, 8, 3, 4.5, -0.4, 0, Math.PI*2); ctx.fill();
+
+  ctx.restore();
+}
+
+// === DRAW AMBIENT NEWTS ===
+const ambientNewts = [];
+for (let i = 0; i < 15; i++) {
+  ambientNewts.push({
+    q: (Math.random()-0.5)*80|0,
+    r: (Math.random()-0.5)*80|0,
+    frame: Math.random()*200|0,
+    dir: Math.random()>0.5?1:-1
+  });
+}
+
+function drawAmbientNewt(x, y, dir, frm) {
+  ctx.globalAlpha = 0.45;
+  drawNewt(x, y, dir, frm);
+  ctx.globalAlpha = 1.0;
+}
+
+// === MAIN RENDER LOOP ===
+function render() {
+  ctx.fillStyle = '#050f05'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const visRange = 12;
+  const drawnHexes = new Set();
+
+  // Draw hexes
+  for (let dq = -visRange; dq <= visRange; dq++) {
+    for (let dr = -visRange; dr <= visRange; dr++) {
+      if (Math.abs(dq + dr) > visRange) continue;
+      const tq = player.q + dq, tr = player.r + dr;
+      const key = `${tq},${tr}`;
+      if (drawnHexes.has(key)) continue;
+      drawnHexes.add(key);
+      const pos = hexToPixel(dq, dr);
+      const ter = getTerrain(tq, tr);
+      const tdata = TERRAIN[ter];
+      drawHex(pos.x, pos.y, HEX_SIZE, tdata.color, '#112211');
+
+      // Draw trees on certain tiles
+      const treeSeed = hashFnv(`tree_${tq}_${tr}`);
+      if ((tdata.walkable && ter !== 'spacecraft') && treeSeed % 10 < 3) {
+        if (!lSystemStr) lSystemStr = generateLSystem('F', L_RULES, 4);
+        ctx.save();
+        ctx.translate(pos.x, pos.y + 4);
+        drawLTree(0, 0, -Math.PI/2, 10 + (treeSeed % 6), lSystemStr, 0);
+        ctx.restore();
+      }
+
+      // Spacecraft marker
+      if (ter === 'spacecraft') {
+        ctx.fillStyle = '#80deea'; ctx.font = '18px serif'; ctx.textAlign = 'center';
+        ctx.fillText('🛸', pos.x, pos.y + 6);
+      }
+    }
+  }
+
+  // Ambient newts
+  for (const an of ambientNewts) {
+    const dq = an.q - player.q, dr = an.r - player.r;
+    if (Math.abs(dq) > visRange || Math.abs(dr) > visRange) continue;
+    const ter = getTerrain(an.q, an.r);
+    if (!TERRAIN[ter].walkable) continue;
+    an.frame += 1;
+    const pos = hexToPixel(dq, dr);
+    drawAmbientNewt(pos.x, pos.y, an.dir, an.frame);
+  }
+
+  // Notebooks
+  for (const nb of NOTEBOOKS) {
+    if (nb.collected) continue;
+    const dq = nb.q - player.q, dr = nb.r - player.r;
+    if (Math.abs(dq) > visRange || Math.abs(dr) > visRange) continue;
+    const pos = hexToPixel(dq, dr);
+    const bob = Math.sin(Date.now()/400 + nb.q) * 3;
+    // Book glow
+    ctx.shadowColor = '#ffd700'; ctx.shadowBlur = 12;
+    ctx.fillStyle = '#1a1a1a'; ctx.fillRect(pos.x-8, pos.y-10+bob, 16, 13);
+    ctx.fillStyle = '#ffd700'; ctx.fillRect(pos.x-8, pos.y-10+bob, 16, 2);
+    ctx.fillStyle = '#ffd700'; ctx.fillRect(pos.x-8, pos.y-10+bob, 2, 13);
+    ctx.fillStyle = '#fff8e1'; ctx.font = 'bold 11px serif'; ctx.textAlign = 'center';
+    ctx.fillText('📓', pos.x, pos.y+bob);
+    ctx.shadowBlur = 0;
+  }
+
+  // Sword
+  if (!SWORD.found) {
+    const dq = SWORD.q - player.q, dr = SWORD.r - player.r;
+    if (Math.abs(dq) <= visRange && Math.abs(dr) <= visRange) {
+      const pos = hexToPixel(dq, dr);
+      const bob = Math.sin(Date.now()/350) * 3;
+      ctx.shadowColor = '#ff5722'; ctx.shadowBlur = 15;
+      ctx.fillStyle = '#bf360c'; ctx.fillRect(pos.x-2, pos.y-18+bob, 4, 28);
+      ctx.fillStyle = '#ffccbc'; ctx.fillRect(pos.x-8, pos.y-18+bob, 16, 6);
+      ctx.fillStyle = '#ffccbc'; ctx.fillRect(pos.x-6, pos.y-14+bob, 12, 3);
+      ctx.fillStyle = '#fff3e0'; ctx.font = 'bold 10px serif'; ctx.textAlign = 'center';
+      ctx.fillText('⚔', pos.x, pos.y+14+bob);
+      ctx.shadowBlur = 0;
+    }
+  }
+
+  // Player newt
+  const pPos = hexToPixel(0, 0);
+  player.frame++;
+  drawNewt(pPos.x, pPos.y, player.dir, player.frame);
+
+  // Update minimap if visible
+  if (minimapVisible) renderMinimap();
+
+  requestAnimationFrame(render);
+}
+
+// Init
+if (!lSystemStr) lSystemStr = generateLSystem('F', L_RULES, 4);
+updateUI();
+showMessage('🦎 Welcome, newt. Find the 7 Black Notebooks, the Cardboard Sword, and reach the Spacecraft.', 5000);
+render();
+</script>
+</body>
+</html>
