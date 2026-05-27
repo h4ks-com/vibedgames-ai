@@ -1,0 +1,1347 @@
+<!DOCTYPE html>
+<html lang="en" style="--accent: #d4af37;">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>H4KS ENGINE v2 — Universal Hex Game System</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0a0a0f; overflow: hidden; font-family: 'Courier New', monospace; user-select: none; }
+canvas { display: block; cursor: crosshair; }
+
+/* === UI OVERLAY === */
+#ui { position: fixed; top: 10px; left: 10px; color: #d4af37; font-size: 13px; z-index: 10;
+  text-shadow: 2px 2px #000; pointer-events: none; line-height: 1.7;
+  background: rgba(0,0,0,0.6); padding: 12px 16px; border-radius: 8px;
+  border: 1px solid rgba(212,175,55,0.3); max-width: 300px; }
+#ui .row { display: flex; justify-content: space-between; gap: 20px; }
+#ui .label { color: #888; }
+#ui .value { color: #d4af37; font-weight: bold; }
+#ui hr { border: none; border-top: 1px solid rgba(212,175,55,0.2); margin: 8px 0; }
+
+#msg { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+  color: #fff; font-size: 17px; text-shadow: 2px 2px #000, 0 0 15px currentColor;
+  text-align: center; opacity: 0; transition: opacity 0.5s; z-index: 10; max-width: 650px;
+  line-height: 1.5; pointer-events: none; }
+
+/* === START SCREEN === */
+#startScreen { position: fixed; inset: 0; background: rgba(0,0,0,0.92);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  z-index: 20; cursor: default; }
+#startScreen h1 { font-size: 48px; letter-spacing: 8px;
+  text-shadow: 0 0 40px var(--accent); color: var(--accent); }
+#startScreen h2 { font-size: 18px; color: #aaa; margin-top: 8px; font-weight: normal; letter-spacing: 3px; }
+#startScreen .info { margin-top: 25px; font-size: 14px; color: #777; text-align: center; line-height: 1.8; max-width: 500px; }
+#startScreen .blink { animation: blink 1s infinite; color: #fff; font-size: 20px; margin-top: 30px; }
+@keyframes blink { 50% { opacity: 0; } }
+
+/* === MINIMAP === */
+#minimap { position: fixed; bottom: 10px; right: 10px;
+  border: 2px solid var(--accent); border-radius: 8px;
+  opacity: 0; transition: opacity 0.3s; z-index: 10; }
+#minimap.show { opacity: 0.85; }
+
+/* === DIALOG BOX === */
+#dialogBox { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  width: min(800px, 90vw); background: rgba(0,0,0,0.94);
+  border: 2px solid var(--accent); border-radius: 10px; padding: 20px 28px;
+  color: #eee; font-size: 16px; line-height: 1.6; z-index: 15;
+  display: none; box-shadow: 0 0 30px rgba(0,0,0,0.8); }
+#dialogBox .speaker { color: var(--accent); font-weight: bold; margin-bottom: 6px; font-size: 14px; }
+#dialogBox .text { min-height: 50px; }
+#dialogBox .hint { color: #666; font-size: 12px; text-align: right; margin-top: 8px; }
+
+/* === INVENTORY PANEL === */
+#inventoryPanel { position: fixed; top: 10px; right: 10px;
+  background: rgba(0,0,0,0.8); border: 1px solid rgba(212,175,55,0.3);
+  border-radius: 8px; padding: 12px; z-index: 10; color: #d4af37; font-size: 12px;
+  max-width: 260px; max-height: 300px; overflow-y: auto; display: none; }
+#inventoryPanel.show { display: block; }
+#inventoryPanel h3 { margin-bottom: 8px; font-size: 13px; border-bottom: 1px solid rgba(212,175,55,0.2); padding-bottom: 4px; }
+#inventoryPanel .item { padding: 3px 0; color: #ccc; }
+
+/* === GOALS PANEL === */
+#goalsPanel { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  background: rgba(0,0,0,0.96); border: 2px solid var(--accent); border-radius: 12px;
+  padding: 24px 32px; z-index: 25; color: #eee; font-size: 15px; display: none;
+  min-width: 420px; box-shadow: 0 0 60px rgba(0,0,0,0.9); }
+#goalsPanel h2 { color: var(--accent); margin-bottom: 16px; text-align: center; }
+#goalsPanel .goal { padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.08); }
+#goalsPanel .goal.done { color: #4ade80; text-decoration: line-through; }
+#goalsPanel .close-hint { text-align: center; color: #666; font-size: 12px; margin-top: 12px; }
+
+/* ════════════════════════════════════════
+    EDITOR PANEL
+   ════════════════════════════════════════ */
+#editorOverlay { position: fixed; inset: 0; background: rgba(0,0,0,0.95);
+  z-index: 100; display: none; overflow-y: auto; padding: 20px; }
+#editorOverlay.show { display: block; }
+
+#editorWrap { max-width: 900px; margin: 0 auto; }
+#editorHeader { text-align: center; margin-bottom: 24px; }
+#editorHeader h1 { color: var(--accent); font-size: 28px; letter-spacing: 4px; }
+#editorHeader p { color: #888; font-size: 13px; margin-top: 8px; }
+
+.editor-tabs { display: flex; gap: 4px; margin-bottom: 20px; flex-wrap: wrap; justify-content: center; }
+.editor-tab { padding: 8px 18px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.15);
+  color: #aaa; cursor: pointer; border-radius: 6px; font-size: 13px; transition: all 0.2s; font-family: inherit; }
+.editor-tab:hover { background: rgba(255,255,255,0.1); color: #fff; }
+.editor-tab.active { background: var(--accent); color: #000; border-color: var(--accent); font-weight: bold; }
+
+.editor-section { display: none; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 10px; padding: 20px; margin-bottom: 16px; }
+.editor-section.active { display: block; }
+
+.editor-section h3 { color: var(--accent); font-size: 16px; margin-bottom: 14px; 
+  padding-bottom: 8px; border-bottom: 1px solid rgba(212,175,55,0.2); }
+
+.edit-field { margin-bottom: 12px; }
+.edit-field label { display: block; color: #bbb; font-size: 12px; margin-bottom: 4px; }
+.edit-field input, .edit-field textarea, .edit-field select {
+  width: 100%; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.15);
+  color: #ddd; padding: 8px 12px; border-radius: 6px; font-family: 'Courier New', monospace;
+  font-size: 13px; outline: none; transition: border-color 0.2s; }
+.edit-field input:focus, .edit-field textarea:focus, .edit-field select:focus {
+  border-color: var(--accent); }
+.edit-field textarea { resize: vertical; min-height: 60px; }
+.edit-field .hint { color: #555; font-size: 11px; margin-top: 3px; }
+
+.edit-row { display: flex; gap: 12px; }
+.edit-row .edit-field { flex: 1; }
+
+.item-entry, .char-entry { background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px; padding: 14px; margin-bottom: 12px; position: relative; }
+.item-entry h4, .char-entry h4 { color: #e8c36e; font-size: 14px; margin-bottom: 10px; }
+.btn-del { position: absolute; top: 10px; right: 10px; background: #c0392b; color: #fff;
+  border: none; border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 11px; font-family: inherit; }
+.btn-del:hover { background: #e74c3c; }
+
+.btn-add { background: #27ae60; color: #fff; border: none; border-radius: 6px;
+  padding: 10px 20px; cursor: pointer; font-size: 13px; font-family: inherit; margin-top: 8px; }
+.btn-add:hover { background: #2ecc71; }
+
+.editor-actions { text-align: center; margin-top: 24px; padding-top: 20px;
+  border-top: 1px solid rgba(255,255,255,0.1); }
+.btn-primary { background: var(--accent); color: #000; border: none; border-radius: 8px;
+  padding: 14px 40px; font-size: 16px; font-weight: bold; cursor: pointer; font-family: inherit;
+  letter-spacing: 2px; margin: 0 8px; }
+.btn-primary:hover { filter: brightness(1.2); }
+.btn-secondary { background: transparent; color: #aaa; border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 8px; padding: 12px 30px; font-size: 14px; cursor: pointer; font-family: inherit; margin: 0 8px; }
+.btn-secondary:hover { color: #fff; border-color: #fff; }
+
+.json-preview { background: rgba(0,0,0,0.7); border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px; padding: 14px; color: #8be9fd; font-size: 11px; max-height: 300px;
+  overflow-y: auto; white-space: pre-wrap; word-break: break-all; font-family: 'Courier New', monospace; }
+</style>
+</head>
+<body>
+
+<canvas id="game"></canvas>
+
+<div id="startScreen">
+  <h1 id="stTitle">H4KS ENGINE</h1>
+  <h2 id="stSubtitle">UNIVERSAL HEX GAME SYSTEM</h2>
+  <div class="info" id="stInfo">
+    Explore an infinite procedural hex world.<br><br>
+    Collect items. Talk to NPCs. Complete objectives.<br><br>
+    Press <b style="color:#d4af37">E</b> to open the Game Editor<br>
+    and customize EVERYTHING.
+  </div>
+  <div class="blink">Press any key to begin</div>
+</div>
+
+<div id="ui"></div>
+<div id="msg"></div>
+<canvas id="minimap" width="160" height="120"></canvas>
+
+<div id="dialogBox">
+  <div class="speaker"></div>
+  <div class="text"></div>
+  <div class="hint">SPACE / ENTER to continue</div>
+</div>
+
+<div id="inventoryPanel">
+  <h3>📦 Inventory</h3>
+  <div id="invList"></div>
+</div>
+
+<div id="goalsPanel">
+  <h2>🎯 Objectives</h2>
+  <div id="goalsList"></div>
+  <div class="close-hint">Press G to close</div>
+</div>
+
+<!-- ═══ EDITOR ═══ -->
+<div id="editorOverlay">
+<div id="editorWrap">
+  <div id="editorHeader">
+    <h1>🛠️ GAME EDITOR</h1>
+    <p>Customize every aspect of your game below. Changes apply instantly when you click PLAY.</p>
+  </div>
+  
+  <div class="editor-tabs" id="editorTabs">
+    <button class="editor-tab active" data-tab="tabIdentity">🏷️ Identity</button>
+    <button class="editor-tab" data-tab="tabPalette">🎨 Palette</button>
+    <button class="editor-tab" data-tab="tabPlayer">🧑 Player</button>
+    <button class="editor-tab" data-tab="tabItems">📦 Items</button>
+    <button class="editor-tab" data-tab="tabChars">👥 Characters</button>
+    <button class="editor-tab" data-tab="tabPlot">📖 Plot</button>
+    <button class="editor-tab" data-tab="tabGoals">🎯 Goals</button>
+    <button class="editor-tab" data-tab="tabEconomy">💰 Economy</button>
+    <button class="editor-tab" data-tab="tabWorld">🌍 World</button>
+    <button class="editor-tab" data-tab="tabJSON">📋 JSON</button>
+  </div>
+
+  <!-- IDENTITY -->
+  <div class="editor-section active" id="tabIdentity">
+    <h3>🏷️ Game Identity</h3>
+    <div class="edit-row"><div class="edit-field"><label>Game Title</label><input id="edTitle" placeholder="MY AWESOME GAME"></div>
+    <div class="edit-field"><label>Subtitle</label><input id="edSubtitle" placeholder="An Epic Adventure"></div></div>
+    <div class="edit-field"><label>Chapter / Episode Name</label><input id="edChapter" placeholder="Chapter 1: The Beginning"></div>
+  </div>
+
+  <!-- PALETTE -->
+  <div class="editor-section" id="tabPalette">
+    <h3>🎨 Color Palette</h3>
+    <div class="edit-row"><div class="edit-field"><label>Accent / UI Color</label><input id="edAccent" type="color" value="#d4af37"></div>
+    <div class="edit-field"><label>Background</label><input id="edBg" type="color" value="#0a0a0f"></div></div>
+    <div class="edit-row"><div class="edit-field"><label>Player Body</label><input id="edPlayer" type="color" value="#2ecc71"></div>
+    <div class="edit-field"><label>Player Outline</label><input id="edPlayerOut" type="color" value="#1a7a3a"></div></div>
+    <div class="edit-row"><div class="edit-field"><label>Player Detail (eyes/spikes)</label><input id="edPlayerDet" type="color" value="#f39c12"></div>
+    <div class="edit-field"><label>Money/Currency Color</label><input id="edMoney" type="color" value="#f1c40f"></div></div>
+    <div class="edit-field"><label>Terrain Colors (JSON array of 11 hex colors)</label>
+      <textarea id="edTerrain" rows="3' placeholder='["#1a3320","#1a3a5c","#2d3a1a",...]'></textarea>
+      <div class="hint">moorland, pond, swamp, ruins, void, forest, village, mountain, desert, ice, lava</div></div>
+  </div>
+
+  <!-- PLAYER -->
+  <div class="editor-section" id="tabPlayer">
+    <h3>🧑 Player Character</h3>
+    <div class="edit-row"><div class="edit-field"><label>Name</label><input id="edPName" placeholder="Hero Name"></div>
+    <div class="edit-field"><label>Sprite Type</label><select id="edPSprite"><option value="newt">🦎 Newt</option><option value="knight">⚔️ Knight</option><option value="wizard">🧙 Wizard</option><option value="slime">💧 Slime</option><option value="ghost">👻 Ghost</option><option value="ship">🚀 Ship</option></select></div></div>
+    <div class="edit-row"><div class="edit-field"><label>Max Health</label><input id="edPHealth" type="number" value="100" min="1"></div>
+    <div class="edit-field"><label>Starting Money</label><input id="edPMoney" type="number" value="0"></div></div>
+  </div>
+
+  <!-- ITEMS -->
+  <div class="editor-section" id="tabItems">
+    <h3>📦 Collectible Items</h3>
+    <div id="itemsList"></div>
+    <button class="btn-add" onclick="addItem()">+ Add Item</button>
+  </div>
+
+  <!-- CHARACTERS -->
+  <div class="editor-section" id="tabChars">
+    <h3>👥 NPC Characters</h3>
+    <div id="charsList"></div>
+    <button class="btn-add" onclick="addChar()">+ Add Character</button>
+  </div>
+
+  <!-- PLOT -->
+  <div class="editor-section" id="tabPlot">
+    <h3>📖 Story & Plot</h3>
+    <div class="edit-field"><label>Intro Text (shown on start screen)</label>
+      <textarea id="edIntro" rows="4" placeholder="You wake up in a strange land..."></textarea></div>
+    <div class="edit-field"><label>Victory Message (when all goals complete)</label>
+      <textarea id="edVictory" rows="3" placeholder="You have won!"></textarea></div>
+    <div class="edit-field"><label>Game Over Message</label>
+      <textarea id="edGameover" rows="2" placeholder="Game over..."></textarea></div>
+  </div>
+
+  <!-- GOALS -->
+  <div class="editor-section" id="tabGoals">
+    <h3>🎯 Win Conditions / Goals</h3>
+    <div id="goalsListEdit"></div>
+    <button class="btn-add" onclick="addGoal()">+ Add Goal</button>
+    <div class="hint" style="margin-top:10px;color:#666;">Goal checkers: collect_all_items, find_item:X, visit_position:Q,R, talk_to:CHAR_ID, money_above:N, custom</div>
+  </div>
+
+  <!-- ECONOMY -->
+  <div class="editor-section" id="tabEconomy">
+    <h3>💰 Economy System</h3>
+    <div class="edit-row"><div class="edit-field"><label>Currency Name</label><input id="edCurrName" value="Shells"></div>
+    <div class="edit-field"><label>Currency Icon</label><input id="edCurrIcon" value="🐚" maxlength="2"></div></div>
+    <div class="edit-field"><label>Enemy Kill Reward</label><input id="edKillReward" type="number" value="10"></div>
+  </div>
+
+  <!-- WORLD -->
+  <div class="editor-section" id="tabWorld">
+    <h3>🌍 World Generation</h3>
+    <div class="edit-row"><div class="edit-field"><label>World Seed (same seed = same world)</label><input id="edSeed" type="number" value="42"></div>
+    <div class="edit-field"><label>Hex Size (pixels)</label><input id="edHexSize" type="number" value="28"></div></div>
+    <div class="edit-field"><label>Ambient Entity Density (0-1)</label><input id="edDensity" type="number" step="0.01" value="0.03" min="0" max="1"></div>
+  </div>
+
+  <!-- JSON -->
+  <div class="editor-section" id="tabJSON">
+    <h3>📋 Full Config (JSON)</h3>
+    <p style="color:#888;font-size:12px;margin-bottom:10px;">Copy this to save/share your game config:</p>
+    <div class="json-preview" id="jsonPreview"></div>
+    <div style="margin-top:12px;text-align:center;">
+      <button class="btn-secondary" onclick="copyJSON()">📋 Copy to Clipboard</button>
+      <button class="btn-secondary" onclick="loadJSONPrompt()">📂 Paste & Load</button>
+    </div>
+  </div>
+
+  <div class="editor-actions">
+    <button class="btn-primary" onclick="applyAndPlay()">✅ APPLY & PLAY</button>
+    <button class="btn-secondary" onclick="closeEditor()">Cancel</button>
+  </div>
+</div>
+</div>
+
+<script>
+// ════════════════════════════════════════════════════════
+//  SECTION 1: GAME CONFIGURATION OBJECT
+//  This is THE thing users edit. Everything reads from here.
+// ════════════════════════════════════════════════════════
+let GAME = {
+  // --- Identity ---
+  title: "H.4.K.S.",
+  subtitle: "THE NEWT CHRONICLES",
+  chapter: "BLACK NOTEBOOK SAGA",
+
+  // --- Palette ---
+  palette: {
+    accent: '#d4af37',
+    bg: '#0a0a0f',
+    terrain: ['#1a3320','#1a3a5c','#2d3a1a','#333340','#2a1a3a','#0f2a15','#2a2518','#404045','#3a3520','#1a2a35','#3a1a15'],
+    player: '#2ecc71',
+    playerOutline: '#1a7a3a',
+    playerDetail: '#f39c12',
+    healthHigh: '#2ecc71',
+    healthMid: '#f39c12',
+    healthLow: '#e74c3c',
+    money: '#f1c40f',
+  },
+
+  // --- Player ---
+  player: {
+    name: "Handy C.",
+    sprite: 'newt',
+    maxHealth: 100,
+    startMoney: 0,
+    startItems: [],
+  },
+
+  // --- Items (collectibles on the map) ---
+  items: [
+    { id: 'notebook_1', name: 'Black Notebook I', type: 'collectible', icon: '📓', color: '#d4af37', desc: 'Early fragments', quote: 'The question of Being must be raised.' },
+    { id: 'notebook_2', name: 'Black Notebook II', type: 'collectible', icon: '📓', color: '#d4af37', desc: 'The turning', quote: 'We are thrown into existence.' },
+    { id: 'notebook_3', name: 'Black Notebook III', type: 'collectible', icon: '📓', color: '#d4af37', desc: 'Danger', quote: 'The saving power may appear as destruction.' },
+    { id: 'notebook_4', name: 'Black Notebook IV', type: 'collectible', icon: '📓', color: '#d4af37', desc: 'The event', quote: 'Language is the house of Being.' },
+    { id: 'notebook_5', name: 'Black Notebook V', type: 'collectible', icon: '📓', color: '#d4af37', desc: 'The fourfold', quote: 'Mortals dwell in that they save the earth.' },
+    { id: 'notebook_6', name: 'Black Notebook VI', type: 'collectible', icon: '📓', color: '#d4af37', desc: 'Technology', quote: 'The essence of technology is nothing technological.' },
+    { id: 'notebook_7', name: 'Black Notebook VII', type: 'collectible', icon: '📓', color: '#d4af37', desc: 'Final volume', quote: 'The danger is the saving power.' },
+    { id: 'sword', name: 'Cardboard Sword', type: 'weapon', icon: '🗡️', color: '#c0c0c0', desc: '+15 DMG', damage: 15 },
+    { id: 'spacecraft', name: 'Alien Spacecraft', type: 'objective', icon: '🛸', color: '#00ffaa', desc: 'Escape vehicle', quote: null },
+  ],
+
+  // --- NPCs ---
+  characters: [
+    { id: 'loudercake', name: 'Loudercake', sprite: 'newt', color: '#e74c3c',
+      dialogue: ['The artifacts are scattered across the moorlands.', 'Find them all. But be careful.', 'I believe in you.'],
+      position: { q: 5, r: -3 }, givesItem: null, trades: null },
+    { id: 'archivist', name: 'The Archivist', sprite: 'wizard', color: '#9b59b6',
+      dialogue: ['Each artifact holds a fragment of truth.', 'I have catalogued them for decades.', 'Beware the void tiles.'],
+      position: { q: -8, r: 4 }, givesItem: null, trades: { accept: ['collectible'], give: 'health', cost: 1 } },
+    { id: 'merchant', name: 'Scrap Merchant', sprite: 'knight', color: '#3498db',
+      dialogue: ['Got parts? Got scrap? I got goods.', 'Name your price.', 'Business is business out here.'],
+      position: { q: 12, r: 7 }, givesItem: null, trades: { accept: ['money'], give: 'health', cost: 30 } },
+  ],
+
+  // --- Plot ---
+  plot: {
+    intro: 'Explore the infinite hex world. Find the artifacts. Talk to strangers. Escape.',
+    victory: 'YOU WIN! All objectives complete!',
+    gameover: 'Game Over...',
+  },
+
+  // --- Goals (win conditions) ---
+  goals: [
+    { text: 'Collect all artifacts', check: s => s.inventory.filter(i=>i.type==='collectible').length >= GAME.items.filter(i=>i.type==='collectible').length },
+    { text: 'Find the weapon', check: s => s.inventory.some(i=>i.type==='weapon') },
+    { text: 'Reach the objective', check: s => s.reachedObjective },
+  ],
+
+  // --- Economy ---
+  economy: {
+    currencyName: 'Shells',
+    currencyIcon: '🐚',
+    killReward: 10,
+  },
+
+  // --- World gen ---
+  world: {
+    seed: 42,
+    hexSize: 28,
+    ambientEntityDensity: 0.03,
+    itemSpread: 4,
+    lSystemRules: { axiom: 'F', rules: { 'F': 'F[+F]F[-F][F]' }, angle: 25, iterations: 3, lengthFactor: 0.65 },
+  },
+};
+
+// ════════════════════════════════════════════════════════
+//  CANVAS SETUP
+// ════════════════════════════════════════════════════════
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const W = () => canvas.width = innerWidth;
+const H = () => canvas.height = innerHeight;
+W(); H();
+window.onresize = () => { W(); H(); };
+
+const uiEl = document.getElementById('ui');
+const msgEl = document.getElementById('msg');
+const minimapCanvas = document.getElementById('minimap');
+const minimapCtx = minimapCanvas.getContext('2d');
+const dialogBox = document.getElementById('dialogBox');
+
+// ════════════════════════════════════════════════════════
+//  HEX MATH (pointy-top axial coordinates)
+// ════════════════════════════════════════════════════════
+const HEX_DIRS = [
+  {q:+1,r:0},{q:+1,r:-1},{q:0,r:-1},
+  {q:-1,r:0},{q:-1,r:+1},{q:0,r:+1}
+];
+const HEX_SIZE = () => GAME.world.hexSize;
+
+function hexToPixel(q, r) {
+  const x = HEX_SIZE() * (Math.sqrt(3)*q + Math.sqrt(3)/2*r);
+  const y = HEX_SIZE() * (3/2 * r);
+  return { x, y };
+}
+
+function pixelToHex(x, y) {
+  const s = HEX_SIZE();
+  const q = (Math.sqrt(3)/3*x - 1/3*y) / s;
+  const r = (2/3*y) / s;
+  return axialRound(q, r);
+}
+
+function axialRound(q, r) {
+  const s = -q-r;
+  let rq = Math.round(q), rr = Math.round(r), rs = Math.round(s);
+  const dq = Math.abs(rq-q), dr = Math.abs(rr-r), ds = Math.abs(rs-s);
+  if (dq > dr && dq > ds) rq = -rr-rs;
+  else if (dr > ds) rr = -rq-rs;
+  else rs = -rq-rr;
+  return { q: rq, r: rr };
+}
+
+function hexDist(a, b) {
+  return (Math.abs(a.q-b.q)+Math.abs(a.q+a.r-b.q-b.r)+Math.abs(a.r-b.r))/2;
+}
+
+// ════════════════════════════════════════════════════════
+//  PRNG (seeded, deterministic world)
+// ════════════════════════════════════════════════════════
+function seededRandom(seed) {
+  let s = seed & 0xffffffff;
+  return function() {
+    s = (s * 1664525 + 1013904223) & 0xffffffff;
+    return (s >>> 0) / 0xffffffff;
+  };
+}
+
+let rng = seededRandom(GAME.world.seed);
+
+function hashQR(q, r) {
+  let h = ((q * 374761393 + r * 668265263) + GAME.world.seed) & 0xffffffff;
+  h = ((h ^ (h >> 13)) * 1274126177) & 0xffffffff;
+  return (h ^ (h >> 16)) >>> 0;
+}
+
+function randForTile(q, r) {
+  const h = hashQR(q, r);
+  let n = h;
+  return function() { n = (n * 1103515245 + 12345) & 0x7fffffff; return n / 0x7fffffff; };
+}
+
+// ════════════════════════════════════════════════════════
+//  L-SYSTEM TREES
+// ════════════════════════════════════════════════════════
+function generateLSystem(rules, iterations) {
+  let str = rules.axiom;
+  for (let i = 0; i < iterations; i++) {
+    let next = '';
+    for (const c of str) next += (rules.rules[c] || c);
+    str = next;
+  }
+  return str;
+}
+
+function drawLTree(ctx, x, y, len, angle, instructions, idx) {
+  if (idx >= instructions.length || len < 2) return idx;
+  const c = instructions[idx++];
+  if (c === 'F') {
+    const x2 = x + Math.cos(angle) * len;
+    const y2 = y + Math.sin(angle) * len;
+    ctx.lineTo(x2, y2);
+    return drawLTree(ctx, x2, y2, len * GAME.world.lSystemRules.lengthFactor, angle, instructions, idx);
+  } else if (c === '+') {
+    return drawLTree(ctx, x, y, len, angle + GAME.world.lSystemRules.angle * Math.PI/180, instructions, idx);
+  } else if (c === '-') {
+    return drawLTree(ctx, x, y, len, angle - GAME.world.lSystemRules.angle * Math.PI/180, instructions, idx);
+  } else if (c === '[') {
+    ctx.save(); ctx.moveTo(x, y);
+    idx = drawLTree(ctx, x, y, len, angle, instructions, idx);
+    ctx.restore(); ctx.moveTo(x, y);
+    return idx;
+  } else if (c === ']') return idx;
+  return idx;
+}
+
+let lSystemString = '';
+
+// ════════════════════════════════════════════════════════
+//  GAME STATE
+// ════════════════════════════════════════════════════════
+let STATE;
+
+function initState() {
+  lSystemString = generateLSystem(GAME.world.lSystemRules, GAME.world.lSystemRules.iterations);
+  rng = seededRandom(GAME.world.seed);
+
+  STATE = {
+    started: false,
+    playerQ: 0, playerR: 0,
+    health: GAME.player.maxHealth,
+    maxHealth: GAME.player.maxHealth,
+    money: GAME.player.startMoney,
+    inventory: [...GAME.player.startItems],
+    goals: GAME.goals.map(g => ({ ...g, done: false })),
+    messageTimer: 0, currentMessage: '', messageColor: '#fff',
+    showMinimap: false, showInventory: false, showGoals: false,
+    invincibleTimer: 0, reachedObjective: false,
+    victory: false, gameOver: false,
+    dialogActive: false, totalMoves: 0, playTime: 0,
+  };
+
+  placeItems();
+  GAME.characters.forEach(ch => {
+    ch.currentQ = ch.position.q;
+    ch.currentR = ch.position.r;
+    ch.dialogIndex = 0;
+  });
+}
+
+function placeItems() {
+  const placed = [];
+  let ring = 1;
+  GAME.items.forEach((item) => {
+    if (item.id === 'spacecraft') { item.q = 35; item.r = 20; return; }
+    let ok = false;
+    while (!ok) {
+      const positions = getRingPositions(ring);
+      for (const pos of positions) {
+        const tt = getTerrainType(pos.q, pos.r);
+        if (tt.walkable && !placed.some(p => hexDist(p, pos) < GAME.itemSpread)) {
+          item.q = pos.q; item.r = pos.r;
+          placed.push(pos); ok = true; break;
+        }
+      }
+      ring++;
+    }
+  });
+}
+
+function getRingPositions(ring) {
+  const positions = [];
+  if (ring === 0) return [{ q: 0, r: 0 }];
+  let q = ring, r = 0;
+  for (let i = 0; i < 6; i++) {
+    for (let j = 0; j < ring; j++) {
+      positions.push({ q, r });
+      q += HEX_DIRS[(i+2)%6].q;
+      r += HEX_DIRS[(i+2)%6].r;
+    }
+  }
+  return positions;
+}
+
+// ════════════════════════════════════════════════════════
+//  TERRAIN SYSTEM
+// ════════════════════════════════════════════════════════
+const TERRAIN_TYPES = [
+  { name:'moorland', walkable:true, char:'·', shade:0 },
+  { name:'pond',     walkable:false, char:'≈', shade:-0.15 },
+  { name:'swamp',    walkable:true,  char:'☁', shade:-0.06 },
+  { name:'ruins',    walkable:true,  char:'▒', shade:0.08 },
+  { name:'void',     walkable:false, char:'∅', shade:-0.2 },
+  { name:'forest',   walkable:true,  char:'♠', shade:-0.1 },
+  { name:'village',  walkable:true,  char:'⌂', shade:0.05 },
+  { name:'mountain', walkable:false, char:'▲', shade:0.15 },
+  { name:'desert',   walkable:true,  char:'∴', shade:0.1 },
+  { name:'ice',      walkable:true,  char:'❄', shade:0.12 },
+  { name:'lava',     walkable:false, char:'☋', shade:-0.12 },
+];
+
+function getTerrainType(q, r) {
+  const rf = randForTile(q, r);
+  const v = rf();
+  const idx = Math.min(Math.floor(v * TERRAIN_TYPES.length), TERRAIN_TYPES.length - 1);
+  return TERRAIN_TYPES[idx];
+}
+
+function getTerrainColor(idx) {
+  const colors = GAME.palette.terrain;
+  return colors[idx] || colors[0];
+}
+
+// ════════════════════════════════════════════════════════
+//  SPRITE DRAWING
+// ════════════════════════════════════════════════════════
+function drawNewtSprite(cx, cy, scale, bodyCol, outCol, detailCol, time) {
+  const s = 22 * scale;
+  ctx.save();
+  ctx.translate(cx, cy + Math.sin(time * 0.004) * 2 * scale);
+
+  // Body (fat teardrop)
+  ctx.beginPath();
+  ctx.ellipse(0, s*0.15, s*0.55, s*0.7, 0, 0, Math.PI*2);
+  ctx.fillStyle = bodyCol; ctx.fill();
+  ctx.strokeStyle = outCol; ctx.lineWidth = 2*scale; ctx.stroke();
+
+  // Tail
+  ctx.beginPath();
+  ctx.moveTo(0, s*0.7);
+  const tailWag = Math.sin(time * 0.008) * 0.3;
+  ctx.quadraticCurveTo(s*0.4*tailWag, s*1.1, s*0.15*tailWag, s*1.35);
+  ctx.strokeStyle = outCol; ctx.lineWidth = 3*scale; ctx.lineCap = 'round'; ctx.stroke();
+
+  // Legs
+  const legPos = [[-s*0.35,s*0.1],[s*0.35,s*0.1],[-s*0.3,s*0.5],[s*0.3,s*0.5]];
+  legPos.forEach(([lx, ly]) => {
+    ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(lx, ly+s*0.25);
+    ctx.strokeStyle = outCol; ctx.lineWidth=2.5*scale; ctx.stroke();
+  });
+
+  // Eye spots (great crested newt feature)
+  ctx.fillStyle = detailCol;
+  ctx.beginPath(); ctx.ellipse(-s*0.18, -s*0.15, s*0.12, s*0.1, -0.2, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(s*0.18, -s*0.15, s*0.12, s*0.1, 0.2, 0, Math.PI*2); ctx.fill();
+
+  // Eyes (white with pupil)
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.ellipse(-s*0.18, -s*0.17, s*0.09, s*0.07, 0, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(s*0.18, -s*0.17, s*0.09, s*0.07, 0, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#111';
+  ctx.beginPath(); ctx.arc(-s*0.16, -s*0.16, s*0.04, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(s*0.2, -s*0.16, s*0.04, 0, Math.PI*2); ctx.fill();
+
+  // Crown spikes
+  ctx.strokeStyle = detailCol; ctx.lineWidth = 1.5*scale;
+  for (let i = -2; i <= 2; i++) {
+    const sx = i * s*0.15;
+    ctx.beginPath(); ctx.moveTo(sx, -s*0.35); ctx.lineTo(sx + i*s*0.05, -s*0.55); ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+function drawPlayerSprite(cx, cy, time) {
+  const sp = GAME.player.sprite;
+  const p = GAME.palette;
+  if (sp === 'newt') {
+    drawNewtSprite(cx, cy, 1.2, p.player, p.playerOutline, p.playerDetail, time);
+  } else if (sp === 'knight') {
+    drawKnightSprite(cx, cy, p.player, p.playerOutline, p.playerDetail, time);
+  } else if (sp === 'wizard') {
+    drawWizardSprite(cx, cy, p.player, p.playerOutline, p.playerDetail, time);
+  } else if (sp === 'slime') {
+    drawSlimeSprite(cx, cy, p.player, p.playerOutline, time);
+  } else if (sp === 'ghost') {
+    drawGhostSprite(cx, cy, p.player, p.playerOutline, time);
+  } else if (sp === 'ship') {
+    drawShipSprite(cx, cy, p.player, p.playerOutline, p.playerDetail, time);
+  } else {
+    drawNewtSprite(cx, cy, 1.2, p.player, p.playerOutline, p.playerDetail, time);
+  }
+
+  // Glow ring around player
+  ctx.save();
+  ctx.globalAlpha = 0.25 + Math.sin(time * 0.005) * 0.1;
+  ctx.beginPath(); ctx.arc(cx, cy, 28, 0, Math.PI*2);
+  ctx.fillStyle = p.accent; ctx.fill();
+  ctx.restore();
+
+  // Name tag
+  ctx.fillStyle = p.accent; ctx.font = 'bold 11px Courier New'; ctx.textAlign = 'center';
+  ctx.fillText(GAME.player.name.toUpperCase(), cx, cy + 38);
+}
+
+function drawKnightSprite(cx, cy, bodyCol, outCol, detCol, time) {
+  const s = 18;
+  ctx.save(); ctx.translate(cx, cy + Math.sin(time*0.004)*1.5);
+  // Body (armor)
+  ctx.fillStyle=bodyCol; ctx.beginPath(); ctx.roundRect(-s*0.5,-s*0.3,s,s*0.9,4); ctx.fill(); ctx.strokeStyle=outCol; ctx.lineWidth=2; ctx.stroke();
+  // Helmet
+  ctx.fillStyle=outCol; ctx.beginPath(); ctx.arc(0,-s*0.4,s*0.45,Math.PI,0); ctx.fill(); ctx.lineTo(s*0.4,-s*0.4); ctx.closePath(); ctx.fill();
+  // Visor slit
+  ctx.fillStyle=detCol; ctx.fillRect(-s*0.2,-s*0.35,s*0.4,s*0.12);
+  // Sword
+  ctx.strokeStyle='#ccc'; ctx.lineWidth=3; ctx.beginPath(); ctx.moveTo(s*0.5,0); ctx.lineTo(s*1.1,-s*0.8); ctx.stroke();
+  ctx.fillStyle=detCol; ctx.fillRect(s*0.95,-s*0.9,s*0.2,s*0.25);
+  ctx.restore();
+}
+
+function drawWizardSprite(cx, cy, bodyCol, outCol, detCol, time) {
+  const s = 18;
+  ctx.save(); ctx.translate(cx, cy + Math.sin(time*0.004)*1.5);
+  // Robe
+  ctx.fillStyle=bodyCol; ctx.beginPath(); ctx.moveTo(0,-s*0.8); ctx.lineTo(-s*0.6,s*0.7); ctx.lineTo(s*0.6,s*0.7); ctx.closePath(); ctx.fill(); ctx.strokeStyle=outCol; ctx.lineWidth=1.5; ctx.stroke();
+  // Hat
+  ctx.fillStyle=outCol; ctx.beginPath(); ctx.moveTo(-s*0.4,-s*0.6); ctx.lineTo(0,-s*1.5); ctx.lineTo(s*0.4,-s*0.6); ctx.closePath(); ctx.fill();
+  // Face dot
+  ctx.fillStyle=detCol; ctx.beginPath(); ctx.arc(0,-s*0.5,s*0.1,0,Math.PI*2); ctx.fill();
+  // Staff glow
+  ctx.globalAlpha=0.5+Math.sin(time*0.008)*0.3; ctx.fillStyle=detCol; ctx.beginPath(); ctx.arc(s*0.7,s*0.3,s*0.15,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
+  ctx.restore();
+}
+
+function drawSlimeSprite(cx, cy, bodyCol, outCol, time) {
+  const s = 18;
+  const wobble = Math.sin(time*0.006)*2;
+  ctx.save(); ctx.translate(cx, cy+wobble);
+  ctx.fillStyle=bodyCol; ctx.beginPath();
+  ctx.ellipse(0,s*0.2,s*0.8,s*0.55,0,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle=outCol; ctx.lineWidth=2; ctx.stroke();
+  // Eyes
+  ctx.fillStyle='#fff'; ctx.beginPath(); ctx.ellipse(-s*0.25,-s*0.05,s*0.18,s*0.2,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(s*0.25,-s*0.05,s*0.18,s*0.2,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#111'; ctx.beginPath(); ctx.arc(-s*0.22,-s*0.03,s*0.07,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(s*0.27,-s*0.03,s*0.07,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
+function drawGhostSprite(cx, cy, bodyCol, outCol, time) {
+  const s = 18;
+  const float = Math.sin(time*0.004)*4;
+  ctx.save(); ctx.translate(cx, cy+float); ctx.globalAlpha=0.75;
+  ctx.fillStyle=bodyCol; ctx.beginPath();
+  ctx.arc(0,-s*0.1,s*0.6,Math.PI,0); ctx.lineTo(s*0.6,s*0.5);
+  for(let i=0;i<4;i++){ const wx=s*0.6-(i+0.5)*(s*1.2/4); ctx.lineTo(wx,s*0.3+i%2*s*0.2); }
+  ctx.lineTo(-s*0.6,s*0.5); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle=outCol; ctx.lineWidth=1.5; ctx.stroke();
+  // Eyes
+  ctx.fillStyle='#111'; ctx.beginPath(); ctx.ellipse(-s*0.2,-s*0.15,s*0.1,s*0.14,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(s*0.2,-s*0.15,s*0.1,s*0.14,0,0,Math.PI*2); ctx.fill();
+  ctx.globalAlpha=1; ctx.restore();
+}
+
+function drawShipSprite(cx, cy, bodyCol, outCol, detCol, time) {
+  const s = 16;
+  const bob = Math.sin(time*0.003)*2;
+  ctx.save(); ctx.translate(cx, cy+bob);
+  // Body
+  ctx.fillStyle=bodyCol; ctx.beginPath(); ctx.ellipse(0,0,s*0.9,s*0.4,0,0,Math.PI*2); ctx.fill(); ctx.strokeStyle=outCol; ctx.lineWidth=2; ctx.stroke();
+  // Cockpit
+  ctx.fillStyle=detCol; ctx.beginPath(); ctx.ellipse(0,-s*0.1,s*0.3,s*0.18,0,0,Math.PI*2); ctx.fill();
+  // Engine glow
+  ctx.globalAlpha=0.6+Math.sin(time*0.01)*0.3; ctx.fillStyle=detCol; ctx.beginPath(); ctx.ellipse(-s*0.85,0,s*0.15,s*0.1,0,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
+  ctx.restore();
+}
+
+// ════════════════════════════════════════════════════════
+//  RENDERING
+// ════════════════════════════════════════════════════════
+function drawHex(cx, cy, size, fillColor, strokeColor) {
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const ang = Math.PI / 180 * (60 * i - 30);
+    const px = cx + size * Math.cos(ang);
+    const py = cy + size * Math.sin(ang);
+    i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fillStyle = fillColor; ctx.fill();
+  ctx.strokeStyle = strokeColor; ctx.lineWidth = 0.5; ctx.stroke();
+}
+
+function render(time) {
+  if (!STATE.started) return;
+  const w = canvas.width, h = canvas.height;
+  const hs = HEX_SIZE();
+
+  // Background
+  ctx.fillStyle = GAME.palette.bg;
+  ctx.fillRect(0, 0, w, h);
+
+  // Camera offset (player at screen center)
+  const playerPx = hexToPixel(STATE.playerQ, STATE.playerR);
+  const offsetX = w/2 - playerPx.x;
+  const offsetY = h/2 - playerPx.y;
+
+  // Draw range
+  const drawRange = Math.ceil(w/(hs*1.5)) + 2;
+  const centerQ = STATE.playerQ, centerR = STATE.playerR;
+
+  // 1. Draw terrain hexes
+  for (let rq = centerQ-drawRange; rq <= centerQ+drawRange; rq++) {
+    for (let rr = centerR-drawRange; rr <= centerR+drawRange; rr++) {
+      const { x, y } = hexToPixel(rq, rr);
+      const px = x+offsetX, py = y+offsetY;
+      if (px<-hs||px>w+hs||py<-hs||py>h+hs) continue;
+      const tt = getTerrainType(rq, rr);
+      const baseColor = getTerrainColor(TERRAIN_TYPES.indexOf(tt));
+      const shaded = shadeColor(baseColor, tt.shade);
+      drawHex(px, py, hs*0.96, shaded, shadeColor(baseColor, tt.shade+0.08));
+    }
+  }
+
+  // 2. Draw L-System trees
+  for (let rq=centerQ-drawRange;rq<=centerQ+drawRange;rq++){
+    for(let rr=centerR-drawRange;rr<=centerR+drawRange;rr++){
+      const tt=getTerrainType(rq,rr);
+      if(!['moorland','ruins','village','desert'].includes(tt.name)) continue;
+      const rf=randForTile(rq,rr); if(rf()>0.85) continue;
+      const{x,y}=hexToPixel(rq,rr);
+      const px=x+offsetX,py=y+offsetY;
+      if(px<-hs*2||px>w+hs*2||py<-hs*2||py>h+hs*2) continue;
+      ctx.save(); ctx.translate(px,py); ctx.scale(0.6,0.6);
+      ctx.strokeStyle='#2a5a2a'; ctx.lineWidth=1.5; ctx.beginPath();
+      ctx.moveTo(0,0); drawLTree(ctx,0,0,hs*0.5,-Math.PI/2,lSystemString,0);
+      ctx.stroke(); ctx.restore();
+    }
+  }
+
+  // 3. Draw items
+  GAME.items.forEach(item => {
+    if (item.q===undefined || STATE.inventory.some(inv=>inv.id===item.id)) return;
+    const {x,y}=hexToPixel(item.q,item.r);
+    const px=x+offsetX,py=y+offsetY;
+    if(px<-30||px>w+30||py<-30||py>h+30) return;
+    ctx.font='20px serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(item.icon, px, py-4);
+    // Glow
+    ctx.save(); ctx.globalAlpha=0.3+Math.sin(time*0.004)*0.15;
+    ctx.beginPath(); ctx.arc(px,py,18,0,Math.PI*2); ctx.fillStyle=item.color; ctx.fill(); ctx.restore();
+  });
+
+  // 4. Draw NPCs
+  GAME.characters.forEach(ch => {
+    const {x:y}=hexToPixel(ch.currentQ,ch.currentR);
+    const px=y+offsetX,py=y+offsetY;
+    if(px<-30||px>w+30||py<-30||py>h+30) return;
+    const sp = ch.sprite==='newt'?drawNewtSprite:ch.sprite==='wizard'?drawWizardSprite:ch.sprite==='knight'?drawKnightSprite:drawSlimeSprite;
+    sp(px,py,0.9,ch.color,'#222',GAME.palette.playerDetail,time);
+    // Name above NPC
+    ctx.fillStyle=ch.color; ctx.font='bold 10px Courier New'; ctx.textAlign='center';
+    ctx.fillText(ch.name,px,py-26);
+  });
+
+  // 5. Draw ambient entities
+  for(let rq=centerQ-drawRange;rq<=centerQ+drawRange;rq++){
+    for(let rr=centerR-drawRange;rr<=centerR+drawRange;rr++){
+      if(rq===centerQ&&rr===centerR)continue;
+      const h=hashQR(rr,rq+77777);
+      if((h%1000)/1000<GAME.world.ambientEntityDensity){}else continue;
+      const{x,y}=hexToPixel(rq,rr);
+      const px=x+offsetX,py=y+offsetY;
+      if(px<-30||px>w+30||py<-30||py>h+30)continue;
+      const wiggle=Math.sin(time*0.002+h)*1.5;
+      ctx.globalAlpha=0.5;
+      drawNewtSprite(px,py+wiggle,0.5,'#3a8a4a','#1a5a2a','#c97a12',time+h);
+      ctx.globalAlpha=1;
+    }
+  }
+
+  // 6. DRAW PLAYER LAST (on top of everything)
+  drawPlayerSprite(w/2, h/2, time);
+
+  // Victory / Game Over overlay
+  if (STATE.victory) {
+    ctx.fillStyle='rgba(0,0,0,0.7)'; ctx.fillRect(0,0,w,h);
+    ctx.fillStyle=GAME.palette.accent; ctx.font='bold 36px Courier New'; ctx.textAlign='center';
+    ctx.fillText(GAME.plot.victory,w/2,h/2-20);
+    ctx.font='16px Courier New'; ctx.fillStyle='#aaa'; ctx.fillText('Press R to restart',w/2,h/2+20);
+  }
+  if (STATE.gameOver) {
+    ctx.fillStyle='rgba(0,0,0,0.7)'; ctx.fillRect(0,0,w,h);
+    ctx.fillStyle='#e74c3c'; ctx.font='bold 36px Courier New'; ctx.textAlign='center';
+    ctx.fillText(GAME.plot.gameover,w/2,h/2-20);
+    ctx.font='16px Courier New'; ctx.fillStyle='#aaa'; ctx.fillText('Press R to restart',w/2,h/2+20);
+  }
+}
+
+function shadeColor(hex, amt) {
+  let c = hex.replace('#','');
+  if(c.length===3)c=c.split('').map(x=>x+x).join('');
+  const num=parseInt(c,16);
+  let r=(num>>16),g=(num>>8&0xff),b=(num&0xff);
+  r=Math.min(255,Math.max(0,Math.round(r+(256*amt))));
+  g=Math.min(255,Math.max(0,Math.round(g+(256*amt))));
+  b=Math.min(255,Math.max(0,Math.round(b+(256*amt))));
+  return`rgb(${r},${g},${b})`;
+}
+
+// ════════════════════════════════════════════════════════
+//  INPUT HANDLING
+// ════════════════════════════════════════════════════════
+const KEY_MAP = {'KeyW':0,'KeyE':1,'KeyD':2,'KeyX':3,'KeyZ':4,'KeyA':5};
+
+document.addEventListener('keydown', e => {
+  // Start screen
+  if (!STATE.started && !document.getElementById('editorOverlay').classList.contains('show')) {
+    document.getElementById('startScreen').style.display = 'none';
+    STATE.started = true;
+    showMessage(GAME.plot.intro, GAME.palette.accent, 280);
+    return;
+  }
+
+  // Dialog
+  if (STATE.dialogActive) {
+    if (e.code === 'Space' || e.code === 'Enter') hideDialog();
+    return;
+  }
+
+  // Editor toggle
+  if (e.code === 'KeyE' && !e.repeat) { toggleEditor(); return; }
+
+  // Movement
+  if (KEY_MAP[e.code] !== undefined) {
+    const dir = HEX_DIRS[KEY_MAP[e.code]];
+    const nq = STATE.playerQ + dir.q, nr = STATE.playerR + dir.r;
+    const tt = getTerrainType(nq, nr);
+    if (tt.walkable) {
+      STATE.playerQ = nq; STATE.playerR = nr;
+      STATE.totalMoves++;
+      checkInteractions();
+    }
+  }
+
+  // Actions
+  if (e.code === 'Space') interact();
+  if (e.code === 'KeyM') { STATE.showMinimap=!STATE.showMinimap; minimapCanvas.classList.toggle('show'); }
+  if (e.code === 'KeyI') { STATE.showInventory=!STATE.showInventory; document.getElementById('inventoryPanel').classList.toggle('show'); updateInventoryPanel(); }
+  if (e.code === 'KeyG') { STATE.showGoals=!STATE.showGoals; document.getElementById('goalsPanel').classList.toggle('show'); updateGoalsPanel(); }
+  if (e.code === 'KeyR' && (STATE.victory || STATE.gameOver)) location.reload();
+});
+
+function checkInteractions() {
+  // Item pickup
+  GAME.items.forEach(item => {
+    if (item.q===undefined) return;
+    if (hexDist({q:STATE.playerQ,r:STATE.playerR},{q:item.q,r:item.r})<1) {
+      STATE.inventory.push({...item});
+      showMessage(`Picked up: ${item.icon} ${item.name}`, item.color, 200);
+      if (item.quote) showMessage(`"${item.quote}"`, item.color, 260);
+      delete item.q; delete item.r;
+    }
+  });
+
+  // Spacecraft objective
+  const sc = GAME.items.find(i=>i.id==='spacecraft');
+  if (sc && sc.q!==undefined && hexDist({q:STATE.playerQ,r:STATE.playerR},{q:sc.q,r:sc.r})<1) {
+    STATE.reachedObjective=true;
+    showMessage(`${sc.icon} ${sc.name} reached!`, sc.color, 240);
+  }
+
+  // Check goals
+  STATE.goals.forEach(g => { if (!g.done && g.check(STATE)) g.done=true; });
+  if (STATE.goals.every(g=>g.done)&&!STATE.victory) { STATE.victory=true; }
+}
+
+function interact() {
+  // Talk to nearest NPC
+  let nearest=null, nearestDist=Infinity;
+  GAME.characters.forEach(ch=>{
+    const d=hexDist({q:STATE.playerQ,r:STATE.playerR},{q:ch.currentQ,r:ch.currentR});
+    if(d<nearestDist&&d<=2){nearestDist=d;nearest=ch;}
+  });
+  if(nearest){
+    showDialog(nearest.name, nearest.dialogue[nearest.dialogIndex]);
+    nearest.dialogIndex=(nearest.dialogIndex+1)%nearest.dialogue.length;
+    return;
+  }
+  showMessage('Nothing here...', '#666', 120);
+}
+
+// ════════════════════════════════════════════════════════
+//  UI UPDATES
+// ════════════════════════════════════════════════════════
+function showMessage(text, color, duration) {
+  STATE.currentMessage=text; STATE.messageColor=color||'#fff';
+  STATE.messageTimer=duration||200;
+  msgEl.textContent=text; msgEl.style.color=color||'#fff'; msgEl.style.opacity=1;
+}
+
+function updateUI() {
+  const collected=STATE.inventory.filter(i=>i.type==='collectible').length;
+  const totalCollectibles=GAME.items.filter(i=>i.type==='collectible').length;
+  const hasWeapon=STATE.inventory.some(i=>i.type==='weapon');
+  const hpPct=STATE.health/STATE.maxHealth;
+  const hpColor=hpPct>0.6?GAME.palette.healthHigh:hpPct>0.3?GAME.palette.healthMid:GAME.palette.healthLow;
+
+  uiEl.innerHTML=`
+    <div style="color:${GAME.palette.accent};font-size:14px;font-weight:bold;margin-bottom:8px;">${GAME.title}</div>
+    <hr>
+    <div class="row"><span class="label">❤️ HP</span><span class="value" style="color:${hpColor}">${STATE.health}/${STATE.maxHealth}</span></div>
+    <div class="row"><span class="label">${GAME.economy.currencyIcon} ${GAME.economy.currencyName}</span><span class="value" style="color:${GAME.palette.money}">${STATE.money}</span></div>
+    <div class="row"><span class="label">📦 Items</span><span class="value">${collected}/${totalCollectibles}</span></div>
+    ${hasWeapon?`<div class="row"><span class="label">⚔️ Weapon</span><span class="value" style="color:#4ade80">✅</span></div>`:''}
+    <hr>
+    <div class="row"><span class="label">Pos</span><span class="value">${STATE.playerQ},${STATE.playerR}</span></div>
+    <div class="row"><span class="label">Steps</span><span class="value">${STATE.totalMoves}</span></div>
+    <hr>
+    <div style="font-size:11px;color:#555;line-height:1.8;">
+      [W][E]<br>[A][D]<br>[Z][X]<br><br>
+      SPACE: act · M: map<br>I: inv · G: goals<br>E: editor
+    </div>`;
+}
+
+function updateInventoryPanel(){
+  const list=document.getElementById('invList');
+  list.innerHTML=STATE.inventory.length===0?'<div class="item"style="color:#555;">Empty</div>':
+    STATE.inventory.map(i=>`<div class="item">${i.icon||'📦'} <b>${i.name}</b>${i.desc?' — '+i.desc:''}</div>`).join('');
+}
+
+function updateGoalsPanel(){
+  const list=document.getElementById('goalsList');
+  list.innerHTML=STATE.goals.map(g=>{
+    const done=g.check(STATE);if(done&&!g.done)g.done=true;
+    return`<div class="goal${done?' done':''}">${g.done?'✅':'⬜'} ${g.text}</div>`;
+  }).join('');
+}
+
+function showDialog(speaker,text){
+  STATE.dialogActive=true;
+  dialogBox.style.display='block';
+  dialogBox.querySelector('.speaker').textContent=speaker;
+  dialogBox.querySelector('.text').textContent=text;
+}
+function hideDialog(){ STATE.dialogActive=false; dialogBox.style.display='none'; }
+
+// ════════════════════════════════════════════════════════
+//  MINIMAP
+// ════════════════════════════════════════════════════════
+function renderMinimap(){
+  const mc=minimapCtx, mw=minimapCanvas.width, mh=minimapCanvas.height;
+  mc.fillStyle='#000'; mc.fillRect(0,0,mw,mh);
+  const scale=2.5;
+  for(let q=-30;q<=30;q++){
+    for(let r=-30;r<=30;r++){
+      const tt=getTerrainType(q,r);
+      mc.fillStyle=getTerrainColor(TERRAIN_TYPES.indexOf(tt));
+      mc.fillRect(mw/2+q*scale-1,mh/2+r*scale-1,2,2);
+    }
+  }
+  // Player dot
+  mc.fillStyle=GAME.palette.accent; mc.beginPath();mc.arc(mw/2+STATE.playerQ*scale,mh/2+STATE.playerR*scale,3,0,Math.PI*2);mc.fill();
+  // Items
+  GAME.items.forEach(it=>{
+    if(it.q===undefined)return;
+    mc.fillStyle=it.color; mc.fillRect(mw/2+it.q*scale-1,mh/2+it.r*scale-1,2,2);
+  });
+  // NPCs
+  GAME.characters.forEach(ch=>{
+    mc.fillStyle=ch.color; mc.fillRect(mw/2+ch.currentQ*scale-1,mh/2+ch.currentR*scale-2,2,2);
+  });
+}
+
+// ════════════════════════════════════════════════════════
+//  GAME LOOP
+// ════════════════════════════════════════════════════════
+function gameLoop(time) {
+  if (STATE.messageTimer > 0) {
+    STATE.messageTimer--;
+    if (STATE.messageTimer <= 0) msgEl.style.opacity = 0;
+  }
+  render(time);
+  updateUI();
+  if (STATE.showMinimap) renderMinimap();
+  requestAnimationFrame(gameLoop);
+}
+
+// ════════════════════════════════════════════════════════
+//  EDITOR SYSTEM
+// ════════════════════════════════════════════════════════
+let itemCounter = 0;
+let charCounter = 0;
+let goalCounter = 0;
+
+function populateEditor() {
+  // Identity
+  document.getElementById('edTitle').value = GAME.title;
+  document.getElementById('edSubtitle').value = GAME.subtitle;
+  document.getElementById('edChapter').value = GAME.chapter;
+
+  // Palette
+  document.getElementById('edAccent').value = GAME.palette.accent;
+  document.getElementById('edBg').value = GAME.palette.bg;
+  document.getElementById('edPlayer').value = GAME.palette.player;
+  document.getElementById('edPlayerOut').value = GAME.palette.playerOutline;
+  document.getElementById('edPlayerDet').value = GAME.palette.playerDetail;
+  document.getElementById('edMoney').value = GAME.palette.money;
+  document.getElementById('edTerrain').value = JSON.stringify(GAME.palette.terrain);
+
+  // Player
+  document.getElementById('edPName').value = GAME.player.name;
+  document.getElementById('edPSprite').value = GAME.player.sprite;
+  document.getElementById('edPHealth').value = GAME.player.maxHealth;
+  document.getElementById('edPMoney').value = GAME.player.startMoney;
+
+  // Plot
+  document.getElementById('edIntro').value = GAME.plot.intro;
+  document.getElementById('edVictory').value = GAME.plot.victory;
+  document.getElementById('edGameover').value = GAME.plot.gameover;
+
+  // Economy
+  document.getElementById('edCurrName').value = GAME.economy.currencyName;
+  document.getElementById('edCurrIcon').value = GAME.economy.currencyIcon;
+  document.getElementById('edKillReward').value = GAME.economy.killReward;
+
+  // World
+  document.getElementById('edSeed').value = GAME.world.seed;
+  document.getElementById('edHexSize').value = GAME.world.hexSize;
+  document.getElementById('edDensity').value = GAME.world.ambientEntityDensity;
+
+  // Items
+  renderItemsEditor();
+  renderCharsEditor();
+  renderGoalsEditor();
+  updateJSONPreview();
+}
+
+function renderItemsEditor() {
+  const container = document.getElementById('itemsList');
+  container.innerHTML = '';
+  GAME.items.forEach((item, i) => {
+    container.appendChild(createItemEntry(item, i));
+  });
+}
+
+function createItemEntry(item, idx) {
+  const div = document.createElement('div');
+  div.className = 'item-entry';
+  div.id = `item_${idx}`;
+  div.innerHTML = `
+    <h4>Item #${idx+1} <button class="btn-del" onclick="removeItem(${idx})">✕</button></h4>
+    <div class="edit-row"><div class="edit-field"><label>ID</label><input id="ii_id_${idx}" value="${item.id||''}"></div>
+    <div class="edit-field"><label>Name</label><input id="ii_name_${idx}" value="${item.name||''}"></div></div>
+    <div class="edit-row"><div class="edit-field"><label>Type</label><select id="ii_type_${idx}"><option value="collectible"${item.type==='collectible'?' selected':''}>📦 Collectible</option><option value="weapon"${item.type==='weapon'?' selected':''}>⚔️ Weapon</option><option value="objective"${item.type==='objective'?' selected':''}>🎯 Objective</option><option value="consumable"${item.type==='consumable'?' selected':''}>💊 Consumable</option></select></div>
+    <div class="edit-field"><label>Icon (emoji)</label><input id="ii_icon_${idx}" value="${item.icon||''}"maxlength="2"></div></div>
+    <div class="edit-row"><div class="edit-field"><label>Color</label><input id="ii_color_${idx}" value="${item.color||'#ffffff'}"type="color"></div>
+    <div class="edit-field"><label>Damage (weapons only)</label><input id="ii_dmg_${idx}" type="number" value="${item.damage||0}"></div></div>
+    <div class="edit-field"><label>Description</label><input id="ii_desc_${idx}" value="${item.desc||''}"></div>
+    <div class="edit-field"><label>Pickup Quote</label><input id="ii_quote_${idx}" value="${item.quote||''}"></div>`;
+  return div;
+}
+
+function addItem() {
+  itemCounter++;
+  GAME.items.push({
+    id: `custom_item_${itemCounter}`, name: 'New Item', type: 'collectible',
+    icon: '📦', color: '#ffffff', desc: '', quote: '',
+  });
+  renderItemsEditor();
+}
+
+function removeItem(idx) {
+  GAME.items.splice(idx, 1);
+  renderItemsEditor();
+}
+
+function renderCharsEditor() {
+  const container = document.getElementById('charsList');
+  container.innerHTML = '';
+  GAME.characters.forEach((ch, i) => {
+    container.appendChild(createCharEntry(ch, i));
+  });
+}
+
+function createCharEntry(ch, idx) {
+  const div = document.createElement('div');
+  div.className = 'char-entry';
+  div.innerHTML = `
+    <h4>${ch.name || 'Character'} #${idx+1} <button class="btn-del" onclick="removeChar(${idx})">✕</button></h4>
+    <div class="edit-row"><div class="edit-field"><label>Name</label><input id="ci_name_${idx}" value="${ch.name||''}"></div>
+    <div class="edit-field"><label>Sprite</label><select id="ci_sprite_${idx}"><option value="newt"${ch.sprite==='newt'?' selected':''}>🦎 Newt</option><option value="knight"${ch.sprite==='knight'?' selected':''}>⚔️ Knight</option><option value="wizard"${ch.sprite==='wizard'?' selected':''}>🧙 Wizard</option><option value="slime"${ch.sprite==='slime'?' selected':''}>💧 Slime</option></select></div></div>
+    <div class="edit-row"><div class="edit-field"><label>Color</label><input id="ci_color_${idx}" value="${ch.color||'#888'}"type="color"></div>
+    <div class="edit-field"><label>Position Q</label><input id="ci_q_${idx}" type="number" value="${ch.position?q:0}"></div>
+    <div class="edit-field"><label>Position R</label><input id="ci_r_${idx}" type="number" value="${ch.position?ch.r:0}"></div></div>
+    <div class="edit-field"><label>Dialogue (one per line)</label><textarea id="ci_dialog_${idx}" rows="3">${Array.isArray(ch.dialogue)?ch.dialogue.join('\n'):''}</textarea></div>`;
+  return div;
+}
+
+function addChar() {
+  charCounter++;
+  GAME.characters.push({
+    id: `custom_char_${charCounter}`, name: 'New Character', sprite: 'newt',
+    color: '#888888', dialogue: ['Hello!'], position: { q: 3, r: 2 },
+  });
+  renderCharsEditor();
+}
+
+function removeChar(idx) {
+  GAME.characters.splice(idx, 1);
+  renderCharsEditor();
+}
+
+function renderGoalsEditor() {
+  const container = document.getElementById('goalsListEdit');
+  container.innerHTML = '';
+  GAME.goals.forEach((g, i) => {
+    const div = document.createElement('div');
+    div.className = 'item-entry';
+    div.innerHTML = `
+      <h4>Goal #${i+1} <button class="btn-del" onclick="removeGoal(${i})">✕</button></h4>
+      <div class="edit-field"><label>Goal Text</label><input id="gi_text_${i}" value="${g.text||''}"></div>
+      <div class="edit-field"><label>Checker Type</label><select id="gi_check_${i}">
+        <option value="collect_all"${g.check.toString().includes('collectible')?' selected':''}>Collect All Items</option>
+        <option value="has_weapon"${g.check.toString().includes('weapon')?' selected':''}>Find Weapon</option>
+        <option value="reach_objective"${g.check.toString().includes('objective')?' selected':''}>Reach Objective</option>
+        <option value="money_above"${g.check.toString().includes('money')?' selected':''}>Money Above X</option>
+        <option value="custom">Custom (JS expression)</option>
+      </select></div>`;
+    container.appendChild(div);
+  });
+}
+
+function addGoal() {
+  goalCounter++;
+  GAME.goals.push({ text: 'New Goal', check: s => false });
+  renderGoalsEditor();
+}
+
+function removeGoal(idx) {
+  GAME.goals.splice(idx, 1);
+  renderGoalsEditor();
+}
+
+function updateJSONPreview() {
+  document.getElementById('jsonPreview').textContent = JSON.stringify(GAME, null, 2);
+}
+
+function copyJSON() {
+  navigator.clipboard.writeText(JSON.stringify(GAME, null, 2));
+  alert('Config copied to clipboard!');
+}
+
+function loadJSONPrompt() {
+  const json = prompt('Paste your game config JSON:');
+  if (json) {
+    try {
+      GAME = JSON.parse(json);
+      populateEditor();
+      alert('Config loaded!');
+    } catch(e) { alert('Invalid JSON: ' + e.message); }
+  }
+}
+
+function applyFromEditor() {
+  // Read identity
+  GAME.title = document.getElementById('edTitle').value || 'Untitled';
+  GAME.subtitle = document.getElementById('edSubtitle').value || '';
+  GAME.chapter = document.getElementById('edChapter').value || '';
+
+  // Read palette
+  GAME.palette.accent = document.getElementById('edAccent').value;
+  GAME.palette.bg = document.getElementById('edBg').value;
+  GAME.palette.player = document.getElementById('edPlayer').value;
+  GAME.palette.playerOutline = document.getElementById('edPlayerOut').value;
+  GAME.palette.playerDetail = document.getElementById('edPlayerDet').value;
+  GAME.palette.money = document.getElementById('edMoney').value;
+  try { GAME.palette.terrain = JSON.parse(document.getElementById('edTerrain').value); } catch(e) {}
+
+  // Read player
+  GAME.player.name = document.getElementById('edPName').value || 'Hero';
+  GAME.player.sprite = document.getElementById('edPSprite').value;
+  GAME.player.maxHealth = parseInt(document.getElementById('edPHealth').value)||100;
+  GAME.player.startMoney = parseInt(document.getElementById('edPMoney').value)||0;
+
+  // Read plot
+  GAME.plot.intro = document.getElementById('edIntro').value || '';
+  GAME.plot.victory = document.getElementById('edVictory').value || 'Victory!';
+  GAME.plot.gameover = document.getElementById('edGameover').value || 'Game Over';
+
+  // Read economy
+  GAME.economy.currencyName = document.getElementById('edCurrName').value || 'Coins';
+  GAME.economy.currencyIcon = document.getElementById('edCurrIcon').value || '💰';
+  GAME.economy.killReward = parseInt(document.getElementById('edKillReward').value)||10;
+
+  // Read world
+  GAME.world.seed = parseInt(document.getElementById('edSeed').value)||42;
+  GAME.world.hexSize = parseInt(document.getElementById('edHexSize').value)||28;
+  GAME.world.ambientEntityDensity = parseFloat(document.getElementById('edDensity').value)||0.03;
+
+  // Read items
+  GAME.items.forEach((item, i) => {
+    const el = id => document.getElementById(`id_${i}`);
+    item.id = gv(`ii_id_${i}`)||item.id;
+    item.name = gv(`ii_name_${i}`)||item.name;
+    item.type = gv(`ii_type_${i}`)||item.type;
+    item.icon = gv(`ii_icon_${i}`)||item.icon;
+    item.color = gv(`ii_color_${i}`)||item.color;
+    item.damage = parseInt(gv(`ii_dmg_${i}`))||0;
+    item.desc = gv(`ii_desc_${i}`)||'';
+    item.quote = gv(`ii_quote_${i}`)||null;
+  });
+
+  // Read characters
+  GAME.characters.forEach((ch, i) => {
+    ch.name = gv(`ci_name_${i}`)||ch.name;
+    ch.sprite = gv(`ci_sprite_${i}`)||ch.sprite;
+    ch.color = gv(`ci_color_${i}`)||ch.color;
+    ch.position = { q: parseInt(gv(`ci_q_${i}`))||0, r: parseInt(gv(`ci_r_${i}`))||0 };
+    const dlg = gv(`ci_dialog_${i}`);
+    ch.dialogue = dlg ? dlg.split('\n').filter(l=>l.trim()) : ch.dialogue;
+  });
+
+  // Update CSS accent variable
+  document.documentElement.style.setProperty('--accent', GAME.palette.accent);
+
+  // Update start screen
+  document.getElementById('stTitle').textContent = GAME.title;
+  document.getElementById('stSubtitle').textContent = GAME.subtitle;
+  document.getElementById('stInfo').innerHTML = GAME.plot.intro.replace(/\n/g,'<br>') + '<br><br>Press <b style="color:'+GAME.palette.accent+'">E</b> to open the Game Editor';
+
+  updateJSONPreview();
+}
+
+function gv(id) { const el = document.getElementById(id); return el ? el.value : ''; }
+
+function toggleEditor() {
+  const ov = document.getElementById('editorOverlay');
+  if (ov.classList.contains('show')) {
+    closeEditor();
+  } else {
+    populateEditor();
+    ov.classList.add('show');
+  }
+}
+
+function closeEditor() {
+  document.getElementById('editorOverlay').classList.remove('show');
+}
+
+function applyAndPlay() {
+  applyFromEditor();
+  closeEditor();
+  // Re-init state with new config
+  initState();
+  document.getElementById('startScreen').style.display = 'flex';
+  STATE.started = false;
+  showMessage('Game config applied! Press any key to start.', GAME.palette.accent, 200);
+}
+
+// Tab switching
+document.querySelectorAll('.editor-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.editor-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.editor-section').forEach(s => s.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById(tab.dataset.tab).classList.add('active');
+  });
+});
+
+// ════════════════════════════════════════════════════════
+//  BOOT
+// ════════════════════════════════════════════════════════
+initState();
+requestAnimationFrame(gameLoop);
+</script>
+</body>
+</html>
