@@ -184,16 +184,14 @@
         const lyricsEl = document.getElementById('lyrics');
         const trackListEl = document.getElementById('track-list');
 
-        // URL hash-based sharing
         function getTrackIdFromHash() {
-            const h = location.hash.slice(1);
-            return h || null;
+            return location.hash.slice(1) || null;
         }
+
         function setHashForTrack(id) {
             if (id) history.replaceState(null, '', '#' + id);
         }
 
-        // Load tracks from S3
         async function loadTracks() {
             try {
                 const response = await fetch(S3_API + '?list-type=2&prefix=songs/&max-keys=200');
@@ -202,15 +200,11 @@
                 const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
                 const files = xmlDoc.getElementsByTagName('Key');
 
-                // Collect json keys and jpg keys
                 const jsonKeys = [], jpgKeys = new Set();
                 for (let i = 0; i < files.length; i++) {
                     const key = files[i].textContent;
                     if (key.endsWith('.json')) jsonKeys.push(key);
-                    else if (key.endsWith('.jpg')) {
-                        const base = key.replace(/\.jpg$/, '');
-                        jpgKeys.add(base);
-                    }
+                    else if (key.endsWith('.jpg')) jpgKeys.add(key.replace(/\.jpg$/, ''));
                 }
 
                 tracks = [];
@@ -228,27 +222,23 @@
                                 coverPath: 'songs/' + baseId + '.jpg'
                             });
                         }
-                    } catch(e) { console.warn(`Failed ${key}:`, e); }
+                    } catch(e) {}
                 }
 
                 tracks.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
 
                 loadingEl.style.display = 'none';
                 playerContentEl.style.display = 'block';
-
                 renderTrackList();
 
-                // Check hash for shared song
                 const hashId = getTrackIdFromHash();
                 if (hashId) {
                     const idx = tracks.findIndex(t => t.id === hashId);
                     if (idx >= 0) { loadTrack(idx); return; }
                 }
-
                 if (tracks.length > 0) loadTrack(0);
 
             } catch(error) {
-                console.error('Failed:', error);
                 loadingEl.innerHTML = `<i class="fas fa-exclamation-triangle"></i><p>Failed to load songs</p><p style="font-size:12px;color:#666">${error.message}</p>`;
             }
         }
@@ -265,7 +255,6 @@
                 item.className = `track-item${index === currentTrackIndex ? ' active' : ''}`;
                 item.onclick = () => loadTrack(index);
 
-                // Cover art or music note icon
                 let coverHTML = '<i class="fas fa-music"></i>';
                 if (track.hasCover) {
                     coverHTML = `<img src="${S3_API}${track.coverPath}" alt="" onerror="this.parentElement.innerHTML='<i class=\\'fas fa-music\\'></i>'">`;
@@ -291,14 +280,12 @@
             if (index < 0 || index >= tracks.length) return;
             currentTrackIndex = index;
             const track = tracks[index];
-
             setHashForTrack(track.id);
 
             audioPlayer.src = S3_API + track.audioPath;
             currentTitleEl.textContent = track.title || 'Untitled';
             currentArtistEl.textContent = track.metadata?.tags?.[0] || 'obbyirc';
 
-            // Cover art in player
             if (track.hasCover) {
                 currentImageEl.src = S3_API + track.coverPath;
                 currentImageEl.onerror = () => currentImageEl.src = 'https://cdn2.suno.ai/image_large_default.jpeg';
@@ -306,9 +293,7 @@
                 currentImageEl.src = 'https://cdn2.suno.ai/image_large_default.jpeg';
             }
 
-            // Lyrics
             displayLyrics(track);
-
             renderTrackList();
             audioPlayer.load();
             togglePlay(true);
@@ -317,13 +302,12 @@
         function displayLyrics(track) {
             const prompt = track.suno_prompt || track.prompt || '';
             if (!prompt || prompt.length < 10) {
-                lyricsEl.innerHTML = '<div style="opacity:0.5">🎵 Instrumental</div>';
+                lyricsEl.innerHTML = '<div style="opacity:0.5">Instrumental</div>';
                 return;
             }
-            // Extract lyrics-like content from prompt
             const lines = prompt.split('\n').filter(l => l.trim().length > 2);
             if (lines.length === 0) {
-                lyricsEl.innerHTML = '<div style="opacity:0.5">🎵 Instrumental</div>';
+                lyricsEl.innerHTML = '<div style="opacity:0.5">Instrumental</div>';
                 return;
             }
             lyricsEl.innerHTML = lines.map(l => `<div class="lyrics-line">${escapeHtml(l.trim())}</div>`).join('');
@@ -347,80 +331,41 @@
 
         function nextTrack() {
             if (tracks.length === 0) return;
-            let nextIdx;
-            if (isShuffled) {
-                nextIdx = Math.floor(Math.random() * tracks.length);
-            } else {
-                nextIdx = (currentTrackIndex + 1) % tracks.length;
-            }
+            let nextIdx = isShuffled ? Math.floor(Math.random() * tracks.length) : (currentTrackIndex + 1) % tracks.length;
             loadTrack(nextIdx);
         }
 
         function prevTrack() {
             if (tracks.length === 0) return;
             if (audioPlayer.currentTime > 3) { audioPlayer.currentTime = 0; return; }
-            let prevIdx = (currentTrackIndex - 1 + tracks.length) % tracks.length;
-            loadTrack(prevIdx);
+            loadTrack((currentTrackIndex - 1 + tracks.length) % tracks.length);
         }
 
-        function toggleShuffle() {
-            isShuffled = !isShuffled;
-            shuffleBtn.classList.toggle('active', isShuffled);
-        }
+        function toggleShuffle() { isShuffled = !isShuffled; shuffleBtn.classList.toggle('active', isShuffled); }
 
         function toggleRepeat() {
             repeatMode = (repeatMode + 1) % 3;
             repeatBtn.classList.toggle('active', repeatMode > 0);
-            repeatBtn.innerHTML = ['<i class="fas fa-repeat"></i>','<i class="fas fa-repeat"></i>','<i class="fas fa-repeat"></i>'][repeatMode];
-            if (repeatMode === 2) repeatBtn.innerHTML += '<span style="font-size:9px;position:absolute">1</span>';
         }
 
         function seek(event) {
-            const bar = event.currentTarget;
-            const rect = bar.getBoundingClientRect();
-            const percent = (event.clientX - rect.left) / rect.width;
-            audioPlayer.currentTime = percent * audioPlayer.duration;
+            const rect = event.currentTarget.getBoundingClientRect();
+            audioPlayer.currentTime = ((event.clientX - rect.left) / rect.width) * (audioPlayer.duration || 0);
         }
 
-        function formatTime(seconds) {
-            if (!seconds || isNaN(seconds)) return '0:00';
-            const m = Math.floor(seconds / 60);
-            const s = Math.floor(seconds % 60);
-            return `${m}:${s.toString().padStart(2, '0')}`;
-        }
+        function formatTime(s) { if (!s || isNaN(s)) return '0:00'; const m=Math.floor(s/60),sec=Math.floor(s%60); return `${m}:${sec.toString().padStart(2,'0')}`; }
 
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
+        function escapeHtml(t) { const d=document.createElement('div'); d.textContent=t; return d.innerHTML; }
 
-        // Share current song URL
         async function shareSong() {
-            if (currentTrackIndex < 0 || !tracks[currentTrackIndex]) {
-                showToast('No song playing');
-                return;
-            }
+            if (currentTrackIndex < 0 || !tracks[currentTrackIndex]) { showToast('No song playing'); return; }
             const url = location.origin + location.pathname + '#' + tracks[currentTrackIndex].id;
-            try {
-                await navigator.clipboard.writeText(url);
-                showToast('Link copied! 📋');
-            } catch(e) {
-                // Fallback
-                const inp = document.createElement('input');
-                inp.value = url; document.body.appendChild(inp);
-                inp.select(); document.execCommand('copy'); document.body.removeChild(inp);
-                showToast('Link copied! 📋');
-            }
+            try { await navigator.clipboard.writeText(url); showToast('Link copied!'); }
+            catch(e) { const inp=document.createElement('input'); inp.value=url; document.body.appendChild(inp); inp.select(); document.execCommand('copy'); document.body.removeChild(inp); showToast('Link copied!'); }
         }
 
-        function showToast(msg) {
-            const t = document.getElementById('toast');
-            t.textContent = msg; t.classList.add('show');
-            setTimeout(() => t.classList.remove('show'), 2000);
-        }
+        function showToast(msg) { const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2000); }
 
-        // Audio events
         audioPlayer.addEventListener('timeupdate', () => {
             if (audioPlayer.duration) {
                 progressFill.style.width = (audioPlayer.currentTime / audioPlayer.duration * 100) + '%';
@@ -429,9 +374,7 @@
             }
         });
 
-        audioPlayer.addEventListener('loadedmetadata', () => {
-            totalTimeEl.textContent = formatTime(audioPlayer.duration);
-        });
+        audioPlayer.addEventListener('loadedmetadata', () => { totalTimeEl.textContent = formatTime(audioPlayer.duration); });
 
         audioPlayer.addEventListener('ended', () => {
             if (repeatMode === 2) { audioPlayer.currentTime = 0; audioPlayer.play(); return; }
@@ -441,20 +384,14 @@
 
         function highlightLyric(currentTime) {
             const lines = lyricsEl.querySelectorAll('.lyrics-line');
-            if (lines.length === 0) return;
-            // Simple time-based lyric sync approximation
+            if (!lines.length) return;
             const totalDuration = audioPlayer.duration || 180;
             const lineDuration = totalDuration / lines.length;
             const targetIndex = Math.floor(currentTime / lineDuration);
-            lines.forEach((line, i) => {
-                line.classList.toggle('active', i === targetIndex);
-            });
-            if (targetIndex >= 0 && lines[targetIndex]) {
-                lines[targetIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }
+            lines.forEach((line, i) => line.classList.toggle('active', i === targetIndex));
+            if (targetIndex >= 0 && lines[targetIndex]) lines[targetIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
 
-        // Init
         loadTracks();
     </script>
 </body>
