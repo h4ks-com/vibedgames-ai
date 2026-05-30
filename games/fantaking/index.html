@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hexagonal Wang Tiles</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0a0a1a; color: #e0e0e0; overflow: hidden; display: flex; height: 100vh; }
+#canvas-container { flex: 1; position: relative; }
+canvas { display: block; }
+#info-panel {
+  width: 320px;
+  background: linear-gradient(180deg, #12122a 0%, #0d0d20 100%);
+  border-left: 2px solid #3a3a6a;
+  padding: 16px;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.5;
+}
+#info-panel h2 {
+  color: #7ab8ff;
+  font-size: 15px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid #3a3a6a;
+  padding-bottom: 8px;
+}
+#info-panel h3 {
+  color: #a0d0ff;
+  font-size: 13px;
+  margin-top: 14px;
+  margin-bottom: 6px;
+}
+.tile-entry {
+  background: rgba(255,255,255,0.04);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border-left: 3px solid #555;
+}
+.tile-name { font-weight: bold; color: #fff; }
+.edge-row { display: flex; gap: 4px; align-items: center; margin-top: 4px; flex-wrap: wrap; }
+.edge-tag {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 2px 6px; border-radius: 10px; font-size: 11px; font-weight: 600;
+}
+.edge-g { background: #1a4a1a; color: #6f6; }
+.edge-a { background: #1a2a5a; color: #6af; }
+.edge-w { background: #0a3a4a; color: #4cf; }
+.edge-r { background: #4a1a1a; color: #f66; }
+.hex-dir-map {
+  width: 120px; height: 110px; position: relative;
+  margin: 8px auto; background: rgba(255,255,255,0.03); border-radius: 8px;
+}
+.hex-dir-label {
+  position: absolute; font-size: 9px; font-weight: bold; color: #aaa;
+  transform: translate(-50%, -50%);
+}
+.rule-text { color: #bbb; font-size: 11.5px; margin-top: 10px; line-height: 1.6; }
+.btn-regen {
+  position: absolute; top: 12px; left: 12px; z-index: 10;
+  background: rgba(60,80,160,0.85); color: #fff; border: none;
+  padding: 8px 18px; border-radius: 8px; cursor: pointer;
+  font-size: 13px; font-weight: 600; backdrop-filter: blur(4px);
+  transition: background 0.2s;
+}
+.btn-regen:hover { background: rgba(80,110,200,0.95); }
+.status {
+  position: absolute; top: 12px; left: 170px; z-index: 10;
+  color: #8af; font-size: 12px; font-family: monospace;
+}
+</style>
+</head>
+<body>
+
+<div id="canvas-container">
+  <button class="btn-regen" onclick="regenerate()">🔄 Regenerate</button>
+  <div class="status" id="status">Generating...</div>
+</div>
+
+<div id="info-panel">
+  <h2>🔷 Hexagonal Wang Tiles</h2>
+  
+  <div class="rule-text">
+    <b>Constraint Rules:</b><br>
+    Each hex tile has <b>6 edges</b>, each assigned one of 4 colors:<br>
+    🟢 <b>GND</b> (ground) &nbsp; 🔵 <b>AIR</b> (open) &nbsp; 🔵💧 <b>H2O</b> (water) &nbsp; 🔴 <b>WALL</b> (solid)<br><br>
+    <b>Matching:</b> Opposite edge pairs must share colors across neighbors:<br>
+    • N ↔ S &nbsp;• NE ↔ SW &nbsp;• SE ↔ NW<br><br>
+    The solver uses backtracking to guarantee all constraints are satisfied.
+  </div>
+
+  <h3>Tile Types & Edge Assignments</h3>
+  <div id="tile-list"></div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// === HEX WANG TILE DEFINITIONS ===
+// Edges: [N, NE, SE, S, SW, NW]
+// Colors: G=ground(green), A=air(blue), W=water(cyan), R=wall(red)
+const COLORS = { G: 0x44aa44, A: 0x4488dd, W: 0x22aaaa, R: 0xcc4444 };
+const COLOR_NAMES = { G: 'GND', A: 'AIR', W: 'H2O', R: 'WALL' };
+
+const DIR_NAMES = ['N', 'NE', 'SE', 'S', 'SW', 'NW'];
+const DIR_POS = [
+  { t: 'N', x: 50, y: 8 },
+  { t: 'NE', x: 85, y: 33 },
+  { t: 'SE', x: 85, y: 77 },
+  { t: 'S', x: 50, y: 102 },
+  { t: 'SW', x: 15, y: 77 },
+  { t: 'NW', x: 15, y: 33 },
+];
+
+const TILE_DEFS = [
+  { name: 'Open Field',      edges: ['G','G','G','G','G','G'], desc: 'Flat grassy terrain, ground on all sides' },
+  { name: 'Raised Platform', edges: ['A','A','A','A','A','A'], desc: 'Elevated deck on pillars, open air all around' },
+  { name: 'Water Pool',      edges: ['W','G','G','W','G','G'], desc: 'Pond with stone borders north/south' },
+  { name: 'Stone Tower',     edges: ['A','A','A','A','A','A'], desc: 'Tall structure with windows, air at all heights' },
+  { name: 'Wall Section',    edges: ['R','R','R','R','R','R'], desc: 'Solid barrier, impassable walls everywhere' },
+  { name: 'Ramp Up',         edges: ['A','G','G','G','G','G'], desc: 'Ground-to-air slope rising northward' },
+  { name: 'Bridge',          edges: ['A','A','A','A','A','A'], desc: 'Elevated walkway with railings over gap' },
+  { name: 'Cave Entrance',   edges: ['G','R','R','A','R','R'], desc: 'Cave mouth: ground south, walls elsewhere' },
+  { name: 'Garden',          edges: ['G','G','G','G','G','G'], desc: 'Flowers and paths, fully ground-level' },
+  { name: 'Watchtower',      edges: ['A','A','A','G','A','A'], desc: 'Tall observation post with stairs south' },
+];
+
+// === SCENE SETUP ===
+const container = document.getElementById('canvas-container');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0a1a);
+
+const camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.1, 200);
+camera.position.set(14, 18, 14);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(container.clientWidth, container.clientHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+container.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.target.set(0, 0, 0);
+controls.maxPolarAngle = Math.PI / 2.1;
+
+// Lights
+scene.add(new THREE.AmbientLight(0x404068, 0.7));
+const sun = new THREE.DirectionalLight(0xffeedd, 1.2);
+sun.position.set(15, 25, 10);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.camera.near = 1;
+sun.shadow.camera.far = 60;
+sun.shadow.camera.left = -20;
+sun.shadow.camera.right = 20;
+sun.shadow.camera.top = 20;
+sun.shadow.camera.bottom = -20;
+scene.add(sun);
+scene.add(new THREE.HemisphereLight(0x8899bb, 0x223344, 0.4));
+
+// Ground plane
+const groundGeo = new THREE.PlaneGeometry(80, 80);
+const groundMat = new THREE.MeshStandardMaterial({ color: 0x1a2a1a, roughness: 0.95 });
+const groundMesh = new THREE.Mesh(groundGeo, groundMat);
+groundMesh.rotation.x = -Math.PI / 2;
+groundMesh.position.y = -0.05;
+groundMesh.receiveShadow = true;
+scene.add(groundMesh);
+
+// Grid helper
+const grid = new THREE.GridHelper(30, 30, 0x222244, 0x181830);
+grid.position.y = 0.01;
+scene.add(grid);
+
+// === HEX GEOMETRY HELPERS ===
+function hexToWorld(q, r) {
+  const x = 1.73 * (q + r / 2);
+  const z = 1.5 * r;
+  return { x, z };
+}
+
+function createHexShape(innerR = 0.92) {
+  const shape = new THREE.Shape();
+  for (let i = 0; i < 6; i++) {
+    const angle = Math.PI / 3 * i - Math.PI / 6;
+    const x = Math.cos(angle) * innerR;
+    const y = Math.sin(angle) * innerR;
+    if (i === 0) shape.moveTo(x, y);
+    else shape.lineTo(x, y);
+  }
+  shape.closePath();
+  return shape;
+}
+
+// === TILE MESH BUILDER ===
+function buildTileMesh(tileDef, idx) {
+  const group = new THREE.Group();
+  const name = tileDef.name;
+  const edges = tileDef.edges;
+  const hue = (idx * 37 + 200) % 360;
+
+  // Base hex platform
+  const hexShape = createHexShape();
+  const baseGeo = new THREE.ExtrudeGeometry(hexShape, { depth: 0.15, bevelEnabled: false });
+  const baseMat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color().setHSL(hue / 360, 0.35, 0.25),
+    roughness: 0.75,
+  });
+  const base = new THREE.Mesh(baseGeo, baseMat);
+  base.rotation.x = -Math.PI / 2;
+  base.position.y = 0;
+  base.castShadow = true;
+  base.receiveShadow = true;
+  group.add(base);
+
+  // Edge indicators (colored bars on each face)
+  for (let i = 0; i < 6; i++) {
+    const angle = Math.PI / 3 * i - Math.PI / 6;
+    const c = COLORS[edges[i]] || 0xffffff;
+    const barGeo = new THREE.BoxGeometry(0.08, 0.45, 0.65);
+    const barMat = new THREE.MeshStandardMaterial({
+      color: c,
+      emissive: c,
+      emissiveIntensity: 0.25,
+      roughness: 0.4,
+    });
+    const bar = new THREE.Mesh(barGeo, barMat);
+    bar.position.set(
+      Math.cos(angle) * 0.92,
+      0.32,
+      Math.sin(angle) * 0.92
+    );
+    bar.rotation.y = -angle + Math.PI / 2;
+    bar.castShadow = true;
+    group.add(bar);
+  }
+
+  // --- Geometry based on tile type ---
+  if (name === 'Open Field' || name === 'Garden') {
+    const grassGeo = new THREE.CylinderGeometry(0.05, 0.03, 0.25 + Math.random() * 0.2, 5);
+    const grassMat = new THREE.MeshStandardMaterial({ color: 0x3a8a3a });
+    for (let j = 0; j < 12; j++) {
+      const blade = new THREE.Mesh(grassGeo, grassMat);
+      blade.position.set((Math.random() - 0.5) * 1.2, 0.28, (Math.random() - 0.5) * 1.2);
+      blade.castShadow = true;
+      group.add(blade);
+    }
+    if (name === 'Garden') {
+      const fGeo = new THREE.SphereGeometry(0.12, 8, 8);
+      const fColors = [0xff6688, 0xffaa44, 0xaa66ff, 0x66ffaa];
+      for (let f = 0; f < 5; f++) {
+        const flower = new THREE.Mesh(fGeo, new THREE.MeshStandardMaterial({ color: fColors[f % 4] }));
+        flower.position.set((Math.random() - 0.5) * 1.1, 0.35, (Math.random() - 0.5) * 1.1);
+        flower.scale.y = 0.8;
+        flower.castShadow = true;
+        group.add(flower);
+      }
+    }
+  }
+
+  else if (name === 'Raised Platform') {
+    const pGeo = createHexShape(0.78);
+    const pExtrude = new THREE.ExtrudeGeometry(pGeo, { depth: 0.8, bevelEnabled: false });
+    const plat = new THREE.Mesh(pExtrude, new THREE.MeshStandardMaterial({ color: 0x888899, roughness: 0.6 }));
+    plat.rotation.x = -Math.PI / 2;
+    plat.position.y = 0.15;
+    plat.castShadow = true;
+    plat.receiveShadow = true;
+    group.add(plat);
+    // Pillars
+    for (let pi = 0; pi < 6; pi++) {
+      const pa = Math.PI / 3 * pi - Math.PI / 6;
+      const pillar = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.07, 0.09, 0.95, 8),
+        new THREE.MeshStandardMaterial({ color: 0x666677, roughness: 0.5 })
+      );
+      pillar.position.set(Math.cos(pa) * 0.6, 0.5, Math.sin(pa) * 0.6);
+      pillar.castShadow = true;
+      group.add(pillar);
+    }
+  }
+
+  else if (name === 'Water Pool') {
+    const waterShape = createHexShape(0.65);
+    const waterGeo = new THREE.ExtrudeGeometry(waterShape, { depth: -0.12, bevelEnabled: false });
+    const water = new THREE.Mesh(waterGeo, new THREE.MeshStandardMaterial({
+      color: 0x2288bb, roughness: 0.15, metalness: 0.3,
+    }));
+    water.rotation.x = -Math.PI / 2;
+    water.position.y = 0.15;
+    group.add(water);
+    // Stone rim
+    const rimGeo = new THREE.TorusGeometry(0.68, 0.08, 6, 6);
+    const rim = new THREE.Mesh(rimGeo, new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.85 }));
+    rim.rotation.x = Math.PI / 2;
+    rim.position.y = 0.12;
+    group.add(rim);
+  }
+
+  else if (name === 'Stone Tower') {
+    const twGeo = new THREE.CylinderGeometry(0.35, 0.42, 2.2, 8);
+    const tower = new THREE.Mesh(twGeo, new THREE.MeshStandardMaterial({ color: 0x9999aa, roughness: 0.7 }));
+    tower.position.y = 1.25;
+    tower.castShadow = true;
+    group.add(tower);
+    // Windows
+    for (let wi = 0; wi < 3; wi++) {
+      const winGeo = new THREE.BoxGeometry(0.1, 0.15, 0.05);
+      const win = new THREE.Mesh(winGeo, new THREE.MeshStandardMaterial({
+        color: 0xaaddff, emissive: 0x334455, emissiveIntensity: 0.5,
+      }));
+      const wa = (wi / 3) * Math.PI * 2;
+      win.position.set(Math.cos(wa) * 0.36, 0.8 + wi * 0.5, Math.sin(wa) * 0.36);
+      win.rotation.y = -wa;
+      group.add(win);
+    }
+    // Roof
+    const roofGeo = new THREE.ConeGeometry(0.5, 0.6, 8);
+    const roof = new THREE.Mesh(roofGeo, new THREE.MeshStandardMaterial({ color: 0x884433, roughness: 0.8 }));
+    roof.position.y = 2.65;
+    roof.castShadow = true;
+    group.add(roof);
+  }
+
+  else if (name === 'Wall Section') {
+    const wallGeo = new THREE.BoxGeometry(1.7, 0.9, 0.25);
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0x776655, roughness: 0.9 });
+    for (let wi = 0; wi < 3; wi++) {
+      const w = new THREE.Mesh(wallGeo, wallMat);
+      w.position.set(0, 0.52, 0);
+      w.rotation.y = (wi / 3) * Math.PI * 2;
+      w.castShadow = true;
+      group.add(w);
+    }
+    const coreGeo = new THREE.BoxGeometry(0.8, 0.9, 0.8);
+    const core = new THREE.Mesh(coreGeo, wallMat);
+    core.position.y = 0.52;
+    core.castShadow = true;
+    group.add(core);
+  }
+
+  else if (name === 'Ramp Up') {
+    const rampShape = new THREE.Shape();
+    rampShape.moveTo(-0.7, 0);
+    rampShape.lineTo(0.7, 0);
+    rampShape.lineTo(0.7, 0.08);
+    rampShape.lineTo(-0.7, 0.9);
+    rampShape.closePath();
+    const rampGeo = new THREE.ExtrudeGeometry(rampShape, { depth: 1.4, bevelEnabled: false });
+    const ramp = new THREE.Mesh(rampGeo, new THREE.MeshStandardMaterial({ color: 0xaa8866, roughness: 0.85 }));
+    ramp.rotation.x = -Math.PI / 2;
+    ramp.rotation.z = Math.PI / 2;
+    ramp.position.set(0, 0, 0.7);
+    ramp.castShadow = true;
+    ramp.receiveShadow = true;
+    group.add(ramp);
+  }
+
+  else if (name === 'Bridge') {
+    const deckGeo = new THREE.BoxGeometry(1.6, 0.08, 0.5);
+    const deck = new THREE.Mesh(deckGeo, new THREE.MeshStandardMaterial({ color: 0xaa8866, roughness: 0.7 }));
+    deck.position.y = 1.0;
+    deck.castShadow = true;
+    group.add(deck);
+    // Railings
+    for (let side of [-0.28, 0.28]) {
+      for (let rx of [-0.7, 0, 0.7]) {
+        const post = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.02, 0.02, 0.4, 6),
+          new THREE.MeshStandardMaterial({ color: 0x888888 })
+        );
+        post.position.set(rx, 1.24, side);
+        group.add(post);
+      }
+      const rail = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.015, 0.015, 1.5, 6),
+        new THREE.MeshStandardMaterial({ color: 0x999999 })
+      );
+      rail.rotation.z = Math.PI / 2;
+      rail.position.set(0, 1.43, side);
+      group.add(rail);
+    }
+    // Support cables
+    for (let cx of [-0.5, 0.5]) {
+      const cable = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.008, 0.008, 1.0, 4),
+        new THREE.MeshStandardMaterial({ color: 0xaaaaaa, metalness: 0.6 })
+      );
+      cable.position.set(cx, 1.55, 0);
+      cable.rotation.z = Math.PI / 2;
+      group.add(cable);
+    }
+  }
+
+  else if (name === 'Cave Entrance') {
+    // Cave floor
+    const caveFloor = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.7, 0.7, 0.1, 8),
+      new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.95 })
+    );
+    caveFloor.position.y = 0.05;
+    caveFloor.receiveShadow = true;
+    group.add(caveFloor);
+    // Arch
+    const archShape = new THREE.Shape();
+    archShape.moveTo(-0.4, 0);
+    archShape.lineTo(-0.4, 0.5);
+    archShape.absarc(0, 0.5, 0.4, Math.PI, 0, false);
+    archShape.lineTo(0.4, 0);
+    archShape.lineTo(-0.35, 0);
+    archShape.absarc(0, 0.48, 0.35, 0, Math.PI, true);
+    archShape.closePath();
+    const archGeo = new THREE.ExtrudeGeometry(archShape, { depth: 0.2, bevelEnabled: false });
+    const arch = new THREE.Mesh(archGeo, new THREE.MeshStandardMaterial({ color: 0x665544, roughness: 0.9 }));
+    arch.rotation.x = -Math.PI / 2;
+    arch.rotation.y = Math.PI / 2;
+    arch.position.set(0, 0, 0.35);
+    arch.castShadow = true;
+    group.add(arch);
+    // Darkness inside
+    const darkGeo = new THREE.CircleGeometry(0.35, 16);
+    const dark = new THREE.Mesh(darkGeo, new THREE.MeshBasicMaterial({ color: 0x111111 }));
+    dark.rotation.x = -Math.PI / 2;
+    dark.position.set(0, 0.11, 0.38);
+    group.add(dark);
+  }
+
+  else if (name === 'Watchtower') {
+    const wtBase = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.3, 0.35, 1.6, 6),
+      new THREE.MeshStandardMaterial({ color: 0x887766, roughness: 0.8 })
+    );
+    wtBase.position.y = 0.88;
+    wtBase.castShadow = true;
+    group.add(wtBase);
+    // Top platform
+    const topP = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.4, 0.35, 0.15, 6),
+      new THREE.MeshStandardMaterial({ color: 0x998877, roughness: 0.7 })
+    );
+    topP.position.y = 1.76;
+    topP.castShadow = true;
+    group.add(topP);
+    // Railing posts
+    for (let ri = 0; ri < 6; ri++) {
+      const ra = (ri / 6) * Math.PI * 2;
+      const rp = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.015, 0.015, 0.3, 4),
+        new THREE.MeshStandardMaterial({ color: 0xaaaaaa })
+      );
+      rp.position.set(Math.cos(ra) * 0.38, 1.98, Math.sin(ra) * 0.38);
+      group.add(rp);
+    }
+  }
+
+  return group;
+}
+
+// === SOLVER ===
+const GRID_R = 3; // radius in hex rings
+
+function solveWangTiles() {
+  // Create grid: axial coords within radius R
+  const cells = [];
+  for (let q = -GRID_R; q <= GRID_R; q++) {
+    for (let r = -GRID_R; r <= GRID_R; r++) {
+      if (Math.abs(q + r) <= GRID_R) {
+        cells.push({ q, r, tileIdx: -1 });
+      }
+    }
+  }
+
+  // Sort by distance from center for better visual distribution
+  cells.sort((a, b) => (Math.abs(a.q) + Math.abs(a.r) + Math.abs(a.q + a.r)) -
+                       (Math.abs(b.q) + Math.abs(b.r) + Math.abs(b.q + b.r)));
+
+  function getCell(q, r) {
+    return cells.find(c => c.q === q && c.r === r);
+  }
+
+  function checkConstraints(cellIdx, tileIdx) {
+    const cell = cells[cellIdx];
+    const tile = TILE_DEFS[tileIdx];
+    // Neighbor offsets for pointy-top hex axial coords
+    const neighbors = [
+      { dq: 0, dr: -1, edge: 0 },  // N  -> checks S (edge 3)
+      { dq: 1, dr: -1, edge: 1 },  // NE -> checks SW (edge 4)
+      { dq: 1, dr: 0,  edge: 2 },  // SE -> checks NW (edge 5)
+      { dq: 0, dr: 1,  edge: 3 },  // S  -> checks N (edge 0)
+      { dq: -1, dr: 1, edge: 4 },  // SW -> checks NE (edge 1)
+      { dq: -1, dr: 0, edge: 5 },  // NW -> checks SE (edge 2)
+    ];
+
+    for (const n of neighbors) {
+      const nq = cell.q + n.dq;
+      const nr = cell.dr + n.dr;
+      const neighbor = getCell(nq, nr);
+      if (neighbor && neighbor.tileIdx >= 0) {
+        const nTile = TILE_DEFS[neighbor.tileIdx];
+        // My edge must match neighbor's opposite edge
+        if (tile.edges[n.edge] !== nTile.edges[(n.edge + 3) % 6]) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  function backtrack(idx) {
+    if (idx >= cells.length) return true;
+
+    // Shuffle tile indices for variety
+    const order = TILE_DEFS.map((_, i) => i).sort(() => Math.random() - 0.5);
+
+    for (const ti of order) {
+      if (checkConstraints(idx, ti)) {
+        cells[idx].tileIdx = ti;
+        if (backtrack(idx + 1)) return true;
+        cells[idx].tileIdx = -1;
+      }
+    }
+    return false;
+  }
+
+  const ok = backtrack(0);
+  return { cells, ok };
+}
+
+// === BUILD SCENE ===
+let tileGroup = null;
+
+function buildScene() {
+  if (tileGroup) {
+    scene.remove(tileGroup);
+    tileGroup.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+  }
+  tileGroup = new THREE.Group();
+
+  const result = solveWangTiles();
+  document.getElementById('status').textContent =
+    result.ok ? `✅ ${result.cells.length} tiles placed` : `⚠️ Partial (${result.cells.filter(c => c.tileIdx >= 0).length})`;
+
+  for (const cell of result.cells) {
+    if (cell.tileIdx < 0) continue;
+    const mesh = buildTileMesh(TILE_DEFS[cell.tileIdx], cell.tileIdx);
+    const pos = hexToWorld(cell.q, cell.r);
+    mesh.position.set(pos.x, 0, pos.z);
+    tileGroup.add(mesh);
+  }
+
+  scene.add(tileGroup);
+}
+
+// === INFO PANEL ===
+function buildInfoPanel() {
+  const list = document.getElementById('tile-list');
+  list.innerHTML = '';
+
+  for (const td of TILE_DEFS) {
+    const div = document.createElement('div');
+    div.className = 'tile-entry';
+
+    let edgeHtml = '<div class="edge-row">';
+    for (let ei = 0; ei < 6; ei++) {
+      const c = td.edges[ei];
+      edgeHtml += `<span class="edge-tag edge-${c.toLowerCase()}">${DIR_NAMES[ei]}:${COLOR_NAMES[c]}</span>`;
+    }
+    edgeHtml += '</div>';
+
+    div.innerHTML = `
+      <div class="tile-name">${td.name}</div>
+      <div style="color:#999;font-size:11px;margin:2px 0">${td.desc}</div>
+      ${edgeHtml}
+    `;
+    list.appendChild(div);
+  }
+
+  // Hex direction map
+  const mapDiv = document.createElement('div');
+  mapDiv.innerHTML = `
+    <h3>🔷 Hex Direction Map</h3>
+    <div class="hex-dir-map">
+      ${DIR_POS.map(d => `<div class="hex-dir-label" style="left:${d.x}%;top:${d.y}%">${d.t}</div>`).join('')}
+      <svg style="position:absolute;top:0;left:0;width:100%;height:100%" viewBox="0 0 100 110">
+        <polygon points="50,5 90,32 90,77 50,105 10,77 10,32"
+                 fill="none" stroke="#444" stroke-width="1"/>
+        <line x1="50" y1="5" x2="50" y2="105" stroke="#333" stroke-width="0.5" stroke-dasharray="2,2"/>
+        <line x1="10" y1="32" x2="90" y2="77" stroke="#333" stroke-width="0.5" stroke-dasharray="2,2"/>
+        <line x1="90" y1="32" x2="10" y2="77" stroke="#333" stroke-width="0.5" stroke-dasharray="2,2"/>
+      </svg>
+    </div>
+  `;
+  list.appendChild(mapDiv);
+}
+
+window.regenerate = function() {
+  buildScene();
+};
+
+// === INIT ===
+buildInfoPanel();
+buildScene();
+
+// Resize handler
+window.addEventListener('resize', () => {
+  camera.aspect = container.clientWidth / container.clientHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(container.clientWidth, container.clientHeight);
+});
+
+// Animation loop
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>
