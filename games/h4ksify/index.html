@@ -137,7 +137,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
   </div>
 </div>
 
-<audio id="audio" preload="auto" crossorigin="anonymous"></audio>
+<audio id="audio" preload="auto"></audio>
 
 <script>
 const BASE = 'https://s3-api.t3ks.com/suno/songs';
@@ -151,63 +151,51 @@ let liked = new Set();
 
 const audio = document.getElementById('audio');
 
-// Parse S3 XML listing to discover track IDs
 async function discoverTracks() {
   const list = document.getElementById('trackList');
   try {
     const resp = await fetch(LIST_URL);
-    if (!resp.ok) throw new Error(`S3 listing failed: ${resp.status}`);
+    if (!resp.ok) throw new Error('S3 listing failed: ' + resp.status);
     const xml = await resp.text();
-    
-    // Extract all .json file keys from the XML
     const parser = new DOMParser();
     const doc = parser.parseFromString(xml, 'text/xml');
     const keys = [...doc.querySelectorAll('Key')].map(el => el.textContent);
-    
-    // Get unique track IDs (from .json files in songs/)
     const ids = [...new Set(keys
       .filter(k => k.startsWith('songs/') && k.endsWith('.json'))
       .map(k => k.replace('songs/', '').replace('.json', ''))
     )];
-    
-    if (!ids.length) throw new Error('No tracks found in S3');
-    
+    if (!ids.length) throw new Error('No tracks found');
     return ids;
   } catch (err) {
     console.error('Discovery error:', err);
-    list.innerHTML = `<div class="error-msg">⚠️ Failed to load song list: ${err.message}<br><br>Trying fallback...</div>`;
     return null;
   }
 }
 
-// Load metadata for each discovered track
 async function loadTracks() {
   const list = document.getElementById('trackList');
-  list.innerHTML = '<div class="empty-state"><div class="icon">🎶</div>Discovering songs...</div>';
+  list.innerHTML = '<div class="empty-state"><div class="icon">🎶</div>Discovering songs from S3...</div>';
   
   const ids = await discoverTracks();
   if (!ids) {
-    // Fallback: try known IDs or show error
-    list.innerHTML = '<div class="error-msg">⚠️ Could not reach S3 API. The server may be temporarily unavailable.<br>Please try again in a moment.</div>';
+    list.innerHTML = '<div class="error-msg">⚠️ Could not reach S3 API.<br>Please try again in a moment.</div>';
     return;
   }
   
   list.innerHTML = '<div class="empty-state"><div class="icon">⚡</div>Loading metadata for ' + ids.length + ' songs...</div>';
   
-  // Fetch all JSON metadata files
   const results = await Promise.allSettled(
     ids.map(id => 
-      fetch(`${BASE}/${id}.json`)
+      fetch(BASE + '/' + id + '.json')
         .then(r => r.ok ? r.json() : null)
         .catch(() => null)
     )
   );
   
   tracks = results
-    .map((r, i) => r.status === 'fulfilled' && r.value ? { ...r.value, id: ids[i] } : null)
+    .map((r, i) => r.status === 'fulfilled' && r.value ? Object.assign({}, r.value, {id: ids[i]}) : null)
     .filter(Boolean);
   
-  // Sort by date descending (newest first)
   tracks.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
   
   renderTracks();
@@ -215,62 +203,48 @@ async function loadTracks() {
 
 function renderTracks() {
   const list = document.getElementById('trackList');
-  document.getElementById('songCount').textContent = `${tracks.length} song${tracks.length !== 1 ? 's' : ''}`;
+  document.getElementById('songCount').textContent = tracks.length + ' song' + (tracks.length !== 1 ? 's' : '');
   
   if (!tracks.length) {
     list.innerHTML = '<div class="empty-state"><div class="icon">🎵</div>No songs found</div>';
     return;
   }
   
-  list.innerHTML = tracks.map((t, i) => `
-    <div class="track-item ${currentIdx >= 0 && tracks[currentIdx]?.id === t.id ? 'playing' : ''}" 
-         data-idx="${i}"
-         ondblclick="playTrack(${i})" onclick="playTrack(${i})">
-      <div class="track-num">${currentIdx >= 0 && tracks[currentIdx]?.id === t.id 
-        ? '<div class="playing-icon"><span></span><span></span><span></span></div>' 
-        : (i + 1)}</div>
-      <div class="track-info">
-        <div class="track-title">${esc(t.title || 'Untitled')}</div>
-        <div class="track-meta">
-          <span class="kind-badge kind-${t.kind || t.source || 'song'}">${t.kind || t.source || 'song'}</span>
-          &nbsp;${esc(t.prompt || '')}
-        </div>
-      </div>
-      <div class="track-album">${esc(t.model || 'Suno')}</div>
-      <div class="track-dur">${formatDate(t.created_at)}</div>
-    </div>
-  `).join('');
+  list.innerHTML = tracks.map((t, i) => {
+    var isPlaying = currentIdx >= 0 && tracks[currentIdx] && tracks[currentIdx].id === t.id;
+    return '<div class="track-item ' + (isPlaying ? 'playing' : '') + '" data-idx="' + i + '" ondblclick="playTrack(' + i + ')" onclick="playTrack(' + i + ')">' +
+      '<div class="track-num">' + (isPlaying ? '<div class="playing-icon"><span></span><span></span><span></span></div>' : (i + 1)) + '</div>' +
+      '<div class="track-info">' +
+        '<div class="track-title">' + esc(t.title || 'Untitled') + '</div>' +
+        '<div class="track-meta"><span class="kind-badge kind-' + (t.kind || t.source || 'song') + '">' + (t.kind || t.source || 'song') + '</span> &nbsp;' + esc(t.prompt || '') + '</div>' +
+      '</div>' +
+      '<div class="track-album">' + esc(t.model || 'Suno') + '</div>' +
+      '<div class="track-dur">' + formatDate(t.created_at) + '</div>' +
+    '</div>';
+  }).join('');
 }
 
 function playTrack(idx) {
   if (idx < 0 || idx >= tracks.length) return;
   currentIdx = idx;
-  const t = tracks[idx];
-  const url = `${BASE}/${t.id}.mp3`;
-  
-  audio.src = url;
+  var t = tracks[idx];
+  audio.src = BASE + '/' + t.id + '.mp3';
   audio.load();
-  
-  const playPromise = audio.play();
-  if (playPromise !== undefined) {
-    playPromise.catch(e => console.log('Autoplay blocked:', e));
-  }
-  
+  var p = audio.play();
+  if (p) p.catch(function(e) {});
   updateNowPlaying();
   renderTracks();
 }
 
 function updateNowPlaying() {
   if (currentIdx < 0) return;
-  const t = tracks[currentIdx];
+  var t = tracks[currentIdx];
   document.getElementById('playerBar').style.display = 'grid';
   document.getElementById('npTitle').textContent = t.title || 'Untitled';
-  document.getElementById('npSubtitle').textContent = `${t.kind || t.source || 'song'} • ${t.prompt || ''}`;
+  document.getElementById('npSubtitle').textContent = (t.kind || t.source || 'song') + ' • ' + (t.prompt || '');
   document.getElementById('playPauseBtn').textContent = '❚❚';
   document.getElementById('likeBtn').textContent = liked.has(t.id) ? '♥' : '♡';
-  
-  // Update page title
-  document.title = `🎵 ${t.title || 'Untitled'} - h4ksify`;
+  document.title = '🎵 ' + (t.title || 'Untitled') + ' - h4ksify';
 }
 
 function togglePlay() {
@@ -280,19 +254,14 @@ function togglePlay() {
 
 function prevTrack() {
   if (audio.currentTime > 3) { audio.currentTime = 0; return; }
-  let idx = currentIdx - 1;
+  var idx = currentIdx - 1;
   if (idx < 0) idx = tracks.length - 1;
   playTrack(idx);
 }
 
 function nextTrack() {
-  let idx;
-  if (shuffleOn) {
-    idx = Math.floor(Math.random() * tracks.length);
-  } else {
-    idx = currentIdx + 1;
-    if (idx >= tracks.length) idx = 0;
-  }
+  var idx = shuffleOn ? Math.floor(Math.random() * tracks.length) : currentIdx + 1;
+  if (idx >= tracks.length) idx = 0;
   playTrack(idx);
 }
 
@@ -303,14 +272,14 @@ function toggleShuffle() {
 
 function toggleRepeat() {
   repeatMode = (repeatMode + 1) % 3;
-  const btn = document.getElementById('repeatBtn');
+  var btn = document.getElementById('repeatBtn');
   btn.textContent = repeatMode === 2 ? '🔂' : '🔁';
   btn.style.color = repeatMode > 0 ? '#1db954' : '';
 }
 
 function toggleLike() {
   if (currentIdx < 0) return;
-  const t = tracks[currentIdx];
+  var t = tracks[currentIdx];
   if (liked.has(t.id)) liked.delete(t.id); else liked.add(t.id);
   document.getElementById('likeBtn').textContent = liked.has(t.id) ? '♥' : '♡';
 }
@@ -318,52 +287,44 @@ function toggleLike() {
 function setVol(v) { audio.volume = v / 100; }
 
 function seek(e) {
-  const bar = e.currentTarget.querySelector('.progress-bar');
-  const rect = bar.getBoundingClientRect();
-  const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+  var bar = e.currentTarget.querySelector('.progress-bar');
+  var rect = bar.getBoundingClientRect();
+  var pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
   if (audio.duration) audio.currentTime = pct * audio.duration;
 }
 
-// Audio events
-audio.addEventListener('play', () => { document.getElementById('playPauseBtn').textContent = '❚❚'; });
-audio.addEventListener('pause', () => { document.getElementById('playPauseBtn').textContent = '▶'; });
-audio.addEventListener('timeupdate', () => {
-  const pct = audio.duration ? (audio.currentTime / audio.duration * 100) : 0;
+audio.addEventListener('play', function() { document.getElementById('playPauseBtn').textContent = '❚❚'; });
+audio.addEventListener('pause', function() { document.getElementById('playPauseBtn').textContent = '▶'; });
+audio.addEventListener('timeupdate', function() {
+  var pct = audio.duration ? (audio.currentTime / audio.duration * 100) : 0;
   document.getElementById('progressFill').style.width = pct + '%';
   document.getElementById('curTime').textContent = fmtT(audio.currentTime);
 });
-audio.addEventListener('loadedmetadata', () => {
+audio.addEventListener('loadedmetadata', function() {
   document.getElementById('durTime').textContent = fmtT(audio.duration);
 });
-audio.addEventListener('ended', () => {
+audio.addEventListener('ended', function() {
   if (repeatMode === 2) { audio.play(); return; }
   nextTrack();
 });
-audio.addEventListener('error', (e) => {
+audio.addEventListener('error', function() {
   console.error('Audio error:', audio.error);
-  const t = tracks[currentIdx];
-  if (t) {
-    document.getElementById('npSubtitle').textContent = `⚠️ Error loading: ${audio.error?.message || 'unknown'}`;
-  }
 });
 
 function showAll() {
-  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-  event.target.classList.add('active');
+  document.querySelectorAll('.nav-item').forEach(function(n) { n.classList.remove('active'); });
+  if (event.target) event.target.classList.add('active');
   document.getElementById('viewTitle').textContent = 'All Songs';
   renderTracks();
 }
 
-// Utils
-function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
-function fmtT(s) { if (!isFinite(s)) return '0:00'; const m = Math.floor(s/60), sec = Math.floor(s%60); return m+':'+sec.toString().padStart(2,'0'); }
-function formatDate(d) { if (!d) return '—'; try { return new Date(d).toLocaleDateString(); } catch { return '—'; } }
+function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function fmtT(s) { if (!isFinite(s)) return '0:00'; var m = Math.floor(s/60), sec = Math.floor(s%60); return m+':'+('0'+sec).slice(-2); }
+function formatDate(d) { if (!d) return '—'; try { return new Date(d).toLocaleDateString(); } catch(e) { return '—'; } }
 
 // Init
-setVolume(0.8);
+audio.volume = 0.8;
 loadTracks();
-
-function setVolume(v) { audio.volume = v; }
 </script>
 </body>
 </html>
