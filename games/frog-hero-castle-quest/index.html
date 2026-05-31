@@ -1,0 +1,982 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Frog Hero: Castle Quest</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; }
+canvas { display: block; }
+
+#loading {
+  position: fixed; inset: 0; z-index: 1000;
+  background: #0a0a0a;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  color: #c8a832; font-size: 24px;
+  font-family: Georgia, serif;
+}
+#loading h1 { font-size: 48px; margin-bottom: 20px; text-shadow: 0 0 20px rgba(200,168,50,0.5); }
+#loading .subtitle { font-size: 18px; color: #8a7a3a; margin-bottom: 30px; }
+#loading .bar-bg { width: 300px; height: 8px; background: #222; border-radius: 4px; overflow: hidden; }
+#loading .bar-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #c8a832, #e8d060); transition: width 0.3s; border-radius: 4px; }
+#loading .tip { margin-top: 20px; font-size: 14px; color: #555; }
+
+#hud {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  pointer-events: none; padding: 20px;
+}
+#health-bar {
+  display: flex; align-items: center; gap: 8px;
+}
+#health-bar .label { color: #e8d060; font-size: 14px; font-weight: bold; text-shadow: 0 0 8px rgba(0,0,0,0.8); }
+#health-bar .bar-outer { width: 200px; height: 16px; background: rgba(0,0,0,0.6); border: 2px solid #c8a832; border-radius: 8px; overflow: hidden; }
+#health-bar .bar-inner { height: 100%; background: linear-gradient(90deg, #e03030, #ff6040); transition: width 0.3s; border-radius: 6px; }
+#frog-health-text { color: #fff; font-size: 12px; text-shadow: 0 0 4px #000; }
+
+#boss-health-container {
+  position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%);
+  z-index: 100; display: none; text-align: center; pointer-events: none;
+}
+#boss-name { color: #ff4040; font-size: 18px; font-weight: bold; text-shadow: 0 0 10px rgba(255,0,0,0.5); margin-bottom: 6px; }
+#boss-bar-outer { width: 400px; height: 20px; background: rgba(0,0,0,0.7); border: 2px solid #ff4040; border-radius: 10px; overflow: hidden; }
+#boss-bar-inner { height: 100%; background: linear-gradient(90deg, #ff0000, #ff6040); transition: width 0.3s; border-radius: 8px; }
+
+#objective {
+  position: fixed; top: 20px; right: 20px; z-index: 100;
+  background: rgba(0,0,0,0.7); border: 1px solid #c8a832; border-radius: 8px;
+  padding: 12px 16px; color: #e8d060; font-size: 13px; max-width: 250px;
+  pointer-events: none;
+}
+#objective .title { font-weight: bold; font-size: 14px; margin-bottom: 4px; color: #fff; }
+
+#controls-hint {
+  position: fixed; bottom: 20px; left: 20px; z-index: 100;
+  background: rgba(0,0,0,0.6); border-radius: 8px; padding: 10px 14px;
+  color: #aaa; font-size: 11px; pointer-events: none; line-height: 1.6;
+}
+#controls-hint span { color: #e8d060; font-weight: bold; }
+
+#message-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  display: none; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.8); flex-direction: column;
+}
+#message-overlay h2 { color: #e8d060; font-size: 42px; font-family: Georgia, serif; text-shadow: 0 0 30px rgba(200,168,50,0.6); }
+#message-overlay p { color: #ccc; font-size: 18px; margin-top: 10px; }
+#message-overlay button {
+  margin-top: 30px; padding: 12px 40px; font-size: 18px;
+  background: linear-gradient(180deg, #c8a832, #8a7020);
+  color: #fff; border: none; border-radius: 8px; cursor: pointer;
+  font-family: Georgia, serif; pointer-events: all;
+}
+#message-overlay button:hover { background: linear-gradient(180deg, #e0c040, #a08828); }
+
+#damage-flash {
+  position: fixed; inset: 0; z-index: 90;
+  background: rgba(255,0,0,0.3); pointer-events: none;
+  opacity: 0; transition: opacity 0.1s;
+}
+
+#crosshair {
+  position: fixed; top: 50%; left: 50%; z-index: 80;
+  transform: translate(-50%, -50%); pointer-events: none;
+  display: none;
+}
+#crosshair::before, #crosshair::after {
+  content: ''; position: absolute; background: rgba(255,255,255,0.6);
+}
+#crosshair::before { width: 12px; height: 2px; top: -1px; left: -6px; }
+#crosshair::after { width: 2px; height: 12px; top: -6px; left: -1px; }
+</style>
+</head>
+<body>
+
+<div id="loading">
+  <h1>Frog Hero</h1>
+  <div class="subtitle">Castle Quest</div>
+  <div class="bar-bg"><div class="bar-fill" id="load-bar"></div></div>
+  <div class="tip">Loading castle assets...</div>
+</div>
+
+<div id="hud">
+  <div id="health-bar">
+    <span class="label">FROG HP</span>
+    <div class="bar-outer"><div class="bar-inner" id="hp-fill" style="width:100%"></div></div>
+    <span id="frog-health-text">100/100</span>
+  </div>
+</div>
+
+<div id="objective">
+  <div class="title">Quest</div>
+  <div id="obj-text">Find and defeat the dragon to save the princess!</div>
+</div>
+
+<div id="controls-hint">
+  <span>WASD</span> Move &nbsp; <span>Space</span> Jump<br>
+  <span>Left Click</span> Attack &nbsp; <span>Shift</span> Sprint
+</div>
+
+<div id="boss-health-container">
+  <div id="boss-name">DRAGON LORD</div>
+  <div id="boss-bar-outer"><div id="boss-bar-inner" style="width:100%"></div></div>
+</div>
+
+<div id="message-overlay">
+  <h2 id="msg-title"></h2>
+  <p id="msg-text"></p>
+  <button id="msg-btn" onclick="restartGame()">Play Again</button>
+</div>
+
+<div id="damage-flash"></div>
+<div id="crosshair"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+// ============ GLOBALS ============
+let scene, camera, renderer, composer, clock;
+let frog, dragon, princess;
+let frogMixer, dragonMixer;
+let frogActions = {}, dragonActions = {};
+let castleColliders = [];
+let torches = [];
+let fireParticles = [];
+let gameState = 'loading'; // loading, playing, won, lost
+let musicAudio;
+let keys = {};
+let mouseDown = false;
+let frogHP = 100, frogMaxHP = 100;
+let dragonHP = 200, dragonMaxHP = 200;
+let frogVel = new THREE.Vector3();
+let frogOnGround = true;
+let frogAttacking = false;
+let attackCooldown = 0;
+let dragonPhase = 'idle'; // idle, chasing, breathing, stunned
+let dragonAttackTimer = 0;
+let dragonStunTimer = 0;
+let dragonTarget = new THREE.Vector3();
+let objectiveText = 'Find and defeat the dragon to save the princess!';
+let princessRescued = false;
+let dragonDefeated = false;
+let cameraAngleH = 0;
+let cameraAngleV = 0.3;
+let cameraDist = 8;
+let lastMouseX = 0, lastMouseY = 0;
+let isPointerLocked = false;
+
+// SFX via Web Audio
+let audioCtx;
+function initAudio() {
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+}
+function playSFX(type) {
+  if (!audioCtx) initAudio();
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  const t = audioCtx.currentTime;
+  if (type === 'jump') {
+    osc.type = 'sine'; osc.frequency.setValueAtTime(300, t); osc.frequency.linearRampToValueAtTime(600, t+0.1);
+    gain.gain.setValueAtTime(0.15, t); gain.gain.linearRampToValueAtTime(0, t+0.15);
+    osc.start(t); osc.stop(t+0.15);
+  } else if (type === 'attack') {
+    osc.type = 'sawtooth'; osc.frequency.setValueAtTime(200, t); osc.frequency.linearRampToValueAtTime(80, t+0.2);
+    gain.gain.setValueAtTime(0.12, t); gain.gain.linearRampToValueAtTime(0, t+0.25);
+    osc.start(t); osc.stop(t+0.25);
+  } else if (type === 'hit') {
+    osc.type = 'square'; osc.frequency.setValueAtTime(150, t); osc.frequency.linearRampToValueAtTime(50, t+0.3);
+    gain.gain.setValueAtTime(0.2, t); gain.gain.linearRampToValueAtTime(0, t+0.35);
+    osc.start(t); osc.stop(t+0.35);
+  } else if (type === 'dragonhit') {
+    osc.type = 'sawtooth'; osc.frequency.setValueAtTime(100, t); osc.frequency.linearRampToValueAtTime(40, t+0.4);
+    gain.gain.setValueAtTime(0.25, t); gain.gain.linearRampToValueAtTime(0, t+0.5);
+    osc.start(t); osc.stop(t+0.5);
+  } else if (type === 'roar') {
+    osc.type = 'sawtooth'; osc.frequency.setValueAtTime(80, t); osc.frequency.linearRampToValueAtTime(40, t+0.8);
+    gain.gain.setValueAtTime(0.3, t); gain.gain.linearRampToValueAtTime(0, t+1.0);
+    osc.start(t); osc.stop(t+1.0);
+  } else if (type === 'win') {
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(523, t); osc.frequency.setValueAtTime(659, t+0.2); osc.frequency.setValueAtTime(784, t+0.4);
+    gain.gain.setValueAtTime(0.15, t); gain.gain.linearRampToValueAtTime(0, t+0.8);
+    osc.start(t); osc.stop(t+0.8);
+  } else if (type === 'pickup') {
+    osc.type = 'sine'; osc.frequency.setValueAtTime(600, t); osc.frequency.linearRampToValueAtTime(1200, t+0.15);
+    gain.gain.setValueAtTime(0.12, t); gain.gain.linearRampToValueAtTime(0, t+0.2);
+    osc.start(t); osc.stop(t+0.2);
+  }
+}
+
+// ============ INIT ============
+function init() {
+  clock = new THREE.Clock();
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0a0808);
+  scene.fog = new THREE.FogExp2(0x0a0808, 0.018);
+
+  camera = new THREE.PerspectiveCamera(65, window.innerWidth/window.innerHeight, 0.1, 200);
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 0.9;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  document.body.appendChild(renderer.domElement);
+
+  // Post-processing
+  composer = new EffectComposer(renderer);
+  composer.addPass(new RenderPass(scene, camera));
+  const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.6, 0.4, 0.85);
+  composer.addPass(bloom);
+
+  // Lighting
+  const ambient = new THREE.AmbientLight(0x1a1020, 0.8);
+  scene.add(ambient);
+
+  const dirLight = new THREE.DirectionalLight(0xffd0a0, 0.6);
+  dirLight.position.set(10, 20, 5);
+  dirLight.castShadow = true;
+  dirLight.shadow.mapSize.set(2048, 2048);
+  dirLight.shadow.camera.near = 0.5; dirLight.shadow.camera.far = 60;
+  dirLight.shadow.camera.left = -30; dirLight.shadow.camera.right = 30;
+  dirLight.shadow.camera.top = 30; dirLight.shadow.camera.bottom = -30;
+  scene.add(dirLight);
+
+  // Load HDRI
+  new RGBELoader().load('./env.hdr', (texture) => {
+    texture.mapping = THREE.EquirectangularReflectionMapping;
+    scene.environment = texture;
+  });
+
+  setupControls();
+  loadAssets();
+}
+
+// ============ CONTROLS ============
+function setupControls() {
+  document.addEventListener('keydown', e => { keys[e.code] = true; });
+  document.addEventListener('keyup', e => { keys[e.code] = false; });
+  document.addEventListener('mousedown', e => {
+    if (gameState !== 'playing') return;
+    if (!isPointerLocked) {
+      renderer.domElement.requestPointerLock();
+      return;
+    }
+    if (e.button === 0) { mouseDown = true; doAttack(); }
+  });
+  document.addEventListener('mouseup', e => { if (e.button === 0) mouseDown = false; });
+  document.addEventListener('mousemove', e => {
+    if (isPointerLocked) {
+      cameraAngleH -= e.movementX * 0.003;
+      cameraAngleV = Math.max(-0.2, Math.min(1.2, cameraAngleV + e.movementY * 0.003));
+    }
+  });
+  document.addEventListener('pointerlockchange', () => {
+    isPointerLocked = document.pointerLockElement === renderer.domElement;
+  });
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    composer.setSize(window.innerWidth, window.innerHeight);
+  });
+}
+
+// ============ ASSET LOADING ============
+const loadManager = { total: 5, loaded: 0, progress: 0 };
+function updateLoading() {
+  loadManager.loaded++;
+  loadManager.progress = (loadManager.loaded / loadManager.total) * 100;
+  document.getElementById('load-bar').style.width = loadManager.progress + '%';
+  if (loadManager.loaded >= loadManager.total) {
+    setTimeout(() => {
+      document.getElementById('loading').style.display = 'none';
+      gameState = 'playing';
+      startMusic();
+      showMessage('Frog Hero: Castle Quest', 'Left-click to start your adventure!\nRescue the princess from the Dragon Lord!', true);
+    }, 500);
+  }
+}
+
+function loadAssets() {
+  const loader = new GLTFLoader();
+
+  // Frog
+  loader.load('./frog.glb', (gltf) => {
+    frog = gltf.scene;
+    frog.scale.set(0.8, 0.8, 0.8);
+    frog.traverse(c => { if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; } });
+    // Add a little cape/hat to make it hero-like
+    const capeMat = new THREE.MeshStandardMaterial({ color: 0xcc2222, roughness: 0.6 });
+    const capeGeo = new THREE.ConeGeometry(0.25, 0.5, 4);
+    const cape = new THREE.Mesh(capeGeo, capeMat);
+    cape.position.set(0, 0.8, -0.2);
+    cape.rotation.x = 0.3;
+    frog.add(cape);
+    // Tiny crown
+    const crownMat = new THREE.MeshStandardMaterial({ color: 0xffd700, metalness: 0.8, roughness: 0.2, emissive: 0xaa8800, emissiveIntensity: 0.3 });
+    const crownGeo = new THREE.CylinderGeometry(0.12, 0.15, 0.15, 5);
+    const crown = new THREE.Mesh(crownGeo, crownMat);
+    crown.position.set(0, 1.05, 0);
+    frog.add(crown);
+
+    frogMixer = new THREE.AnimationMixer(frog);
+    if (gltf.animations.length > 0) {
+      gltf.animations.forEach((clip, i) => {
+        const action = frogMixer.clipAction(clip);
+        if (i === 0) { action.play(); frogActions.idle = action; }
+        else frogActions['anim' + i] = action;
+      });
+    }
+    frog.position.set(0, 0, 25);
+    scene.add(frog);
+    updateLoading();
+  }, undefined, () => updateLoading());
+
+  // Dragon
+  loader.load('./dragon.glb', (gltf) => {
+    dragon = gltf.scene;
+    dragon.scale.set(1.8, 1.8, 1.8);
+    dragon.traverse(c => {
+      if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; }
+    });
+    dragonMixer = new THREE.AnimationMixer(dragon);
+    if (gltf.animations.length > 0) {
+      gltf.animations.forEach((clip, i) => {
+        const action = dragonMixer.clipAction(clip);
+        if (i === 0) { action.play(); dragonActions.idle = action; }
+        else dragonActions['anim' + i] = action;
+      });
+    }
+    dragon.position.set(0, 0, -30);
+    scene.add(dragon);
+    updateLoading();
+  }, undefined, () => updateLoading());
+
+  // Princess
+  loader.load('./princess.glb', (gltf) => {
+    princess = gltf.scene;
+    princess.scale.set(0.6, 0.6, 0.6);
+    princess.traverse(c => {
+      if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; }
+    });
+    princess.position.set(-3, 0, -32);
+    scene.add(princess);
+    updateLoading();
+  }, undefined, () => updateLoading());
+
+  // Chest prop
+  loader.load('./chest.gltf', (gltf) => {
+    const chest = gltf.scene;
+    chest.scale.set(2, 2, 2);
+    chest.traverse(c => { if(c.isMesh) { c.castShadow=true; c.receiveShadow=true; } });
+    const box = new THREE.Box3().setFromObject(chest);
+    const center = box.getCenter(new THREE.Vector3());
+    chest.position.x -= center.x; chest.position.z -= center.z; chest.position.y -= box.min.y;
+    // Place some chests around
+    for (let i = 0; i < 5; i++) {
+      const c = chest.clone();
+      const positions = [
+        [8, 0, 15], [-8, 0, 10], [5, 0, -5], [-10, 0, -15], [2, 0, -22]
+      ];
+      c.position.set(positions[i][0], positions[i][1], positions[i][2]);
+      scene.add(c);
+    }
+    updateLoading();
+  }, undefined, () => updateLoading());
+
+  // Build castle
+  buildCastle();
+  updateLoading();
+}
+
+// ============ CASTLE BUILDING ============
+function buildCastle() {
+  const wallMat = new THREE.MeshStandardMaterial({ color: 0x4a3a2a, roughness: 0.9, metalness: 0.1 });
+  const floorMat = new THREE.MeshStandardMaterial({ color: 0x3a3028, roughness: 0.95 });
+  const pillarMat = new THREE.MeshStandardMaterial({ color: 0x5a4a3a, roughness: 0.85, metalness: 0.1 });
+  const darkMat = new THREE.MeshStandardMaterial({ color: 0x2a1a1a, roughness: 0.9 });
+
+  // Floor
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), floorMat);
+  floor.rotation.x = -Math.PI / 2;
+  floor.receiveShadow = true;
+  scene.add(floor);
+
+  // Helper to make walls and add to colliders
+  function addWall(x, y, z, w, h, d, mat) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat || wallMat);
+    m.position.set(x, y, z);
+    m.castShadow = true; m.receiveShadow = true;
+    scene.add(m);
+    castleColliders.push(new THREE.Box3().setFromObject(m));
+    return m;
+  }
+
+  // ---- OUTER CASTLE WALLS ----
+  // North wall (far end - throne room)
+  addWall(0, 5, -38, 40, 10, 2);
+  // South wall (entrance)
+  addWall(0, 5, 35, 40, 10, 2);
+  // West wall
+  addWall(-20, 5, 0, 2, 10, 75);
+  // East wall
+  addWall(20, 5, 0, 2, 10, 75);
+
+  // ---- CORRIDOR WALLS creating rooms ----
+  // Main corridor: z from 15 to -38, x around 0
+  
+  // Entrance hall divider walls (z=15)
+  addWall(-12, 5, 15, 15, 10, 2);
+  addWall(12, 5, 15, 15, 10, 2);
+  
+  // Mid corridor walls (z=0) - with doorway
+  addWall(-14, 5, 0, 10, 10, 2);
+  addWall(14, 5, 0, 10, 10, 2);
+  // Small walls to make doorway
+  addWall(-4, 5, 0, 2, 4, 2, darkMat);
+  addWall(4, 5, 0, 2, 4, 2, darkMat);
+  // Arch over door
+  addWall(0, 9, 0, 6, 2, 2, wallMat);
+
+  // Pre-throne room walls (z=-15)
+  addWall(-14, 5, -15, 10, 10, 2);
+  addWall(14, 5, -15, 10, 10, 2);
+  addWall(-4, 5, -15, 2, 4, 2, darkMat);
+  addWall(4, 5, -15, 2, 4, 2, darkMat);
+  addWall(0, 9, -15, 6, 2, 2, wallMat);
+
+  // Throne room walls (z=-25)
+  addWall(-14, 5, -25, 10, 10, 2);
+  addWall(14, 5, -25, 10, 10, 2);
+  addWall(-4, 5, -25, 2, 4, 2, darkMat);
+  addWall(4, 5, -25, 2, 4, 2, darkMat);
+  addWall(0, 9, -25, 6, 2, 2, wallMat);
+
+  // Side rooms
+  // West side room 1 (z=5 to 15, x=-20 to -9)
+  addWall(-9, 5, 8, 2, 10, 14);
+  // East side room 1
+  addWall(9, 5, 8, 2, 10, 14);
+  
+  // West side room 2 (z=-5 to -15)
+  addWall(-9, 5, -8, 2, 10, 14);
+  // East side room 2
+  addWall(9, 5, -8, 2, 10, 14);
+
+  // Pillars along the main corridor
+  for (let z = 10; z >= -35; z -= 8) {
+    const pGeo = new THREE.CylinderGeometry(0.5, 0.6, 8, 8);
+    const p1 = new THREE.Mesh(pGeo, pillarMat);
+    p1.position.set(-5, 4, z); p1.castShadow = true;
+    scene.add(p1);
+    castleColliders.push(new THREE.Box3().setFromObject(p1));
+    const p2 = new THREE.Mesh(pGeo, pillarMat);
+    p2.position.set(5, 4, z); p2.castShadow = true;
+    scene.add(p2);
+    castleColliders.push(new THREE.Box3().setFromObject(p2));
+  }
+
+  // Ceiling
+  const ceil = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), new THREE.MeshStandardMaterial({ color: 0x2a2018, roughness: 1.0 }));
+  ceil.rotation.x = Math.PI / 2;
+  ceil.position.y = 10;
+  scene.add(ceil);
+
+  // ---- TORCHES ----
+  function addTorch(x, y, z) {
+    const group = new THREE.Group();
+    // Torch body
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.8, 6), new THREE.MeshStandardMaterial({ color: 0x4a3020 }));
+    group.add(body);
+    // Flame (glowing sphere)
+    const flameMat = new THREE.MeshStandardMaterial({ color: 0xff6600, emissive: 0xff4400, emissiveIntensity: 2.0 });
+    const flame = new THREE.Mesh(new THREE.SphereGeometry(0.15, 8, 6), flameMat);
+    flame.position.y = 0.5;
+    group.add(flame);
+    
+    // Point light
+    const light = new THREE.PointLight(0xff6620, 3, 12, 2);
+    light.position.y = 0.5;
+    light.castShadow = false; // performance
+    group.add(light);
+    
+    group.position.set(x, y, z);
+    scene.add(group);
+    torches.push({ group, flame, light, baseIntensity: 2 + Math.random() * 2 });
+  }
+
+  // Torches along corridors
+  for (let z = 12; z >= -35; z -= 8) {
+    addTorch(-6.5, 5, z);
+    addTorch(6.5, 5, z);
+  }
+  // Throne room torches
+  addTorch(-8, 5, -28);
+  addTorch(8, 5, -28);
+  addTorch(-8, 5, -35);
+  addTorch(8, 5, -35);
+  // Side room torches
+  addTorch(-15, 5, 5);
+  addTorch(15, 5, 5);
+  addTorch(-15, 5, -8);
+  addTorch(15, 5, -8);
+
+  // Dragon area fire basin
+  const fireBasinLight = new THREE.PointLight(0xff2200, 8, 25, 2);
+  fireBasinLight.position.set(0, 4, -30);
+  fireBasinLight.castShadow = true;
+  scene.add(fireBasinLight);
+  torches.push({ light: fireBasinLight, baseIntensity: 8, isDragon: true });
+
+  // Fire basin mesh
+  const basinGeo = new THREE.CylinderGeometry(1, 0.6, 1, 8);
+  const basinMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1a, metalness: 0.8, roughness: 0.4 });
+  const basin = new THREE.Mesh(basinGeo, basinMat);
+  basin.position.set(0, 0.5, -30);
+  scene.add(basin);
+  
+  // Fire particles from basin
+  const fireGeo = new THREE.BufferGeometry();
+  const fireCount = 100;
+  const firePositions = new Float32Array(fireCount * 3);
+  for (let i = 0; i < fireCount; i++) {
+    firePositions[i*3] = (Math.random()-0.5)*0.8;
+    firePositions[i*3+1] = Math.random()*3;
+    firePositions[i*3+2] = (Math.random()-0.5)*0.8 - 30;
+  }
+  fireGeo.setAttribute('position', new THREE.BufferAttribute(firePositions, 3));
+  const fireMat = new THREE.PointsMaterial({ color: 0xff4400, size: 0.15, transparent: true, opacity: 0.7 });
+  const firePoints = new THREE.Points(fireGeo, fireMat);
+  scene.add(firePoints);
+  fireParticles.push(firePoints);
+
+  // Throne
+  const throneMat = new THREE.MeshStandardMaterial({ color: 0x8a1a1a, roughness: 0.6, metalness: 0.2 });
+  const throneBack = new THREE.Mesh(new THREE.BoxGeometry(2, 4, 0.4), throneMat);
+  throneBack.position.set(-5, 2, -36.5);
+  scene.add(throneBack);
+  const throneSeat = new THREE.Mesh(new THREE.BoxGeometry(2, 0.4, 1.5), throneMat);
+  throneSeat.position.set(-5, 1, -35.8);
+  scene.add(throneSeat);
+
+  // Health pickups
+  addHealthPickup(15, 0, 10);
+  addHealthPickup(-15, 0, -8);
+  addHealthPickup(8, 0, -20);
+}
+
+// Health pickups
+let healthPickups = [];
+function addHealthPickup(x, y, z) {
+  const geo = new THREE.SphereGeometry(0.35, 12, 8);
+  const mat = new THREE.MeshStandardMaterial({ color: 0x00ff44, emissive: 0x00aa22, emissiveIntensity: 0.8, transparent: true, opacity: 0.85 });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(x, 1.2, z);
+  scene.add(mesh);
+  // Glow
+  const light = new THREE.PointLight(0x00ff44, 1, 5);
+  light.position.copy(mesh.position);
+  scene.add(light);
+  healthPickups.push({ mesh, light, collected: false });
+}
+
+// ============ COMBAT ============
+function doAttack() {
+  if (attackCooldown > 0 || frogAttacking) return;
+  frogAttacking = true;
+  attackCooldown = 0.6;
+  playSFX('attack');
+
+  // Check if dragon in range
+  if (dragon && !dragonDefeated) {
+    const dist = frog.position.distanceTo(dragon.position);
+    if (dist < 5) {
+      const dmg = 15 + Math.random() * 10;
+      dragonHP = Math.max(0, dragonHP - dmg);
+      playSFX('dragonhit');
+      showDamageFlash(0.2);
+      // Knockback dragon slightly
+      const dir = new THREE.Vector3().subVectors(dragon.position, frog.position).normalize();
+      dragon.position.add(dir.multiplyScalar(0.5));
+
+      if (dragonHP <= 0) {
+        defeatDragon();
+      }
+    }
+  }
+}
+
+function dragonAttack() {
+  if (!frog || frogHP <= 0) return;
+  const dist = frog.position.distanceTo(dragon.position);
+  if (dist < 6) {
+    const dmg = 8 + Math.random() * 7;
+    frogHP = Math.max(0, frogHP - dmg);
+    playSFX('hit');
+    showDamageFlash(0.4);
+    // Knockback frog
+    const dir = new THREE.Vector3().subVectors(frog.position, dragon.position).normalize();
+    frog.position.add(dir.multiplyScalar(2));
+
+    if (frogHP <= 0) {
+      gameOver();
+    }
+  }
+}
+
+// Dragon fire breath (ranged)
+let fireballs = [];
+function dragonFireBreath() {
+  if (!frog || frogHP <= 0 || dragonDefeated) return;
+  playSFX('roar');
+  
+  const dir = new THREE.Vector3().subVectors(frog.position, dragon.position).normalize();
+  const fireball = new THREE.Mesh(
+    new THREE.SphereGeometry(0.4, 8, 6),
+    new THREE.MeshStandardMaterial({ color: 0xff2200, emissive: 0xff4400, emissiveIntensity: 3 })
+  );
+  fireball.position.copy(dragon.position);
+  fireball.position.y += 2;
+  scene.add(fireball);
+  const light = new THREE.PointLight(0xff4400, 3, 10);
+  fireball.add(light);
+  fireballs.push({ mesh: fireball, vel: dir.multiplyScalar(20), life: 3 });
+}
+
+function defeatDragon() {
+  dragonDefeated = true;
+  dragonPhase = 'dead';
+  objectiveText = 'The dragon is defeated! Go rescue the princess!';
+  document.getElementById('boss-health-container').style.display = 'none';
+  
+  // Dragon death animation - fall over
+  if (dragon) {
+    dragon.traverse(c => {
+      if (c.isMesh) {
+        c.material = c.material.clone();
+        c.material.emissive = new THREE.Color(0x440000);
+        c.material.emissiveIntensity = 0.5;
+      }
+    });
+  }
+  playSFX('win');
+}
+
+function rescuePrincess() {
+  if (princessRescued) return;
+  princessRescued = true;
+  playSFX('win');
+  playSFX('pickup');
+  
+  setTimeout(() => {
+    showMessage('Victory!', 'You rescued the princess! The frog hero saves the day!');
+    gameState = 'won';
+  }, 1000);
+}
+
+function gameOver() {
+  gameState = 'lost';
+  showMessage('Game Over', 'The dragon was too powerful... Try again!');
+}
+
+function showMessage(title, text, isStart) {
+  const overlay = document.getElementById('message-overlay');
+  document.getElementById('msg-title').textContent = title;
+  document.getElementById('msg-text').textContent = text;
+  overlay.style.display = 'flex';
+  document.getElementById('msg-btn').textContent = isStart ? 'Begin Quest!' : 'Play Again';
+}
+
+function showDamageFlash(opacity) {
+  const flash = document.getElementById('damage-flash');
+  flash.style.opacity = opacity;
+  setTimeout(() => flash.style.opacity = 0, 150);
+}
+
+window.restartGame = function() {
+  document.getElementById('message-overlay').style.display = 'none';
+  if (gameState === 'won' || gameState === 'lost') {
+    frogHP = frogMaxHP;
+    dragonHP = dragonMaxHP;
+    dragonDefeated = false;
+    princessRescued = false;
+    dragonPhase = 'idle';
+    if (frog) frog.position.set(0, 0, 25);
+    if (dragon) dragon.position.set(0, 0, -30);
+    objectiveText = 'Find and defeat the dragon to save the princess!';
+    document.getElementById('boss-health-container').style.display = 'none';
+    healthPickups.forEach(h => { h.collected = false; h.mesh.visible = true; h.light.visible = true; });
+    gameState = 'playing';
+  } else {
+    gameState = 'playing';
+  }
+  document.exitPointerLock();
+};
+
+// ============ MUSIC ============
+function startMusic() {
+  if (musicAudio) return;
+  musicAudio = new Audio('./music.mp3');
+  musicAudio.loop = true;
+  musicAudio.volume = 0.3;
+  musicAudio.play().catch(() => {});
+}
+
+// ============ GAME LOOP ============
+function update() {
+  if (gameState !== 'playing') return;
+  const dt = Math.min(clock.getDelta(), 0.05);
+
+  if (frogMixer) frogMixer.update(dt);
+  if (dragonMixer && !dragonDefeated) dragonMixer.update(dt);
+
+  // ---- FROG MOVEMENT ----
+  if (frog && frogHP > 0) {
+    const speed = keys['ShiftLeft'] ? 10 : 6;
+    const forward = new THREE.Vector3(-Math.sin(cameraAngleH), 0, -Math.cos(cameraAngleH));
+    const right = new THREE.Vector3(forward.z, 0, -forward.x);
+    const move = new THREE.Vector3();
+
+    if (keys['KeyW']) move.add(forward);
+    if (keys['KeyS']) move.sub(forward);
+    if (keys['KeyA']) move.sub(right);
+    if (keys['KeyD']) move.add(right);
+
+    if (move.length() > 0) {
+      move.normalize().multiplyScalar(speed * dt);
+      const newPos = frog.position.clone().add(move);
+      // Collision check
+      const frogBox = new THREE.Box3().setFromCenterAndSize(
+        new THREE.Vector3(newPos.x, frog.position.y + 0.5, newPos.z),
+        new THREE.Vector3(0.8, 1.6, 0.8)
+      );
+      let blocked = false;
+      for (const wall of castleColliders) {
+        if (frogBox.intersectsBox(wall)) { blocked = true; break; }
+      }
+      if (!blocked) {
+        frog.position.add(move);
+      }
+      // Face movement direction
+      frog.rotation.y = Math.atan2(move.x, move.z);
+    }
+
+    // Jump
+    if (keys['Space'] && frogOnGround) {
+      frogVel.y = 10;
+      frogOnGround = false;
+      playSFX('jump');
+    }
+
+    // Gravity
+    frogVel.y -= 25 * dt;
+    frog.position.y += frogVel.y * dt;
+    if (frog.position.y <= 0) {
+      frog.position.y = 0;
+      frogVel.y = 0;
+      frogOnGround = true;
+    }
+
+    // Bob animation while moving
+    if (move.length() > 0 && frogOnGround) {
+      frog.position.y += Math.sin(clock.elapsedTime * 10) * 0.05;
+    }
+
+    // Attack cooldown
+    if (attackCooldown > 0) {
+      attackCooldown -= dt;
+      if (attackCooldown <= 0) frogAttacking = false;
+    }
+
+    // Attack visual - lunge
+    if (frogAttacking && attackCooldown > 0.3) {
+      const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(frog.quaternion);
+      frog.position.add(fwd.multiplyScalar(dt * 5));
+    }
+  }
+
+  // ---- HEALTH PICKUPS ----
+  healthPickups.forEach(h => {
+    if (h.collected) return;
+    h.mesh.rotation.y += dt * 2;
+    h.mesh.position.y = 1.2 + Math.sin(clock.elapsedTime * 3) * 0.2;
+    if (frog && frog.position.distanceTo(h.mesh.position) < 1.5) {
+      frogHP = Math.min(frogMaxHP, frogHP + 25);
+      h.collected = true;
+      h.mesh.visible = false;
+      h.light.visible = false;
+      playSFX('pickup');
+    }
+  });
+
+  // ---- DRAGON AI ----
+  if (dragon && !dragonDefeated) {
+    const distToDragon = frog ? frog.position.distanceTo(dragon.position) : 999;
+    
+    // Show boss bar when close
+    if (distToDragon < 20) {
+      document.getElementById('boss-health-container').style.display = 'block';
+    } else {
+      document.getElementById('boss-health-container').style.display = 'none';
+    }
+
+    // Face the frog
+    if (frog && distToDragon < 25) {
+      const lookDir = new THREE.Vector3().subVectors(frog.position, dragon.position);
+      lookDir.y = 0;
+      if (lookDir.length() > 0.1) {
+        dragon.rotation.y = Math.atan2(lookDir.x, lookDir.z);
+      }
+    }
+
+    dragonAttackTimer -= dt;
+    dragonStunTimer -= dt;
+
+    if (dragonStunTimer <= 0) {
+      if (distToDragon > 8 && distToDragon < 25 && frog) {
+        // Chase
+        const dir = new THREE.Vector3().subVectors(frog.position, dragon.position).normalize();
+        dir.y = 0;
+        const newPos = dragon.position.clone().add(dir.multiplyScalar(4 * dt));
+        // Keep dragon in throne room area
+        if (Math.abs(newPos.x) < 16 && newPos.z < -20 && newPos.z > -38) {
+          dragon.position.copy(newPos);
+        }
+        dragonPhase = 'chasing';
+      } else if (distToDragon <= 8) {
+        // Melee attack
+        if (dragonAttackTimer <= 0) {
+          dragonAttack();
+          dragonAttackTimer = 1.5;
+          // Occasional stun after combo
+          if (Math.random() < 0.3) {
+            dragonStunTimer = 1.0;
+          }
+        }
+        dragonPhase = 'attacking';
+      }
+
+      // Fire breath attack
+      if (distToDragon > 6 && distToDragon < 20 && dragonAttackTimer <= 0 && Math.random() < 0.01) {
+        dragonFireBreath();
+        dragonAttackTimer = 3;
+      }
+    }
+
+    // Dragon breathing animation
+    if (dragon) {
+      const breathe = Math.sin(clock.elapsedTime * 2) * 0.05;
+      dragon.scale.y = 1.8 + breathe;
+    }
+  }
+
+  // ---- FIREBALLS ----
+  for (let i = fireballs.length - 1; i >= 0; i--) {
+    const fb = fireballs[i];
+    fb.mesh.position.add(fb.vel.clone().multiplyScalar(dt));
+    fb.life -= dt;
+    
+    // Hit frog?
+    if (frog && fb.mesh.position.distanceTo(frog.position) < 1.5) {
+      frogHP = Math.max(0, frogHP - 15);
+      playSFX('hit');
+      showDamageFlash(0.3);
+      if (frogHP <= 0) gameOver();
+      scene.remove(fb.mesh);
+      fireballs.splice(i, 1);
+      continue;
+    }
+
+    if (fb.life <= 0) {
+      scene.remove(fb.mesh);
+      fireballs.splice(i, 1);
+    }
+  }
+
+  // ---- PRINCESS RESCUE ----
+  if (princess && dragonDefeated && !princessRescued && frog) {
+    const dist = frog.position.distanceTo(princess.position);
+    if (dist < 3) {
+      rescuePrincess();
+    }
+    // Princess idle animation
+    princess.rotation.y += dt * 0.5;
+  }
+
+  // ---- TORCH FLICKER ----
+  torches.forEach((t, i) => {
+    if (t.light) {
+      t.light.intensity = t.baseIntensity + Math.sin(clock.elapsedTime * 5 + i * 2) * 0.5 + Math.random() * 0.3;
+    }
+    if (t.flame) {
+      t.flame.scale.setScalar(1 + Math.sin(clock.elapsedTime * 8 + i) * 0.15);
+    }
+  });
+
+  // ---- FIRE PARTICLES ----
+  fireParticles.forEach(fp => {
+    const pos = fp.geometry.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      let y = pos.getY(i);
+      y += dt * 2;
+      if (y > 4) y = 0;
+      pos.setY(i, y);
+      pos.setX(i, pos.getX(i) + (Math.random() - 0.5) * dt * 2);
+    }
+    pos.needsUpdate = true;
+  });
+
+  // ---- CAMERA ----
+  if (frog) {
+    const camTarget = frog.position.clone().add(new THREE.Vector3(0, 2, 0));
+    const offset = new THREE.Vector3(
+      Math.sin(cameraAngleH) * cameraDist * Math.cos(cameraAngleV),
+      cameraDist * Math.sin(cameraAngleV) + 2,
+      Math.cos(cameraAngleH) * cameraDist * Math.cos(cameraAngleV)
+    );
+    const desiredCamPos = camTarget.clone().add(offset);
+    
+    // Clamp camera to avoid going through walls
+    camera.position.lerp(desiredCamPos, 0.1);
+    camera.lookAt(camTarget);
+  }
+
+  // ---- HUD UPDATE ----
+  document.getElementById('hp-fill').style.width = (frogHP / frogMaxHP * 100) + '%';
+  document.getElementById('frog-health-text').textContent = Math.round(frogHP) + '/' + frogMaxHP;
+  document.getElementById('obj-text').textContent = objectiveText;
+  document.getElementById('boss-bar-inner').style.width = (dragonHP / dragonMaxHP * 100) + '%';
+}
+
+// ============ ANIMATE ============
+function animate() {
+  requestAnimationFrame(animate);
+  update();
+  if (composer) composer.render();
+}
+
+init();
+animate();
+</script>
+</body>
+</html>
