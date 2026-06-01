@@ -1,0 +1,1291 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Frog Knight: The Dragon's Keep</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;font-family:system-ui,sans-serif;background:#0b0d14}
+  #hud{position:fixed;top:12px;left:14px;color:#fff;font-size:18px;font-weight:700;
+       text-shadow:0 2px 6px rgba(0,0,0,.7);pointer-events:none;line-height:1.4}
+  #tip{position:fixed;bottom:12px;left:14px;color:#fff;font-size:13px;opacity:.85;
+       text-shadow:0 2px 6px rgba(0,0,0,.7)}
+  #msg{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
+       color:#fff;font-size:48px;font-weight:800;text-align:center;
+       text-shadow:0 4px 22px rgba(0,0,0,.85);background:rgba(0,0,0,.35)}
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="hud"></div>
+<div id="tip">WASD move · click + move mouse to look · Q/E to turn</div>
+<div id="msg"></div>
+<script type="module">
+import * as THREE from 'three';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+// Asset manifest injected by the build pipeline (relative filenames it published).
+const ASSETS = {"character": "hero.glb", "music": "music.mp3"};
+
+window.__err = [];
+addEventListener('error', e => window.__err.push(String(e.message)));
+
+/* ===========================================================================
+   ENGINE — fixed, pre-validated. Do NOT regenerate this. Bright lighting recipe,
+   keyboard third-person controller + follow camera (no pointer lock), and asset
+   loaders that guard against black/spec-gloss materials.
+   =========================================================================== */
+let W = innerWidth, H = innerHeight;
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(W, H); renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;                 // bright, never the dark frog-game look
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+function gradientBg(top, bottom) {
+  const c = document.createElement('canvas'); c.width = 2; c.height = 256;
+  const x = c.getContext('2d'); const g = x.createLinearGradient(0, 0, 0, 256);
+  g.addColorStop(0, top); g.addColorStop(1, bottom); x.fillStyle = g; x.fillRect(0, 0, 2, 256);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+scene.background = gradientBg('#3a4f7a', '#cbb489');
+scene.fog = new THREE.Fog(0xb9a888, 40, 110);
+
+const camera = new THREE.PerspectiveCamera(55, W / H, 0.1, 400);
+camera.position.set(0, 8, 12);
+
+// Lighting: hemisphere fill (so nothing is ever pitch black) + shadow-casting key.
+scene.add(new THREE.HemisphereLight(0xcfe0ff, 0x4a4636, 1.1));
+const key = new THREE.DirectionalLight(0xfff2d8, 2.4);
+key.position.set(12, 20, 8); key.castShadow = true; key.shadow.mapSize.set(2048, 2048);
+key.shadow.camera.near = 1; key.shadow.camera.far = 90;
+key.shadow.camera.left = -45; key.shadow.camera.right = 45;
+key.shadow.camera.top = 45; key.shadow.camera.bottom = -45;
+key.shadow.bias = -0.0003; scene.add(key);
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(W, H), 0.5, 0.6, 0.85);
+composer.addPass(bloom);
+addEventListener('resize', () => {
+  W = innerWidth; H = innerHeight; camera.aspect = W / H; camera.updateProjectionMatrix();
+  renderer.setSize(W, H); composer.setSize(W, H); bloom.setSize(W, H);
+});
+
+const gltfLoader = new GLTFLoader();
+function guardMaterials(obj) {
+  // KHR_materials_pbrSpecularGlossiness is dropped by three r160 -> models render
+  // black. Give every mesh sane PBR defaults + env response so nothing is invisible.
+  obj.traverse(o => {
+    if (!o.isMesh) return;
+    o.castShadow = true; o.receiveShadow = true;
+    const m = o.material;
+    if (!m) { o.material = new THREE.MeshStandardMaterial({ color: 0x9aa0a8, roughness: 0.7 }); return; }
+    const mats = Array.isArray(m) ? m : [m];
+    for (const mat of mats) {
+      if ('envMapIntensity' in mat) mat.envMapIntensity = 1.0;
+      const c = mat.color;
+      if (c && c.r === 0 && c.g === 0 && c.b === 0 && !mat.map) c.setHex(0x9aa0a8);
+      if ('roughness' in mat && mat.roughness === 1 && mat.metalness === 1 && !mat.map) {
+        mat.roughness = 0.7; mat.metalness = 0.1;
+      }
+    }
+  });
+}
+async function loadGLB(url) {
+  const g = await gltfLoader.loadAsync(url);
+  guardMaterials(g.scene);
+  return g;
+}
+function centerOnGround(obj) {
+  const box = new THREE.Box3().setFromObject(obj);
+  const c = box.getCenter(new THREE.Vector3());
+  obj.position.x -= c.x; obj.position.z -= c.z; obj.position.y -= box.min.y;
+}
+
+// audio: simple Web Audio SFX (no external file needed); resumes on first input.
+let actx = null;
+function playBeep(freq = 440, dur = 0.12) {
+  try {
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    if (actx.state === 'suspended') actx.resume();
+    const o = actx.createOscillator(), gn = actx.createGain();
+    o.type = 'triangle'; o.frequency.value = freq;
+    gn.gain.setValueAtTime(0.18, actx.currentTime);
+    gn.gain.exponentialRampToValueAtTime(0.001, actx.currentTime + dur);
+    o.connect(gn); gn.connect(actx.destination); o.start(); o.stop(actx.currentTime + dur);
+  } catch (e) { /* autoplay/codec — non-fatal */ }
+}
+
+const keys = {};
+addEventListener('keydown', e => { keys[e.code] = true; });
+addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ground
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(200, 200),
+  new THREE.MeshStandardMaterial({ color: 0x6e7a52, roughness: 0.97 })
+);
+ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
+
+const hud = document.getElementById('hud');
+const msg = document.getElementById('msg');
+let ended = false;
+function finish(text) { if (!ended) { ended = true; msg.textContent = text; msg.style.display = 'flex'; } }
+
+const player = new THREE.Group();
+let mixer = null, idleAction = null, walkAction = null, activeAction = null;
+const PLAYER_SPEED = 7, HALF = 95;
+
+function setAction(a) {
+  if (!a || a === activeAction) return;
+  a.reset().fadeIn(0.18).play(); if (activeAction) activeAction.fadeOut(0.18); activeAction = a;
+}
+
+async function buildPlayer() {
+  let model = null;
+  if (ASSETS.character) {
+    try {
+      const g = await loadGLB('./' + ASSETS.character);
+      model = g.scene;
+      // skinned-mesh Box3 is unreliable (bind-pose/morph bounds can read ~100x off,
+      // which scales the model to a speck) — use native scale, feet assumed at origin.
+      model.position.y = 0;
+      if (g.animations && g.animations.length) {
+        mixer = new THREE.AnimationMixer(model);
+        const find = n => THREE.AnimationClip.findByName(g.animations, n);
+        idleAction = (find('Idle') || find('idle')) ? mixer.clipAction(find('Idle') || find('idle')) : null;
+        walkAction = (find('Walking') || find('Walk') || find('Run')) ? mixer.clipAction(find('Walking') || find('Walk') || find('Run')) : null;
+        if (idleAction) { idleAction.play(); activeAction = idleAction; }
+        else if (g.animations[0]) { activeAction = mixer.clipAction(g.animations[0]); activeAction.play(); }
+      }
+    } catch (e) { window.__err.push('character: ' + e); }
+  }
+  if (!model) {
+    model = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.5, 1, 8, 16),
+      new THREE.MeshStandardMaterial({ color: 0x44dd88, emissive: 0x114422, roughness: 0.4 })
+    );
+    model.castShadow = true; model.position.y = 1;
+  }
+  player.add(model); scene.add(player);
+}
+
+async function loadEnvironment() {
+  if (!ASSETS.env) return;
+  try {
+    const hdr = await new RGBELoader().loadAsync('./' + ASSETS.env);
+    hdr.mapping = THREE.EquirectangularReflectionMapping;
+    scene.environment = hdr;                            // lighting/reflections only
+  } catch (e) { window.__err.push('env: ' + e); }
+}
+
+let music = null;
+function startMusic() {
+  if (music || !ASSETS.music) return;
+  music = new Audio('./' + ASSETS.music); music.loop = true; music.volume = 0.4;
+  music.play().catch(() => {});
+}
+addEventListener('keydown', startMusic, { once: true });
+addEventListener('pointerdown', startMusic, { once: true });
+
+// per-frame hooks the game logic can register
+const updaters = [];
+
+// ctx handed to the game logic — the ONLY surface it builds against.
+const ctx = {
+  THREE, scene, player, keys,
+  loadModel: async (url) => { const g = await loadGLB('./' + url); centerOnGround(g.scene); return g.scene; },
+  add: (o) => scene.add(o),
+  onUpdate: (fn) => updaters.push(fn),
+  hud: (html) => { hud.innerHTML = html; },
+  tip: (t) => { document.getElementById('tip').textContent = t; },
+  distanceToPlayer: (o) => o.position.distanceTo(player.position),
+  playBeep,
+  win: (t = 'YOU WIN') => finish(t),
+  lose: (t = 'GAME OVER') => finish(t),
+  assets: ASSETS,
+};
+
+// third-person mouse-look: click to capture the pointer (free-look), move mouse to
+// turn. Pointer lock fails when the game is iframed by the host, so when it's not
+// locked we still turn while the left button is held. Q/E always work as a fallback.
+let camYaw = 0;
+const CAM_DIST = 12, CAM_HEIGHT = 7, CAM_ROT_SPEED = 1.8, MOUSE_SENS = 0.0025;
+const canvasEl = renderer.domElement;
+canvasEl.addEventListener('click', () => {
+  if (document.pointerLockElement !== canvasEl && canvasEl.requestPointerLock) {
+    try { canvasEl.requestPointerLock(); } catch (e) { /* iframe — fall back to drag-look */ }
+  }
+});
+addEventListener('mousemove', e => {
+  if (document.pointerLockElement === canvasEl || (e.buttons & 1)) {
+    camYaw -= e.movementX * MOUSE_SENS;
+  }
+});
+
+function updatePlayer(dt) {
+  if (keys.KeyQ) camYaw += CAM_ROT_SPEED * dt;
+  if (keys.KeyE) camYaw -= CAM_ROT_SPEED * dt;
+  let f = 0, s = 0;
+  if (keys.KeyW || keys.ArrowUp) f += 1;
+  if (keys.KeyS || keys.ArrowDown) f -= 1;
+  if (keys.KeyA || keys.ArrowLeft) s -= 1;
+  if (keys.KeyD || keys.ArrowRight) s += 1;
+  if ((f || s) && !ended) {
+    // camera-relative: forward follows where the camera points
+    const fwdX = -Math.sin(camYaw), fwdZ = -Math.cos(camYaw);
+    const rightX = Math.cos(camYaw), rightZ = -Math.sin(camYaw);
+    let mx = fwdX * f + rightX * s, mz = fwdZ * f + rightZ * s;
+    const l = Math.hypot(mx, mz) || 1; mx /= l; mz /= l;
+    player.position.x = THREE.MathUtils.clamp(player.position.x + mx * PLAYER_SPEED * dt, -HALF, HALF);
+    player.position.z = THREE.MathUtils.clamp(player.position.z + mz * PLAYER_SPEED * dt, -HALF, HALF);
+    player.rotation.y = Math.atan2(mx, mz);
+    setAction(walkAction || idleAction);
+  } else setAction(idleAction);
+  const cx = player.position.x + Math.sin(camYaw) * CAM_DIST;
+  const cz = player.position.z + Math.cos(camYaw) * CAM_DIST;
+  camera.position.lerp(new THREE.Vector3(cx, CAM_HEIGHT, cz), 1 - Math.pow(0.0009, dt));
+  camera.lookAt(player.position.x, 1.2, player.position.z);
+}
+
+const clock = new THREE.Clock();
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  if (mixer) mixer.update(dt);
+  updatePlayer(dt);
+  if (!ended) { for (const u of updaters) u(dt, ctx); if (window.GAME && GAME.update) try { GAME.update(dt, ctx); } catch (e) { window.__err.push('update: ' + e); } }
+  composer.render();
+}
+
+/* ===========================================================================
+   GAME LOGIC — the ONLY part the model writes. Implement window.GAME with an
+   async build(ctx) (place level + entities) and optional update(dt, ctx).
+   Use ctx helpers; never re-create the renderer/lights/camera/player.
+   =========================================================================== */
+window.GAME = {
+  state: null,
+  keys: [],
+  doors: [],
+  hazards: [],
+  checkpoints: [],
+  dragon: null,
+  princess: null,
+  sword: null,
+  attackHitbox: null,
+
+  async build(ctx) {
+    const T = ctx.THREE;
+    this.ctx = ctx;
+    this.T = T;
+
+    this.state = {
+      hp: 100, maxHp: 100, stamina: 100, maxStamina: 100,
+      lives: 3, keysCollected: 0, totalKeys: 2,
+      bossDefeated: false, princessRescued: false,
+      attackCooldown: 0, heavyCooldown: 0, dodgeCooldown: 0,
+      isAttacking: false, isDodging: false, isHeavy: false,
+      attackTimer: 0, invincible: 0,
+      dragonHp: 500, dragonMaxHp: 500,
+      dragonPhase: 1, dragonState: 'idle', dragonTimer: 0,
+      dragonTargetPos: null, dragonSwoopStart: null, dragonSwoopProgress: 0,
+      breathActive: false, breathTimer: 0, tailSwipeTimer: 0,
+      doorUnlocked: { door1: false, door2: false },
+      prompt: '', lastCheckpointIndex: 0
+    };
+
+    this.createEnvironment(ctx);
+    this.createKeys(ctx);
+    this.createDoors(ctx);
+    this.createHazards(ctx);
+    this.createDragon(ctx);
+    this.createPrincess(ctx);
+    this.createCheckpoints(ctx);
+    this.createSword(ctx);
+    this.setupHUD(ctx);
+    this.setupInput(ctx);
+
+    ctx.tip('WASD to move | SPACE double-jump | LMB light attack | RMB heavy | SHIFT dodge | E interact');
+  },
+
+  createEnvironment(ctx) {
+    const T = this.T;
+
+    // Main floor
+    const floorGeo = new T.BoxGeometry(80, 1, 100);
+    const floorMat = new T.MeshStandardMaterial({ color: 0x4a3728, roughness: 0.9 });
+    const floor = new T.Mesh(floorGeo, floorMat);
+    floor.position.set(0, -0.5, 0);
+    floor.receiveShadow = true;
+    ctx.add(floor);
+
+    // Stone texture pattern
+    const stoneMat = new T.MeshStandardMaterial({ color: 0x6b5b4f, roughness: 0.85 });
+
+    // Starting room walls
+    this.createWall(ctx, -15, 2, -35, 30, 4, 1, stoneMat);
+    this.createWall(ctx, 15, 2, -35, 30, 4, 1, stoneMat);
+    this.createWall(ctx, 0, 2, -45, 32, 4, 1, stoneMat);
+
+    // Corridor walls
+    this.createWall(ctx, -8, 2, -15, 1, 4, 25, stoneMat);
+    this.createWall(ctx, 8, 2, -15, 1, 4, 25, stoneMat);
+
+    // Main hall walls
+    this.createWall(ctx, -20, 2, 12, 1, 4, 40, stoneMat);
+    this.createWall(ctx, 20, 2, 12, 1, 4, 40, stoneMat);
+    this.createWall(ctx, 0, 2, 32, 42, 4, 1, stoneMat);
+
+    // Throne room walls
+    this.createWall(ctx, -8, 2, 45, 1, 4, 26, stoneMat);
+    this.createWall(ctx, 8, 2, 45, 1, 4, 26, stoneMat);
+    this.createWall(ctx, 0, 2, 58, 18, 4, 1, stoneMat);
+
+    // Pillars
+    const pillarGeo = new T.CylinderGeometry(1, 1.2, 6, 8);
+    const pillarMat = new T.MeshStandardMaterial({ color: 0x5a4a3a });
+    [[-10, 0, 0], [10, 0, 0], [-10, 0, 20], [10, 0, 20]].forEach(p => {
+      const pillar = new T.Mesh(pillarGeo, pillarMat);
+      pillar.position.set(p[0], 3, p[2]);
+      pillar.castShadow = true;
+      ctx.add(pillar);
+    });
+
+    // Ambient lighting already exists but add some torches
+    const torchLight = (x, z) => {
+      const light = new T.PointLight(0xff6600, 2, 15);
+      light.position.set(x, 4, z);
+      ctx.add(light);
+      const flame = new T.Mesh(
+        new T.SphereGeometry(0.3, 8, 8),
+        new T.MeshBasicMaterial({ color: 0xff4400 })
+      );
+      flame.position.set(x, 3.5, z);
+      ctx.add(flame);
+    };
+    torchLight(-7, -25); torchLight(7, -25);
+    torchLight(-19, 5); torchLight(19, 5);
+    torchLight(-19, 25); torchLight(19, 25);
+  },
+
+  createWall(ctx, x, y, z, w, h, d, mat) {
+    const wall = new this.T.BoxGeometry(w, h, d);
+    const mesh = new this.T.Mesh(wall, mat);
+    mesh.position.set(x, y, z);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    ctx.add(mesh);
+  },
+
+  createKeys(ctx) {
+    const T = this.T;
+    const keyGeo = new T.OctahedronGeometry(0.5);
+    const keyMat = new T.MeshStandardMaterial({ 
+      color: 0xffd700, metalness: 0.8, roughness: 0.2, emissive: 0xaa6600, emissiveIntensity: 0.3 
+    });
+
+    const key1 = new T.Mesh(keyGeo, keyMat);
+    key1.position.set(0, 1, -38);
+    key1.userData = { type: 'key', id: 0, collected: false };
+    ctx.add(key1);
+    this.keys.push(key1);
+
+    const key2 = new T.Mesh(keyGeo, keyMat.clone());
+    key2.material.color.setHex(0x00ff88);
+    key2.material.emissive.setHex(0x00aa44);
+    key2.position.set(0, 1, 22);
+    key2.userData = { type: 'key', id: 1, collected: false };
+    ctx.add(key2);
+    this.keys.push(key2);
+  },
+
+  createDoors(ctx) {
+    const T = this.T;
+    const doorMat = new T.MeshStandardMaterial({ color: 0x3d2817, metalness: 0.3 });
+
+    // Door 1 - to main hall
+    const door1 = new T.Mesh(new T.BoxGeometry(5, 5, 0.5), doorMat);
+    door1.position.set(0, 2.5, -2);
+    door1.userData = { type: 'door', id: 'door1', requiresKey: true, locked: true };
+    ctx.add(door1);
+    this.doors.push(door1);
+
+    // Door frame glow when locked
+    const lockGlow1 = new T.Mesh(
+      new T.BoxGeometry(5.5, 5.5, 0.2),
+      new T.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.5 })
+    );
+    lockGlow1.position.copy(door1.position);
+    lockGlow1.position.z += 0.4;
+    door1.userData.glow = lockGlow1;
+    ctx.add(lockGlow1);
+
+    // Door 2 - to throne room
+    const door2 = new T.Mesh(new T.BoxGeometry(5, 5, 0.5), doorMat.clone());
+    door2.position.set(0, 2.5, 38);
+    door2.userData = { type: 'door', id: 'door2', requiresKey: true, locked: true };
+    ctx.add(door2);
+    this.doors.push(door2);
+
+    const lockGlow2 = lockGlow1.clone();
+    lockGlow2.position.copy(door2.position);
+    lockGlow2.position.z += 0.4;
+    door2.userData.glow = lockGlow2;
+    ctx.add(lockGlow2);
+  },
+
+  createHazards(ctx) {
+    const T = this.T;
+
+    // Fire pits in main hall
+    const firePositions = [[-14, 8], [14, 8], [-14, 18], [14, 18], [0, 14]];
+    firePositions.forEach(([x, z]) => {
+      const pit = new T.Mesh(
+        new T.CylinderGeometry(1.5, 1.8, 0.3, 16),
+        new T.MeshStandardMaterial({ color: 0x222222 })
+      );
+      pit.position.set(x, 0.15, z);
+      ctx.add(pit);
+
+      const fire = new T.Mesh(
+        new T.ConeGeometry(1.2, 2, 8),
+        new T.MeshBasicMaterial({ color: 0xff4400, transparent: true, opacity: 0.8 })
+      );
+      fire.position.set(x, 1.3, z);
+      fire.userData = { type: 'hazard', hazardType: 'fire', damage: 15, baseY: 1.3 };
+      ctx.add(fire);
+      this.hazards.push(fire);
+
+      const fireLight = new T.PointLight(0xff4400, 2, 6);
+      fireLight.position.set(x, 2, z);
+      ctx.add(fireLight);
+    });
+
+    // Spike traps in corridor
+    for (let i = 0; i < 5; i++) {
+      const spikes = new T.Group();
+      for (let j = 0; j < 4; j++) {
+        const spike = new T.Mesh(
+          new T.ConeGeometry(0.15, 0.8, 4),
+          new T.MeshStandardMaterial({ color: 0x888888, metalness: 0.9 })
+        );
+        spike.position.set((j - 1.5) * 0.4, 0.4, 0);
+        spikes.add(spike);
+      }
+      spikes.position.set((i % 2 === 0 ? -4 : 4), 0, -10 + i * 5);
+      spikes.userData = { type: 'hazard', hazardType: 'spikes', damage: 25, active: true, timer: Math.random() * 2 };
+      ctx.add(spikes);
+      this.hazards.push(spikes);
+    }
+
+    // Lava pool near throne room entrance
+    const lava = new T.Mesh(
+      new T.BoxGeometry(10, 0.2, 6),
+      new T.MeshBasicMaterial({ color: 0xff2200 })
+    );
+    lava.position.set(0, 0.1, 33);
+    lava.userData = { type: 'hazard', hazardType: 'lava', damage: 30 };
+    ctx.add(lava);
+    this.hazards.push(lava);
+  },
+
+  createDragon(ctx) {
+    const T = this.T;
+    const dragon = new T.Group();
+
+    // Body
+    const body = new T.Mesh(
+      new T.CapsuleGeometry(2, 5, 8, 16),
+      new T.MeshStandardMaterial({ color: 0x8b0000, roughness: 0.6, metalness: 0.3 })
+    );
+    body.rotation.z = Math.PI / 2;
+    body.castShadow = true;
+    dragon.add(body);
+
+    // Head
+    const head = new T.Mesh(
+      new T.ConeGeometry(1.5, 4, 8),
+      new T.MeshStandardMaterial({ color: 0xa00000, roughness: 0.5 })
+    );
+    head.rotation.z = -Math.PI / 2;
+    head.position.set(5, 1, 0);
+    dragon.add(head);
+
+    // Wings
+    const wingGeo = new T.BufferGeometry();
+    const wingVerts = new Float32Array([
+      0, 0, 0, -6, 3, 2, -4, 0, 4, -8, 1, 0, -6, -2, 2
+    ]);
+    wingGeo.setAttribute('position', new T.BufferAttribute(wingVerts, 3));
+    wingGeo.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 1]);
+    wingGeo.computeVertexNormals();
+
+    const wingMat = new T.MeshStandardMaterial({ 
+      color: 0x660000, side: T.DoubleSide, transparent: true, opacity: 0.9 
+    });
+
+    const leftWing = new T.Mesh(wingGeo, wingMat);
+    leftWing.position.set(0, 2, 2);
+    leftWing.scale.set(1.5, 1.5, 1.5);
+    leftWing.userData.isLeftWing = true;
+    dragon.add(leftWing);
+
+    const rightWing = new T.Mesh(wingGeo, wingMat.clone());
+    rightWing.position.set(0, 2, -2);
+    rightWing.scale.set(1.5, 1.5, -1.5);
+    rightWing.userData.isRightWing = true;
+    dragon.add(rightWing);
+
+    // Tail
+    const tailSegments = [];
+    for (let i = 0; i < 5; i++) {
+      const seg = new T.Mesh(
+        new T.SphereGeometry(1.2 - i * 0.18, 8, 8),
+        new T.MeshStandardMaterial({ color: 0x8b0000 })
+      );
+      seg.position.set(-4 - i * 1.5, -0.5, 0);
+      seg.scale.set(1, 0.7, 0.7);
+      dragon.add(seg);
+      tailSegments.push(seg);
+    }
+
+    // Eyes (glowing)
+    const eyeGeo = new T.SphereGeometry(0.3, 8, 8);
+    const eyeMat = new T.MeshBasicMaterial({ color: 0xffff00 });
+    const leftEye = new T.Mesh(eyeGeo, eyeMat);
+    leftEye.position.set(6, 1.5, 0.8);
+    dragon.add(leftEye);
+    const rightEye = new T.Mesh(eyeGeo, eyeMat);
+    rightEye.position.set(6, 1.5, -0.8);
+    dragon.add(rightEye);
+
+    dragon.position.set(0, 3, 50);
+    dragon.userData = { 
+      type: 'dragon', 
+      wingAngle: 0,
+      tailSegments 
+    };
+
+    ctx.add(dragon);
+    this.dragon = dragon;
+
+    // Dragon health bar above
+    const hpBarBg = new T.Mesh(
+      new T.PlaneGeometry(6, 0.6),
+      new T.MeshBasicMaterial({ color: 0x333333 })
+    );
+    hpBarBg.position.set(0, 6, 0);
+    dragon.add(hpBarBg);
+
+    const hpBarFill = new T.Mesh(
+      new T.PlaneGeometry(5.8, 0.5),
+      new T.MeshBasicMaterial({ color: 0xff0000 })
+    );
+    hpBarFill.position.set(0, 6, 0.001);
+    dragon.add(hpBarFill);
+    dragon.userData.hpBar = hpBarFill;
+  },
+
+  createPrincess(ctx) {
+    const T = this.T;
+    const princess = new T.Group();
+
+    // Body/dress
+    const dress = new T.Mesh(
+      new T.ConeGeometry(0.8, 2.5, 8),
+      new T.MeshStandardMaterial({ color: 0xff69b4 })
+    );
+    dress.position.y = 1.25;
+    princess.add(dress);
+
+    // Head
+    const head = new T.Mesh(
+      new T.SphereGeometry(0.4, 16, 16),
+      new T.MeshStandardMaterial({ color: 0xffdbac })
+    );
+    head.position.y = 2.7;
+    princess.add(head);
+
+    // Crown
+    const crown = new T.Mesh(
+      new T.ConeGeometry(0.35, 0.4, 5),
+      new T.MeshStandardMaterial({ color: 0xffd700, metalness: 0.8 })
+    );
+    crown.position.y = 3.1;
+    princess.add(crown);
+
+    // Hair
+    const hair = new T.Mesh(
+      new T.SphereGeometry(0.45, 16, 16),
+      new T.MeshStandardMaterial({ color: 0xdaa520 })
+    );
+    hair.position.y = 2.75;
+    hair.scale.set(1, 0.8, 1);
+    princess.add(hair);
+
+    princess.position.set(5, 0, 52);
+    princess.userData = { type: 'princess' };
+    ctx.add(princess);
+    this.princess = princess;
+
+    // Cage around princess
+    const cageMat = new T.MeshStandardMaterial({ color: 0x666666, metalness: 0.9 });
+    const bars = [
+      [0, 0, 1.2], [0, 0, -1.2], [1.2, 0, 0], [-1.2, 0, 0]
+    ];
+    bars.forEach(([x, y, z]) => {
+      const bar = new T.Mesh(new T.CylinderGeometry(0.05, 0.05, 4, 8), cageMat);
+      bar.position.set(x, 2, z);
+      princess.userData.cageBars = princess.userData.cageBars || [];
+      princess.userData.cageBars.push(bar);
+      ctx.add(bar);
+    });
+  },
+
+  createCheckpoints(ctx) {
+    const T = this.T;
+    const positions = [
+      { pos: [0, 0, -35], label: 'Entrance Hall' },
+      { pos: [0, 0, 10], label: 'Main Hall' },
+      { pos: [0, 0, 48], label: 'Throne Room' }
+    ];
+
+    positions.forEach((cp, idx) => {
+      const group = new T.Group();
+      
+      const base = new T.Mesh(
+        new T.CylinderGeometry(1, 1.2, 0.2, 8),
+        new T.MeshStandardMaterial({ color: 0x444444, metalness: 0.7 })
+      );
+      group.add(base);
+
+      const beacon = new T.Mesh(
+        new T.CylinderGeometry(0.2, 0.2, 3, 8),
+        new T.MeshBasicMaterial({ color: 0x00aaff, transparent: true, opacity: 0.6 })
+      );
+      beacon.position.y = 1.5;
+      group.add(beacon);
+
+      const light = new T.PointLight(0x00aaff, 1, 8);
+      light.position.y = 2;
+      group.add(light);
+
+      group.position.set(cp.pos[0], cp.pos[1] + 0.1, cp.pos[2]);
+      group.userData = { type: 'checkpoint', index: idx, label: cp.label, activated: idx === 0 };
+      ctx.add(group);
+      this.checkpoints.push(group);
+    });
+  },
+
+  createSword(ctx) {
+    const T = this.T;
+    const sword = new T.Group();
+
+    const blade = new T.Mesh(
+      new T.BoxGeometry(0.1, 1.2, 0.02),
+      new T.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.95, roughness: 0.1 })
+    );
+    blade.position.y = 0.6;
+    sword.add(blade);
+
+    const guard = new T.Mesh(
+      new T.BoxGeometry(0.4, 0.08, 0.08),
+      new T.MeshStandardMaterial({ color: 0xffd700, metalness: 0.8 })
+    );
+    sword.add(guard);
+
+    const handle = new T.Mesh(
+      new T.CylinderGeometry(0.04, 0.04, 0.3, 8),
+      new T.MeshStandardMaterial({ color: 0x4a3728 })
+    );
+    handle.position.y = -0.2;
+    sword.add(handle);
+
+    sword.position.set(0.6, 1, 0.3);
+    sword.visible = false;
+    ctx.player.add(sword);
+    this.sword = sword;
+
+    // Attack hitbox (invisible)
+    this.attackHitbox = new T.Mesh(
+      new T.SphereGeometry(2, 8, 8),
+      new T.MeshBasicMaterial({ visible: false })
+    );
+    this.attackHitbox.visible = false;
+    ctx.player.add(this.attackHitbox);
+  },
+
+  setupHUD(ctx) {
+    ctx.hud(`
+      <div id="game-hud" style="position:fixed;top:10px;left:10px;right:10px;pointer-events:none;font-family:'Segoe UI',sans-serif;z-index:100;">
+        <div style="display:flex;gap:20px;align-items:flex-start;">
+          <div style="background:rgba(0,0,0,0.7);padding:12px;border-radius:8px;min-width:200px;">
+            <div style="color:#fff;font-size:12px;margin-bottom:4px;">HP</div>
+            <div style="background:#333;height:20px;border-radius:4px;overflow:hidden;">
+              <div id="hp-bar" style="background:linear-gradient(90deg,#cc0000,#ff4444);height:100%;width:100%;transition:width 0.2s;"></div>
+            </div>
+            <div id="hp-text" style="color:#fff;font-size:11px;margin-top:2px;">100 / 100</div>
+            
+            <div style="color:#fff;font-size:12px;margin-top:8px;margin-bottom:4px;">STAMINA</div>
+            <div style="background:#333;height:14px;border-radius:4px;overflow:hidden;">
+              <div id="stamina-bar" style="background:linear-gradient(90deg,#0066cc,#00aaff);height:100%;width:100%;transition:width 0.1s;"></div>
+            </div>
+            
+            <div style="display:flex;gap:15px;margin-top:10px;">
+              <div style="color:#ffd700;">🔑 <span id="keys-count">0</span> / 2</div>
+              <div style="color:#ff6666;">❤️ <span id="lives-count">3</span></div>
+            </div>
+          </div>
+          
+          <div id="boss-hud" style="background:rgba(100,0,0,0.8);padding:12px;border-radius:8px;min-width:250px;display:none;">
+            <div style="color:#ff4444;font-size:14px;font-weight:bold;margin-bottom:4px;">🐉 ANCIENT DRAGON</div>
+            <div style="background:#330000;height:24px;border-radius:4px;overflow:hidden;">
+              <div id="dragon-hp-bar" style="background:linear-gradient(90deg,#aa0000,#ff0000);height:100%;width:100%;transition:width 0.2s;"></div>
+            </div>
+            <div id="dragon-phase" style="color:#ff8888;font-size:11px;margin-top:2px;">PHASE 1</div>
+          </div>
+          
+          <div id="prompt-box" style="margin-left:auto;background:rgba(255,255,255,0.9);padding:10px 20px;border-radius:8px;display:none;">
+            <span id="prompt-text" style="color:#333;font-weight:bold;"></span>
+          </div>
+        </div>
+        
+        <div id="message-area" style="position:fixed;bottom:80px;left:50%;transform:translateX(-50%);text-align:center;">
+          <div id="game-message" style="background:rgba(0,0,0,0.8);color:#fff;padding:15px 30px;border-radius:8px;font-size:18px;display:none;"></div>
+        </div>
+        
+        <div id="damage-overlay" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(255,0,0,0.3);pointer-events:none;opacity:0;transition:opacity 0.1s;"></div>
+      </div>
+    `);
+  },
+
+  setupInput(ctx) {
+    document.addEventListener('mousedown', (e) => {
+      if (this.state.lives <= 0 || this.state.princessRescued) return;
+      const s = this.state;
+      
+      if (e.button === 0 && s.attackCooldown <= 0 && !s.isAttacking && !s.isDodging) {
+        // Light attack
+        s.isAttacking = true;
+        s.isHeavy = false;
+        s.attackTimer = 0.3;
+        s.attackCooldown = 0.4;
+        s.stamina = Math.max(0, s.stamina - 10);
+        this.sword.visible = true;
+        ctx.playBeep(400);
+      } else if (e.button === 2 && s.heavyCooldown <= 0 && !s.isAttacking && !s.isDodging && s.stamina >= 30) {
+        // Heavy attack
+        s.isAttacking = true;
+        s.isHeavy = true;
+        s.attackTimer = 0.6;
+        s.heavyCooldown = 1.0;
+        s.stamina = Math.max(0, s.stamina - 30);
+        this.sword.visible = true;
+        this.sword.scale.set(1.5, 1.5, 1.5);
+        ctx.playBeep(250);
+      }
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (this.state.lives <= 0 || this.state.princessRescued) return;
+      const s = this.state;
+      
+      if (e.key === 'Shift' && s.dodgeCooldown <= 0 && !s.isDodging && s.stamina >= 25) {
+        s.isDodging = true;
+        s.dodgeCooldown = 1.0;
+        s.invincible = 0.4;
+        s.stamina = Math.max(0, s.stamina - 25);
+        setTimeout(() => { s.isDodging = false; }, 300);
+        ctx.playBeep(600);
+      }
+      
+      if (e.key.toLowerCase() === 'e') {
+        this.handleInteraction(ctx);
+      }
+    });
+
+    document.addEventListener('contextmenu', (e) => e.preventDefault());
+  },
+
+  handleInteraction(ctx) {
+    const s = this.state;
+    
+    // Check doors
+    this.doors.forEach(door => {
+      if (ctx.distanceToPlayer(door) < 4) {
+        const data = door.userData;
+        if (data.locked && s.keysCollected > 0) {
+          data.locked = false;
+          s.doorUnlocked[data.id] = true;
+          door.visible = false;
+          if (data.glow) data.glow.visible = false;
+          s.keysCollected--;
+          this.showMessage(`Door unlocked! Keys remaining: ${s.keysCollected}`);
+          ctx.playBeep(800);
+        } else if (!data.locked) {
+          this.showMessage('Door is already open!');
+        } else {
+          this.showMessage('You need a key to open this door!');
+          ctx.playBeep(150);
+        }
+      }
+    });
+
+    // Check princess
+    if (s.bossDefeated && !s.princessRescued && ctx.distanceToPlayer(this.princess) < 3) {
+      s.princessRescued = true;
+      // Remove cage
+      if (this.princess.userData.cageBars) {
+        this.princess.userData.cageBars.forEach(b => b.visible = false);
+      }
+      this.showMessage('PRINCESS RESCUED! The kingdom is saved!');
+      ctx.playBeep(1000);
+      setTimeout(() => ctx.win('VICTORY! You defeated the dragon and rescued the princess!'), 1500);
+    }
+  },
+
+  checkKeys(ctx) {
+    this.keys.forEach(key => {
+      if (!key.userData.collected && ctx.distanceToPlayer(key) < 2) {
+        key.userData.collected = true;
+        key.visible = false;
+        this.state.keysCollected++;
+        this.showMessage(`Key collected! (${this.state.keysCollected}/${this.state.totalKeys})`);
+        ctx.playBeep(600);
+        setTimeout(() => ctx.playBeep(800), 100);
+      }
+    });
+  },
+
+  checkDoors(ctx) {
+    let nearDoor = false;
+    this.doors.forEach(door => {
+      if (ctx.distanceToPlayer(door) < 4 && door.userData.locked) {
+        nearDoor = true;
+        this.updatePrompt(`[E] ${this.state.keysCollected > 0 ? 'Unlock Door (' + this.state.keysCollected + ' keys)' : 'Need Key'}`);
+      }
+    });
+    
+    // Check princess proximity
+    if (this.state.bossDefeated && !this.state.princessRescued && ctx.distanceToPlayer(this.princess) < 3) {
+      nearDoor = true;
+      this.updatePrompt('[E] Rescue Princess');
+    }
+    
+    if (!nearDoor) this.updatePrompt('');
+  },
+
+  checkHazards(ctx, dt) {
+    const s = this.state;
+    if (s.invincible > 0 || s.isDodging) return;
+
+    this.hazards.forEach(hazard => {
+      const data = hazard.userData;
+      let dmg = 0;
+
+      if (data.hazardType === 'spikes') {
+        data.timer = (data.timer || 0) + dt;
+        const cycle = Math.sin(data.timer * 3) > 0;
+        hazard.visible = cycle;
+        hazard.position.y = cycle ? 0.4 : -0.3;
+        if (cycle && ctx.distanceToPlayer(hazard) < 1.5) dmg = data.damage;
+      } else if (ctx.distanceToPlayer(hazard) < 2) {
+        dmg = data.damage;
+      }
+
+      if (dmg > 0) {
+        this.takeDamage(dmg, ctx);
+      }
+    });
+  },
+
+  checkCheckpoints(ctx) {
+    this.checkpoints.forEach(cp => {
+      if (!cp.userData.activated && ctx.distanceToPlayer(cp) < 2) {
+        cp.userData.activated = true;
+        this.state.lastCheckpointIndex = cp.userData.index;
+        cp.children[1].material.color.setHex(0x00ff00);
+        this.showMessage(`Checkpoint: ${cp.userData.label}`);
+        ctx.playBeep(500);
+        setTimeout(() => ctx.playBeep(700), 100);
+      }
+    });
+  },
+
+  updateDragon(dt, ctx) {
+    const s = this.state;
+    const dragon = this.dragon;
+    if (!dragon) return;
+
+    const distToPlayer = ctx.distanceToPlayer(dragon);
+    s.dragonTimer += dt;
+
+    // Phase transitions
+    if (s.dragonHp < s.dragonMaxHp * 0.5 && s.dragonPhase === 1) {
+      s.dragonPhase = 2;
+      dragon.children[0].material.color.setHex(0xaa0000);
+      this.showMessage('DRAGON ENRAGES!');
+    }
+    if (s.dragonHp < s.dragonMaxHp * 0.2 && s.dragonPhase === 2) {
+      s.dragonPhase = 3;
+      dragon.children[0].material.color.setHex(0xff0000);
+      this.showMessage('DRAGON IS FURIOUS!');
+    }
+
+    // Wing animation
+    s.dragonTimer *= 1;
+    const wingSpeed = s.dragonPhase >= 2 ? 8 : 5;
+    dragon.userData.wingAngle += dt * wingSpeed;
+    const wingFlap = Math.sin(dragon.userData.wingAngle) * 0.5;
+    dragon.children[2].rotation.x = wingFlap;
+    dragon.children[3].rotation.x = -wingFlap;
+
+    // Tail sway
+    if (dragon.userData.tailSegments) {
+      dragon.userData.tailSegments.forEach((seg, i) => {
+        seg.position.y = -0.5 + Math.sin(s.dragonTimer * 3 + i * 0.5) * 0.3;
+        seg.position.x = (-4 - i * 1.5) + Math.cos(s.dragonTimer * 2 + i) * 0.2;
+      });
+    }
+
+    // State machine
+    switch (s.dragonState) {
+      case 'idle':
+        if (distToPlayer < 20) {
+          s.dragonState = 'aggro';
+          s.dragonTimer = 0;
+        }
+        // Idle breathing
+        dragon.position.y = 3 + Math.sin(s.dragonTimer * 2) * 0.3;
+        break;
+
+      case 'aggro':
+        // Face player
+        const dirToPlayer = new this.T.Vector3().subVectors(ctx.player.position, dragon.position).normalize();
+        dragon.rotation.y = Math.atan2(dirToPlayer.x, dirToPlayer.z);
+
+        // Choose attack based on phase and distance
+        if (s.dragonTimer > (s.dragonPhase >= 2 ? 1.5 : 2.5)) {
+          s.dragonTimer = 0;
+          const rand = Math.random();
+          
+          if (distToPlayer < 8) {
+            s.dragonState = rand < 0.5 ? 'tailSwipe' : 'breath';
+          } else if (s.dragonPhase >= 2 && rand < 0.4) {
+            s.dragonState = 'swoop';
+            s.dragonSwoopStart = dragon.position.clone();
+            s.dragonSwoopProgress = 0;
+          } else {
+            s.dragonState = 'breath';
+          }
+        }
+        
+        // Move toward player slowly
+        if (distToPlayer > 10) {
+          dragon.position.x += dirToPlayer.x * dt * 3;
+          dragon.position.z += dirToPlayer.z * dt * 3;
+        }
+        dragon.position.y = 3 + Math.sin(s.dragonTimer * 3) * 0.5;
+        break;
+
+      case 'breath':
+        s.breathActive = true;
+        s.breathTimer += dt;
+        
+        // Breath visual would go here - using distance damage
+        const breathDir = new this.T.Vector3(0, 0, -1).applyQuaternion(dragon.quaternion);
+        const playerRelPos = new this.T.Vector3().subVectors(ctx.player.position, dragon.position);
+        const dotProduct = playerRelPos.normalize().dot(breathDir);
+        
+        if (dotProduct > 0.6 && distToPlayer < 15 && s.invincible <= 0 && !s.isDodging) {
+          this.takeDamage(s.dragonPhase * 10, ctx);
+        }
+
+        if (s.breathTimer > (s.dragonPhase >= 2 ? 1.5 : 2)) {
+          s.breathActive = false;
+          s.breathTimer = 0;
+          s.dragonState = 'aggro';
+          s.dragonTimer = 0;
+        }
+        break;
+
+      case 'tailSwipe':
+        s.tailSwipeTimer += dt;
+        const swipeAngle = Math.sin(s.tailSwipeTimer * 10) * 1.5;
+        if (dragon.userData.tailSegments) {
+          dragon.userData.tailSegments.forEach((seg, i) => {
+            seg.position.z = Math.sin(s.tailSwipeTimer * 10 + i * 0.3) * (2 + i * 0.5);
+          });
+        }
+
+        if (distToPlayer < 6 && s.tailSwipeTimer > 0.2 && s.tailSwipeTimer < 0.8 && s.invincible <= 0 && !s.isDodging) {
+          this.takeDamage(25 + s.dragonPhase * 10, ctx);
+          s.tailSwipeTimer = 1; // Prevent continuous damage
+        }
+
+        if (s.tailSwipeTimer > 1.2) {
+          s.tailSwipeTimer = 0;
+          s.dragonState = 'aggro';
+          s.dragonTimer = 0;
+        }
+        break;
+
+      case 'swoop':
+        s.dragonSwoopProgress += dt * (1 + s.dragonPhase * 0.3);
+        
+        if (s.dragonSwoopProgress >= 1) {
+          // Impact
+          if (distToPlayer < 5 && s.invincible <= 0 && !s.isDodging) {
+            this.takeDamage(40 + s.dragonPhase * 15, ctx);
+          }
+          s.dragonState = 'recover';
+          s.dragonTimer = 0;
+        } else {
+          // Arc movement
+          const t = s.dragonSwoopProgress;
+          const start = s.dragonSwoopStart;
+          const target = ctx.player.position.clone();
+          target.y = 0;
+          
+          dragon.position.lerpVectors(start, target, t);
+          dragon.position.y = 3 + Math.sin(t * Math.PI) * 8;
+          
+          if (t < 0.5) {
+            dragon.rotation.x = -Math.PI / 4;
+          } else {
+            dragon.rotation.x = Math.PI / 4;
+          }
+        }
+        break;
+
+      case 'recover':
+        dragon.position.y = 3 + Math.abs(Math.sin(s.dragonTimer * 4)) * 2;
+        dragon.rotation.x *= 0.9;
+        if (s.dragonTimer > 1.5) {
+          s.dragonState = 'aggro';
+          s.dragonTimer = 0;
+        }
+        break;
+    }
+
+    // Update dragon HP bar
+    if (dragon.userData.hpBar) {
+      dragon.userData.hpBar.scale.x = Math.max(0, s.dragonHp / s.dragonMaxHp);
+      dragon.userData.hpBar.position.x = -(1 - s.dragonHp / s.dragonMaxHp) * 2.9;
+    }
+
+    // Show/hide boss HUD
+    const bossHud = document.getElementById('boss-hud');
+    if (distToPlayer < 30) {
+      bossHud.style.display = 'block';
+      document.getElementById('dragon-hp-bar').style.width = `${(s.dragonHp / s.dragonMaxHp) * 100}%`;
+      document.getElementById('dragon-phase').textContent = `PHASE ${s.dragonPhase} - ${['NORMAL', 'ENRAGED', 'FURIOUS'][s.dragonPhase - 1]}`;
+    } else {
+      bossHud.style.display = 'none';
+    }
+  },
+
+  checkPrincess(ctx) {
+    // Handled in handleInteraction
+  },
+
+  takeDamage(amount, ctx) {
+    const s = this.state;
+    if (s.invincible > 0 || s.isDodging) return;
+    
+    s.hp = Math.max(0, s.hp - amount);
+    s.invincible = 0.5;
+    
+    // Visual feedback
+    const overlay = document.getElementById('damage-overlay');
+    overlay.style.opacity = '1';
+    setTimeout(() => overlay.style.opacity = '0', 150);
+    
+    ctx.playBeep(150);
+    
+    if (s.hp <= 0) {
+      this.handleDeath(ctx);
+    }
+  },
+
+  handleDeath(ctx) {
+    const s = this.state;
+    s.lives--;
+    
+    if (s.lives <= 0) {
+      ctx.lose('GAME OVER - The dragon claims another victim...');
+      return;
+    }
+
+    // Respawn at checkpoint
+    s.hp = s.maxHp;
+    s.stamina = s.maxStamina;
+    s.invincible = 2;
+    
+    const cp = this.checkpoints[s.lastCheckpointIndex];
+    if (cp) {
+      ctx.player.position.copy(cp.position);
+      ctx.player.position.y = 1;
+    }
+    
+    this.showMessage(`Respawning... Lives remaining: ${s.lives}`);
+    ctx.playBeep(200);
+  },
+
+  dealDamageToDragon(amount) {
+    const s = this.state;
+    if (s.bossDefeated) return;
+    
+    s.dragonHp = Math.max(0, s.dragonHp - amount);
+    
+    if (s.dragonHp <= 0) {
+      s.bossDefeated = true;
+      this.dragon.visible = false;
+      this.showMessage('THE DRAGON HAS FALLEN! Find the princess!');
+      this.ctx.playBeep(800);
+      setTimeout(() => this.ctx.playBeep(1000), 200);
+      setTimeout(() => this.ctx.playBeep(1200), 400);
+    }
+  },
+
+  update(dt, ctx) {
+    const s = this.state;
+    
+    // Cooldowns
+    if (s.attackCooldown > 0) s.attackCooldown -= dt;
+    if (s.heavyCooldown > 0) s.heavyCooldown -= dt;
+    if (s.dodgeCooldown > 0) s.dodgeCooldown -= dt;
+    if (s.invincible > 0) s.invincible -= dt;
+
+    // Stamina regen
+    if (!s.isDodging && s.stamina < s.maxStamina) {
+      s.stamina = Math.min(s.maxStamina, s.stamina + 15 * dt);
+    }
+
+    // Attack animation
+    if (s.isAttacking) {
+      s.attackTimer -= dt;
+      const progress = 1 - (s.attackTimer / (s.isHeavy ? 0.6 : 0.3));
+      
+      // Sword swing animation
+      const swingAngle = Math.sin(progress * Math.PI) * (s.isHeavy ? 2.5 : 2);
+      this.sword.rotation.x = -swingAngle;
+      this.sword.rotation.z = swingAngle * 0.3;
+      
+      // Check hit at peak of swing
+      if (progress > 0.3 && progress < 0.7 && !this.sword.userData.hasHit) {
+        this.sword.userData.hasHit = true;
+        
+        // Check dragon hit
+        if (!s.bossDefeated && this.dragon && ctx.distanceToPlayer(this.dragon) < 5) {
+          const dmg = s.isHeavy ? 40 + s.dragonPhase * 5 : 20 + s.dragonPhase * 2;
+          this.dealDamageToDragon(dmg);
+          ctx.playBeep(s.isHeavy ? 180 : 300);
+        }
+      }
+      
+      if (s.attackTimer <= 0) {
+        s.isAttacking = false;
+        this.sword.visible = false;
+        this.sword.rotation.set(0, 0, 0);
+        this.sword.scale.set(1, 1, 1);
+        this.sword.userData.hasHit = false;
+      }
+    }
+
+    // Dodge movement boost (visual only - actual movement handled by engine)
+    if (s.isDodging) {
+      // Could add particle effects here
+    }
+
+    // Animate keys
+    this.keys.forEach((key, i) => {
+      if (!key.userData.collected) {
+        key.rotation.y += dt * 2;
+        key.position.y = 1 + Math.sin(Date.now() * 0.003 + i) * 0.3;
+      }
+    });
+
+    // Animate hazards
+    this.hazards.forEach(hazard => {
+      if (hazard.userData.hazardType === 'fire') {
+        hazard.scale.y = 0.8 + Math.sin(Date.now() * 0.01 + hazard.position.x) * 0.3;
+        hazard.position.y = hazard.userData.baseY + Math.sin(Date.now() * 0.008) * 0.2;
+      }
+    });
+
+    // Animate princess
+    if (this.princess && !s.princessRescued) {
+      this.princess.position.y = Math.sin(Date.now() * 0.002) * 0.1;
+      this.princess.rotation.y += dt * 0.5;
+    }
+
+    // Game logic checks
+    this.checkKeys(ctx);
+    this.checkDoors(ctx);
+    this.checkHazards(ctx, dt);
+    this.checkCheckpoints(ctx);
+    
+    if (!s.bossDefeated) {
+      this.updateDragon(dt, ctx);
+    } else if (!s.princessRescued) {
+      this.checkPrincess(ctx);
+    }
+
+    // Update HUD
+    this.updateHUD();
+  },
+
+  updateHUD() {
+    const s = this.state;
+    document.getElementById('hp-bar').style.width = `${(s.hp / s.maxHp) * 100}%`;
+    document.getElementById('hp-text').textContent = `${Math.ceil(s.hp)} / ${s.maxHp}`;
+    document.getElementById('stamina-bar').style.width = `${(s.stamina / s.maxStamina) * 100}%`;
+    document.getElementById('keys-count').textContent = s.keysCollected;
+    document.getElementById('lives-count').textContent = s.lives;
+  },
+
+  updatePrompt(text) {
+    const box = document.getElementById('prompt-box');
+    const txt = document.getElementById('prompt-text');
+    if (text) {
+      box.style.display = 'block';
+      txt.textContent = text;
+    } else {
+      box.style.display = 'none';
+    }
+  },
+
+  showMessage(text) {
+    const msg = document.getElementById('game-message');
+    msg.textContent = text;
+    msg.style.display = 'block';
+    clearTimeout(this._msgTimeout);
+    this._msgTimeout = setTimeout(() => msg.style.display = 'none', 2500);
+  }
+};
+
+async function main() {
+  await loadEnvironment();
+  await buildPlayer();
+  try { if (window.GAME && GAME.build) await GAME.build(ctx); }
+  catch (e) { window.__err.push('build: ' + e); }
+  animate();
+  window.__ready = true;
+}
+main().catch(e => { window.__err.push('main: ' + e); window.__ready = true; });
+</script>
+</body>
+</html>
