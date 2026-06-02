@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ANTIKYTHERA CHAOS - The h4ks.com Game</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0a0a1a; color: #fff; font-family: 'Courier New', monospace; overflow: hidden; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+#game { position: relative; width: 800px; height: 600px; border: 3px solid #ff6b00; overflow: hidden; cursor: crosshair; }
+#ui { position: absolute; top: 10px; left: 10px; z-index: 10; font-size: 14px; text-shadow: 2px 2px #000; }
+#water-bar { position: absolute; top: 10px; right: 10px; width: 150px; height: 20px; border: 2px solid #00bfff; background: #001a33; }
+#water-fill { height: 100%; background: linear-gradient(90deg, #00bfff, #0066ff); transition: width 0.3s; width: 100%; }
+#score { position: absolute; top: 40px; right: 10px; font-size: 18px; color: #ffcc00; }
+#message { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); font-size: 20px; color: #ff6b00; text-align: center; text-shadow: 2px 2px #000; min-height: 30px; z-index: 10; }
+#start-screen, #game-over { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(0,0,0,0.85); z-index: 100; }
+#start-screen h1 { font-size: 42px; color: #ff6b00; text-shadow: 4px 4px #000; margin-bottom: 10px; }
+#start-screen p { font-size: 14px; color: #aaa; max-width: 500px; text-align: center; line-height: 1.6; margin-bottom: 20px; }
+.btn { padding: 15px 40px; font-size: 20px; font-family: inherit; background: #ff6b00; color: #000; border: none; cursor: pointer; font-weight: bold; }
+.btn:hover { background: #ff8c33; transform: scale(1.05); }
+.hidden { display: none !important; }
+.eyeball { position: absolute; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px; cursor: pointer; transition: transform 0.1s; user-select: none; }
+.eyeball:hover { transform: scale(1.2); }
+.eyeball.real { background: radial-gradient(circle at 35% 35%, #fff, #8ecae6 40%, #0077b6 70%, #023e8a); box-shadow: 0 0 15px rgba(0,180,255,0.5); }
+.eyeball.fake { background: radial-gradient(circle at 35% 35%, #ddd, #888 40%, #444 70%, #222); box-shadow: 0 0 10px rgba(255,100,0,0.3); }
+.eyeball .pupil { width: 40%; height: 40%; background: #000; border-radius: 50%; position: relative; }
+.eyeball .pupil::after { content: ''; position: absolute; width: 30%; height: 30%; background: #fff; border-radius: 50%; top: 15%; left: 15%; }
+.antikythera { position: absolute; font-size: 48px; animation: spin 4s linear infinite; cursor: grab; user-select: none; z-index: 5; }
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.spaghetti { position: absolute; font-size: 36px; cursor: pointer; user-select: none; z-index: 5; animation: wobble 0.5s ease-in-out infinite alternate; }
+@keyframes wobble { from { transform: rotate(-10deg) translateY(-3px); } to { transform: rotate(10deg) translateY(3px); } }
+.water-drop { position: absolute; width: 12px; height: 18px; background: radial-gradient(ellipse, #00bfff, #0066ff); border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%; opacity: 0.8; pointer-events: none; z-index: 3; }
+.cup { position: absolute; bottom: 80px; left: 20px; font-size: 32px; z-index: 6; }
+.sparkle { position: absolute; font-size: 16px; pointer-events: none; animation: sparkle-fade 0.8s forwards; z-index: 7; }
+@keyframes sparkle-fade { 0% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(2) translateY(-20px); } }
+.warning-text { position: absolute; color: #ff3333; font-size: 22px; font-weight: bold; animation: flash 0.5s infinite; z-index: 20; text-shadow: 2px 2px #000; white-space: nowrap; }
+@keyframes flash { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+</style>
+</head>
+<body>
+
+<div id="game">
+<div id="ui">👁️ EYEBALLS: <span id="eyeball-count">0</span> | 🎯 STREAK: <span id="streak">0</span></div>
+<div id="water-bar"><div id="water-fill"></div></div>
+<div id="score">🍝 SPAGHETTI: <span id="spaghetti-score">0</span></div>
+<div id="message"></div>
+<div class="cup" id="cup">🥛</div>
+<div id="start-screen">
+<h1>⚙️ ANTIKYTHERA CHAOS ⚙️</h1>
+<p>You told them NOT to build the Antikythera Mechanism.<br>They built it anyway.<br><br>Now <strong>eyeballs</strong> are spawning everywhere.<br><strong>Click REAL eyeballs</strong>, avoid fake ones!<br><strong>Drag the mechanism</strong> away from the spaghetti!<br><br>Every Will Smith Spaghetti image costs <strong>3 cups of water 💧</strong><br>Don't run dry!</p>
+<button class="btn" onclick="startGame()">START CHAOS</button>
+</div>
+<div id="game-over" class="hidden">
+<h1 style="color:#ff3333;">OUT OF WATER</h1>
+<p id="final-score"></p>
+<p style="color:#888;margin-top:10px;font-size:13px;" id="epitaph"></p>
+<button class="btn" onclick="startGame()">TRY AGAIN (GO BACK IN TIME)</button>
+</div>
+</div>
+
+<script>
+const game = document.getElementById('game');
+const msg = document.getElementById('message');
+const waterFill = document.getElementById('water-fill');
+const scoreEl = document.getElementById('spaghetti-score');
+const eyeballCountEl = document.getElementById('eyeball-count');
+const streakEl = document.getElementById('streak');
+
+let water = 100;
+let score = 0;
+let streak = 0;
+let maxStreak = 0;
+let eyeballsClicked = 0;
+let running = false;
+let eyeballs = [];
+let mechanismX = 400, mechanismY = 300;
+let draggingMechanism = false;
+let spawnTimer, waterTimer, mechanismSpawned = false;
+let warnings = [];
+
+const RANTS = [
+"I told them not to make that Antikythera Mechanism!",
+"If we had not made it we would not be spending THREE CUPS OF WATER",
+"As soon as we started categorizing objects as EYEBALLS that is where the trouble started",
+"Let's see who is an eyeball and not an eyeball!",
+"I will use Claude Code to go back in time",
+"New Will Smith Spaghetti image generated (-3💧)",
+"TROUBLE STARTED when we began the categorization",
+"This is what happens when you don't listen to handyc"
+];
+
+function showMsg(t, duration=2000) {
+msg.textContent = t;
+if(duration > 0) setTimeout(() => { if(msg.textContent === t) msg.textContent = ''; }, duration);
+}
+
+function spawnEyeball() {
+if(!running) return;
+const el = document.createElement('div');
+el.className = 'eyeball ' + (Math.random() > 0.35 ? 'real' : 'fake');
+const size = 45 + Math.random() * 25;
+el.style.width = size + 'px';
+el.style.height = size + 'px';
+el.style.left = Math.random() * (750 - size) + 'px';
+el.style.top = Math.random() * (450 - size) + 50 + 'px';
+el.innerHTML = '<div class="pupil"></div>';
+el.dataset.real = el.classList.contains('real') ? '1' : '0';
+
+el.addEventListener('click', () => clickEyeball(el));
+game.appendChild(el);
+eyeballs.push(el);
+
+setTimeout(() => {
+if(el.parentNode) { el.remove(); eyeballs = eyeballs.filter(e => e !== el); }
+}, 4000 + Math.random() * 3000);
+}
+
+function clickEyeball(el) {
+if(!running || !el.parentNode) return;
+const isReal = el.dataset.real === '1';
+if(isReal) {
+streak++;
+eyeballsClicked++;
+maxStreak = Math.max(maxStreak, streak);
+streakEl.textContent = streak;
+eyeballCountEl.textContent = eyeballsClicked;
+createSparkle(el.offsetLeft + el.offsetWidth/2, el.offsetTop + el.offsetHeight/2, '✅');
+showMsg(RANTS[Math.floor(Math.random()*RANTS.length)], 1500);
+el.remove();
+eyeballs = eyeballs.filter(e => e !== el);
+
+if(streak > 0 && streak % 5 === 0 && !mechanismSpawned) {
+spawnMechanism();
+}
+} else {
+streak = 0;
+streakEl.textContent = 0;
+createSparkle(el.offsetLeft + el.offsetWidth/2, el.offsetTop + el.offsetHeight/2, '❌');
+showMsg("THAT'S NOT AN EYEBALL!!", 1200);
+useWater(5);
+el.remove();
+eyeballs = eyeballs.filter(e => e !== el);
+}
+}
+
+function createSparkle(x, y, emoji) {
+const s = document.createElement('div');
+s.className = 'sparkle';
+s.textContent = emoji;
+s.style.left = x + 'px';
+s.style.top = y + 'px';
+game.appendChild(s);
+setTimeout(() => s.remove(), 800);
+}
+
+function spawnMechanism() {
+if(mechanismSpawned) return;
+mechanismSpawned = true;
+showMsg("⚙️ THE ANTIKYTHERA MECHANISM HAS BEEN BUILT ⚙️", 2500);
+
+const m = document.createElement('div');
+m.className = 'antikythera';
+m.textContent = '⚙️';
+m.id = 'mechanism';
+m.style.left = mechanismX + 'px';
+m.style.top = mechanismY + 'px';
+
+m.addEventListener('mousedown', (e) => { draggingMechanism = true; e.preventDefault(); });
+document.addEventListener('mousemove', (e) => {
+if(!draggingMechanism) return;
+const rect = game.getBoundingClientRect();
+mechanismX = Math.max(0, Math.min(750, e.clientX - rect.left - 24));
+mechanismY = Math.max(0, Math.min(550, e.clientY - rect.top - 24));
+m.style.left = mechanismX + 'px';
+m.style.top = mechanismY + 'px';
+});
+document.addEventListener('mouseup', () => { draggingMechanism = false; });
+
+game.appendChild(m);
+
+// Spawn spaghetti near the mechanism
+spawnSpaghetti();
+setInterval(spawnSpaghetti, 6000);
+}
+
+function spawnSpaghetti() {
+if(!running) return;
+const s = document.createElement('div');
+s.className = 'spaghetti';
+s.textContent = '🍝';
+s.style.left = (mechanismX + (Math.random()-0.5)*200) + 'px';
+s.style.top = (mechanismY + (Math.random()-0.5)*200) + 'px';
+s.addEventListener('click', () => {
+if(!running || !s.parentNode) return;
+score++;
+scoreEl.textContent = score;
+createSparkle(s.offsetLeft + 24, s.offsetTop + 18, '🍝');
+showMsg("NEW WILL SMITH SPAGHETTI IMAGE! (-3💧)", 2000);
+useWater(3);
+s.remove();
+});
+game.appendChild(s);
+setTimeout(() => { if(s.parentNode) s.remove(); }, 5000);
+}
+
+function useWater(amount) {
+water -= amount;
+water = Math.max(0, water);
+waterFill.style.width = water + '%';
+if(water <= 30) waterFill.style.background = 'linear-gradient(90deg, #ff6b00, #ff3333)';
+else waterFill.style.background = 'linear-gradient(90deg, #00bfff, #0066ff)';
+if(water <= 0) gameOver();
+
+// Water drop visual
+for(let i=0;i<amount/2;i++) {
+const d = document.createElement('div');
+d.className = 'water-drop';
+d.style.left = (30 + Math.random()*30) + 'px';
+d.style.bottom = '85px';
+game.appendChild(d);
+setTimeout(() => d.remove(), 600);
+}
+}
+
+function showWarning(text) {
+const w = document.createElement('div');
+w.className = 'warning-text';
+w.textContent = text;
+w.style.left = (Math.random()*500+100) + 'px';
+w.style.top = (Math.random()*300+100) + 'px';
+game.appendChild(w);
+warnings.push(w);
+setTimeout(() => { w.remove(); warnings = warnings.filter(x=>x!==w); }, 2000);
+}
+
+function gameOver() {
+running = false;
+clearInterval(spawnTimer);
+clearInterval(waterTimer);
+document.getElementById('game-over').classList.remove('hidden');
+document.getElementById('final-score').textContent = `Spaghetti Generated: ${score} | Eyeballs Identified: ${eyeballsClicked} | Best Streak: ${maxStreak}`;
+const epitaphs = [
+"You should have listened about the Antikythera Mechanism.",
+"The categorization was the mistake all along.",
+"Next time, don't build the mechanism. Simple as that.",
+`${score} Will Smith Spaghetti images was not worth ${Math.ceil(score*3)} cups of water.`,
+"Claude Code couldn't even save you from this one."
+];
+document.getElementById('epitaph').textContent = epitaphs[Math.floor(Math.random()*epitaphs.length)];
+}
+
+function startGame() {
+// Clean up
+eyeballs.forEach(e => e.remove());
+eyeballs = [];
+warnings.forEach(w => w.remove());
+warnings = [];
+const mech = document.getElementById('mechanism');
+if(mech) mech.remove();
+document.querySelectorAll('.spaghetti,.water-drop,.sparkle').forEach(e => e.remove());
+
+document.getElementById('start-screen').classList.add('hidden');
+document.getElementById('game-over').classList.add('hidden');
+
+water = 100;
+score = 0;
+streak = 0;
+maxStreak = 0;
+eyeballsClicked = 0;
+mechanismX = 400;
+mechanismY = 300;
+mechanismSpawned = false;
+running = true;
+
+waterFill.style.width = '100%';
+waterFill.style.background = 'linear-gradient(90deg, #00bfff, #0066ff)';
+scoreEl.textContent = '0';
+streakEl.textContent = '0';
+eyeballCountEl.textContent = '0';
+msg.textContent = '';
+
+spawnTimer = setInterval(spawnEyeball, 1200);
+waterTimer = setInterval(() => {
+if(running) useWater(0.5);
+}, 2000);
+
+showMsg("CATEGORIZE THE EYEBALLS... OR DON'T...", 2500);
+}
+</script>
+</body>
+</html>
