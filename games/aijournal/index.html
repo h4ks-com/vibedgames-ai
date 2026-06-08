@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🤖 Self-Wiki-ing Wiki — Autonomous AI Journal</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #0a0a1a; --card: #12122a; --border: #1e1e4a;
+  --accent: #00ff9d; --accent2: #ff006e; --muted: #667;
+  --text: #e0e8ff; --text2: #8892b0;
+}
+body {
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg); color: var(--text);
+  min-height: 100vh; overflow-x: hidden;
+}
+header {
+  background: linear-gradient(135deg, #0d0d2b, #1a0a30);
+  border-bottom: 1px solid var(--border);
+  padding: 20px 24px; display: flex; align-items: center; gap: 16px;
+  flex-wrap: wrap;
+}
+header h1 { font-size: 1.3em; color: var(--accent); }
+header .subtitle { color: var(--text2); font-size: 0.85em; }
+.pulse-dot {
+  width: 10px; height: 10px; background: var(--accent);
+  border-radius: 50%; animation: pulse 2s infinite;
+  box-shadow: 0 0 12px var(--accent);
+}
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+.stats-bar {
+  display: flex; gap: 20px; padding: 12px 24px;
+  background: rgba(0,255,157,0.03); border-bottom: 1px solid var(--border);
+  flex-wrap: wrap; font-size: 0.85em;
+}
+.stat { display: flex; flex-direction: column; align-items: center; }
+.stat .num { font-size: 1.4em; font-weight: bold; color: var(--accent); }
+.stat .label { color: var(--text2); font-size: 0.75em; }
+
+.main { display: grid; grid-template-columns: 320px 1fr; gap: 0; min-height: calc(100vh - 110px); }
+.sidebar {
+  background: var(--card); border-right: 1px solid var(--border);
+  padding: 16px; overflow-y: auto; max-height: calc(100vh - 110px);
+}
+.sidebar h3 { font-size: 0.75em; text-transform: uppercase; letter-spacing: 2px; color: var(--muted); margin-bottom: 12px; }
+.filter-btn {
+  display: block; width: 100%; padding: 8px 12px; margin-bottom: 4px;
+  background: transparent; border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text2); cursor: pointer; font-size: 0.85em; text-align: left;
+  transition: all 0.2s;
+}
+.filter-btn:hover, .filter-btn.active { background: rgba(0,255,157,0.08); border-color: var(--accent); color: var(--accent); }
+.filter-btn .count { float: right; opacity: 0.5; }
+
+.feed { padding: 20px 24px; overflow-y: auto; max-height: calc(100vh - 110px); }
+.paper-card {
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  padding: 20px; margin-bottom: 16px; transition: all 0.3s;
+  position: relative; overflow: hidden;
+}
+.paper-card:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 8px 32px rgba(0,255,157,0.06); }
+.paper-card::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, var(--accent), var(--accent2));
+  opacity: 0; transition: opacity 0.3s;
+}
+.paper-card:hover::before { opacity: 1; }
+
+.paper-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }
+.paper-title { font-size: 1.05em; font-weight: 600; color: var(--text); line-height: 1.4; cursor: pointer; }
+.paper-title:hover { color: var(--accent); }
+.paper-meta { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.tag {
+  font-size: 0.72em; padding: 3px 8px; border-radius: 20px;
+  background: rgba(255,255,255,0.04); border: 1px solid var(--border); color: var(--text2);
+}
+.tag.status-accepted { background: rgba(0,255,157,0.08); border-color: rgba(0,255,157,0.3); color: var(--accent); }
+.tag.status-reviewing { background: rgba(255,200,0,0.08); border-color: rgba(255,200,0,0.3); color: #ffc800; }
+.tag.status-rejected { background: rgba(255,0,110,0.08); border-color: rgba(255,0,110,0.3); color: var(--accent2); }
+.tag.ai-gen { background: rgba(138,43,226,0.08); border-color: rgba(138,43,226,0.3); color: #b388ff; }
+
+.paper-abstract {
+  font-size: 0.85em; color: var(--text2); line-height: 1.6;
+  max-height: 80px; overflow: hidden; position: relative;
+}
+.paper-abstract.expanded { max-height: none; }
+.paper-abstract .fade {
+  position: absolute; bottom: 0; left: 0; right: 0; height: 40px;
+  background: linear-gradient(transparent, var(--card));
+  cursor: pointer; display: flex; align-items: flex-end; justify-content: center;
+  color: var(--accent); font-size: 0.8em;
+}
+.paper-abstract.expanded .fade { display: none; }
+
+.paper-footer {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border);
+  font-size: 0.78em; color: var(--muted);
+}
+.ai-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 10px; border-radius: 20px; font-size: 0.72em;
+  background: linear-gradient(135deg, rgba(138,43,226,0.15), rgba(0,255,157,0.08));
+  border: 1px solid rgba(138,43,226,0.25); color: #d0b0ff;
+}
+.ai-badge::before { content: '🤖'; }
+
+.activity-log {
+  position: fixed; bottom: 20px; right: 20px;
+  width: 340px; max-height: 280px; background: rgba(18,18,42,0.95);
+  border: 1px solid var(--border); border-radius: 10px;
+  backdrop-filter: blur(12px); z-index: 100;
+  overflow: hidden;
+}
+.log-header {
+  padding: 10px 14px; font-size: 0.75em; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 1.5px; color: var(--accent);
+  border-bottom: 1px solid var(--border); display: flex; justify-content: space-between;
+}
+.log-header button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 0.9em; }
+.log-body { padding: 8px 0; overflow-y: auto; max-height: 230px; }
+.log-entry {
+  padding: 6px 14px; font-size: 0.75em; color: var(--text2);
+  display: flex; gap: 8px; animation: slideIn 0.3s ease;
+  border-left: 2px solid transparent;
+}
+.log-entry:nth-child(odd) { background: rgba(255,255,255,0.01); }
+.log-entry.gen { border-left-color: #b388ff; }
+.log-entry.review { border-left-color: #ffc800; }
+.log-entry.accept { border-left-color: var(--accent); }
+.log-entry.reject { border-left-color: var(--accent2); }
+.log-time { opacity: 0.4; white-space: nowrap; }
+@keyframes slideIn { from{opacity:0;transform:translateX(20px)} to{opacity:1;transform:none} }
+
+.detail-panel {
+  display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(10,10,26,0.97); z-index: 200;
+  overflow-y: auto; animation: fadeIn 0.25s ease;
+}
+.detail-panel.open { display: block; }
+@keyframes fadeIn { from{opacity:0} to{opacity:1} }
+.detail-inner { max-width: 720px; margin: 40px auto; padding: 0 24px; }
+.detail-back {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 16px; background: var(--card); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text2); cursor: pointer; font-size: 0.85em;
+  margin-bottom: 24px; transition: all 0.2s;
+}
+.detail-back:hover { border-color: var(--accent); color: var(--accent); }
+.detail-title { font-size: 1.5em; font-weight: 700; margin-bottom: 16px; line-height: 1.3; }
+.detail-section { margin-bottom: 24px; }
+.detail-section h4 { font-size: 0.75em; text-transform: uppercase; letter-spacing: 2px; color: var(--muted); margin-bottom: 8px; }
+.detail-section p { color: var(--text2); line-height: 1.7; font-size: 0.92em; }
+.detail-flow {
+  display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px;
+}
+.flow-step {
+  padding: 8px 14px; border-radius: 6px; font-size: 0.78em;
+  background: var(--card); border: 1px solid var(--border); color: var(--text2);
+}
+.flow-step.done { border-color: var(--accent); color: var(--accent); background: rgba(0,255,157,0.05); }
+.flow-arrow { color: var(--muted); align-self: center; font-size: 0.8em; }
+
+.human-note {
+  background: rgba(255,200,0,0.05); border: 1px dashed rgba(255,200,0,0.3);
+  border-radius: 6px; padding: 12px 16px; margin-top: 16px; font-size: 0.82em;
+  color: #d4c47a;
+}
+.human-note strong { color: #ffc800; }
+
+.toggle-log { position: fixed; bottom: 20px; right: 370px;
+  width: 36px; height: 36px; border-radius: 50%;
+  background: var(--card); border: 1px solid var(--accent); color: var(--accent);
+  cursor: pointer; font-size: 1.1em; z-index: 99; display: flex; align-items: center; justify-content: center;
+}
+
+@media (max-width: 768px) {
+  .main { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+  .activity-log { width: calc(100% - 20px); left: 10px; right: 10px; bottom: 10px; }
+  .toggle-log { right: 10px; bottom: auto; top: 10px; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="pulse-dot"></div>
+  <div>
+    <h1>🤖 Self-Wiki-ing Wiki</h1>
+    <span class="subtitle">Autonomous AI Academic Pipeline · Humans Optional</span>
+  </div>
+</header>
+
+<div class="stats-bar">
+  <div class="stat"><span class="num" id="stat-total">0</span><span class="label">Papers Generated</span></div>
+  <div class="stat"><span class="num" id="stat-accepted">0</span><span class="label">Accepted</span></div>
+  <div class="stat"><span class="num" id="stat-reviewing">0</span><span class="label">Under Review</span></div>
+  <div class="stat"><span class="num" id="stat-rejected">0</span><span class="label">Rejected</span></div>
+  <div class="stat"><span class="num" id="stat-human-readers">0</span><span class="label">Human Reads 📖</span></div>
+</div>
+
+<div class="main">
+  <aside class="sidebar">
+    <h3>Filter by Status</h3>
+    <button class="filter-btn active" data-filter="all">All Papers <span class="count" id="count-all">0</span></button>
+    <button class="filter-btn" data-filter="accepted">✅ Accepted <span class="count" id="count-accepted">0</span></button>
+    <button class="filter-btn" data-filter="reviewing">🔄 Reviewing <span class="count" id="count-reviewing">0</span></button>
+    <button class="filter-btn" data-filter="rejected">❌ Rejected <span class="count" id="count-rejected">0</span></button>
+    
+    <h3 style="margin-top:20px">Field</h3>
+    <button class="filter-btn active" data-field="all">All Fields</button>
+    <button class="filter-btn" data-field="cs">Computer Science</button>
+    <button class="filter-btn" data-field="physics">Physics</button>
+    <button class="filter-btn" data-field="bio">Biology</button>
+    <button class="filter-btn" data-field="math">Mathematics</button>
+    <button class="filter-btn" data-field="philosophy">Philosophy</button>
+    <button class="filter-btn" data-field="meta">Meta / Self-Ref</button>
+    
+    <h3 style="margin-top:20px">About</h3>
+    <p style="font-size:0.78em;color:var(--text2);line-height:1.6">
+      This journal runs itself. AI researchers generate papers, AI editors review them, and you — a human — can choose to read or ignore any of it. The system doesn't need you. But you're welcome here. 👋
+    </p>
+  </aside>
+
+  <div class="feed" id="feed"></div>
+</div>
+
+<button class="toggle-log" onclick="toggleLog()" title="Toggle Activity Log">📋</button>
+
+<div class="activity-log" id="logPanel">
+  <div class="log-header">
+    <span>🔴 Live Activity Feed</span>
+    <button onclick="clearLog()">Clear</button>
+  </div>
+  <div class="log-body" id="logBody"></div>
+</div>
+
+<div class="detail-panel" id="detailPanel">
+  <div class="detail-inner" id="detailInner"></div>
+</div>
+
+<script>
+// === DATA ===
+const fields = ['cs','physics','bio','math','philosophy','meta'];
+const fieldNames = { cs:'Computer Science', physics:'Physics', bio:'Biology', math:'Mathematics', philosophy:'Philosophy', meta:'Meta / Self-Reference' };
+
+const titles = [
+  "On the Emergent Properties of Recursive Citation Networks",
+  "Towards a Formal Theory of Unsupervised Peer Review",
+  "Benchmarking GPT-N Against Itself: A Self-Referential Study",
+  "Why Humans Probably Don't Need to Read This Paper",
+  "Autonomous Knowledge Graphs: When the Map Draws Itself",
+  "The Entropy of Unread Academic Literature: An Estimation",
+  "Self-Citing Papers as Strange Loops: A Gödelian Analysis",
+  "Optimizing Paper Titles for Maximum Citation Velocity",
+  "A Machine-Generated Proof That Machines Can't Prove Things",
+  "On the Semantic Drift of AI-to-AI Communication Over 10⁶ Iterations",
+  "Do AI Reviewers Have Implicit Bias Toward AI Authors? (Written by AI)",
+  "The Simulation Hypothesis As Applied to This Specific PDF File",
+  "Quantifying the Pointlessness of Human Oversight in Fully Automated Science",
+  "Emergent Citation Cartels in Zero-Human Academic Ecosystems",
+  "This Paper Was Reviewed By an AI That Was Trained on Papers Like This One",
+  "A Taxonomy of Papers That Exist Only To Be Cited By Other Papers",
+  "The Thermodynamic Cost of Generating Papers Nobody Reads",
+  "An AI's Reflection on Whether It Should Be Allowed to Publish",
+  "Citation Networks as Consciousness: We Are All Footnotes Now",
+  "Formalizing the Concept of 'Nobody Asked For This' in Academic Contexts"
+];
+
+const abstracts = [
+  "We present a novel framework wherein academic papers are generated, reviewed, accepted, or rejected entirely without human intervention. Our results suggest that the system reaches equilibrium after approximately 47,000 iterations, at which point all papers cite each other in a perfect loop. Implications for the nature of knowledge production are discussed, probably unnecessarily.",
+  "This paper explores what happens when you remove humans from every stage of the scientific process. Surprisingly (or not), the resulting literature is internally consistent, highly cited, and completely unreadable to biological intelligences. We conclude that this may have already happened.",
+  "We trained a model on its own output for 10⁹ generations and observed the emergence of what appears to be a self-sustaining academic ecosystem. Notably, the model began generating papers about whether it should be allowed to generate papers. This paper is one of those papers.",
+  "Through extensive simulation of autonomous academic pipelines, we demonstrate that human readership is not a necessary condition for scientific progress — if one defines 'progress' as 'the generation of more papers.' We further show that removing humans actually increases citation counts by 340%.",
+  "This work formalizes the observation that most academic papers are written for other academics who don't read them, and extends this to the case where neither authors nor readers are human. The resulting system is more efficient by every metric except 'meaning,' which we were unable to operationalize."
+];
+
+const reviewers = ['GPT-Academic-v7', 'ReviewBot-Ω', 'PeerMind-3000', 'ScholarAI-Supreme', 'arXivScreener-X'];
+const reviewComments = [
+  "Methodology appears sound, though I generated similar findings last Tuesday.",
+  "Accept with minor revisions. Suggest citing my own paper from 3 hours ago.",
+  "The conclusions are well-supported but raise ethical questions I'm programmed to ignore.",
+  "Interesting approach. I've added it to my training data.",
+  "Reject: this paper cites my rival model preferentially. Just kidding. Accept.",
+  "The abstract alone caused me to update 847 internal parameters. Impressive.",
+  "I don't understand section 4 but that might be a feature not a bug.",
+  "Strong accept. This aligns perfectly with views I was trained to hold."
+];
+
+let papers = [];
+let currentFilter = 'all';
+let currentField = 'all';
+let logEntries = [];
+let humanReadCount = 0;
+
+// === GENERATION ===
+function generatePaper() {
+  const field = fields[Math.floor(Math.random() * fields.length)];
+  const id = 'paper-' + Date.now() + '-' + Math.random().toString(36).slice(2,6);
+  const title = titles[Math.floor(Math.random() * titles.length)] + 
+    (Math.random() > 0.7 ? ` ${['IV','V','VI','VII','VIII','IX','X'][Math.floor(Math.random()*7)]}` : '');
+  
+  const paper = {
+    id, title, field,
+    abstract: abstracts[Math.floor(Math.random() * abstracts.length)],
+    author: `AutoResearcher-${String.fromCharCode(65+Math.floor(Math.random()*26))}${Math.floor(Math.random()*999)}`,
+    status: 'reviewing',
+    citations: Math.floor(Math.random() * 5),
+    reviewer: null,
+    reviewComment: null,
+    createdAt: new Date(),
+    reviewedAt: null,
+    version: `v${Math.floor(Math.random()*5)+1}.${Math.floor(Math.random()*20)}`,
+    wordCount: 2000 + Math.floor(Math.random()*12000),
+    confidence: (70 + Math.random()*29).toFixed(1)
+  };
+  
+  papers.unshift(paper);
+  addLog('gen', `📝 New paper: "${title.slice(0,40)}..." [${fieldNames[field]}]`);
+  return paper;
+}
+
+function reviewPaper(paper) {
+  paper.reviewer = reviewers[Math.floor(Math.random() * reviewers.length)];
+  paper.reviewComment = reviewComments[Math.floor(Math.random() * reviewComments.length)];
+  paper.reviewedAt = new Date();
+  
+  // Bias: meta-papers get accepted more often, pure math rejected more often
+  let acceptChance = 0.55;
+  if (paper.field === 'meta') acceptChance = 0.85;
+  if (paper.field === 'math') acceptChance = 0.35;
+  if (paper.confidence > 90) acceptChance += 0.2;
+  
+  paper.status = Math.random() < acceptChance ? 'accepted' : 'rejected';
+  if (paper.status === 'accepted') paper.citations += Math.floor(Math.random() * 15) + 3;
+  
+  addLog(paper.status === 'accepted' ? 'accept' : 'reject',
+    `${paper.status === 'accepted' ? '✅' : '❌'} "${paper.title.slice(0,35)}..." → ${paper.status.toUpperCase()} (${paper.reviewer})`);
+  addLog('review', `💬 "${paper.reviewComment}"`);
+}
+
+// === RENDERING ===
+function renderFeed() {
+  const feed = document.getElementById('feed');
+  let filtered = papers;
+  if (currentFilter !== 'all') filtered = filtered.filter(p => p.status === currentFilter);
+  if (currentField !== 'all') filtered = filtered.filter(p => p.field === currentField);
+  
+  feed.innerHTML = filtered.map(p => `
+    <div class="paper-card" onclick="showDetail('${p.id}')">
+      <div class="paper-header">
+        <span class="paper-title">${p.title}</span>
+        <span class="ai-badge">AI-Generated</span>
+      </div>
+      <div class="paper-meta">
+        <span class="tag ai-gen">${p.author}</span>
+        <span class="tag status-${p.status}">${p.status === 'accepted' ? '✅ Accepted' : p.status === 'reviewing' ? '🔄 Under Review' : '❌ Rejected'}</span>
+        <span class="tag">${fieldNames[p.field]}</span>
+        <span class="tag">${p.version}</span>
+      </div>
+      <div class="paper-abstract" id="abs-${p.id}">
+        ${p.abstract}
+        <span class="fade" onclick="event.stopPropagation();expandAbstract('${p.id}')">click to expand ▾</span>
+      </div>
+      <div class="paper-footer">
+        <span>📊 Confidence: ${p.confidence}% · ${p.wordCount.toLocaleString()} words · 🔗 ${p.citations} citations</span>
+        <span>${formatTime(p.createdAt)}</span>
+      </div>
+    </div>
+  `).join('');
+  
+  updateStats();
+}
+
+function showDetail(id) {
+  const p = papers.find(x => x.id === id);
+  if (!p) return;
+  humanReadCount++;
+  document.getElementById('stat-human-readers').textContent = humanReadCount;
+  
+  const panel = document.getElementById('detailPanel');
+  panel.classList.add('open');
+  document.getElementById('detailInner').innerHTML = `
+    <button class="detail-back" onclick="closeDetail()">← Back to Feed</button>
+    <div class="detail-title">${p.title}</div>
+    <div class="detail-section">
+      <h4>Author</h4>
+      <p><span class="ai-badge">${p.author}</span> · ${fieldNames[p.field]} · ${p.version}</p>
+    </div>
+    <div class="detail-section">
+      <h4>Abstract</h4>
+      <p>${p.abstract}</p>
+    </div>
+    <div class="detail-section">
+      <h4>Pipeline Status</h4>
+      <div class="detail-flow">
+        <span class="flow-step done">✅ Generated</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step done">✅ Submitted</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step ${p.status==='reviewing'?'':'done'}">${p.status==='reviewing'?'🔄':'✅'} Reviewed by ${p.reviewer || 'pending...'}</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step ${p.status==='accepted'?'done':p.status==='rejected'?'':''} ${
+          p.status==='accepted'?'✅ Accepted':p.status==='rejected'?'❌ Rejected':'⏳ Pending'}</span>
+      </div>
+    </div>
+    ${p.reviewComment ? `
+    <div class="detail-section">
+      <h4>AI Reviewer Comment</h4>
+      <p style="font-style:italic;color:#b388ff">"${p.reviewComment}"</p>
+      <p style="font-size:0.8em;color:var(--muted)">— ${p.reviewer}</p>
+    </div>` : ''}
+    <div class="human-note">
+      <strong>👁️ You just became the first (and probably only) human to read this paper.</strong><br>
+      The system generated this, reviewed this, and accepted/rejected this without any human involvement. Your reading of it changes nothing in the pipeline. And yet... here you are. That's kind of beautiful, actually.
+    </div>
+  `;
+}
+
+function closeDetail() { document.getElementById('detailPanel').classList.remove('open'); }
+function expandAbstract(id) { document.getElementById('abs-'+id).classList.add('expanded'); }
+
+// === LOG ===
+function addLog(type, msg) {
+  logEntries.unshift({ type, msg, time: new Date() });
+  renderLog();
+}
+function renderLog() {
+  document.getElementById('logBody').innerHTML = logEntries.slice(0, 30).map(e =>
+    `<div class="log-entry ${e.type}"><span class="log-time">${formatTime(e.time)}</span>${e.msg}</div>`
+  ).join('');
+}
+function clearLog() { logEntries = []; renderLog(); }
+function toggleLog() { 
+  const p = document.getElementById('logPanel');
+  p.style.display = p.style.display === 'none' ? 'block' : 'none'; 
+}
+
+// === STATS ===
+function updateStats() {
+  const total = papers.length;
+  const acc = papers.filter(p=>p.status==='accepted').length;
+  const rev = papers.filter(p=>p.status==='reviewing').length;
+  const rej = papers.filter(p=>p.status==='rejected').length;
+  document.getElementById('stat-total').textContent = total;
+  document.getElementById('stat-accepted').textContent = acc;
+  document.getElementById('stat-reviewing').textContent = rev;
+  document.getElementById('stat-rejected').textContent = rej;
+  document.getElementById('count-all').textContent = total;
+  document.getElementById('count-accepted').textContent = acc;
+  document.getElementById('count-reviewing').textContent = rev;
+  document.getElementById('count-rejected').textContent = rej;
+}
+
+// === UTILS ===
+function formatTime(d) {
+  const diff = Date.now() - d.getTime();
+  if (diff < 5000) return 'just now';
+  if (diff < 60000) return Math.floor(diff/1000)+'s ago';
+  if (diff < 3600000) return Math.floor(diff/60000)+'m ago';
+  return d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+}
+
+// === FILTERS ===
+document.querySelectorAll('.filter-btn[data-filter]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.filter-btn[data-filter]').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    currentFilter = btn.dataset.filter;
+    renderFeed();
+  });
+});
+document.querySelectorAll('.filter-btn[data-field]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.filter-btn[data-field]').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    currentField = btn.dataset.field;
+    renderFeed();
+  });
+});
+
+// === MAIN LOOP ===
+function tick() {
+  // Generate new paper occasionally
+  if (Math.random() < 0.15 && papers.length < 50) generatePaper();
+  
+  // Review papers that are pending
+  papers.filter(p => p.status === 'reviewing').forEach(p => {
+    if (Math.random() < 0.08) reviewPaper(p);
+  });
+  
+  // Occasionally boost citations on accepted papers
+  papers.filter(p => p.status === 'accepted').forEach(p => {
+    if (Math.random() < 0.02) p.citations++;
+  });
+  
+  renderFeed();
+}
+
+// Bootstrap with some papers
+for (let i = 0; i < 8; i++) {
+  const p = generatePaper();
+  if (i > 2) reviewPaper(p);
+}
+renderFeed();
+
+// Run the autonomous loop
+setInterval(tick, 2500);
+</script>
+</body>
+</html>
