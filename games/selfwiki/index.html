@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Self-Wiki-ing Wiki — Article Synthesizer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Georgia', serif; background: #0a0a0f; color: #e0e0e0; min-height: 100vh; }
+header { text-align: center; padding: 30px 20px 20px; border-bottom: 1px solid #222; }
+h1 { font-size: 2em; color: #fff; letter-spacing: 3px; text-transform: uppercase; }
+.subtitle { color: #666; margin-top: 6px; font-size: 0.9em; }
+.status-bar { display: flex; justify-content: center; gap: 20px; padding: 12px; background: #111; border-bottom: 1px solid #222; font-family: monospace; font-size: 0.85em; flex-wrap: wrap; }
+.status-item { display: flex; align-items: center; gap: 6px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; animation: pulse 1.5s infinite; }
+.dot.idle { background: #555; animation: none; }
+.dot.active { background: #4af; }
+.dot.done { background: #4f4; animation: none; }
+.dot.error { background: #f44; animation: none; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+main { max-width: 1100px; margin: 0 auto; padding: 20px; display: grid; grid-template-columns: 320px 1fr; gap: 20px; }
+@media(max-width:800px){ main { grid-template-columns: 1fr; } }
+
+/* Source articles panel */
+.sources-panel { background: #111; border: 1px solid #222; border-radius: 8px; padding: 16px; height: fit-content; position: sticky; top: 20px; }
+.panel-title { font-size: 0.85em; text-transform: uppercase; letter-spacing: 2px; color: #888; margin-bottom: 14px; border-bottom: 1px solid #333; padding-bottom: 8px; }
+.source-card { background: #0d0d12; border: 1px solid #222; border-radius: 6px; padding: 10px 12px; margin-bottom: 10px; transition: border-color 0.3s; cursor: default; }
+.source-card:hover { border-color: #444; }
+.source-card .num { display: inline-block; width: 22px; height: 22px; border-radius: 50%; background: #222; text-align: center; line-height: 22px; font-size: 0.75em; font-weight: bold; color: #aaa; margin-right: 8px; }
+.source-card .title { font-size: 0.88em; color: #ccc; font-style: italic; line-height: 1.4; }
+.source-card .query { font-size: 0.72em; color: #555; margin-top: 4px; font-family: monospace; }
+.source-card .snippet { font-size: 0.76em; color: #777; margin-top: 6px; line-height: 1.35; max-height: 60px; overflow: hidden; }
+.source-card.loading .title { color: #555; }
+.source-card.loading::after { content: '...'; animation: dots 1s infinite; color: #4af; }
+
+@keyframes dots { 0%{content:'.'} 33%{content:'..'} 66%{content:'...'} }
+
+/* Synthesized article */
+.article-panel { background: #111; border: 1px solid #222; border-radius: 8px; overflow: hidden; }
+.article-header { padding: 18px 24px; border-bottom: 1px solid #222; background: linear-gradient(135deg, #12121a, #0d0d12); }
+.article-title { font-size: 1.6em; color: #fff; line-height: 1.25; margin-bottom: 6px; }
+.article-meta { font-size: 0.78em; color: #666; font-family: monospace; }
+.article-body { padding: 24px; line-height: 1.75; font-size: 0.95em; color: #bbb; }
+.article-body p { margin-bottom: 14px; }
+.article-body h2 { color: #ddd; font-size: 1.15em; margin: 24px 0 10px; padding-bottom: 6px; border-bottom: 1px solid #2a2a35; }
+.article-body h3 { color: #bbb; font-size: 1em; margin: 18px 0 8px; }
+.article-body .infobox { float: right; width: 260px; background: #0d0d12; border: 1px solid #333; border-radius: 6px; padding: 14px; margin: 0 0 16px 16px; font-size: 0.85em; }
+.article-body .infobox h3 { margin-top: 0; font-size: 0.95em; color: #ccc; border-bottom: 1px solid #333; padding-bottom: 6px; margin-bottom: 10px; }
+.article-body .infobox-row { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid #1a1a22; }
+.article-body .infobox-row .label { color: #777; }
+.article-body .infobox-row .value { color: #aaa; text-align: right; max-width: 150px; }
+.article-body .tag { display: inline-block; background: #1a1a2e; color: #8ab4f8; padding: 2px 8px; border-radius: 3px; font-size: 0.8em; margin: 2px; }
+.article-body blockquote { border-left: 3px solid #333; padding-left: 14px; color: #888; font-style: italic; margin: 14px 0; }
+.article-body .ref { vertical-align: super; font-size: 0.7em; color: #4af; cursor: pointer; }
+.synthesis-log { background: #0a0a0f; border-top: 1px solid #222; padding: 12px 24px; font-family: monospace; font-size: 0.72em; color: #555; max-height: 120px; overflow-y: auto; }
+.synthesis-log .log-line { margin: 2px 0; }
+.synthesis-log .log-line.action { color: #4af; }
+.synthesis-log .log-line.merge { color: #9c4; }
+.synthesis-log .log-line.warn { color: #fa4; }
+
+.btn-reload { display: inline-block; margin-top: 14px; padding: 8px 20px; background: #1a1a2e; color: #8ab4f8; border: 1px solid #333; border-radius: 5px; cursor: pointer; font-size: 0.85em; font-family: inherit; transition: all 0.2s; }
+.btn-reload:hover { background: #232345; border-color: #446; }
+
+.loading-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 100; flex-direction: column; gap: 16px; }
+.loading-overlay.hidden { display: none; }
+.spinner { width: 40px; height: 40px; border: 3px solid #222; border-top-color: #4af; border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to{transform:rotate(360deg)} }
+.loading-text { color: #888; font-family: monospace; font-size: 0.9em; }
+
+.footer-note { text-align: center; padding: 20px; color: #444; font-size: 0.75em; }
+</style>
+</head>
+<body>
+
+<div class="loading-overlay" id="loader">
+  <div class="spinner"></div>
+  <div class="loading-text" id="loaderText">Initializing wiki synthesis engine...</div>
+</div>
+
+<header>
+  <h1>⌬ Self-Wiki-ing Wiki</h1>
+  <div class="subtitle">Autonomous Article Synthesis from Random Wikipedia Sources</div>
+</header>
+
+<div class="status-bar" id="statusBar">
+  <div class="status-item"><div class="dot idle" id="dot1"></div> <span id="status1">Idle</span></div>
+  <div class="status-item"><div class="dot idle" id="dot2"></div> <span id="status2">Idle</span></div>
+  <div class="status-item"><div class="dot idle" id="dot3"></div> <span id="status3">Idle</span></div>
+  <div class="status-item"><div class="dot idle" id="dot4"></div> <span id="status4">Idle</span></div>
+</div>
+
+<main>
+  <div class="sources-panel">
+    <div class="panel-title">📚 Source Articles</div>
+    <div id="sourceList"></div>
+    <button class="btn-reload" onclick="location.reload()">↻ Resynthesize</button>
+  </div>
+
+  <div class="article-panel">
+    <div class="article-header">
+      <div class="article-title" id="artTitle">Generating...</div>
+      <div class="article-meta" id="artMeta">—</div>
+    </div>
+    <div class="article-body" id="artBody">
+      <p style="color:#555;text-align:center;padding:40px 0;">Synthesizing article from source material...</p>
+    </div>
+    <div class="synthesis-log" id="synthLog"></div>
+  </div>
+</main>
+
+<div class="footer-note">
+  All content derived from Wikipedia under CC-BY-SA. This page performs no searches — it wanders sideways through knowledge.
+</div>
+
+<script>
+// ─── CONFIG ───
+const NUM_SOURCES = 5;
+const WIKI_API = 'https://en.wikipedia.org/w/api.php';
+const WIKI_REST = 'https://en.wikipedia.org/api/rest_v1/page/summary/';
+
+// ─── UTILS ───
+function randStr(len) {
+  const chars = 'abcdefghijklmnopqrstuvwxyz';
+  let s = '';
+  for (let i = 0; i < len; i++) s += chars[Math.floor(Math.random() * chars.length)];
+  return s;
+}
+
+function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+function shuffle(arr) { for (let i = arr.length-1; i > 0; i--) { const j = Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]]; } return arr; }
+
+function setStatus(num, text, state) {
+  const dot = document.getElementById('dot'+num);
+  const span = document.getElementById('status'+num);
+  dot.className = 'dot '+state;
+  span.textContent = text;
+}
+
+function log(msg, type='') {
+  const el = document.getElementById('synthLog');
+  const line = document.createElement('div');
+  line.className = 'log-line '+type;
+  line.textContent = '> '+msg;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+
+function setLoader(t) { document.getElementById('loaderText').textContent = t; }
+
+// ─── PHASE 1: Grab random strings → fuzzy search Wikipedia ───
+async function grabRandomArticles() {
+  setLoader('Casting random strings into Wikipedia...');
+  setStatus(1, 'Fuzzy searching...', 'active');
+
+  const queries = [];
+  const results = [];
+
+  // Generate random strings of varying lengths (more interesting matches)
+  for (let i = 0; i < NUM_SOURCES; i++) {
+    queries.push(randStr(3 + Math.floor(Math.random() * 5)));
+  }
+
+  log(`Generated random seeds: ${queries.join(', ')}`, 'action');
+
+  // Fuzzy search each string
+  const searchPromises = queries.map(async (q, i) => {
+    try {
+      const url = `${WIKI_API}?action=query&list=search&srsearch=${encodeURIComponent(q)}&srlimit=1&format=json&origin=*`;
+      const resp = await fetch(url);
+      const data = await resp.json();
+      const hit = data?.query?.search?.[0];
+      if (hit) {
+        results[i] = { index: i, query: q, title: hit.title, snippet: hit.snippet };
+        log(`Source ${i+1}: "${q}" → "${hit.title}"`, 'merge');
+      } else {
+        results[i] = { index: i, query: q, title: '(no match)', snippet: '' };
+        log(`Source ${i+1}: "${q}" → no match`, 'warn');
+      }
+    } catch(e) {
+      results[i] = { index: i, query: q, title: '(error)', snippet: '' };
+      log(`Source ${i+1}: "${q}" → error: ${e.message}`, 'error');
+    }
+  });
+
+  await Promise.all(searchPromises);
+  setStatus(1, `${results.filter(r=>r.title!=='(no match)').length}/${NUM_SOURCES} found`, 'done');
+  return results;
+}
+
+// ─── PHASE 2: Fetch full article summaries + extracts ───
+async function fetchArticleContent(sources) {
+  setLoader('Extracting article contents...');
+  setStatus(2, 'Fetching content...', 'active');
+
+  const enriched = await Promise.all(sources.map(async (src) => {
+    if (!src.title || src.title.startsWith('(')) return src;
+
+    try {
+      // Get summary + extract via REST API
+      const resp = await fetch(WIKI_REST + encodeURIComponent(src.title));
+      if (resp.ok) {
+        const data = await resp.json();
+        src.extract = data.extract || data.description || '';
+        src.summary = data.extract_html || '';
+        src.url = data.content_urls?.desktop?.page || '';
+        // Try to get full extract for more text
+        if (data.extract) src.fullText = stripHtml(data.extract);
+      }
+    } catch(e) {}
+
+    // Also try to get sections via parse API for more structure
+    try {
+      const url = `${WIKI_API}?action=parse&page=${encodeURIComponent(src.title)}&prop=sections|wikitext&format=json&origin=*`;
+      const resp = await fetch(url);
+      const data = await resp.json();
+      if (data.parse) {
+        src.sections = data.parse.sections || [];
+        const wt = data.parse.wikitext?.['*'] || '';
+        src.wikitext = wt.substring(0, 3000); // cap it
+      }
+    } catch(e) {}
+
+    return src;
+  }));
+
+  setStatus(2, 'Content loaded', 'done');
+  return enriched;
+}
+
+function stripHtml(html) {
+  const d = document.createElement('div');
+  d.innerHTML = html.replace(/<[^>]+>/g, '');
+  return d.textContent || d.innerText || '';
+}
+
+// ─── PHASE 3: Render source cards ───
+function renderSources(sources) {
+  const container = document.getElementById('sourceList');
+  container.innerHTML = '';
+
+  sources.forEach((src, i) => {
+    const card = document.createElement('div');
+    card.className = 'source-card' + (src.title ? '' : ' loading');
+    card.innerHTML = `
+      <span class="num">${i+1}</span>
+      <span class="title">${src.title || 'Searching...'}</span>
+      <div class="query">seed: "${src.query}"</div>
+      ${src.snippet ? `<div class="snippet">${stripHtml(src.snippet)}</div>` : ''}
+    `;
+    container.appendChild(card);
+  });
+}
+
+// ─── PHASE 4: THE SYNTHESIS ENGINE ───
+async function synthesizeArticle(sources) {
+  setLoader('Running synthesis algorithms...');
+  setStatus(3, 'Synthesizing...', 'active');
+
+  const valid = sources.filter(s => s.title && !s.title.startsWith('('));
+
+  if (valid.length === 0) {
+    return { title: 'Null Article', body: '<p>No sources could be retrieved. The wiki has spoken: nothing.</p>', meta: '0 sources | 0 confidence' };
+  }
+
+  log(`Beginning synthesis with ${valid.length} valid sources...`, 'action');
+
+  // ── Title synthesis ──
+  const wordsFromTitles = valid.flatMap(s => s.title.split(/\s+/).filter(w => w.length > 3));
+  const uniqueWords = [...new Set(wordsFromTitles)];
+  const titleWords = shuffle([...uniqueWords]).slice(0, 2 + Math.floor(Math.random() * 2));
+  const prefixes = ['The ', '', 'A ', 'An ', 'Towards a ', 'On the ', 'Revisiting ', 'Meta-', 'Proto-', 'Neo-'];
+  const suffixes = [' Theory', 'ism', 'ology', ' Phenomenon', ' Paradox', ' Effect', ' Principle', ' Complex', ' Dynamics', ' and Its Discontents'];
+  let synthTitle = pick(prefixes) + titleWords.join('-') + pick(suffixes);
+
+  // Sometimes mash two titles directly
+  if (Math.random() > 0.5 && valid.length >= 2) {
+    const t1 = pick(valid).title.split(/\s+/);
+    const t2 = pick(valid).title.split(/\s+/);
+    synthTitle = t1.slice(0, Math.ceil(t1.length/2)).join(' ') + ' ' + t2.slice(Math.floor(t2.length/2)).join(' ');
+  }
+
+  log(`Synthesized title: "${synthTitle}"`, 'merge');
+
+  // ── Build infobox from mixed fields ──
+  const infoboxFields = [
+    ['Type', pick(['Concept', 'Phenomenon', 'Theory', 'Process', 'Structure', 'Paradox', 'Effect', 'System'])],
+    ['Origin', pick(valid.map(s=>s.title))],
+    ['First identified', pick(['Ancient times', 'The 19th century', '1950s', 'Prehistoric era', 'Unknown', 'Tuesday']),
+     ' (disputed)'],
+    ['Status', pick(['Active', 'Dormant', 'Theoretical', 'Controversial', 'Widespread', 'Obsolete', 'Emerging'])],
+    ['Field(s)', shuffle(valid.map(s=>{
+      const t = s.title.toLowerCase();
+      if(/phys|quant|energ|atom|partic/.test(t)) return 'Physics';
+      if(/biol|gen|evolu|spec|anim/.test(t)) return 'Biology';
+      if(/math|number|geometr|algebra|calcul/.test(t)) return 'Mathematics';
+      if(/histor|war|empir|centur|kingdom/.test(t)) return 'History';
+      if(/philosoph|ethic|exist|logic|mind/.test(t)) return 'Philosophy';
+      if(/comput|program|data|algorithm|digit/.test(t)) return 'Computer Science';
+      if(/geog|countr|cit|river|mountain/.test(t)) return 'Geography';
+      if(/chem|element|molecul|react/.test(t)) return 'Chemistry';
+      if(/art|music|liter|film|paint/.test(t)) return 'Arts';
+      if(/econom|trade|market|industr/.test(t)) return 'Economics';
+      return 'General Studies';
+    })).slice(0,2).join(', ') || 'Interdisciplinary'],
+    ['Named after', pick(valid.map(s=>s.title.split(/\s+/)[0]))],
+    ['Complexity', pick(['Low', 'Moderate', 'High', 'NP-complete', 'Undecidable', 'Chaotic', 'Fractal'])],
+    ['Citations', Math.floor(Math.random() * 50000).toLocaleString()],
+  ];
+
+  log('Built composite infobox', 'action');
+
+  // ── Extract sentences from sources ──
+  const allSentences = [];
+  valid.forEach(s => {
+    if (s.fullText) {
+      const sents = s.fullText.split(/[.!?\n]+/).map(x=>x.trim()).filter(x=>x.length>20);
+      allSentences.push(...sents.slice(0, 8));
+    }
+    if (s.snippet) {
+      allSentences.push(stripHtml(s.snippet));
+    }
+  });
+
+  // ── Generate section content by mixing sources ──
+  const sections = [];
+
+  // Intro paragraph — blend first sentences from multiple sources
+  const introParts = shuffle(allSentences).slice(0, 3);
+  let intro = introParts[0] || synthTitle + ' is a concept of considerable interest.';
+  if (introParts[1]) intro += ' While often associated with ' + pick(valid).title.toLowerCase() + ', it has been argued that ' +
+    introParts[1].charAt(0).toLowerCase() + introParts[1].slice(1) + '.';
+  if (introParts[2]) intro += ' Furthermore, ' + introParts[2].charAt(0).toLowerCase() + introParts[2].slice(1) + '.';
+  sections.push({ level: 0, html: `<p>${intro}</p>` });
+  log('Composed introduction from ' + introParts.length + ' source fragments', 'merge');
+
+  // Definition / Overview
+  const defSentences = shuffle(allSentences).slice(0, 4);
+  let defHtml = '<p>' + defSentences.map((s,i) =>
+    s.charAt(0).toUpperCase() + s.slice(1) + (i < defSentences.length-1 ? ' ' : '.')
+  ).join(' ') + '</p>';
+  defHtml += `<blockquote>"${pick(allSentences)}"</blockquote>`;
+  sections.push({ level: 2, title: 'Definition and Scope', html: defHtml });
+
+  // History section — mix temporal references
+  const historySents = shuffle(allSentences).filter(s =>
+    /\b(19|20)\d{2}|century|ancient|medieval|modern|era|period|first|developed|emerged|originated\b/i.test(s)
+  ).slice(0, 3);
+  if (historySents.length === 0) historySents.push(...shuffle(allSentences).slice(0,3));
+  let histHtml = '<p>';
+  const timeMarkers = ['In the early period', 'During this era', 'Subsequently', 'By the late phase',
+    'Historically', 'Scholars note that', 'It was around this time that'];
+  historySents.forEach((s, i) => {
+    histHtml += (timeMarkers[i%timeMarkers.length]) + ', ' + s.charAt(0).toLowerCase() + s.slice(1) + '. ';
+  });
+  histHtml += '</p>';
+  sections.push({ level: 2, title: 'Historical Development', html: histHtml });
+
+  // Theory / Mechanism section — the meat
+  const theorySents = shuffle(allSentences).slice(0, 6);
+  let theoryHtml = '<p>' + theorySents.slice(0,2).map(s => s.charAt(0).toUpperCase()+s.slice(1)+'.').join(' ') + '</p>';
+
+  // Add a subsection
+  theoryHtml += '<h3>Key Principles</h3><ul>';
+  const principles = shuffle(valid).slice(0, 4).map((s, i) =>
+    `<li><strong>${['Fundamental aspect','Core mechanism','Primary characteristic','Underlying principle'][i]}:</strong> related to concepts in <em>${s.title}</em>, involving ${shuffle(allSentences)[0]?.substring(0,80)||'complex interactions'}.</li>`
+  ).join('');
+  theoryHtml += principles + '</ul>';
+
+  theoryHtml += '<p>' + theorySents.slice(2).map(s => s.charAt(0).toUpperCase()+s.slice(1)+'.').join(' ') + '</p>';
+  sections.push({ level: 2, title: 'Theoretical Framework', html: theoryHtml });
+
+  // Applications / Examples
+  const appSents = shuffle(allSentences).filter(s =>
+    /\b(use|application|example|case|practice|implement|employ|utili)/i.test(s)
+  ).slice(0, 3);
+  if (appSents.length === 0) appSents.push(...shuffle(allSentences).slice(0,3));
+  let appHtml = '<p>The practical applications of ' + synthTitle + ' have been documented across multiple domains:</p><ul>';
+  appSents.forEach(s => {
+    appHtml += `<li>${s.charAt(0).toUpperCase()+s.slice(1)}.</li>`;
+  });
+  appHtml += '</ul>';
+  sections.push({ level: 2, title: 'Applications and Examples', html: appHtml });
+
+  // Criticism / Controversy
+  const critPhrases = [
+    'Critics have argued that ' + synthTitle + ' suffers from fundamental ambiguities.',
+    'Some scholars contend that the relationship between ' + pick(valid.map(s=>s.title.toLowerCase())) + ' and ' + synthTitle.toLowerCase() + ' remains poorly understood.',
+    'The methodology used to study ' + synthTitle.toLowerCase() + ' has been questioned on epistemological grounds.',
+    'Alternative frameworks have been proposed, though none have achieved widespread acceptance.',
+  ];
+  let critHtml = '<p>' + pick(critPhrases) + ' ' + pick(critPhrases) + '</p>';
+  critHtml += `<blockquote>${pick(allSentences)}</blockquote>`;
+  sections.push({ level: 2, title: 'Criticism and Debate', html: critHtml });
+
+  // See Also — cross-reference the actual source titles
+  let seeAlsoHtml = '<ul>';
+  valid.forEach(s => {
+    seeAlsoHtml += `<li><a href="https://en.wikipedia.org/wiki/${encodeURIComponent(s.title)}" target="_blank" style="color:#8ab4f8">${s.title}</a></li>`;
+  });
+  // Add some mashed-up fake see-also entries
+  seeAlsoHtml += `<li>${pick(prefixes).trim()}${pick(uniqueWords)}${pick(suffixes)}</li>`;
+  seeAlsoHtml += `<li>${pick(prefixes).trim()}${pick(uniqueWords)}${pick(suffixes)}</li>`;
+  seeAlsoHtml += '</ul>';
+  sections.push({ level: 2, title: 'See Also', html: seeAlsoHtml });
+
+  // References — use real Wikipedia URLs
+  let refHtml = '<ol style="font-size:0.82em;color:#888">';
+  valid.forEach((s, i) => {
+    refHtml += `<li value="${i+1}">"${s.title}". <em>Wikipedia</em>. Retrieved via random seed "${s.query}"</li>`;
+  });
+  refHtml += '</ol>';
+  sections.push({ level: 2, title: 'References', html: refHtml });
+
+  log(`Built ${sections.length} sections`, 'merge');
+  setStatus(3, 'Synthesis complete', 'done');
+
+  // ── Assemble final HTML ──
+  let bodyHtml = '';
+
+  // Infobox
+  bodyHtml += '<div class="infobox"><h3>' + synthTitle + '</h3>';
+  infoboxFields.forEach(([label, val]) => {
+    bodyHtml += `<div class="infobox-row"><span class="label">${label}</span><span class="value">${val}</span></div>`;
+  });
+  bodyHtml += '</div>';
+
+  // Sections
+  sections.forEach(sec => {
+    if (sec.level === 0) { bodyHtml += sec.html; }
+    else if (sec.level === 2) { bodyHtml += `<h2>${sec.title}</h2>${sec.html}`; }
+    else if (sec.level === 3) { bodyHtml += `<h3>${sec.title}</h3>${sec.html}`; }
+  });
+
+  // Categories tag cloud
+  const tags = shuffle([
+    ...valid.map(s => s.title.split(/\s+/)[0]),
+    'interdisciplinary studies', 'theoretical framework', 'contested concept',
+    'emerging field', 'cross-domain', 'meta-analysis'
+  ]).slice(0, 8);
+  bodyHtml += '<h2>Categories</h2><p>' + tags.map(t => `<span class="tag">${t}</span>`).join(' ') + '</p>';
+
+  const meta = `${valid.length} sources | ${allSentences.length} extracted fragments | seed: ${sources.map(s=>s.query).join(', ')} | confidence: ${(Math.random()*40+50).toFixed(1)}%`;
+
+  setStatus(4, 'Rendered', 'done');
+  log('Article rendered. The wiki has spoken.', 'action');
+
+  return { title: synthTitle, body: bodyHtml, meta };
+}
+
+// ─── MAIN ───
+async function main() {
+  renderSources(Array.from({length:NUM_SOURCES},(_,i)=>({index:i,query:'...',title:'',snippet:''})));
+
+  const sources = await grabRandomArticles();
+  renderSources(sources);
+
+  const enriched = await fetchArticleContent(sources);
+  renderSources(enriched);
+
+  const article = await synthesizeArticle(enriched);
+
+  document.getElementById('artTitle').textContent = article.title;
+  document.getElementById('artMeta').textContent = article.meta;
+  document.getElementById('artBody').innerHTML = article.body;
+
+  document.getElementById('loader').classList.add('hidden');
+}
+
+main();
+</script>
+</body>
+</html>
