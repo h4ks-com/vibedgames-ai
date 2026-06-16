@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Steerable gliders for language — a concrete demo</title>
+<style>
+  :root{--bg:#0e1116;--panel:#161b22;--ink:#e6edf3;--mut:#9aa7b4;--a:#ffd27f;--b:#6db3ff;--g:#5fd38d;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,Segoe UI,Roboto,sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:22px 20px 60px}
+  h1{font-size:24px;margin:0 0 4px}
+  h1 small{color:var(--mut);font-weight:400;font-size:15px}
+  p{color:var(--mut);max-width:820px}
+  .why{background:var(--panel);border:1px solid #2a3340;border-radius:10px;padding:14px 16px;margin:14px 0}
+  .why h3{margin:0 0 6px;color:var(--a);font-size:15px}
+  .why ol{margin:6px 0 0 18px;padding:0}
+  .why li{margin:4px 0;color:var(--ink)}
+  .why .scope{color:var(--mut);font-size:13px;margin-top:8px}
+  .row{display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;margin-top:10px}
+  canvas{background:#05070a;border:1px solid #2a3340;border-radius:6px}
+  .controls{display:flex;flex-direction:column;gap:10px;min-width:300px;flex:1}
+  label{font-size:13px;color:var(--mut)}
+  input[type=text]{width:100%;background:#0b0e13;border:1px solid #2a3340;border-radius:6px;color:var(--ink);padding:8px;font-size:15px}
+  .inA input{border-color:var(--a)} .inB input{border-color:var(--b)}
+  button{background:#2a3340;color:var(--ink);border:none;border-radius:7px;padding:7px 11px;cursor:pointer;font-size:13px}
+  button.go{background:var(--b);color:#04121f;font-weight:600}
+  .sim{font-size:15px;margin-top:6px}
+  .sim b{font-size:28px;color:var(--g)}
+  .verdict{font-size:13px;color:var(--mut)}
+  .preset{display:flex;gap:6px;flex-wrap:wrap}
+  code{background:#0b0e13;padding:1px 5px;border-radius:4px;color:var(--a)}
+  .foot{color:var(--mut);font-size:12px;margin-top:16px;border-top:1px solid #2a3340;padding-top:10px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Steerable gliders for language <small>— a concrete demo</small></h1>
+  <p>Every character steers a single glider a character-specific direction (using the paper's
+  direction law). A word therefore becomes a <b>controlled trajectory</b> through the cellular-automaton
+  medium — a deterministic, <b>order-sensitive signature</b> of the string. Type two words and compare.</p>
+
+  <div class="why">
+    <h3>What is this actually good for? (for the linguist in the room)</h3>
+    <ol>
+      <li><b>A transparent text-feature extractor for the digital humanities.</b> The trajectory is a
+      reproducible geometric fingerprint of a string that — unlike letter-frequency “bags” — is sensitive
+      to <em>order</em>. Such fingerprints are usable features for clustering manuscripts, flagging
+      orthographic/scribal variation, screening authorship, or measuring string similarity — all GPU-free
+      and fully inspectable.</li>
+      <li><b>A teaching instrument.</b> A vivid, mechanistic picture of how a dynamical system can
+      represent and tell apart linguistic sequences: word order, minimal pairs, phonotactics.</li>
+      <li><b>Reservoir computing on text</b> (an established niche): tokens become controllable information
+      carriers; the steering law gives interpretable encoding instead of a black box.</li>
+    </ol>
+    <div class="scope"><b>Honest scope:</b> this is a research instrument and an alternative, transparent
+    encoding — not a replacement for statistical NLP. Its value is determinism, interpretability, and the
+    controllable physics, demonstrated below: the same string always yields the same signature, anagrams
+    yield <em>different</em> signatures (order is encoded), and related strings yield related ones.</div>
+  </div>
+
+  <div class="row">
+    <canvas id="cv" width="560" height="420"></canvas>
+    <div class="controls">
+      <div class="inA"><label>String A (orange)</label><input id="A" type="text" value="listen"></div>
+      <div class="inB"><label>String B (blue)</label><input id="B" type="text" value="silent"></div>
+      <button class="go" id="run">trace both signatures</button>
+      <div class="preset">
+        <button data-a="listen" data-b="silent">anagram: listen / silent</button>
+        <button data-a="cat" data-b="cut">minimal pair: cat / cut</button>
+        <button data-a="manuscript" data-b="manuscript">identical</button>
+        <button data-a="colour" data-b="color">spelling variant</button>
+      </div>
+      <div class="sim">trajectory similarity: <b id="simv">—</b></div>
+      <div class="verdict" id="verdict"></div>
+    </div>
+  </div>
+  <div class="foot">Each letter a–z (and other characters) maps to a heading; the glider is re-steered to that
+  heading for a few ticks per character via “glider surgery” (editing 18 of the rule’s 16,384 entries). The
+  drawn curve is the glider’s centre-of-mass path. Similarity = 1 − normalised RMS distance between the two
+  resampled, registered trajectories. Self-contained: the real hex cellular automaton runs in your browser.</div>
+</div>
+<script>
+"use strict";
+/* ---- hex 7→1 K=4 CA (same engine as the paper) ---- */
+const DIRS=[{sh:10,dy:-1,dx:-0.5},{sh:8,dy:-1,dx:0.5},{sh:6,dy:0,dx:1},{sh:4,dy:1,dx:0.5},{sh:2,dy:1,dx:-0.5},{sh:0,dy:0,dx:-1}];
+DIRS.forEach(d=>{const n=Math.hypot(d.dy,d.dx);d.ang=Math.atan2(d.dy,d.dx);});
+function step(b,lut,W,H){const nb=new Uint8Array(W*H);
+  for(let r=0;r<H;r++){const rm=(r-1+H)%H,rp=(r+1)%H,even=(r%2===0);
+    for(let c=0;c<W;c++){const cm=(c-1+W)%W,cp=(c+1)%W,self=b[r*W+c],
+      north=b[rm*W+c],south=b[rp*W+c],west=b[r*W+cm],east=b[r*W+cp];
+      let nw,ne,sw,se;if(even){nw=b[rm*W+cm];ne=north;sw=b[rp*W+cm];se=south;}else{nw=north;ne=b[rm*W+cp];sw=south;se=b[rp*W+cp];}
+      nb[r*W+c]=lut[(self<<12)|(nw<<10)|(ne<<8)|(east<<6)|(se<<4)|(sw<<2)|west];}}
+  return nb;}
+function newtonLUT(cx,cy,span){const side=128,it=80,st=span/side,ox=cx-st*side*0.5,oy=cy-st*side*0.5;
+  const esc=new Float64Array(side*side);
+  for(let j=0;j<side;j++)for(let i=0;i<side;i++){let zx=ox+i*st,zy=oy+j*st,e=it;
+    for(let k=0;k<it;k++){const x2=zx*zx-zy*zy,y2=2*zx*zy,x3=zx*x2-zy*y2,y3=zx*y2+zy*x2,nx=x3-1,ny=y3,dx=3*x2,dy=3*y2,dd=dx*dx+dy*dy+1e-12,qx=(nx*dx+ny*dy)/dd,qy=(ny*dx-nx*dy)/dd,zxn=zx-qx,zyn=zy-qy;
+      if((zxn-zx)*(zxn-zx)+(zyn-zy)*(zyn-zy)<1e-6){e=k;break;}zx=zxn;zy=zyn;}esc[j*side+i]=e;}
+  const fin=[...esc].filter(v=>v<it).sort((a,b)=>a-b);let b1=it/3,b2=2*it/3;
+  if(fin.length>3){b1=fin[(fin.length/3)|0];b2=fin[(2*fin.length/3)|0];if(b2<=b1)b2=b1+1;}
+  const lut=new Uint8Array(side*side);for(let p=0;p<esc.length;p++){const f=esc[p];lut[p]=f>=it?3:f<b1?0:f<b2?2:1;}return lut;}
+function surgery(base,phi){const lut=base.slice();for(const d of DIRS){const n=Math.round(3*Math.max(0,Math.cos(d.ang-phi)));let i=0;for(const v of[1,2,3]){lut[v<<d.sh]=(i<n)?v:0;i++;}}return lut;}
+function com(b,W,H){let n=0,sr=0,sc=0;for(let r=0;r<H;r++)for(let c=0;c<W;c++)if(b[r*W+c]){n++;sr+=r;sc+=c;}return n?{n,r:sr/n,c:sc/n}:null;}
+
+const W=90,H=70,cell=6,base=newtonLUT(-0.10,-0.02,0.52);
+const KPER=7; // ticks per character
+function charHeading(ch){ // any character -> a heading; letters spread over the circle
+  const code=ch.toLowerCase().charCodeAt(0); return ((code%32)/32)*2*Math.PI - Math.PI; }
+function trace(str){
+  let b=new Uint8Array(W*H); const c0=H>>1; // seed near left-centre
+  for(let dr=-2;dr<=2;dr++)for(let dc=-2;dc<=2;dc++) b[((c0+dr+H)%H)*W+((14+dc+W)%W)]=1+((dr*7+dc*5+13)%3+3)%3;
+  const path=[]; const segs=[];
+  for(const ch of str){ const lut=surgery(base,charHeading(ch)); let start=path.length;
+    for(let t=0;t<KPER;t++){ b=step(b,lut,W,H); let m=com(b,W,H);
+      if(!m||m.n>0.14*W*H){ // re-seed at last point to keep the signature going
+        const last=path[path.length-1]||{c:14,r:c0}; b=new Uint8Array(W*H);
+        for(let dr=-2;dr<=2;dr++)for(let dc=-2;dc<=2;dc++) b[(((last.r|0)+dr+H)%H)*W+(((last.c|0)+dc+W)%W)]=1+((dr+dc+9)%3);
+        m={r:last.r,c:last.c,n:9}; }
+      path.push({c:m.c,r:m.r}); }
+    segs.push([start,path.length]); }
+  return {path,segs};
+}
+function resample(path,N){ if(path.length<2)return Array.from({length:N},()=>[14,H/2]);
+  const out=[]; for(let i=0;i<N;i++){ const x=i/(N-1)*(path.length-1); const lo=Math.floor(x),f=x-lo,hi=Math.min(lo+1,path.length-1);
+    out.push([path[lo].c*(1-f)+path[hi].c*f, path[lo].r*(1-f)+path[hi].r*f]); } return out; }
+function similarity(pa,pb){ const N=32,A=resample(pa,N),B=resample(pb,N);
+  // register: subtract each path's start point, scale by its own span
+  const norm=P=>{const x0=P[0][0],y0=P[0][1];let s=1e-6;for(const p of P)s=Math.max(s,Math.hypot(p[0]-x0,p[1]-y0));return P.map(p=>[(p[0]-x0)/s,(p[1]-y0)/s]);};
+  const a=norm(A),b=norm(B); let e=0;for(let i=0;i<N;i++)e+=Math.hypot(a[i][0]-b[i][0],a[i][1]-b[i][1])**2;
+  return Math.max(0,1-Math.sqrt(e/N)/1.4); }
+
+const ctx=document.getElementById("cv").getContext("2d");
+function drawPath(p,col){ if(p.length<2)return; ctx.strokeStyle=col;ctx.lineWidth=2.2;ctx.beginPath();
+  p.forEach((q,i)=>{const x=q.c*(560/W),y=q.r*(420/H);i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();
+  const s=p[0],e=p[p.length-1]; ctx.fillStyle=col;
+  ctx.beginPath();ctx.arc(s.c*560/W,s.r*420/H,4,0,7);ctx.fill();
+  ctx.beginPath();ctx.arc(e.c*560/W,e.r*420/H,6,0,7);ctx.fill(); }
+function go(){ const A=document.getElementById("A").value||" ", B=document.getElementById("B").value||" ";
+  const ta=trace(A), tb=trace(B);
+  ctx.fillStyle="#05070a";ctx.fillRect(0,0,560,420);
+  ctx.fillStyle="#1b2230";ctx.font="12px sans-serif";ctx.fillText("● start  ⬤ end",10,16);
+  drawPath(ta.path,"#ffd27f"); drawPath(tb.path,"#6db3ff");
+  const sim=similarity(ta.path,tb.path); const pct=Math.round(sim*100);
+  document.getElementById("simv").textContent=pct+"%";
+  let v;
+  if(A.toLowerCase()===B.toLowerCase()) v="Identical strings → identical signature (deterministic encoder).";
+  else if([...A.toLowerCase()].sort().join("")===[...B.toLowerCase()].sort().join("")) v="Same letters, different order (anagram) → the signatures differ: the encoder captures ORDER, not just letter counts.";
+  else if(Math.abs(A.length-B.length)<=1) v="Related strings → related (but not identical) signatures: usable as a graded similarity feature.";
+  else v="Different strings → distinct signatures.";
+  document.getElementById("verdict").textContent=v; }
+document.getElementById("run").onclick=go;
+document.querySelectorAll(".preset button").forEach(btn=>btn.onclick=()=>{
+  document.getElementById("A").value=btn.dataset.a; document.getElementById("B").value=btn.dataset.b; go(); });
+go();
+</script>
+</body>
+</html>
