@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glider Lab — interactive companion to "Glider Surgery"</title>
+<style>
+  :root { --bg:#0e1116; --panel:#161b22; --ink:#e6edf3; --mut:#9aa7b4; --acc:#ffd27f; --acc2:#6db3ff; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui,Segoe UI,Roboto,sans-serif; }
+  header { padding:22px 20px 8px; max-width:980px; margin:0 auto; }
+  h1 { margin:0 0 4px; font-size:25px; }
+  h1 small { color:var(--mut); font-weight:400; font-size:15px; }
+  .lede { color:var(--mut); max-width:760px; }
+  .law { background:var(--panel); border:1px solid #222b36; border-radius:10px; padding:10px 14px; margin:12px 0; font-size:14px; }
+  .law b { color:var(--acc); }
+  nav { max-width:980px; margin:0 auto; display:flex; gap:6px; padding:0 20px; flex-wrap:wrap; }
+  nav button { background:var(--panel); color:var(--ink); border:1px solid #2a3340; padding:8px 14px; border-radius:8px 8px 0 0; cursor:pointer; font-size:14px; }
+  nav button.on { background:var(--acc); color:#1a1205; font-weight:600; border-color:var(--acc); }
+  main { max-width:980px; margin:0 auto; padding:0 20px 60px; }
+  section { display:none; background:var(--panel); border:1px solid #2a3340; border-radius:0 10px 10px 10px; padding:18px; }
+  section.on { display:block; }
+  section h2 { margin:0 0 6px; font-size:19px; }
+  section p { color:var(--mut); max-width:760px; }
+  .row { display:flex; gap:20px; flex-wrap:wrap; align-items:flex-start; }
+  canvas { background:#05070a; border:1px solid #2a3340; border-radius:6px; image-rendering:pixelated; }
+  .controls { display:flex; flex-direction:column; gap:10px; min-width:230px; }
+  .controls label { font-size:13px; color:var(--mut); display:block; }
+  .controls input[type=range] { width:100%; }
+  button.act { background:var(--acc2); color:#04121f; border:none; padding:9px 14px; border-radius:7px; cursor:pointer; font-weight:600; }
+  button.act.sec { background:#2a3340; color:var(--ink); }
+  .stat { font-variant-numeric:tabular-nums; font-size:13px; }
+  .stat b { color:var(--acc); }
+  .compass { touch-action:none; cursor:crosshair; }
+  .pill { display:inline-block; background:#0b0e13; border:1px solid #2a3340; border-radius:20px; padding:2px 10px; font-size:12px; color:var(--mut); }
+  code { background:#0b0e13; padding:1px 5px; border-radius:4px; color:var(--acc); }
+  .foot { color:var(--mut); font-size:12px; margin-top:14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Glider Lab <small>— interactive companion to “Glider Surgery”</small></h1>
+  <p class="lede">A 7→1 four-state hexagonal cellular automaton. Each rule is a 16,384-entry table.
+  This page runs the <em>actual</em> CA, the fractal rule generator, and the direction-law math in your browser —
+  no server, no libraries. Steer a glider, see why it works.</p>
+  <div class="law">The <b>direction law</b>: a glider’s heading = <code>angle(F) + 180°</code>, where
+  <code>F = Σ&nbsp;a<sub>p</sub>·d<sub>p</sub></code> is the <b>single-neighbour activation vector</b> — for each of the
+  six hex directions, “does an isolated upstream cell there switch the centre on?” (just 18 of the 16,384 entries).</div>
+</header>
+<nav>
+  <button class="on" data-t="surgery">1 · Glider Surgery</button>
+  <button data-t="fractal">2 · Fractal → Rule</button>
+  <button data-t="routing">3 · Routing</button>
+</nav>
+<main>
+  <!-- ============ SURGERY ============ -->
+  <section id="surgery" class="on">
+    <h2>Steer a glider by editing 18 numbers</h2>
+    <p>Click the compass to request a heading. The app rewrites only the 18 single-neighbour entries so that
+    <code>F</code> points the right way, then runs the glider. The white arrow is the law’s prediction
+    <code>angle(F)+180°</code>; the orange trail is where the glider actually goes. They agree.</p>
+    <div class="row">
+      <canvas id="sCanvas" width="560" height="420"></canvas>
+      <div class="controls">
+        <div><span class="pill">click / drag the compass</span></div>
+        <canvas id="sComp" class="compass" width="170" height="170"></canvas>
+        <div class="stat">requested heading: <b id="sReq">—</b></div>
+        <div class="stat">predicted angle(F)+180°: <b id="sPred">—</b></div>
+        <div class="stat">measured glider heading: <b id="sMeas">—</b></div>
+        <button class="act" id="sReseed">re-seed glider</button>
+        <button class="act sec" id="sPause">pause</button>
+      </div>
+    </div>
+    <div class="foot">The bulk of the rule (the other 16,366 entries) is a fixed fractal-generated glider rule —
+    only the 18 direction entries change as you turn the dial. 100% of edits keep the glider alive (in the paper’s sweep).</div>
+  </section>
+
+  <!-- ============ FRACTAL ============ -->
+  <section id="fractal">
+    <h2>A fractal image <em>is</em> the rule</h2>
+    <p>Render a 128×128 Newton escape-time image and posterise it into four levels: the flattened image is literally
+    the 16,384-entry lookup table (pixel index = neighbourhood key). Drag the sliders to walk fractal space and watch
+    which rules grow gliders.</p>
+    <div class="row">
+      <div>
+        <canvas id="fRule" width="256" height="256" title="the rule as a 128×128 image"></canvas>
+        <div class="foot">the rule (escape-time → 4 states)</div>
+      </div>
+      <canvas id="fCanvas" width="434" height="378"></canvas>
+      <div class="controls">
+        <label>cx <span id="fcxv"></span></label><input type="range" id="fcx" min="-0.30" max="0.20" step="0.005" value="-0.10">
+        <label>cy <span id="fcyv"></span></label><input type="range" id="fcy" min="-0.30" max="0.20" step="0.005" value="-0.02">
+        <label>span (zoom) <span id="fspv"></span></label><input type="range" id="fsp" min="0.20" max="1.40" step="0.02" value="0.55">
+        <div class="stat">activation |F|: <b id="fF">—</b> · class: <b id="fcls">—</b></div>
+        <button class="act" id="fReseed">re-seed</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ ROUTING ============ -->
+  <section id="routing">
+    <h2>Route a glider with a steering field</h2>
+    <p>Tile space with rules that differ only in those 18 entries, so each column steers a slightly different way
+    (heading rises 0°→ the slider value across the board). The glider keeps its shape but follows the field — a
+    programmable waveguide. The background tint shows the local target heading.</p>
+    <div class="row">
+      <canvas id="rCanvas" width="560" height="420"></canvas>
+      <div class="controls">
+        <label>total turn across board <span id="rtv"></span></label><input type="range" id="rt" min="0" max="170" step="5" value="90">
+        <label>gradient (fraction of board) <span id="rgv"></span></label><input type="range" id="rg" min="0.3" max="1.0" step="0.05" value="0.85">
+        <button class="act" id="rReseed">launch glider</button>
+        <div class="foot">Curving the field bends the glider; sharp jumps can scatter it — gentle gradients route best
+        (matches the cluster sweep: best recipes use a ~0.85-board gradient).</div>
+      </div>
+    </div>
+  </section>
+</main>
+<script>
+"use strict";
+/* ============================================================
+   Hex 7→1 K=4 CA — exact port of the paper's hex_key + step.
+   Pointy-top, even-row offset. key = self<<12|nw<<10|ne<<8|e<<6|se<<4|sw<<2|w
+   ============================================================ */
+const K=4, NS=16384;
+// directional neighbours: bit shift + lattice unit direction (dy=row down, dx=col)
+const DIRS=[
+  {sh:10, dy:-1, dx:-0.5}, // nw
+  {sh: 8, dy:-1, dx: 0.5}, // ne
+  {sh: 6, dy: 0, dx: 1.0}, // e
+  {sh: 4, dy: 1, dx: 0.5}, // se
+  {sh: 2, dy: 1, dx:-0.5}, // sw
+  {sh: 0, dy: 0, dx:-1.0}, // w
+];
+DIRS.forEach(d=>{const n=Math.hypot(d.dy,d.dx); d.uy=d.dy/n; d.ux=d.dx/n; d.ang=Math.atan2(d.dy,d.dx);});
+
+function step(b,lut,W,H){
+  const nb=new Uint8Array(W*H);
+  for(let r=0;r<H;r++){
+    const rm=(r-1+H)%H, rp=(r+1)%H, even=(r%2===0);
+    for(let c=0;c<W;c++){
+      const cm=(c-1+W)%W, cp=(c+1)%W;
+      const self=b[r*W+c];
+      const north=b[rm*W+c], south=b[rp*W+c], west=b[r*W+cm], east=b[r*W+cp];
+      let nw,ne,sw,se;
+      if(even){ nw=b[rm*W+cm]; ne=north; sw=b[rp*W+cm]; se=south; }
+      else    { nw=north; ne=b[rm*W+cp]; sw=south; se=b[rp*W+cp]; }
+      const key=(self<<12)|(nw<<10)|(ne<<8)|(east<<6)|(se<<4)|(sw<<2)|west;
+      nb[r*W+c]=lut[key];
+    }
+  }
+  return nb;
+}
+/* ---------- Newton fractal → posterised LUT (the rule) ---------- */
+function newtonLUT(cx,cy,span){
+  const side=128, it=80, st=span/side, ox=cx-st*side*0.5, oy=cy-st*side*0.5;
+  const esc=new Float64Array(side*side);
+  for(let j=0;j<side;j++){ for(let i=0;i<side;i++){
+    let zx=ox+i*st, zy=oy+j*st, e=it;
+    for(let k=0;k<it;k++){
+      // z - (z^3-1)/(3 z^2)
+      const x2=zx*zx-zy*zy, y2=2*zx*zy;         // z^2
+      const x3=zx*x2-zy*y2, y3=zx*y2+zy*x2;     // z^3
+      const nx=x3-1, ny=y3, dx=3*x2, dy=3*y2;   // num=z^3-1, den=3z^2
+      const dd=dx*dx+dy*dy+1e-12;
+      const qx=(nx*dx+ny*dy)/dd, qy=(ny*dx-nx*dy)/dd;
+      const zxn=zx-qx, zyn=zy-qy;
+      if((zxn-zx)*(zxn-zx)+(zyn-zy)*(zyn-zy)<1e-6){ e=k; break; }
+      zx=zxn; zy=zyn;
+    }
+    esc[j*side+i]=e;
+  }}
+  // posterise by terciles of the finite (converged) values
+  const fin=[...esc].filter(v=>v<it).sort((a,b)=>a-b);
+  let b1=it/3, b2=2*it/3;
+  if(fin.length>3){ b1=fin[(fin.length/3)|0]; b2=fin[(2*fin.length/3)|0]; if(b2<=b1)b2=b1+1; }
+  const lut=new Uint8Array(side*side);
+  for(let p=0;p<esc.length;p++){ const f=esc[p]; lut[p]= f>=it?3 : f<b1?0 : f<b2?2 : 1; }
+  return lut; // 16384 entries, index = neighbourhood key
+}
+/* ---------- surgery + the activation vector F ---------- */
+function designEdit(base,phi){
+  const lut=base.slice();
+  for(const d of DIRS){
+    const n=Math.round(3*Math.max(0,Math.cos(d.ang-phi)));
+    let i=0; for(const v of [1,2,3]){ lut[v<<d.sh]= (i<n)? v : 0; i++; }
+  }
+  return lut;
+}
+function Fvec(lut){
+  let Fy=0,Fx=0;
+  for(const d of DIRS){
+    const a=((lut[1<<d.sh]>0)+(lut[2<<d.sh]>0)+(lut[3<<d.sh]>0))/3;
+    Fy+=a*d.uy; Fx+=a*d.ux;
+  }
+  return {Fy,Fx,mag:Math.hypot(Fy,Fx)};
+}
+const predHeading = lut=>{ const F=Fvec(lut); return Math.atan2(-F.Fy,-F.Fx); }; // angle(F)+180
+/* ---------- rendering ---------- */
+const PAL=["#05070a","#3a6ea5","#ffd27f","#e06c5a"];
+function draw(ctx,b,W,H,cell){
+  ctx.fillStyle=PAL[0]; ctx.fillRect(0,0,W*cell+cell,H*cell);
+  for(let r=0;r<H;r++){ const off=(r%2)*cell*0.5;
+    for(let c=0;c<W;c++){ const s=b[r*W+c]; if(!s)continue;
+      ctx.fillStyle=PAL[s]; ctx.fillRect(c*cell+off, r*cell, cell-0.4, cell-0.4); }}
+}
+function seedPatch(b,W,H,r,c){ for(let dr=-2;dr<=2;dr++)for(let dc=-2;dc<=2;dc++){
+  const rr=(r+dr+H)%H, cc=(c+dc+W)%W; b[rr*W+cc]=1+((Math.random()*3)|0); } }
+function com(b,W,H){ let n=0,sr=0,sc=0; for(let r=0;r<H;r++)for(let c=0;c<W;c++){ if(b[r*W+c]){n++;sr+=r;sc+=c;} }
+  return n? {n, r:sr/n, c:sc/n} : null; }
+
+/* ============================================================ tabs */
+document.querySelectorAll("nav button").forEach(btn=>btn.onclick=()=>{
+  document.querySelectorAll("nav button").forEach(b=>b.classList.remove("on"));
+  document.querySelectorAll("section").forEach(s=>s.classList.remove("on"));
+  btn.classList.add("on"); document.getElementById(btn.dataset.t).classList.add("on");
+});
+
+/* ============================================================ shared base glider rule */
+const BASE = newtonLUT(-0.10,-0.02,0.52);
+
+/* ============================================================ DEMO 1 — surgery */
+(function(){
+  const W=80,H=60,cell=7, cv=document.getElementById("sCanvas"), ctx=cv.getContext("2d");
+  const comp=document.getElementById("sComp"), cc=comp.getContext("2d");
+  let target=0, lut=designEdit(BASE,target-Math.PI), grid=new Uint8Array(W*H), trail=[], paused=false, t0com=null;
+  function reseed(){ grid=new Uint8Array(W*H); seedPatch(grid,W,H,(H/2)|0,18); trail=[]; t0com=null; }
+  function setTarget(th){ target=th; lut=designEdit(BASE,target-Math.PI); reseed();
+    document.getElementById("sReq").textContent=deg(th);
+    document.getElementById("sPred").textContent=deg(predHeading(lut)); drawComp(); }
+  function deg(a){ return (((a*180/Math.PI)%360+540)%360-180).toFixed(0)+"°"; }
+  function drawComp(){ cc.clearRect(0,0,170,170); const cx=85,cy=85,R=70;
+    cc.strokeStyle="#2a3340"; cc.beginPath(); cc.arc(cx,cy,R,0,7); cc.stroke();
+    cc.fillStyle="#9aa7b4"; cc.font="11px sans-serif";
+    cc.fillText("E",cx+R-8,cy+4); cc.fillText("W",cx-R+2,cy+4); cc.fillText("S",cx-3,cy+R-2); cc.fillText("N",cx-3,cy-R+10);
+    const p=predHeading(lut); // predicted glider dir
+    arrow(cc,cx,cy,Math.cos(p)*R,Math.sin(p)*R,"#fff",2);
+    arrow(cc,cx,cy,Math.cos(target)*R*0.5,Math.sin(target)*R*0.5,"#6db3ff",2);
+  }
+  function arrow(g,x,y,dx,dy,col,w){ g.strokeStyle=col; g.fillStyle=col; g.lineWidth=w;
+    g.beginPath(); g.moveTo(x,y); g.lineTo(x+dx,y+dy); g.stroke();
+    const a=Math.atan2(dy,dx); g.beginPath(); g.moveTo(x+dx,y+dy);
+    g.lineTo(x+dx-8*Math.cos(a-0.4),y+dy-8*Math.sin(a-0.4)); g.lineTo(x+dx-8*Math.cos(a+0.4),y+dy-8*Math.sin(a+0.4));
+    g.closePath(); g.fill(); }
+  function pick(ev){ const r=comp.getBoundingClientRect(); const x=ev.clientX-r.left-85, y=ev.clientY-r.top-85;
+    setTarget(Math.atan2(y,x)); }
+  comp.addEventListener("pointerdown",e=>{comp.setPointerCapture(e.pointerId);pick(e);});
+  comp.addEventListener("pointermove",e=>{ if(e.pressure>0||e.buttons)pick(e); });
+  document.getElementById("sReseed").onclick=reseed;
+  document.getElementById("sPause").onclick=function(){ paused=!paused; this.textContent=paused?"resume":"pause"; };
+  function frame(){
+    if(!paused){ for(let s=0;s<2;s++){ grid=step(grid,lut,W,H);
+      const m=com(grid,W,H);
+      if(m){ if(!t0com)t0com=m; trail.push([m.c,m.r]); if(trail.length>120)trail.shift();
+        if(m.n>0.10*W*H){ reseed(); } } else reseed(); } }
+    draw(ctx,grid,W,H,cell);
+    // trail + measured heading
+    ctx.strokeStyle="#ffd27f"; ctx.lineWidth=2; ctx.beginPath();
+    trail.forEach((p,i)=>{ const x=p[0]*cell+(((p[1]|0)%2)*cell*0.5), y=p[1]*cell;
+      i?ctx.lineTo(x,y):ctx.moveTo(x,y); }); ctx.stroke();
+    if(trail.length>14){ const a=trail[trail.length-1], b=trail[Math.max(0,trail.length-14)];
+      const mh=Math.atan2(a[1]-b[1],a[0]-b[0]); document.getElementById("sMeas").textContent=deg(mh);
+      const m=com(grid,W,H); if(m){ const px=m.c*cell, py=m.r*cell; const ph=predHeading(lut);
+        arrow(ctx,px,py,Math.cos(ph)*34,Math.sin(ph)*34,"#fff",2); } }
+    requestAnimationFrame(frame);
+  }
+  setTarget(0); frame();
+})();
+
+/* ============================================================ DEMO 2 — fractal */
+(function(){
+  const W=62,H=54,cell=7, cv=document.getElementById("fCanvas"), ctx=cv.getContext("2d");
+  const rc=document.getElementById("fRule").getContext("2d");
+  let lut=BASE, grid=new Uint8Array(W*H);
+  const img=rc.createImageData(128,128);
+  function regen(){ const cx=+fcx.value, cy=+fcy.value, sp=+fsp.value;
+    fcxv.textContent=cx.toFixed(3); fcyv.textContent=cy.toFixed(3); fspv.textContent=sp.toFixed(2);
+    lut=newtonLUT(cx,cy,sp);
+    for(let p=0;p<16384;p++){ const s=lut[p]; const col=[[5,7,10],[58,110,165],[255,210,127],[224,108,90]][s];
+      img.data[p*4]=col[0]; img.data[p*4+1]=col[1]; img.data[p*4+2]=col[2]; img.data[p*4+3]=255; }
+    blit();
+    document.getElementById("fF").textContent=Fvec(lut).mag.toFixed(2);
+    document.getElementById("fcls").textContent= lut[0]===0? "quiescent bg ✓":"no bg";
+    reseed();
+  }
+  // scale the 128×128 rule image up to the 256×256 display canvas
+  function blit(){ const tmp=document.createElement("canvas"); tmp.width=128;tmp.height=128;
+    tmp.getContext("2d").putImageData(img,0,0); rc.imageSmoothingEnabled=false; rc.clearRect(0,0,256,256);
+    rc.drawImage(tmp,0,0,256,256); }
+  function reseed(){ grid=new Uint8Array(W*H); seedPatch(grid,W,H,(H/2)|0,(W/2)|0); }
+  ["fcx","fcy","fsp"].forEach(id=>document.getElementById(id).addEventListener("input",regen));
+  document.getElementById("fReseed").onclick=reseed;
+  function frame(){ for(let s=0;s<2;s++){ grid=step(grid,lut,W,H); const m=com(grid,W,H);
+      if(!m||m.n>0.12*W*H) reseed(); } draw(ctx,grid,W,H,cell); requestAnimationFrame(frame); }
+  regen(); frame();
+})();
+
+/* ============================================================ DEMO 3 — routing */
+(function(){
+  const W=80,H=60,cell=7, cv=document.getElementById("rCanvas"), ctx=cv.getContext("2d");
+  const N=16; let bank=[], field=new Float64Array(W), grid=new Uint8Array(W*H), trail=[];
+  for(let k=0;k<N;k++) bank.push(designEdit(BASE,(k*2*Math.PI/N)-Math.PI));
+  function rebuild(){ const turn=+rt.value*Math.PI/180, gl=Math.max(1,(+rg.value)*W);
+    rtv.textContent=rt.value+"°"; rgv.textContent=(+rg.value).toFixed(2);
+    for(let c=0;c<W;c++){ field[c]=Math.min(turn, c/gl*turn); }
+    reseed();
+  }
+  function regionAt(c){ const h=field[c]; let k=Math.round(h/(2*Math.PI/N)); return ((k%N)+N)%N; }
+  function stepRoute(b){ const nb=new Uint8Array(W*H);
+    for(let r=0;r<H;r++){ const rm=(r-1+H)%H,rp=(r+1)%H,even=(r%2===0);
+      for(let c=0;c<W;c++){ const cm=(c-1+W)%W,cp=(c+1)%W, lut=bank[regionAt(c)];
+        const self=b[r*W+c],north=b[rm*W+c],south=b[rp*W+c],west=b[r*W+cm],east=b[r*W+cp];
+        let nw,ne,sw,se; if(even){nw=b[rm*W+cm];ne=north;sw=b[rp*W+cm];se=south;}else{nw=north;ne=b[rm*W+cp];sw=south;se=b[rp*W+cp];}
+        nb[r*W+c]=lut[(self<<12)|(nw<<10)|(ne<<8)|(east<<6)|(se<<4)|(sw<<2)|west]; } }
+    return nb; }
+  function reseed(){ grid=new Uint8Array(W*H); seedPatch(grid,W,H,(H/2)|0,12); trail=[]; }
+  ["rt","rg"].forEach(id=>document.getElementById(id).addEventListener("input",rebuild));
+  document.getElementById("rReseed").onclick=reseed;
+  function frame(){ for(let s=0;s<2;s++){ grid=stepRoute(grid); const m=com(grid,W,H);
+      if(!m||m.n>0.12*W*H) reseed(); else { trail.push([m.c,m.r]); if(trail.length>200)trail.shift(); } }
+    // field tint
+    ctx.fillStyle=PAL[0]; ctx.fillRect(0,0,cv.width,cv.height);
+    for(let c=0;c<W;c++){ const h=(field[c]*180/Math.PI)/180; ctx.fillStyle=`hsla(${200+h*120},60%,45%,0.13)`; ctx.fillRect(c*cell,0,cell,H*cell); }
+    for(let r=0;r<H;r++){ const off=(r%2)*cell*0.5; for(let c=0;c<W;c++){ const s=grid[r*W+c]; if(!s)continue; ctx.fillStyle=PAL[s]; ctx.fillRect(c*cell+off,r*cell,cell-0.4,cell-0.4);} }
+    ctx.strokeStyle="#ffd27f"; ctx.lineWidth=2; ctx.beginPath();
+    trail.forEach((p,i)=>{const x=p[0]*cell+(((p[1]|0)%2)*cell*0.5),y=p[1]*cell; i?ctx.lineTo(x,y):ctx.moveTo(x,y);}); ctx.stroke();
+    requestAnimationFrame(frame); }
+  rebuild(); frame();
+})();
+</script>
+</body>
+</html>
