@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fan Physics Engine v2 — Variable Diameter</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0a0e1a; color: #c8d0e8; min-height: 100vh; }
+h1 { text-align: center; padding: 20px; font-size: 1.6em; background: linear-gradient(135deg, #1a1f3a, #12162b); border-bottom: 2px solid #2a3a6a; }
+h1 span { color: #5af; }
+
+.controls { display: flex; flex-wrap: wrap; gap: 12px; padding: 16px 24px; background: #111827; border-bottom: 1px solid #222; align-items: center; justify-content: center; }
+.controls label { font-weight: 600; color: #8af; font-size: 0.9em; }
+.controls input[type=range] { width: 200px; accent-color: #5af; cursor: pointer; }
+.controls select, .preset-btn { padding: 6px 12px; border-radius: 6px; border: 1px solid #334; background: #1a2035; color: #c8d0e8; cursor: pointer; font-size: 0.85em; }
+.preset-btn:hover { background: #252d48; border-color: #5af; }
+.preset-btn.active { background: #2a3a6a; border-color: #5af; color: #fff; }
+
+.stats-bar { display: flex; flex-wrap: wrap; gap: 16px; justify-content: center; padding: 10px 24px; background: #0d1220; border-bottom: 1px solid #1a2040; font-size: 0.82em; }
+.stat { background: #141c30; padding: 6px 14px; border-radius: 8px; border-left: 3px solid #5af; }
+.stat .val { color: #5ef; font-weight: 700; font-family: 'Consolas', monospace; }
+.stat .unit { color: #888; margin-left: 3px; }
+
+.charts-grid { display: grid; grid-template-columns: 1fr; gap: 18px; padding: 18px 24px; max-width: 1200px; margin: 0 auto; }
+@media (min-width: 900px) { .charts-grid { grid-template-columns: 1fr 1fr; } }
+.chart-card { background: #111827; border-radius: 12px; border: 1px solid #223; overflow: hidden; }
+.chart-card.full { grid-column: 1 / -1; }
+.card-header { padding: 10px 16px; background: #161e35; border-bottom: 1px solid #223; font-weight: 600; font-size: 0.9em; display: flex; align-items: center; gap: 8px; }
+.card-header .emoji { font-size: 1.2em; }
+.canvas-wrap { padding: 14px; position: relative; min-height: 300px; }
+canvas { width: 100% !important; height: 320px !important; }
+
+.legend-note { text-align: center; padding: 8px; font-size: 0.78em; color: #667; background: #0a0e1a; border-top: 1px solid #1a1f35; }
+</style>
+</head>
+<body>
+
+<h1>🌀 Fan Physics Engine <span>v2</span> — Variable Diameter 📏</h1>
+
+<div class="controls">
+  <label>Diameter: <span id="diamVal" style="color:#5ef">1.00</span> m</label>
+  <input type="range" id="diameter" min="0.01" max="5" step="0.01" value="1">
+
+  <label>Blades:</label>
+  <select id="blades"><option>2</option><option>3</option><option selected>5</option><option>7</option><option>9</option><option>12</option><option>16</option></select>
+
+  <label>Flow φ:</label>
+  <input type="range" id="flowCoef" min="0.05" max="0.50" step="0.01" value="0.20">
+
+  <label>Max RPM:</label>
+  <input type="range" id="maxRpm" min="60" max="6000" step="60" value="1800">
+
+  <div style="display:flex;gap:4px;flex-wrap:wrap;">
+    <button class="preset-btn" onclick="setPreset(0.04)">40mm</button>
+    <button class="preset-btn" onclick="setPreset(0.08)">80mm</button>
+    <button class="preset-btn" onclick="setPreset(0.12)">120mm</button>
+    <button class="preset-btn" onclick="setPreset(0.30)">300mm</button>
+    <button class="preset-btn active" onclick="setPreset(1)">1m</button>
+    <button class="preset-btn" onclick="setPreset(2)">2m</button>
+    <button class="preset-btn" onclick="setPreset(5)">5m</button>
+  </div>
+</div>
+
+<div class="stats-bar" id="statsBar"></div>
+
+<div class="charts-grid">
+  <div class="chart-card full">
+    <div class="card-header"><span class="emoji">📊</span> Airflow &amp; Sound vs Rotation Speed</div>
+    <div class="canvas-wrap"><canvas id="chartMain"></canvas></div>
+  </div>
+
+  <div class="chart-card">
+    <div class="card-header"><span class="emoji">🎵</span> Blade Pass Frequency Spectrum</div>
+    <div class="canvas-wrap"><canvas id="chartBPF"></canvas></div>
+  </div>
+
+  <div class="chart-card">
+    <div class="card-header"><span class="emoji">🔊</span> Sound Power Law (v⁵)</div>
+    <div class="canvas-wrap"><canvas id="chartLaw"></canvas></div>
+  </div>
+</div>
+
+<div class="legend-note">💡 Tip speed = π × D × RPM / 60 &nbsp;|&nbsp; Flow Q = φ × A × v_tip &nbsp;|&nbsp; Sound Lw ∝ ρ A v⁵ &nbsp;|&nbsp; BPF = blades × RPM / 60</div>
+
+<script>
+// ── State ──
+const state = {
+  diameter: 1,
+  blades: 5,
+  phi: 0.20,
+  maxRpm: 1800
+};
+
+const charts = {};
+
+// ── Physics helpers ──
+function tipSpeed(d, rpm) {
+  return Math.PI * d * rpm / 60;
+}
+
+function flowRate(d, rpm, phi) {
+  const r = d / 2;
+  const area = Math.PI * r * r;
+  const vt = tipSpeed(d, rpm);
+  return phi * area * vt;
+}
+
+function soundPowerDb(d, rpm) {
+  const rho = 1.225;
+  const r = d / 2;
+  const area = Math.PI * r * r;
+  const vt = tipSpeed(d, rpm);
+  // Lw ∝ ρ A v^5, normalized so 1m fan @ 1800 RPM ≈ 65 dB
+  const refLw = 1e-12;
+  const basePower = rho * area * Math.pow(vt, 5);
+  const refBase = 1.225 * Math.PI * 0.25 * Math.pow(Math.PI * 1 * 1800 / 60, 5);
+  return 10 * Math.log10(basePower / refLw) - 10 * Math.log10(refBase / refLw) + 55;
+}
+
+function bpfFreq(blades, rpm) {
+  return blades * rpm / 60;
+}
+
+function pcFanArea() { return Math.PI * Math.pow(0.06, 2); }
+
+// ── Data generators ──
+function generateMainData(d, blades, phi, maxRpm) {
+  const steps = 80;
+  const rpmStep = maxRpm / steps;
+  const rpms = [], flows = [], sounds = [], tips = [];
+  for (let i = 0; i <= steps; i++) {
+    const rpm = Math.max(rpmStep, i * rpmStep);
+    rpms.push(rpm);
+    flows.push(flowRate(d, rpm, phi));
+    sounds.push(soundPowerDb(d, rpm));
+    tips.push(tipSpeed(d, rpm));
+  }
+  return { rpms, flows, sounds, tips };
+}
+
+function generateBPFData(d, blades, maxRpm) {
+  const sampleRpms = [60, 300, 1000, 3000].filter(r => r <= maxRpm);
+  if (sampleRpms.length === 0) sampleRpms.push(maxRpm);
+  return sampleRpms.map(rpm => {
+    const f0 = bpfFreq(blades, rpm);
+    const harmonics = [];
+    for (let h = 1; h <= 8; h++) {
+      const freq = f0 * h;
+      if (freq > 20000) break;
+      const amp = 1 / h;
+      harmonics.push({ x: freq, y: amp, rpm });
+    }
+    return { rpm, f0, harmonics };
+  });
+}
+
+function generateLawData(d, maxRpm) {
+  const steps = 60;
+  const data = [];
+  for (let i = 0; i <= steps; i++) {
+    const rpm = Math.max(10, (i / steps) * maxRpm);
+    const vt = tipSpeed(d, rpm);
+    data.push({ x: vt, y: soundPowerDb(d, rpm), rpm });
+  }
+  return data;
+}
+
+// ── Chart creation helpers ──
+const COLORS = {
+  flow: '#5af',
+  sound: '#f5a',
+  tip: '#5fa',
+  bpf1: '#5af',
+  bpf2: '#f5a',
+  bpf3: '#5fa',
+  bpf4: '#fa5',
+  law: '#a5f'
+};
+
+function createMainChart(data) {
+  const ctx = document.getElementById('chartMain').getContext('2d');
+  if (charts.main) charts.main.destroy();
+  
+  charts.main = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: data.rpms.map(r => Math.round(r)),
+      datasets: [
+        {
+          label: 'Volumetric Flow (L/s)',
+          data: data.flows.map(v => (v * 1000).toFixed(2)),
+          borderColor: COLORS.flow,
+          backgroundColor: COLORS.flow + '15',
+          yAxisID: 'yFlow',
+          tension: 0.3,
+          pointRadius: 0,
+          borderWidth: 2.5
+        },
+        {
+          label: 'Sound Power (dB)',
+          data: data.sounds.map(v => v.toFixed(1)),
+          borderColor: COLORS.sound,
+          backgroundColor: COLORS.sound + '15',
+          yAxisID: 'ySound',
+          tension: 0.3,
+          pointRadius: 0,
+          borderWidth: 2.5
+        },
+        {
+          label: 'Tip Speed (m/s)',
+          data: data.tips.map(v => v.toFixed(2)),
+          borderColor: COLORS.tip,
+          backgroundColor: COLORS.tip + '15',
+          yAxisID: 'yTip',
+          tension: 0.3,
+          pointRadius: 0,
+          borderWidth: 1.5,
+          borderDash: [5, 3]
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: '#aab', usePointStyle: true, padding: 14 } },
+        tooltip: {
+          callbacks: {
+            title: items => `RPM: ${items[0].label}`,
+            label: item => `${item.datasetName}: ${item.raw}`
+          }
+        }
+      },
+      scales: {
+        x: {
+          title: { display: true, text: 'Rotation Speed (RPM)', color: '#889' },
+          ticks: { color: '#667', maxTicksLimit: 12 },
+          grid: { color: '#181f38' }
+        },
+        yFlow: {
+          type: 'linear',
+          position: 'left',
+          title: { display: true, text: 'Flow (L/s)', color: COLORS.flow },
+          ticks: { color: COLORS.flow + '99' },
+          grid: { color: '#181f38' }
+        },
+        ySound: {
+          type: 'linear',
+          position: 'right',
+          title: { display: true, text: 'Sound (dB)', color: COLORS.sound },
+          ticks: { color: COLORS.sound + '99' },
+          grid: { drawOnChartArea: false }
+        },
+        yTip: {
+          type: 'linear',
+          position: 'right',
+          title: { display: true, text: 'Tip Speed (m/s)', color: COLORS.tip },
+          ticks: { color: COLORS.tip + '99' },
+          grid: { drawOnChartArea: false },
+          offset: true
+        }
+      }
+    }
+  });
+}
+
+function createBPFChart(bpfData) {
+  const ctx = document.getElementById('chartBPF').getContext('2d');
+  if (charts.bpf) charts.bpf.destroy();
+
+  const bpfColors = [COLORS.bpf1, COLORS.bpf2, COLORS.bpf3, COLORS.bpf4];
+  const datasets = bpfData.map((sample, idx) => ({
+    label: `${sample.rpm} RPM (BPF=${sample.f0.toFixed(2)}Hz)`,
+    data: sample.harmonics.map(h => ({ x: h.x, y: h.y })),
+    borderColor: bpfColors[idx % bpfColors.length],
+    backgroundColor: bpfColors[idx % bpfColors.length] + '30',
+    showLine: true,
+    tension: 0.2,
+    pointRadius: 4,
+    pointStyle: 'circle'
+  }));
+
+  charts.bpf = new Chart(ctx, {
+    type: 'scatter',
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color: '#aab', usePointStyle: true, padding: 10, font: { size: 11 } } },
+        tooltip: {
+          callbacks: {
+            label: item => `${item.dataset.label}: harmonic @ ${item.parsed.x.toFixed(0)} Hz`
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: 'linear',
+          title: { display: true, text: 'Frequency (Hz)', color: '#889' },
+          ticks: { color: '#667' },
+          grid: { color: '#181f38' },
+          min: 0
+        },
+        y: {
+          title: { display: true, text: 'Relative Amplitude', color: '#889' },
+          ticks: { color: '#667' },
+          grid: { color: '#181f38' },
+          max: 1.1
+        }
+      }
+    }
+  });
+}
+
+function createLawChart(lawData) {
+  const ctx = document.getElementById('chartLaw').getContext('2d');
+  if (charts.law) charts.law.destroy();
+
+  charts.law = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: lawData.map(d => d.x.toFixed(2)),
+      datasets: [{
+        label: 'Sound Power (dB)',
+        data: lawData.map(d => d.y.toFixed(1)),
+        borderColor: COLORS.law,
+        backgroundColor: COLORS.law + '15',
+        fill: true,
+        tension: 0.3,
+        pointRadius: 0,
+        borderWidth: 2.5
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color: '#aab', usePointStyle: true } },
+        tooltip: {
+          callbacks: {
+            title: items => `Tip speed: ${items[0].label} m/s`,
+            label: item => `Sound: ${item.raw} dB`
+          }
+        }
+      },
+      scales: {
+        x: {
+          title: { display: true, text: 'Tip Velocity (m/s)', color: '#889' },
+          ticks: { color: '#667', maxTicksLimit: 10 },
+          grid: { color: '#181f38' }
+        },
+        y: {
+          title: { display: true, text: 'Sound Power Level (dB)', color: COLORS.law },
+          ticks: { color: COLORS.law + '99' },
+          grid: { color: '#181f38' }
+        }
+      }
+    }
+  });
+}
+
+// ── Stats bar ──
+function updateStats(d, blades, phi) {
+  const r = d / 2;
+  const area = Math.PI * r * r;
+  const vt1 = tipSpeed(d, 1);
+  const q1 = flowRate(d, 1, phi);
+  const lw1 = soundPowerDb(d, 1);
+  const bpf1 = bpfFreq(blades, 1);
+  const ratio = area / pcFanArea();
+
+  document.getElementById('statsBar').innerHTML = `
+    <div class="stat">Diameter: <span class="val">${d.toFixed(2)}</span><span class="unit">m</span></div>
+    <div class="stat">Radius: <span class="val">${r.toFixed(3)}</span><span class="unit">m</span></div>
+    <div class="stat">Swept Area: <span class="val">${area.toFixed(3)}</span><span class="unit">m²</span></div>
+    <div class="stat">@ 1 RPM → Tip: <span class="val">${vt1.toFixed(3)}</span><span class="unit">m/s</span></div>
+    <div class="stat">@ 1 RPM → Flow: <span class="val">${(q1*1000).toFixed(1)}</span><span class="unit">L/s</span></div>
+    <div class="stat">@ 1 RPM → Sound: <span class="val">${lw1.toFixed(1)}</span><span class="unit">dB</span></div>
+    <div class="stat">BPF@1RPM: <span class="val">${bpf1.toFixed(3)}</span><span class="unit">Hz</span></div>
+    <div class="stat">vs 120mm PC fan: <span class="val">${ratio.toFixed(1)}×</span><span class="unit">area</span></div>
+  `;
+}
+
+// ── Presets ──
+function setPreset(d) {
+  document.getElementById('diameter').value = d;
+  document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  render();
+}
+
+// ── Main render ──
+function render() {
+  state.diameter = parseFloat(document.getElementById('diameter').value);
+  state.blades = parseInt(document.getElementById('blades').value);
+  state.phi = parseFloat(document.getElementById('flowCoef').value);
+  state.maxRpm = parseInt(document.getElementById('maxRpm').value);
+
+  document.getElementById('diamVal').textContent = state.diameter.toFixed(2);
+
+  updateStats(state.diameter, state.blades, state.phi);
+
+  const mainData = generateMainData(state.diameter, state.blades, state.phi, state.maxRpm);
+  const bpfData = generateBPFData(state.diameter, state.blades, state.maxRpm);
+  const lawData = generateLawData(state.diameter, state.maxRpm);
+
+  createMainChart(mainData);
+  createBPFChart(bpfData);
+  createLawChart(lawData);
+}
+
+// ── Init ──
+document.querySelectorAll('.controls input, .controls select').forEach(el => {
+  el.addEventListener('input', render);
+  el.addEventListener('change', render);
+});
+
+render();
+</script>
+</body>
+</html>
