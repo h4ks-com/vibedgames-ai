@@ -1,0 +1,850 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🦇 Vampire Lord: Circuit — Empire Edition</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0a0a0f; color: #c9a0dc; font-family: 'Georgia', serif; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
+h1 { text-align: center; padding: 8px 0 4px; font-size: 1.3em; text-shadow: 0 0 15px #6b1f8a; letter-spacing: 3px; }
+#game-container { display: flex; flex: 1; overflow: hidden; }
+#map-area { flex: 1; position: relative; display: flex; align-items: center; justify-content: center; }
+#sidebar { width: 300px; background: #110b18; border-left: 2px solid #3d1d5c; padding: 12px; overflow-y: auto; font-size: 0.85em; line-height: 1.55; }
+#sidebar h3 { color: #e0b0ff; margin: 10px 0 6px; font-size: 1em; border-bottom: 1px solid #3d1d5c; padding-bottom: 3px; }
+.stat-row { display: flex; justify-content: space-between; margin: 2px 0; }
+.stat-label { color: #9a7aaa; }
+.stat-val { font-weight: bold; }
+.bar-container { width: 100%; height: 14px; background: #1a1025; border-radius: 7px; overflow: hidden; margin: 3px 0 8px; border: 1px solid #2d1840; }
+.bar-fill { height: 100%; transition: width 0.3s; border-radius: 7px; }
+.bar-blood { background: linear-gradient(90deg, #8b0000, #cc2222); }
+.bar-sanity { background: linear-gradient(90deg, #2a0845, #6b2da0); }
+.bar-moves { background: linear-gradient(90deg, #1a3a1a, #2d8a2d); }
+#log { background: #0d0812; border: 1px solid #2d1840; border-radius: 6px; padding: 8px; max-height: 180px; overflow-y: auto; font-family: monospace; font-size: 0.78em; line-height: 1.5; margin-top: 8px; }
+.log-entry { margin: 1px 0; opacity: 0.85; }
+.log-feed { color: #ff6666; }
+.log-move { color: #88aaee; }
+.log-warn { color: #ffaa44; }
+.log-danger { color: #ff3333; }
+.log-good { color: #66dd66; }
+.log-info { color: #aa99dd; }
+#controls { padding: 8px; background: #0f0a17; border-top: 2px solid #3d1d5c; display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; font-size: 0.82em; }
+.key-btn { 
+  min-width: 38px; height: 34px; border: 1px solid #4a2870; background: #1a1028; 
+  color: #d4b0e8; border-radius: 6px; cursor: pointer; font-family: monospace; font-weight: bold;
+  transition: all 0.15s; font-size: 0.95em;
+}
+.key-btn:hover { background: #2d1850; border-color: #7a3db8; transform: translateY(-1px); }
+.key-btn.action { background: #2a1520; border-color: #8b3030; color: #ffaabb; }
+.key-btn.action:hover { background: #401a25; border-color: #bb4444; }
+.key-btn.special { background: #15202a; border-color: #306080; color: #88ccff; }
+#tooltip {
+  position: absolute; background: rgba(10,5,18,0.96); border: 1px solid #6b2da0;
+  border-radius: 8px; padding: 10px 14px; pointer-events: none; z-index: 100;
+  font-size: 0.82em; max-width: 240px; display: none; box-shadow: 0 4px 20px rgba(100,30,150,0.4);
+  line-height: 1.5;
+}
+#tt-title { color: #e0b0ff; font-weight: bold; margin-bottom: 5px; font-size: 1.05em; }
+#tt-body { color: #b090cc; }
+.tt-stat { display: flex; justify-content: space-between; margin: 2px 0; }
+.tt-label { color: #8888aa; }
+#night-indicator { text-align: center; font-size: 0.8em; color: #666688; margin-top: 2px; }
+.tier-star { color: #ffd700; }
+.circuit-badge { display: inline-block; background: #3d1d5c; color: #e0b0ff; padding: 1px 6px; border-radius: 4px; font-size: 0.75em; margin-left: 4px; }
+.hunter-marker { color: #cc3333; font-weight: bold; }
+#game-over-overlay {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  background: rgba(5,2,10,0.92); z-index: 200; display: none;
+  flex-direction: column; align-items: center; justify-content: center;
+}
+#go-title { font-size: 2.2em; margin-bottom: 10px; text-shadow: 0 0 25px currentColor; }
+#go-sub { font-size: 1.1em; margin-bottom: 20px; color: #9999bb; }
+#go-stats { font-size: 0.9em; color: #aa99cc; margin-bottom: 25px; text-align: center; line-height: 1.7; }
+.go-btn {
+  padding: 12px 32px; font-size: 1.1em; border: 2px solid #6b2da0; background: #1a1028;
+  color: #e0b0ff; border-radius: 10px; cursor: pointer; font-family: Georgia, serif;
+  transition: all 0.2s; letter-spacing: 2px;
+}
+.go-btn:hover { background: #2d1850; border-color: #9a4de8; transform: scale(1.05); }
+</style>
+</head>
+<body>
+
+<h1>🦇 VAMPIRE LORD: CIRCUIT — EMPIRE EDITION</h1>
+<div id="game-container">
+  <div id="map-area"><canvas id="canvas"></canvas></div>
+  <div id="sidebar">
+    <h3>🧛 Vampire Lord</h3>
+    <div class="stat-row"><span class="stat-label">Power Level</span><span class="stat-val" id="stat-power">1</span></div>
+    <div class="stat-row"><span class="stat-label">Night</span><span class="stat-val" id="stat-night">1</span></div>
+    <div style="margin-top:8px;">
+      <div class="stat-row"><span class="stat-label">🩸 Blood</span><span class="stat-val" id="stat-blood">0 / 8</span></div>
+      <div class="bar-container"><div class="bar-fill bar-blood" id="bar-blood" style="width:0%"></div></div>
+    </div>
+    <div>
+      <div class="stat-row"><span class="stat-label">🧠 Sanity</span><span class="stat-val" id="stat-sanity">100</span></div>
+      <div class="bar-container"><div class="bar-fill bar-sanity" id="bar-sanity" style="width:100%"></div></div>
+    </div>
+    <div>
+      <div class="stat-row"><span class="stat-label">⏱️ Moves Left</span><span class="stat-val" id="stat-moves">18</span></div>
+      <div class="bar-container"><div class="bar-fill bar-moves" id="bar-moves" style="width:100%"></div></div>
+    </div>
+    
+    <h3>📋 Circuit (<span id="circuit-count">0</span>)</h3>
+    <div id="circuit-list" style="font-size:0.8em;color:#9988aa;">No villages in circuit</div>
+    
+    <h3>🗺️ Known Villages</h3>
+    <div id="village-list" style="font-size:0.78em;"></div>
+    
+    <div id="log"></div>
+    <div id="night-indicator">🌙 Night 1 of ∞</div>
+  </div>
+</div>
+<div id="controls">
+  <button class="key-btn" title="Up-Left">W</button>
+  <button class="key-btn" title="Up-Right">E</button>
+  <button class="key-btn" title="Left">A</button>
+  <button class="key-btn" title="Wait/Center">S</button>
+  <button class="key-btn" title="Right">D</button>
+  <button class="key-btn" title="Down-Left">Z</button>
+  <button class="key-btn" title="Down-Right">X</button>
+  <button class="key-btn action" title="Feed on village">F</button>
+  <button class="key-btn action" title="Return to crypt">R</button>
+  <button class="key-btn special" title="Add to circuit">A+</button>
+  <button class="key-btn special" title="Remove from circuit">X-</button>
+  <button class="key-btn special" title="New Game">N</button>
+</div>
+
+<div id="tooltip"><div id="tt-title"></div><div id="tt-body"></div></div>
+
+<div id="game-over-overlay">
+  <div id="go-title"></div>
+  <div id="go-sub"></div>
+  <div id="go-stats"></div>
+  <button class="go-btn" onclick="startGame()">RISE AGAIN</button>
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const tooltip = document.getElementById('tooltip');
+
+// === HEX MATH: Pointy-top hexes arranged in a FLAT-TOP board shape ===
+// Pointy-top: vertices at ±30°, ±90°, ±150°
+// Flat-top board: |q|<=R, |r|<=R, |q+r|<=R
+
+const HEX_SIZE = 26;
+
+function hexCorner(center, size, i) {
+  // Pointy-top: vertex angles at 30° + 60°*i
+  const angleDeg = 30 + 60 * i;
+  const angleRad = Math.PI / 180 * angleDeg;
+  return {
+    x: center.x + size * Math.cos(angleRad),
+    y: center.y + size * Math.sin(angleRad)
+  };
+}
+
+function drawHex(cx, cy, size, fillColor, strokeColor, lineWidth=1.5) {
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const corner = hexCorner({x: cx, y: cy}, size, i);
+    if (i === 0) ctx.moveTo(corner.x, corner.y);
+    else ctx.lineTo(corner.x, corner.y);
+  }
+  ctx.closePath();
+  if (fillColor) { ctx.fillStyle = fillColor; ctx.fill(); }
+  if (strokeColor) { ctx.strokeStyle = strokeColor; ctx.lineWidth = lineWidth; ctx.stroke(); }
+}
+
+function pixelToHex(x, y) {
+  const pt = hexToPixel({q:0,r:0});
+  const px = x - pt.x;
+  const py = y - pt.y;
+  // Pointy-top inverse
+  const q = (Math.sqrt(3)/3 * px - 1/3 * py) / HEX_SIZE;
+  const r = (2/3 * py) / HEX_SIZE;
+  return hexRound(q, r);
+}
+
+function hexToPixel(hex) {
+  // Pointy-top layout
+  const x = HEX_SIZE * (Math.sqrt(3) * hex.q + Math.sqrt(3)/2 * hex.r);
+  const y = HEX_SIZE * (3/2 * hex.r);
+  return {x: x + offsetX, y: y + offsetY};
+}
+
+function hexRound(q, r) {
+  let s = -q - r;
+  let rq = Math.round(q), rr = Math.round(r), rs = Math.round(s);
+  const qDiff = Math.abs(rq - q), rDiff = Math.abs(rr - r), sDiff = Math.abs(rs - s);
+  if (qDiff > rDiff && qDiff > sDiff) rq = -rr - rs;
+  else if (rDiff > sDiff) rr = -rq - rs;
+  return {q: rq, r: rr};
+}
+
+function hexKey(h) { return h.q + ',' + h.r; }
+function hexDist(a, b) { return (Math.abs(a.q - b.q) + Math.abs(a.q + a.r - b.q - b.r) + Math.abs(a.r - b.r)) / 2; }
+
+const DIRS = [
+  {dq: 1, dr: -1, label:'E'},   // up-right
+  {dq: 1, dr: 0, label:'D'},    // right
+  {dq: 0, dr: 1, label:'X'},    // down-right
+  {dq: -1, dr: 1, label:'Z'},   // down-left
+  {dq: -1, dr: 0, label:'A'},   // left
+  {dq: 0, dr: -1, label:'W'},   // up-left
+];
+
+let offsetX, offsetY;
+
+// === GAME STATE ===
+let G = {};
+
+const VILLAGE_TIERS = [
+  { name: 'Hamlet', stars: 1, popMin: 25, popMax: 50, quality: 1, suspicionGain: 3, baseRisk: 0.03 },
+  { name: 'Village', stars: 2, popMin: 70, popMax: 130, quality: 2, suspicionGain: 5, baseRisk: 0.06 },
+  { name: 'Town', stars: 3, popMin: 180, popMax: 350, quality: 3, suspicionGain: 8, baseRisk: 0.10 },
+  { name: 'City', stars: 4, popMin: 450, popMax: 700, quality: 4, suspicionGain: 14, baseRisk: 0.16 },
+];
+
+const NAMES_P1 = ['Ash','Black','Blood','Cold','Dark','Dread','Fell','Grim','Hollow','Mist','Moon','Night','Raven','Shadow','Silent','Stone','Wolf'];
+const NAMES_P2 = ['brook','bury','cross','dale','ford','gate','haven','heim','holm','moor','shire','thorpe','vale','wick','wald'];
+
+function randName() { return NAMES_P1[Math.floor(Math.random()*NAMES_P1.length)] + NAMES_P2[Math.floor(Math.random()*NAMES_P2.length)]; }
+
+function seededRandom(seed) {
+  let s = seed;
+  return function() {
+    s = (s * 1664525 + 1013904223) & 0xFFFFFFFF;
+    return (s >>> 0) / 0xFFFFFFFF;
+  };
+}
+
+function initMap(seed) {
+  const rng = seededRandom(seed);
+  const R = 5; // board radius
+  G.mapRadius = R;
+  G.cells = {};
+  
+  // Place crypt near center
+  const cryptQ = Math.floor(rng() * 3) - 1;
+  const cryptR = Math.floor(rng() * 3) - 1;
+  G.crypt = {q: cryptQ, r: cryptR};
+  G.player = {q: cryptQ, r: cryptR};
+  
+  // Generate villages
+  G.villages = [];
+  const numVillages = 8 + Math.floor(rng() * 5); // 8-12
+  
+  for (let i = 0; i < numVillages; i++) {
+    let vq, vr, attempts = 0;
+    do {
+      vq = Math.floor(rng() * (2*R+1)) - R;
+      vr = Math.floor(rng() * (2*R+1)) - R;
+      attempts++;
+    } while (
+      ((Math.abs(vq) > R || Math.abs(vr) > R || Math.abs(vq+vr) > R) ||
+      (vq === cryptQ && vr === cryptR) ||
+      G.villages.some(v => v.q === vq && v.r === vr)) &&
+      attempts < 100
+    );
+    
+    if (attempts >= 100) continue;
+    
+    // Power level affects tier distribution
+    const tierRoll = rng();
+    let tierIdx;
+    const pwr = G.power || 1;
+    if (tierRoll < 0.5 - pwr*0.04) tierIdx = 0;       // hamlets common early
+    else if (tierRoll < 0.8 - pwr*0.03) tierIdx = 1;   // villages
+    else if (tierRoll < 0.95 - pwr*0.01) tierIdx = 2;   // towns
+    else tierIdx = 3;                                    // cities rare
+    
+    const tier = VILLAGE_TIERS[tierIdx];
+    const pop = tier.popMin + Math.floor(rng() * (tier.popMax - tier.popMin));
+    
+    G.villages.push({
+      q: vq, r: vr,
+      name: randName(),
+      tier: tierIdx,
+      pop: pop,
+      maxPop: pop,
+      fedCount: 0,
+      suspicion: 0,
+      discovered: false,
+      inCircuit: false,
+    });
+  }
+  
+  G.hunters = [];
+  G.maxMoves = 18 + Math.floor((G.power||1) * 1.7);
+  G.movesLeft = G.maxMoves;
+  G.blood = 0;
+  G.bloodCapacity = 8 + (G.power||1) * 3.2;
+  G.sanity = 100;
+  G.sanityDrain = 2 - Math.min((G.power||1) * 0.15, 1.5);
+  G.feedYield = 2 + Math.min((G.power||1) * 0.3, 2);
+  G.bloodGoal = Math.ceil(G.bloodCapacity * 0.6);
+  G.night = G.night || 1;
+  G.totalBloodEver = G.totalBloodEver || 0;
+  G.totalKills = G.totalKills || 0;
+  G.nightsSurvived = G.nightsSurvived || 0;
+  G.regionalSuspicion = 0;
+  G.gameOver = false;
+  G.wonNight = false;
+}
+
+function getVillageAt(q, r) {
+  return G.villages.find(v => v.q === q && v.r === r);
+}
+
+function isOnCrypt() {
+  return G.player.q === G.crypt.q && G.player.r === G.crypt.r;
+}
+
+function spendMove() {
+  G.movesLeft--;
+  // Sanity drain each turn
+  G.sanity -= G.sanityDrain;
+  if (G.sanity < 0) G.sanity = 0;
+  
+  // Hunter movement
+  moveHunters();
+  
+  checkEndConditions();
+  updateUI();
+}
+
+function movePlayer(dir) {
+  if (G.gameOver) return;
+  const nq = G.player.q + dir.dq;
+  const nr = G.player.r + dir.dr;
+  if (Math.abs(nq) > G.mapRadius || Math.abs(nr) > G.mapRadius || Math.abs(nq+nr) > G.mapRadius) {
+    addLog('❌ Cannot leave the map boundary.', 'warn');
+    return;
+  }
+  G.player = {q: nq, r: nr};
+  
+  // Discover village if present
+  const vil = getVillageAt(nq, nr);
+  if (vil && !vil.discovered) {
+    vil.discovered = true;
+    const tier = VILLAGE_TIERS[vil.tier];
+    addLog(`🏘️ Discovered ${'★'.repeat(tier.stars)} **${vil.name}** (${vil.pop} people)`, 'good');
+  }
+  
+  addLog(`➡️ Moved ${dir.label} to (${nq},${nr})`, 'move');
+  spendMove();
+}
+
+function waitTurn() {
+  if (G.gameOver) return;
+  addLog(`⏳ Waiting... time passes`, 'info');
+  spendMove();
+}
+
+function feed() {
+  if (G.gameOver) return;
+  const vil = getVillageAt(G.player.q, G.player.r);
+  if (!vil) { addLog('❌ No village here to feed on.', 'warn'); return; }
+  if (!vil.inCircuit) { addLog('❌ This village is not in your circuit! Press A+ to add it first.', 'warn'); return; }
+  if (G.blood >= G.bloodCapacity) { addLog('❌ Blood capacity full!', 'warn'); return; }
+  
+  const yieldAmt = Math.min(G.feedYield, G.bloodCapacity - G.blood);
+  G.blood += yieldAmt;
+  G.totalBloodEver += yieldAmt;
+  G.totalKills++;
+  vil.fedCount++;
+  vil.pop--;
+  vil.suspicion += VILLAGE_TIERS[vil.tier].suspicionGain;
+  G.regionalSuspicion += 0.8;
+  
+  // Chance of hunter spawn based on individual + regional suspicion
+  const hunterChance = VILLAGE_TIERS[vil.tier].baseRisk + (vil.suspicion / 500) + (G.regionalSuspicion / 800);
+  
+  let msg = `🩸 Fed at **${vil.name}** (+${yieldAmt} 🩸, pop: ${vil.pop})`;
+  if (vil.pop <= 0) msg += ` ⚰️ **VILLAGE WIPED OUT**`;
+  else if (vil.suspicion > 60) msg += ` 👁️ Suspicion HIGH`;
+  addLog(msg, 'feed');
+  
+  if (Math.random() < hunterChance && G.hunters.length < 3 + G.night) {
+    spawnHunter(vil);
+  }
+  
+  // Regional awareness check
+  if (G.regionalSuspicion > 30) {
+    addLog(`💬 Villages are beginning to share stories of disappearances...`, 'warn');
+  }
+  if (G.regionalSuspicion > 70) {
+    addLog(`💀 A coordinated hunt may be forming against you!`, 'danger');
+  }
+  
+  spendMove();
+}
+
+function spawnHunter(sourceVil) {
+  // Spawn at edge of map, will path toward crypt
+  const edgePos = [
+    {q: -G.mapRadius, r: Math.floor(Math.random()*(G.mapRadius*2+1))-G.mapRadius},
+    {q: G.mapRadius, r: Math.floor(Math.random()*(G.mapRadius*2+1))-G.mapRadius},
+    {q: Math.floor(Math.random()*(G.mapRadius*2+1))-G.mapRadius, r: -G.mapRadius},
+    {q: Math.floor(Math.random()*(G.mapRadius*2+1))-G.mapRadius, r: G.mapRadius},
+  ];
+  const pos = edgePos[Math.floor(Math.random()*edgePos.length)];
+  G.hunters.push({
+    q: pos.q, r: pos.r,
+    sourceVil: sourceVil ? sourceVil.name : 'Unknown',
+    turnsAlive: 0,
+  });
+  addLog(`🧔 A vampire hunter has set out from the region!`, 'danger');
+}
+
+function moveHunters() {
+  G.hunters.forEach(h => {
+    h.turnsAlive++;
+    // Move toward crypt, with some randomness
+    if (Math.random() < 0.65) {
+      const dq = G.crypt.q - h.q;
+      const dr = G.crypt.r - h.r;
+      // Pick direction closest to target
+      let bestDir = DIRS[0];
+      let bestDist = Infinity;
+      DIRS.forEach(d => {
+        const nq = h.q + d.dq;
+        const nr = h.r + d.dr;
+        const dist = Math.sqrt((G.crypt.q-nq)**2 + (G.crypt.r-nr)**2);
+        if (dist < bestDist) { bestDist = dist; bestDir = d; }
+      });
+      h.q += bestDir.dq;
+      h.r += bestDir.dr;
+    } else {
+      // Random move
+      const d = DIRS[Math.floor(Math.random()*6)];
+      h.q += d.dq;
+      h.r += d.dr;
+    }
+    // Clamp to map
+    h.q = Math.max(-G.mapRadius, Math.min(G.mapRadius, h.q));
+    h.r = Math.max(-G.mapRadius, Math.min(G.mapRadius, h.r));
+  });
+  
+  // Check hunter collision with player
+  G.hunters = G.hunters.filter(h => {
+    if (h.q === G.player.q && h.r === G.player.r) {
+      endGame('slain', `A hunter caught you at (${h.q},${h.r})!`);
+      return false;
+    }
+    return true;
+  });
+}
+
+function addToCircuit() {
+  if (G.gameOver) return;
+  const vil = getVillageAt(G.player.q, G.player.r);
+  if (!vil) { addLog('❌ No village here.', 'warn'); return; }
+  if (!vil.discovered) { addLog('❌ You must discover this village first (walk onto it).', 'warn'); return; }
+  if (vil.inCircuit) { addLog('❌ Already in circuit.', 'warn'); return; }
+  
+  const cost = (vil.tier + 1) * 2;
+  if (G.power < cost) {
+    addLog(`❌ Need Power level ${cost} to add this ${VILLAGE_TIERS[vil.tier].name}. (You have ${G.power})`, 'warn');
+    return;
+  }
+  
+  vil.inCircuit = true;
+  addLog(`✅ Added **${vil.name}** to your circuit! (-${cost} effective power for maintenance)`, 'good');
+  updateUI();
+}
+
+function removeFromCircuit() {
+  if (G.gameOver) return;
+  const vil = getVillageAt(G.player.q, G.player.r);
+  if (!vil || !vil.inCircuit) { addLog('❌ No circuit village here.', 'warn'); return; }
+  vil.inCircuit = false;
+  addLog(`❌ Removed **${vil.name}** from circuit.`, 'info');
+  updateUI();
+}
+
+function returnToCrypt() {
+  if (G.gameOver) return;
+  if (isOnCrypt()) { addLog('You are already at your crypt.', 'info'); return; }
+  const dist = hexDist(G.player, G.crypt);
+  if (dist > G.movesLeft) {
+    addLog(`❌ Not enough moves! Crypt is ${dist} moves away, you have ${G.movesLeft}.`, 'danger');
+    return;
+  }
+  G.movesLeft -= dist;
+  G.player = {q: G.crypt.q, r: G.crypt.r};
+  addLog(`🦇 Returned to crypt (-${dist} moves)`, 'move');
+  checkEndConditions();
+  updateUI();
+}
+
+function checkEndConditions() {
+  // Sanity check
+  if (G.sanity <= 0) {
+    endGame('insane', 'Your mind shatters from blood starvation. You go feral and are hunted down by morning.');
+    return;
+  }
+  
+  // Hunter reaches crypt
+  G.hunters.forEach(h => {
+    if (h.q === G.crypt.q && h.r === G.crypt.r) {
+      endGame('crypt_found', `A hunter found your crypt while you were away! Your resting place is destroyed.`);
+    }
+  });
+  
+  // Out of moves
+  if (G.movesLeft <= 0) {
+    if (isOnCrypt()) {
+      winNight();
+    } else {
+      endGame('sunrise', `☀️ Sunrise catches you away from your crypt! The sun burns you to ash.`);
+    }
+  }
+}
+
+function winNight() {
+  G.wonNight = true;
+  G.nightsSurvived++;
+  G.power = (G.power || 1) + 1;
+  if (G.power > 10) G.power = 10;
+  
+  // Bonus: keep some blood into next night
+  const bloodRetained = Math.floor(G.blood * 0.3);
+  
+  addLog(`🌅 Dawn breaks. You made it through Night ${G.night}.`, 'good');
+  addLog(`⬆️ POWER INCREASED → Level ${G.power}!`, 'good');
+  
+  setTimeout(() => {
+    alert(
+      `🌅 NIGHT ${G.night} COMPLETE!\n\n` +
+      `🧛 Power Level: ${(G.power||1)}\n` +
+      `🩸 Blood gathered: ${G.blood}\n` +
+      `👥 Total victims: ${G.totalKills}\n` +
+      `🌙 Nights survived: ${G.nightsSurvived}\n\n` +
+      `Your power grows... Next night will bring new villages and greater challenges.`
+    );
+    
+    G.night++;
+    initMap(Date.now() + G.night);
+    G.blood = bloodRetained;
+    G.sanity = Math.min(100, G.sanity + 40);
+    render();
+    updateUI();
+  }, 100);
+}
+
+function endGame(reason, desc) {
+  G.gameOver = true;
+  const overlay = document.getElementById('game-over-overlay');
+  const title = document.getElementById('go-title');
+  const sub = document.getElementById('go-sub');
+  const stats = document.getElementById('go-stats');
+  
+  if (reason === 'insane') {
+    title.textContent = '🧠 FERAL';
+    title.style.color = '#9933cc';
+    sub.textContent = desc;
+  } else if (reason === 'sunrise') {
+    title.textContent = '☀️ ASH';
+    title.style.color = '#ff6600';
+    sub.textContent = desc;
+  } else if (reason === 'slain') {
+    title.textContent = '🔥 STAKED';
+    title.style.color = '#cc3333';
+    sub.textContent = desc;
+  } else if (reason === 'crypt_found') {
+    title.textContent = '⚰️ UNDONE';
+    title.style.color = '#888888';
+    sub.textContent = desc;
+  }
+  
+  stats.innerHTML =
+    `Nights Survived: <b>${G.nightsSurvived}</b><br>` +
+    `Final Night: <b>${G.night}</b><br>` +
+    `Power Level: <b>${G.power || 1}</b><br>` +
+    `Total Blood: <b>${Math.floor(G.totalBloodEver)}</b><br>` +
+    `Victims: <b>${G.totalKills}</b><br>` +
+    `Circuit Size: <b>${G.villages.filter(v=>v.inCircuit).length}</b>`;
+  
+  overlay.style.display = 'flex';
+}
+
+function startGame() {
+  document.getElementById('game-over-overlay').style.display = 'none';
+  G.power = 1;
+  G.night = 1;
+  G.totalBloodEver = 0;
+  G.totalKills = 0;
+  G.nightsSurvived = 0;
+  initMap(Date.now());
+  render();
+  updateUI();
+  addLog('🦇 You awaken in your crypt. A new night begins. Find villages, build your circuit, feed wisely.', 'info');
+}
+
+// === RENDERING ===
+function render() {
+  const rect = document.getElementById('map-area').getBoundingClientRect();
+  canvas.width = rect.width;
+  canvas.height = rect.height;
+  offsetX = canvas.width / 2;
+  offsetY = canvas.height / 2;
+  
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  
+  // Background gradient
+  const bgGrad = ctx.createRadialGradient(canvas.width/2, canvas.height/2, 0, canvas.width/2, canvas.height/2, canvas.width*0.7);
+  bgGrad.addColorStop(0, '#12101c');
+  bgGrad.addColorStop(1, '#0a0810');
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  
+  // Draw cells
+  for (let q = -G.mapRadius; q <= G.mapRadius; q++) {
+    for (let r = -G.mapRadius; r <= G.mapRadius; r++) {
+      if (Math.abs(q + r) > G.mapRadius) continue;
+      
+      const px = hexToPixel({q, r});
+      const vil = getVillageAt(q, r);
+      const isPlayer = (G.player.q === q && G.player.r === r);
+      const isCrypt = (G.crypt.q === q && G.crypt.r === r);
+      const hunterHere = G.hunters.some(h => h.q === q && h.r === r);
+      
+      let fill = null, stroke = '#251a35', lw = 1;
+      
+      if (isCrypt) {
+        fill = 'rgba(60, 20, 80, 0.6)';
+        stroke = '#8b5cb8';
+        lw = 2.5;
+      } else if (isPlayer) {
+        fill = 'rgba(120, 40, 160, 0.35)';
+        stroke = '#a060d0';
+        lw = 2;
+      } else if (hunterHere) {
+        fill = 'rgba(140, 30, 30, 0.4)';
+        stroke = '#cc3333';
+        lw = 2;
+      } else if (vil && vil.discovered) {
+        if (vil.inCircuit) {
+          const sus = Math.min(vil.suspicion / 100, 1);
+          const r_col = Math.floor(30 + sus * 80);
+          const g_col = Math.floor(50 - sus * 30);
+          const b_col = Math.floor(30 + sus * 20);
+          fill = `rgba(${r_col}, ${g_col}, ${b_col}, 0.45)`;
+          stroke = `rgb(${r_col+60}, ${g_col+40}, ${b_col+60})`;
+        } else {
+          fill = 'rgba(20, 40, 30, 0.35)';
+          stroke = '#3a7a5a';
+        }
+        lw = 1.5;
+      } else if (vil && !vil.discovered) {
+        fill = 'rgba(30, 25, 40, 0.2)';
+        stroke = '#3a3050';
+      } else {
+        // Empty cell - very subtle
+        fill = 'rgba(18, 14, 26, 0.15)';
+        stroke = '#1e1828';
+        lw = 0.5;
+      }
+      
+      drawHex(px.x, px.y, HEX_SIZE, fill, stroke, lw);
+      
+      // Draw icons
+      if (isCrypt) {
+        ctx.fillStyle = '#c9a0dc';
+        ctx.font = `${HEX_SIZE}px serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('⛪', px.x, px.y);
+      }
+      if (vil && vil.discovered) {
+        ctx.font = `${HEX_SIZE * 0.65}px serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const tier = VILLAGE_TIERS[vil.tier];
+        ctx.fillStyle = vil.inCircuit ? '#ddccaa' : '#777788';
+        ctx.fillText('🏘️', px.x - 6, px.y - 2);
+        // Stars
+        ctx.font = '10px serif';
+        ctx.fillStyle = '#ffd700';
+        ctx.fillText('★'.repeat(tier.stars), px.x + 10, px.y + 6);
+        if (vil.inCircuit) {
+          ctx.font = 'bold 9px sans-serif';
+          ctx.fillStyle = '#a080c0';
+          ctx.fillText('●', px.x + HEX_SIZE - 4, px.y - HEX_SIZE + 4);
+        }
+      }
+      if (isPlayer && !isCrypt) {
+        ctx.fillStyle = '#ff44aa';
+        ctx.font = `bold ${HEX_SIZE * 0.7}px serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('🧛', px.x, px.y);
+      }
+      if (hunterHere) {
+        ctx.fillStyle = '#ff3333';
+        ctx.font = `${HEX_SIZE * 0.6}px serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('🧔', px.x, px.y);
+      }
+    }
+  }
+}
+
+// === UI ===
+function updateUI() {
+  document.getElementById('stat-power').textContent = G.power || 1;
+  document.getElementById('stat-night').textContent = G.night;
+  document.getElementById('stat-blood').textContent = `${Math.floor(G.blood)} / ${Math.ceil(G.bloodCapacity)}`;
+  document.getElementById('bar-blood').style.width = `${(G.blood / G.bloodCapacity) * 100}%`;
+  document.getElementById('stat-sanity').textContent = Math.ceil(G.sanity);
+  document.getElementById('bar-sanity').style.width = `${G.sanity}%`;
+  document.getElementById('stat-moves').textContent = G.movesLeft;
+  document.getElementById('bar-moves').style.width = `${(G.movesLeft / G.maxMoves) * 100}%`;
+  document.getElementById('night-indicator').textContent = `🌙 Night ${G.night} — Moves: ${G.movesLeft}/${G.maxMoves}`;
+  
+  // Circuit list
+  const circuit = G.villages.filter(v => v.inCircuit);
+  document.getElementById('circuit-count').textContent = circuit.length;
+  const clist = document.getElementById('circuit-list');
+  if (circuit.length === 0) {
+    clist.innerHTML = '<span style="color:#665577;">No villages in circuit — explore and press A+ to add</span>';
+  } else {
+    clist.innerHTML = circuit.map(v => {
+      const t = VILLAGE_TIERS[v.tier];
+      const susPct = Math.min(100, Math.floor(v.suspicion));
+      const susColor = susPct > 60 ? '#cc3333' : susPct > 30 ? '#cc8833' : '#55aa55';
+      return `<div style="margin:2px 0;padding:2px 4px;background:#1a1225;border-radius:3px;">
+        <span style="color:#dda">${'★'.repeat(t.stars)}</span> 
+        <b style="color:#c9a0dc">${v.name}</b> 
+        <span style="color:#8888aa;font-size:0.9em">(pop:${v.pop})</span>
+        <span style="color:${susColor};font-size:0.85em">[${susPct}%👁️]</span>
+      </div>`;
+    }).join('');
+  }
+  
+  // Village list
+  const disc = G.villages.filter(v => v.discovered);
+  const vlist = document.getElementById('village-list');
+  vlist.innerHTML = disc.map(v => {
+    const t = VILLAGE_TIERS[v.tier];
+    return `<div style="margin:1px 0;">
+      ${v.inCircuit ? '<span class="circuit-badge">CKT</span>' : ''}
+      <span class="tier-star">${'★'.repeat(t.stars)}</span> 
+      <b>${v.name}</b> <span style="color:#666">(${v.pop}/${v.maxPop})</span>
+      ${v.fedCount > 0 ? `<span style="color:#aa5555;font-size:0.9em">×${v.fedCount}</span>` : ''}
+    </div>`;
+  }).join('') || '<span style="color:#554466;">Explore to find villages...</span>';
+}
+
+function addLog(msg, cls='info') {
+  const log = document.getElementById('log');
+  const entry = document.createElement('div');
+  entry.className = 'log-entry log-' + cls;
+  entry.innerHTML = msg;
+  log.appendChild(entry);
+  log.scrollTop = log.scrollHeight;
+}
+
+// === TOOLTIP ===
+canvas.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  const hex = pixelToHex(mx, my);
+  
+  if (Math.abs(hex.q) > G.mapRadius || Math.abs(hex.r) > G.mapRadius || Math.abs(hex.q+hex.r) > G.mapRadius) {
+    tooltip.style.display = 'none';
+    return;
+  }
+  
+  const vil = getVillageAt(hex.q, hex.r);
+  const isCrypt = (hex.q === G.crypt.q && hex.r === G.crypt.r);
+  const dist = hexDist(G.player, hex);
+  const hunterThere = G.hunters.find(h => h.q === hex.q && h.r === hex.r);
+  
+  if (!vil && !isCrypt && !hunterThere) {
+    tooltip.style.display = 'none';
+    return;
+  }
+  
+  tooltip.style.display = 'block';
+  tooltip.style.left = (e.clientX + 15) + 'px';
+  tooltip.style.top = (e.clientY + 15) + 'px';
+  
+  let html = '';
+  if (isCrypt) {
+    document.getElementById('tt-title').textContent = '⛪ Your Crypt';
+    html = `<div class="tt-stat"><span class="tt-label">Position</span><span>(${G.crypt.q}, ${G.crypt.r})</span></div>
+            <div class="tt-stat"><span class="tt-label">Distance</span><span>${dist} moves</span></div>
+            <div style="color:#88aa88;margin-top:4px;">Safe haven. Must be here when moves run out.</div>`;
+  } else if (vil && vil.discovered) {
+    const t = VILLAGE_TIERS[vil.tier];
+    document.getElementById('tt-title').textContent = `${'★'.repeat(t.stars)} ${vil.name}`;
+    html = `<div class="tt-stat"><span class="tt-label">Type</span><span>${t.name}</span></div>
+            <div class="tt-stat"><span class="tt-label">Population</span><span>${vil.pop} / ${vil.maxPop}</span></div>
+            <div class="tt-stat"><span class="tt-label">Quality</span><span>${t.quality}x blood</span></div>
+            <div class="tt-stat"><span class="tt-label">Times Fed</span><span>${vil.fedCount}</span></div>
+            <div class="tt-stat"><span class="tt-label">Suspicion</span><span style="color:${vil.suspicion>60?'#cc3333':vil.suspicion>30?'#cc8833':'#55aa55'}">${Math.floor(vil.suspicion)}%</span></div>
+            <div class="tt-stat"><span class="tt-label">In Circuit</span><span style="color:${vil.inCircuit?'#66dd66':'#888'}">${vil.inCircuit ? '✅ Yes' : '❌ No'}</span></div>
+            <div class="tt-stat"><span class="tt-label">Distance</span><span>${dist} moves</span></div>`;
+  } else if (vil && !vil.discovered) {
+    document.getElementById('tt-title').textContent = '? Undiscovered Settlement';
+    html = `<div style="color:#9988aa;">Walk onto this cell to discover what lies here...</div>`;
+  } else if (hunterThere) {
+    document.getElementById('tt-title').textContent = '🧔 Vampire Hunter!';
+    html = `<div class="tt-stat"><span class="tt-label">Source</span><span>${hunterThere.sourceVil}</span></div>
+            <div class="tt-stat"><span="tt-label">Active</span><span>${hunterThere.turnsAlive} turns</span></div>
+            <div style="color:#cc3333;margin-top:4px;">Hunting YOUR crypt. If it finds you or your crypt, you die.</div>`;
+  }
+  document.getElementById('tt-body').innerHTML = html;
+});
+
+canvas.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+
+// === INPUT ===
+document.addEventListener('keydown', e => {
+  if (G.gameOver && e.key.toLowerCase() !== 'n') return;
+  
+  const key = e.key.toLowerCase();
+  
+  if (key === 'w') movePlayer(DIRS[5]);     // up-left
+  else if (key === 'e') movePlayer(DIRS[0]); // up-right
+  else if (key === 'a') movePlayer(DIRS[4]); // left
+  else if (key === 'd') movePlayer(DIRS[1]); // right
+  else if (key === 'z') movePlayer(DIRS[3]); // down-left
+  else if (key === 'x') movePlayer(DIRS[2]); // down-right
+  else if (key === 's') waitTurn();
+  else if (key === 'f') feed();
+  else if (key === 'r') returnToCrypt();
+  else if (key === 'n') startGame();
+});
+
+document.querySelectorAll('.key-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const t = btn.textContent.trim().toLowerCase();
+    if (t === 'w') movePlayer(DIRS[5]);
+    else if (t === 'e') movePlayer(DIRS[0]);
+    else if (t === 'a') movePlayer(DIRS[4]);
+    else if (t === 'd') movePlayer(DIRS[1]);
+    else if (t === 'z') movePlayer(DIRS[3]);
+    else if (t === 'x') movePlayer(DIRS[2]);
+    else if (t === 's') waitTurn();
+    else if (t === 'f') feed();
+    else if (t === 'r') returnToCrypt();
+    else if (t === 'n') startGame();
+    else if (t === 'a+') addToCircuit();
+    else if (t === 'x-') removeFromCircuit();
+  });
+});
+
+// === INIT ===
+window.addEventListener('resize', () => { render(); updateUI(); });
+startGame();
+
+</script>
+</body>
+</html>
