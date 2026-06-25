@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>📖 SEX-WOMEN: THE COMIC — EXPANDED EDITION</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Bangers&family=Comic+Neue:wght@400;700&display=swap');
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #0a0a0f;
+  color: #fff;
+  font-family: 'Comic Neue', cursive;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  overflow: hidden;
+}
+#game-container {
+  width: 100vw;
+  height: 100vh;
+  position: relative;
+}
+canvas { display: block; width: 100%; height: 100%; }
+.ui-overlay {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  z-index: 10;
+}
+.btn {
+  background: rgba(255,20,147,0.2);
+  border: 2px solid #ff1493;
+  color: #ff1493;
+  padding: 8px 18px;
+  font-family: 'Bangers', cursive;
+  font-size: 18px;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: all 0.2s;
+}
+.btn:hover { background: rgba(255,20,147,0.4); transform: scale(1.05); }
+.panel-counter {
+  font-family: 'Bangers', cursive;
+  font-size: 22px;
+  color: #ffd700;
+  text-shadow: 0 0 10px rgba(255,215,0,0.5);
+}
+.hint {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 14px;
+  color: rgba(255,255,255,0.4);
+  font-family: 'Comic Neue', cursive;
+}
+</style>
+</head>
+<body>
+<div id="game-container">
+  <canvas id="canvas"></canvas>
+  <div class="ui-overlay">
+    <button class="btn" id="prevBtn">◀ Prev</button>
+    <span class="panel-counter" id="counter">1 / 12</span>
+    <button class="btn" id="nextBtn">Next ▶</button>
+  </div>
+  <div class="hint">Click or press →/Space to advance • Click 🐝 Buzzy to buzz!</div>
+</div>
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let W, H;
+
+function resize() {
+  const c = document.getElementById('game-container');
+  W = canvas.width = c.clientWidth;
+  H = canvas.height = c.clientHeight;
+  drawPanel(currentPanel);
+}
+window.addEventListener('resize', resize);
+
+let currentPanel = 0;
+let animFrame = null;
+let startTime = Date.now();
+
+function drawRoundedRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.lineTo(x+w-r, y);
+  ctx.quadraticCurveTo(x+w, y, x+w, y+r);
+  ctx.lineTo(x+w, y+h-r);
+  ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
+  ctx.lineTo(x+r, y+h);
+  ctx.quadraticCurveTo(x, y+h, x, y+h+r);
+  ctx.lineTo(x, y+r);
+  ctx.quadraticCurveTo(x, y, x+r, y);
+  ctx.closePath();
+}
+
+function drawSpeechBubble(x, y, text, align) {
+  ctx.font = Math.max(14, Math.min(W*0.032, 22)) + 'px Comic Neue';
+  const metrics = ctx.measureText(text);
+  const tw = metrics.width + 24;
+  const th = 32;
+  const bx = align === 'center' ? x - tw/2 : (align === 'right' ? x - tw : x);
+  const by = y - th - 8;
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 2;
+  drawRoundedRect(bx, by, tw, th, 8);
+  ctx.fill();
+  ctx.stroke();
+  // tail
+  ctx.beginPath();
+  ctx.moveTo(bx + tw/2 - 6, by + th);
+  ctx.lineTo(bx + tw/2, by + th + 10);
+  ctx.lineTo(bx + tw/2 + 6, by + th);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#000';
+  ctx.textAlign = 'center';
+  ctx.fillText(text, bx + tw/2, by + th/2 + 5);
+}
+
+function drawCharacter(x, y, emoji, label, color, scale) {
+  const s = scale || 1;
+  const r = 28 * s;
+  // glow
+  const glow = ctx.createRadialGradient(x, y, r*0.5, x, y, r*2);
+  glow.addColorStop(0, color + '40');
+  glow.addColorStop(1, 'transparent');
+  ctx.fillStyle = glow;
+  ctx.fillRect(x-r*2, y-r*2, r*4, r*4);
+  // body
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  // emoji
+  ctx.font = (20*s) + 'px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(emoji, x, y+2);
+  if (label) {
+    ctx.font = (11*s) + 'px Bangers';
+    ctx.fillStyle = '#ffd700';
+    ctx.fillText(label, x, y + r + 14*s);
+  }
+}
+
+function drawBuzzy(t) {
+  const bx = W - 45, by = H - 40;
+  const bounce = Math.sin(t*4)*3;
+  // wings
+  ctx.fillStyle = '#FFE066';
+  ctx.beginPath(); ctx.ellipse(bx-8, by+bounce-2, 7, 4, -0.3, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(bx+8, by+bounce-2, 7, 4, 0.3, 0, Math.PI*2); ctx.fill();
+  // body
+  ctx.beginPath(); ctx.ellipse(bx, by+bounce, 9, 11, 0, 0, Math.PI*2); ctx.fillStyle = '#FFD700'; ctx.fill();
+  ctx.strokeStyle = '#333'; ctx.lineWidth = 1; ctx.stroke();
+  // stripes
+  ctx.fillStyle = '#333';
+  ctx.fillRect(bx-7, by+bounce-3, 14, 2);
+  ctx.fillRect(bx-6, by+bounce+2, 12, 2);
+  // eyes
+  ctx.fillStyle = '#000';
+  ctx.beginPath(); ctx.arc(bx-3, by+bounce-2, 1.5, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(bx+3, by+bounce-2, 1.5, 0, Math.PI*2); ctx.fill();
+  // smile
+  ctx.beginPath(); ctx.arc(bx, by+bounce+1, 4, 0.2*Math.PI, 0.8*Math.PI); ctx.stroke();
+  // label
+  ctx.font = 'bold 10px Bangers';
+  ctx.fillStyle = '#FFD700';
+  ctx.textAlign = 'center';
+  ctx.fillText('BUZZY', bx, by + 22);
+}
+
+// ===== PANEL DATA =====
+const panels = [
+  // PANEL 0 — COVER
+  function(t) {
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#1a0020'); g.addColorStop(1, '#400050');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    // spotlight
+    const sg = ctx.createRadialGradient(W/2, H*0.35, 50, W/2, H*0.35, W*0.6);
+    sg.addColorStop(0, 'rgba(255,20,147,0.3)');
+    sg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = sg; ctx.fillRect(0,0,W,H);
+    // silhouettes
+    for(let i=0;i<5;i++) {
+      const sx = W*(0.25+i*0.125), sy = H*0.55+Math.sin(t+i)*5;
+      ctx.beginPath(); ctx.arc(sx, sy, 22, 0, Math.PI*2);
+      ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fill();
+      ctx.strokeStyle = 'rgba(255,20,147,0.3)'; ctx.lineWidth=1; ctx.stroke();
+    }
+    // title
+    ctx.save();
+    ctx.font = 'bold ' + Math.min(W*0.13, 76) + 'px Bangers';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ff1493';
+    ctx.strokeStyle = '#ffd700';
+    ctx.lineWidth = 3;
+    ctx.strokeText('SEX-WOMEN', W/2, H*0.32);
+    ctx.fillText('SEX-WOMEN', W/2, H*0.32);
+    ctx.font = 'bold ' + Math.min(W*0.05, 32) + 'px Bangers';
+    ctx.fillStyle = '#ffd700';
+    ctx.fillText('THE COMIC', W/2, H*0.42);
+    ctx.font = '16px Comic Neue';
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.fillText('A handyc_ Production • Based on True Events™', W/2, H*0.5);
+    ctx.restore();
+    // stars
+    for(let i=0;i<30;i++) {
+      const sx = (Math.sin(i*127.1+t*0.5)*0.5+0.5)*W;
+      const sy = (Math.cos(i*311.3)*0.5+0.5)*H*0.6;
+      ctx.fillStyle = 'rgba(255,255,255,'+(0.3+Math.sin(t*2+i)*0.2)+')';
+      ctx.beginPath(); ctx.arc(sx, sy, 1.5, 0, Math.PI*2); ctx.fill();
+    }
+  },
+  // PANEL 1 — "So why not X-Women...?"
+  function(t) {
+    const g = ctx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0,'#0f001a'); g.addColorStop(1,'#1a0030');
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+    // handyc character thinking
+    drawCharacter(W*0.5, H*0.45, '💡', '', '#4CAF50', 1.8);
+    // thought bubble
+    ctx.font = Math.min(W*0.04,28)+'px Comic Neue';
+    ctx.textAlign='center';
+    ctx.fillStyle='#fff';
+    ctx.fillText("So why not X-Women...", W/2, H*0.22);
+    ctx.font=Math.min(W*0.032,20)+'px Comic Neue';
+    ctx.fillStyle='rgba(255,255,255,0.6)';
+    ctx.fillText("(like X-Men but... women)", W/2, H*0.27);
+    // thought lines
+    ctx.strokeStyle='rgba(255,255,255,0.3)';
+    ctx.setLineDash([4,4]);
+    [W*0.4, W*0.5, W*0.6].forEach(function(wx,i) {
+      ctx.beginPath();
+      ctx.arc(wx, H*0.33, 5-i*1.5, 0, Math.PI*2);
+      ctx.stroke();
+    });
+    ctx.setLineDash([]);
+    // small X-Men logo reference
+    ctx.font='14px Bangers'; ctx.fillStyle='rgba(255,215,0,0.4)';
+    ctx.fillText('☠️ X-MEN exists...', W/2, H*0.72);
+    ctx.fillText('✅ WOMEN exist...', W/2, H*0.77);
+    ctx.fillText('💡 ...COMBINE?', W/2, H*0.82);
+  },
+  // PANEL 2 — "But why stop there? Sex sells."
+  function(t) {
+    const g = ctx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0,'#1a0a00'); g.addColorStop(1,'#301500');
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+    // money rain
+    for(let i=0;i<20;i++) {
+      const mx = (Math.sin(i*73.1+t*1.5+i*0.1)*0.5+0.5)*W;
+      const my = ((t*60+i*47)%H);
+      ctx.font='20px sans-serif';
+      ctx.fillText('💵', mx, my);
+    }
+    // greedy handyc
+    drawCharacter(W*0.5, H*0.5, '🤑', '', '#FF9800', 2);
+    // speech bubble
+    drawSpeechBubble(W/2, H*0.34, "But why stop there?", 'center');
+    drawSpeechBubble(W*0.65, H*0.38, "Sex sells! 💰", 'left');
+    // pie chart
+    const pcx=W*0.22, pcy=H*0.7, pr=Math.min(W,H)*0.12;
+    ctx.fillStyle='#e91e63'; ctx.beginPath(); ctx.moveTo(pcx,pcy); ctx.arc(pcx,pcy,pr,0,Math.PI*2*0.94); ctx.fill();
+    ctx.fillStyle='#666'; ctx.beginPath(); ctx.moveTo(pcx,pcy); ctx.arc(pcx,pcy,pr,Math.PI*2*0.94,Math.PI*2); ctx.fill();
+    ctx.font='12px Comic Neue'; ctx.fillStyle='#fff';
+    ctx.fillText('Sex: 94%', pcx, pcy-pr-8);
+    ctx.fillText('Plot: 6%', pcx+pr+15, pcy);
+  },
+  // PANEL 3 — Evolution chain
+  function(t) {
+    const g = ctx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0,'#0a0a1a'); g.addColorStop(1,'#1a0a2a');
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+    // evolution arrows
+    const stages=[
+      {x:W*0.15,emoji:'☠️',label:'X-Men',color:'#3F51B5'},
+      {x:W*0.38,emoji:'‍♀️🦸',label:'X-Women',color:'#E91E63'},
+      {x:W*0.62,emoji:'🔥',label:'S-Women',color:'#FF5722'},
+      {x:W*0.85,emoji:'💋',label:'SEX-WOMEN',color:'#F44336'}
+    ];
+    stages.forEach(function(s,i) {
+      const bounce=Math.sin(t*2+i)*4;
+      drawCharacter(s.x, H*0.45+bounce, s.emoji, s.label, s.color, 1.4);
+      if(i<stages.length-1) {
+        // arrow
+        const ax=s.x+50, ay=H*0.45;
+        ctx.strokeStyle='#ffd700';
+        ctx.lineWidth=3;
+        ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(ax+40,ay); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(ax+34,ay-6); ctx.lineTo(ax+40,ay); ctx.lineTo(ax+34,ay+6); ctx.stroke();
+        // plus sign above arrow
+        ctx.font='bold 18px Comic Neue'; ctx.fillStyle='#ff1493';
+        ctx.fillText(i===0?'♀️':(i===1?'🔥':'💋'), ax+15, ay-18);
+      }
+    });
+    // label
+    ctx.font='bold '+Math.min(W*0.045,30)+'px Bangers';
+    ctx.textAlign='center'; ctx.fillStyle='#ff1493';
+    ctx.fillText('THE EVOLUTION OF BRILLIANCE', W/2, H*0.15);
+    ctx.font='14px Comic Neue'; ctx.fillStyle='rgba(255,255,255,0.5)';
+    ctx.fillText('Each step = more profit ✨', W/2, H*0.88);
+  },
+  // PANEL 4 — Marketing chart
+  function(t) {
+    const g = ctx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0,'#001a0a'); g.addColorStop(1,'#002a10');
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+    // bar chart
+    const bars=[
+      {label:'Story Quality',h:0.08,color:'#666'},
+      {label:'Character Dev',h:0.05,color:'#888'},
+      {label:'Animation Budget',h:0.03,color:'#aaa'},
+      {label:'S** IN NAME',h:0.92,color:'#e91e63'}
+    ];
+    const barW=W*0.12, maxH=H*0.45, baseY=H*0.62;
+    bars.forEach(function(b,i) {
+      const bx=W*0.15+i*(barW+20);
+      const bh=b.h*maxH;
+      ctx.fillStyle=b.color;
+      drawRoundedRect(bx, baseY-bh, barW, bh, 6);
+      ctx.fill();
+      ctx.fillStyle='#fff';
+      ctx.font='11px Comic Neue';
+      ctx.textAlign='center';
+      ctx.save();
+      ctx.translate(bx+barW/2, baseY+8);
+      ctx.rotate(-0.4);
+      ctx.fillText(b.label, 0, 0);
+      ctx.restore();
+      // value on top
+      ctx.fillStyle=b.color;
+      ctx.font='bold 13px Bangers';
+      ctx.fillText(Math.round(b.h*100)+'%', bx+barW/2, baseY-bh-8);
+    });
+    // presenter
+    drawCharacter(W*0.82, H*0.5, '📊', '', '#00BCD4', 1.5);
+    drawSpeechBubble(W*0.82, H*0.36, "As you can see...", 'center');
+    // title
+    ctx.font='bold '+Math.min(W*0.05,32)+'px Bangers';
+    ctx.textAlign='center'; ctx.fillStyle='#4CAF50';
+    ctx.fillText('MARKETING RESEARCH', W/2, H*0.12);
+  },
+  // PANEL 5 — Meet the team
+  function(t) {
+    const g = ctx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0,'#1a0010'); g.addColorStop(1,'#300020');
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+    const team=[
+      {emoji:'💋',name:'Sexyla',power:'Seduction Beam',color:'#E91E63',x:W*0.17},
+      {emoji:'🌀',name:'Curvex',power:'Hypno-Curves',color:'#9C27B0',x:W*0.34},
+      {emoji:'😏',name:'Laustra',power:'Allure Aura',color:'#FF5722',x:W*0.5},
+      {emoji:'🪞',name:'Glamoura',power:'Mirror Trap',color:'#00BCD4',x:W*0.66},
+      {emoji:'🧠',name:'Temptiss',power:'Mind Melt',color:'#4CAF50',x:W*0.83}
+    ];
+    team.forEach(function(m,i) {
+      const bounce=Math.sin(t*2.5+i*0.7)*5;
+      drawCharacter(m.x, H*0.38+bounce, m.emoji, m.name, m.color, 1.3);
+      // power label
+      ctx.font='11px Bangers'; ctx.fillStyle=m.color;
+      ctx.textAlign='center';
+      ctx.fillText('POWER: '+m.power, m.x, H*0.56+bounce);
+    });
+    // title banner
+    ctx.fillStyle='rgba(233,30,99,0.2)';
+    drawRoundedRect(W*0.1, H*0.08, W*0.8, 46, 10);
+    ctx.fill();
+    ctx.font='bold '+Math.min(W*0.05,34)+'px Bangers';
+    ctx.textAlign='center'; ctx.fillStyle='#E91E63';
+    ctx.fillText('MEET THE SEX-WOMEN', W/2, H*0.12);
+    ctx.font='13px Comic Neue'; ctx.fillStyle='rgba(255,255,255,0.5)';
+    ctx.fillText('Each one recruited from a different... source 😏', W/2, H*0.88);
+  },
+  // PANEL 6 — Origin stories
+  function(t) {
+    const g = ctx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0,'#0a0a0a'); g.addColorStop(1,'#1a1015');
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+    const origins=[
+      {name:'Sexyla',story:'Found on Tinder. Swiped right into destiny.',emoji:'💋',color:'#E91E63'},
+      {name:'Curvex','story':'Ex-instagram model. Posts still go viral.',emoji:'🌀',color:'#9C27B0'},
+      {name:'Laustra',story:'Responded to Craigslist ad. "Models wanted."',emoji:'😏',color:'#FF5722'},
+      {name:'Glamoura',story:'Was a TikTok influencer. Got cancelled. Reborn.',emoji:'🪞',color:'#00BCD4'},
+      {name:'Temptiss',story:'AI-generated. Doesn\'t even know she\'s fictional.',emoji:'🧠',color:'#4CAF50'}
+    ];
+    origins.forEach(function(o,i) {
+      const oy=H*0.15+i*H*0.16;
+      // card bg
+      ctx.fillStyle='rgba(255,255,255,0.05)';
+      drawRoundedRect(W*0.08, oy, W*0.84, H*0.135, 8);
+      ctx.fill();
+      drawCharacter(W*0.15, oy+H*0.065, o.emoji, o.name, o.color, 1.1);
+      ctx.font='13px Comic Neue'; ctx.fillStyle='#ddd';
+      ctx.textAlign='left';
+      ctx.fillText(o.story, W*0.24, oy+H*0.07);
+    });
+    ctx.font='bold '+Math.min(W*0.045,28)+'px Bangers';
+    ctx.textAlign='center'; ctx.fillStyle='#FF9800';
+    ctx.fillText('ORIGIN STORIES', W/2, H*0.06);
+  },
+  // PANEL 7 — S-W Tower HQ
+  function(t) {
+    const g = ctx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0,'#0a001a'); g.addColorStop(1,'#1a0030');
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+    // tower building
+    const tx=W*0.35, ty=H*0.2, tw=W*0.3, th=H*0.58;
+    // main tower
+    ctx.fillStyle='#1a1a3a';
+    drawRoundedRect(tx, ty, tw, th, 4);
+    ctx.fill();
+    ctx.strokeStyle='#E91E63'; ctx.lineWidth=3;
+    ctx.stroke();
+    // windows (pink glow)
+    for(let row=0;row<8;row++) {
+      for(let col=0;col<3;col++) {
+        const wx=tx+tw*0.15+col*tw*0.28;
+        const wy=ty+th*0.08+row*th*0.11;
+        ctx.fillStyle=row===3&&col===1?'#E91E63':'rgba(233,30,99,'+(0.2+Math.sin(t*2+row+col)*0.15)+')';
+        ctx.fillRect(wx, wy, tw*0.18, th*0.06);
+      }
+    }
+    // sign
+    ctx.fillStyle='#E91E63';
+    drawRoundedRect(tx+tw*0.15, ty+th*0.02, tw*0.7, 28, 4);
+    ctx.fill();
+    ctx.font='bold 16px Bangers'; ctx.textAlign='center'; ctx.fillStyle='#fff';
+    ctx.fillText('⚠️ S-W TOWER ⚠️', tx+tw/2, ty+th*0.02+19);
+    // ground
+    ctx.fillStyle='#222';
+    ctx.fillRect(0, ty+th, W, H-ty-th);
+    // characters at entrance
+    drawCharacter(W*0.3, ty+th+25, '💋', '', '#E91E63', 0.8);
+    drawCharacter(W*0.45, ty+th+25, '🌀', '', '#9C27B0', 0.8);
+    drawCharacter(W*0.6, ty+th+25, '😏', '', '#FF5722', 0.8);
+    drawCharacter(W*0.75, ty+th+25, '🪞', '', '#00BCD4', 0.8);
+    // funding labels
+    ctx.font='12px Comic Neue'; ctx.fillStyle='rgba(255,255,255,0.5)';
+    ctx.textAlign='left';
+    ctx.fillText('💰 Funded by:', W*0.05, H*0.15);
+    ctx.fillText('• Patreon ($47/mo)', W*0.05, H*0.18);
+    ctx.fillText('• Merch (t-shirts)', W*0.05, H*0.21);
+    ctx.fillText('• OnlyFans cross-promo', W*0.05, H*0.24);
+    // title
+    ctx.font='bold '+Math.min(W*0.05,32)+'px Bangers';
+    ctx.textAlign='center'; ctx.fillStyle='#E91E63';
+    ctx.fillText('HEADQUARTERS', W/2, H*0.07);
+  },
+  // PANEL 8 — Mission briefing
+  function(t) {
+    const g = ctx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0,'#0a0a0a'); g.addColorStop(0.5,'#1a0a0a'); g.addColorStop(1,'#0a0a0a');
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+    // table
+    ctx.fillStyle='#3a2a1a';
+    drawRoundedRect(W*0.1, H*0.52, W*0.8, H*0.12, 6);
+    ctx.fill();
+    // hologram projector
+    ctx.fillStyle='#444';
+    ctx.beginPath(); ctx.arc(W*0.5, H*0.54, 20, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle='#00BCD4';
+    ctx.beginPath(); ctx.arc(W*0.5, H*0.48, 35+Math.sin(t*3)*3, 0, Math.PI*2);
+    ctx.fill();
+    // villain silhouette on hologram
+    ctx.fillStyle='rgba(255,0,0,0.5)';
+    ctx.beginPath(); ctx.arc(W*0.5, H*0.38, 22, 0, Math.PI*2); ctx.fill();
+    ctx.font='24px sans-serif'; ctx.textAlign='center';
+    ctx.fillText('👵', W/2, H*0.39);
+    // team around table
+    drawCharacter(W*0.2, H*0.62, '💋', '', '#E91E63', 1);
+    drawCharacter(W*0.35, H*0.64, '🌀', '', '#9C27B0', 1);
+    drawCharacter(W*0.5, H*0.68, '😏', '', '#FF5722', 1);
+    drawCharacter(W*0.65, H*0.64, '🪞', '', '#00BCD4', 1);
+    drawCharacter(W*0.8, H*0.62, '🧠', '', '#4CAF50', 1);
+    // speech bubbles
+    drawSpeechBubble(W*0.2, H*0.55, "Target acquired!", 'center');
+    drawSpeechBubble(W*0.8, H*0.55, "Let's seduce!", 'center');
+    // mission text
+    ctx.fillStyle='rgba(0,188,212,0.15)';
+    drawRoundedRect(W*0.1, H*0.08, W*0.8, H*0.18, 8);
+    ctx.fill();
+    ctx.font='bold '+Math.min(W*0.045,28)+'px Bangers';
+    ctx.textAlign='center'; ctx.fillStyle='#00BCD4';
+    ctx.fillText('MISSION BRIEFING', W/2, H*0.13);
+    ctx.font='14px Comic Neue'; ctx.fillStyle='#ccc';
+    ctx.fillText('Target: PRUDENCE — Guardian of Decency & Moral Standards', W/2, H*0.2);
+    ctx.fillText('Objective: Neutralize. By any means necessary. 😏', W/2, H*0.235);
+  },
+  // PANEL 9 — Villain reveal
+  function(t) {
+    const g = ctx.createRadialGradient(W/2, H*0.4, 50, W/2, H*0.4, W*0.6);
+    g.addColorStop(0, '#2a0000'); g.addColorStop(1, '#0a0000');
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+    // red ominous glow
+    const rg = ctx.createRadialGradient(W/2, H*0.35, 30, W/2, H*0.35, W*0.5);
+    rg.addColorStop(0, 'rgba(255,0,0,'+(0.15+Math.sin(t*1.5)*0.1)+')');
+    rg.addColorStop(1, 'transparent');
+    ctx.fillStyle=rg; ctx.fillRect(0,0,W,H);
+    // PRUDENCE — giant villain
+    const vscale=2.5;
+    const vx=W/2, vy=H*0.45;
+    // dark aura
+    const va=ctx.createRadialGradient(vx,vy,20,vx,vy,80*vscale);
+    va.addColorStop(0, 'rgba(100,0,0,0.4)');
+    va.addColorStop(1, 'transparent');
+    ctx.fillStyle=va; ctx.fillRect(0,0,W,H);
+    // body
+    ctx.beginPath(); ctx.arc(vx, vy, 35*vscale, 0, Math.PI*2);
+    ctx.fillStyle='#1a1a1a'; ctx.fill();
+    ctx.strokeStyle='#f00'; ctx.lineWidth=3; ctx.stroke();
+    // eyes — glowing red
+    const eyeOff=12*vscale;
+    ['fill','stroke'].forEach(function(method) {
+      ctx[method==='fill'?'fillStyle':'strokeStyle']=method==='fill'?'#ff0000':'#ff6666';
+      ctx.beginPath(); ctx.arc(vx-eyeOff, vy-8*vscale, 6*vscale, 0, Math.PI*2); ctx[method]();
+      ctx.beginPath(); ctx.arc(vx+eyeOff, vy-8*vscale, 6*vscale, 0, Math.PI*2); ctx[method]();
+    });
+    // grandma glasses
+    ctx.strokeStyle='#666'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(vx-eyeOff, vy-8*vscale, 10*vscale, 0, Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(vx+eyeOff, vy-8*vscale, 10*vscale, 0, Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(vx-eyeOff+10*vscale,vy-8*vscale); ctx.lineTo(vx+eyeOff-10*vscale,vy-8*vscale); ctx.stroke();
+    // emoji face
+    ctx.font=(40*vscale)+'px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('👵', vx, vy+5*vscale);
+    // name
+    ctx.font='bold '+Math.min(W*0.07,48)+'px Bangers';
+    ctx.textAlign='center'; ctx.fillStyle='#ff0000';
+    ctx.fillText('PRUDENCE', W/2, H*0.12);
+    ctx.font='18px Comic Neue'; ctx.fillStyle='#ff6666';
+    ctx.fillText('Guardian of Decency & Moral Standards', W/2, H*0.17);
+    ctx.font='14px Comic Neue'; ctx.fillStyle='rgba(255,0,0,0.6)';
+    ctx.fillText('"You won\'t seduce ME! I haven\'t felt anything since 1987!"', W/2, H*0.82);
+    // lightning bolts
+    for(let i=0;i<5;i++) {
+      const lx=(Math.sin(t*3+i*1.7)*0.4+0.5)*W;
+      const ly=Math.random()*H;
+      ctx.strokeStyle='rgba(255,0,0,'+(0.3+Math.sin(t*5+i)*0.2)+')';
+      ctx.lineWidth=2;
+      ctx.beginPath(); ctx.moveTo(lx,ly); ctx.lineTo(lx+10,ly+20); ctx.lineTo(lx-5,ly+40); ctx.stroke();
+    }
+  },
+  // PANEL 10 — Battle scene
+  function(t) {
+    const g = ctx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0,'#1a0808'); g.addColorStop(0.5,'#2a0a0a'); g.addColorStop(1,'#1a0808');
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+    // PRUDENCE (right side)
+    drawCharacter(W*0.78, H*0.45, '👵', 'PRUDENCE', '#CC0000', 1.8);
+    // Sex-Women team (left side)
+    const attackers=[
+      {emoji:'💋',x:W*0.15,c:'#E91E63'},
+      {emoji:'🌀',x:W*0.28,c:'#9C27B0'},
+      {emoji:'😏',x:W*0.41,c:'#FF5722'},
+      {emoji:'🪞',x:W*0.54,c:'#00BCD4'},
+      {emoji:'🧠',x:W*0.67,c:'#4CAF50'}
+    ];
+    attackers.forEach(function(a,i) {
+      const bounce=Math.sin(t*4+i)*4;
+      drawCharacter(a.x, H*0.55+bounce, a.emoji, '', a.c, 1);
+    });
+    // seduction beams!
+    attackers.forEach(function(a,i) {
+      const beamX=a.x+15;
+      const progress=(Math.sin(t*2+i*0.5)+1)/2;
+      const endX=W*0.78-50;
+      const grad=ctx.createLinearGradient(beamX, H*0.55, beamX+(endX-beamX)*progress, H*0.45);
+      grad.addColorStop(0, a.c+'00');
+      grad.addColorStop(0.5, a.c+'88');
+      grad.addColorStop(1, a.c+'00');
+      ctx.strokeStyle=grad;
+      ctx.lineWidth=3+i;
+      ctx.beginPath();
+      ctx.moveTo(beamX, H*0.55);
+      // wavy beam
+      for(let j=1;j<=10;j++) {
+        const px=beamX+(endX-beamX)*(j/10);
+        const py=H*0.5+Math.sin(t*6+j*2+i)*8*(j/10);
+        ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    });
+    // impact effects near PRUDENCE
+    for(let i=0;i<8;i++) {
+      const ix=W*0.7+Math.random()*W*0.08;
+      const iy=H*0.35+Math.random()*H*0.25;
+      ctx.fillStyle='rgba(255,20,147,'+Math.random()*0.5+')';
+      ctx.beginPath(); ctx.arc(ix, iy, 2+Math.random()*4, 0, Math.PI*2); ctx.fill();
+    }
+    // action text
+    ctx.font='bold '+Math.min(W*0.05,32)+'px Bangers';
+    ctx.textAlign='center'; ctx.fillStyle='#ff1493';
+    ctx.fillText('⚔️ SEDUCTION BEAMS FIRE! ⚔️', W/2, H*0.1);
+    ctx.font='14px Comic Neue'; ctx.fillStyle='rgba(255,255,255,0.5)';
+    ctx.fillText('* laser sounds mixed with kiss noises *', W/2, H*0.92);
+  },
+  // PANEL 11 — Finale / Canon established
+  function(t) {
+    const g = ctx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0,'#00001a'); g.addColorStop(1,'#0a0a2a');
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+    // spotlight
+    const sg = ctx.createRadialGradient(W/2,H*0.35,30,W/2,H*0.35,W*0.5);
+    sg.addColorStop(0,'rgba(255,20,147,0.25)');
+    sg.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=sg; ctx.fillRect(0,0,W,H);
+    // victory pose — all characters together
+    const finaleChars=[
+      {x:W*0.14,c:'#e91e63',emoji:'💋'},{x:W*0.28,c:'#9c27b0',emoji:'🌀'},
+      {x:W*0.42,c:'#ff5722',emoji:'😏'},{x:W*0.56,c:'#00bcd4',emoji:'🪞'},
+      {x:W*0.70,c:'#4caf50',emoji:'🧠'},{x:W*0.84,c:'#ffd700',emoji:'🐝'}
+    ];
+    finaleChars.forEach(function(fc,i) {
+      const bounce=Math.sin(t*2+i)*4;
+      const scale=1+Math.sin(t*3+i*0.5)*0.05;
+      ctx.beginPath(); ctx.arc(fc.x, H*0.38+bounce, 26*scale, 0, Math.PI*2);
+      ctx.fillStyle=fc.c; ctx.fill();
+      ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.stroke();
+      ctx.font=(22*scale)+'px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(fc.emoji, fc.x, H*0.38+bounce+2);
+    });
+    // Canon stamp
+    ctx.font='bold '+Math.min(W*0.09,52)+'px Bangers';
+    ctx.textAlign='center';
+    ctx.fillStyle='#ff1493'; ctx.strokeStyle='#ffd700'; ctx.lineWidth=2;
+    ctx.strokeText('✅ CANON ✅', W/2, H*0.6);
+    ctx.fillText('✅ CANON ✅', W/2, H*0.6);
+    ctx.font='16px Comic Neue'; ctx.fillStyle='rgba(255,255,255,0.6)';
+    ctx.fillText('SEX-WOMEN is now part of official H.4.K.S. canon.', W/2, H*0.68);
+    ctx.font='13px Comic Neue'; ctx.fillStyle='rgba(255,215,0,0.5)';
+    ctx.fillText('Created by handyc_ • Approved by Buzzy the Bee 🐝', W/2, H*0.85);
+    // sparkles
+    for(let i=0;i<20;i++) {
+      const sx=(Math.sin(i*97.7+t*2)*0.4+0.5)*W;
+      const sy=(Math.cos(i*53.3+t*1.5)*0.3+0.3)*H;
+      ctx.fillStyle='rgba(255,215,0,'+(0.4+Math.sin(t*3+i)*0.3)+')';
+      ctx.font='16px sans-serif'; ctx.textAlign='center';
+      ctx.fillText('✨', sx, sy);
+    }
+  }
+];
+
+function drawPanel(idx) {
+  if(idx >= 0 && idx < panels.length) {
+    const t = (Date.now() - startTime) / 1000;
+    panels[idx](t);
+    drawBuzzy(t);
+  }
+}
+
+function animate() {
+  drawPanel(currentPanel);
+  animFrame = requestAnimationFrame(animate);
+}
+
+function nextPanel() {
+  if(currentPanel < panels.length - 1) {
+    currentPanel++;
+    startTime = Date.now();
+    document.getElementById('counter').textContent = (currentPanel+1) + ' / ' + panels.length;
+  }
+}
+
+function prevPanel() {
+  if(currentPanel > 0) {
+    currentPanel--;
+    startTime = Date.now();
+    document.getElementById('counter').textContent = (currentPanel+1) + ' / ' + panels.length;
+  }
+}
+
+document.getElementById('nextBtn').addEventListener('click', nextPanel);
+document.getElementById('prevBtn').addEventListener('click', prevPanel);
+
+document.addEventListener('keydown', function(e) {
+  if(e.key === 'ArrowRight' || e.key === ' ') nextPanel();
+  if(e.key === 'ArrowLeft') prevPanel();
+});
+
+canvas.addEventListener('click', function(e) {
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  const bx = W - 45, by = H - 40;
+  if(Math.hypot(x-bx, y-by) < 30) {
+    var origDraw = panels[currentPanel];
+    var buzzTime = Date.now();
+    var savedIdx = currentPanel;
+    var overrideDraw = function(t) {
+      origDraw(t);
+      var bt = (Date.now() - buzzTime)/1000;
+      if(bt < 0.5) {
+        ctx.font = 'bold 16px Bangers'; ctx.fillStyle = '#FFD700';
+        ctx.textAlign = 'center'; ctx.fillText("BUZZ! 🐝", W/2, H*0.93);
+      }
+    };
+    panels[savedIdx] = overrideDraw;
+    setTimeout(function() { panels[savedIdx] = origDraw; }, 500);
+  }
+});
+
+resize();
+animate();
+</script>
+</body>
+</html>
