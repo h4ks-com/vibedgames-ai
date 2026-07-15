@@ -212,13 +212,11 @@ function renderMandel(cRe, cIm, zoom, maxIter) {
   mandelCtx.putImageData(imgData, 0, 0);
 }
 
-function extractRuleFromMandel() {
+function extractRuleToArray(arr) {
   const w = mandelCanvas.width, h = mandelCanvas.height;
-  // Center 128x128 crop → 16384 rule entries
   const sx = Math.floor(w/2) - 64;
   const sy = Math.floor(h/2) - 64;
   const imgData = mandelCtx.getImageData(sx, sy, 128, 128).data;
-  ruleTable = new Array(16384);
   for (let i = 0; i < 16384; i++) {
     const r = imgData[i*4], g = imgData[i*4+1], b = imgData[i*4+2];
     let bestDist = Infinity, bestIdx = 0;
@@ -229,8 +227,75 @@ function extractRuleFromMandel() {
       const d = (r-pr)*(r-pr)+(g-pg)*(g-pg)+(b-pb)*(b-pb);
       if(d<bestDist){bestDist=d;bestIdx=p;}
     }
-    ruleTable[i] = bestIdx;
+    arr[i] = bestIdx;
   }
+}
+function extractRuleFromMandel() {
+  ruleTable = new Array(16384);
+  extractRuleToArray(ruleTable);
+}
+
+// ===== MONSTROSITY SCORING =====
+let monstrosityHighScore = 0;
+let currentMonstrosity = 0;
+
+function getCentralCropVals() {
+  const sx = Math.floor((GRID_SIZE - CROP_SIZE) / 2);
+  const sy = Math.floor((GRID_SIZE - CROP_SIZE) / 2);
+  const crop = new Array(CROP_SIZE * CROP_SIZE);
+  for (let y = 0; y < CROP_SIZE; y++)
+    for (let x = 0; x < CROP_SIZE; x++)
+      crop[y*CROP_SIZE+x] = caGrid[(sy+y)*GRID_SIZE + (sx+x)] || 0;
+  return crop;
+}
+
+function countNonBackground(crop) {
+  const counts = [0,0,0,0];
+  for (const v of crop) counts[v % 4]++;
+  let maxCount = 0, bgVal = 0;
+  for (let i = 0; i < 4; i++) { if (counts[i] > maxCount) { maxCount = counts[i]; bgVal = i; } }
+  let nonBg = 0;
+  for (const v of crop) if ((v % 4) !== bgVal) nonBg++;
+  return nonBg;
+}
+
+function measureMonstrosity(testRule) {
+  const savedGrid = caGrid.slice();
+  const savedRule = ruleTable;
+  const savedStep = stepCount;
+  ruleTable = testRule;
+  seedGrid(nondataStr || HANB);
+  const TEST_STEPS = 40;
+  const SAMPLE_INTERVAL = 5;
+  const cropArea = CROP_SIZE * CROP_SIZE;
+  let prevCrop = null;
+  let totalHamming = 0, hammingSamples = 0;
+  let sizes = [];
+  for (let s = 0; s < TEST_STEPS; s++) {
+    stepCAOnce();
+    if (s % SAMPLE_INTERVAL === 0) {
+      const crop = getCentralCropVals();
+      sizes.push(countNonBackground(crop));
+      if (prevCrop) {
+        let hamming = 0;
+        for (let i = 0; i < crop.length; i++) { if (crop[i] !== prevCrop[i]) hamming++; }
+        totalHamming += hamming;
+        hammingSamples++;
+      }
+      prevCrop = crop;
+    }
+  }
+  caGrid = savedGrid;
+  ruleTable = savedRule;
+  stepCount = savedStep;
+  const avgSize = sizes.length ? sizes.reduce((a,b)=>a+b,0)/sizes.length : 0;
+  const sizeVar = sizes.length ? sizes.reduce((a,b)=>a+(b-avgSize)*(b-avgSize),0)/sizes.length : cropArea;
+  const avgHamming = hammingSamples > 0 ? totalHamming / hammingSamples : cropArea;
+  const stabilityScore = Math.max(0, 1 - (avgHamming / cropArea));
+  const cv = avgSize > 1 ? Math.sqrt(sizeVar) / avgSize : 1;
+  const sizeScore = Math.max(0, 1 - cv);
+  const monstrosity = Math.sqrt(stabilityScore * sizeScore);
+  return { monstrosity, stability: stabilityScore, fixedSize: sizeScore, avgSize, avgHamming };
 }
 
 function monsterHunt() {
