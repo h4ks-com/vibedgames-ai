@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MONSTER DECODER</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#050308;color:#c8c0d8;font-family:monospace;overflow-x:hidden}
+.header{text-align:center;padding:12px 8px 6px}
+.header h1{font-size:1.4em;letter-spacing:3px;color:#9a3abc;text-shadow:0 0 15px rgba(154,58,188,.5)}
+.header .sub{font-size:.7em;color:#666;margin-top:2px}
+.wrap{max-width:900px;margin:0 auto;padding:8px}
+.layout{display:flex;gap:8px;flex-wrap:wrap}
+.panel{background:#0c0810;border:1px solid #2a1e3a;border-radius:6px;padding:8px}
+.panel-left{flex:1;min-width:240px;font-size:.7em}
+.panel-right{flex:2;min-width:320px}
+.panel h2{font-size:.75em;color:#7a5a9a;margin-bottom:6px;letter-spacing:1px;border-bottom:1px solid #1a1020;padding-bottom:3px}
+#nondataStr{word-break:break-all;font-size:.65em;color:#4a3a5a;line-height:1.5;padding:4px;background:#06030a;border-radius:3px;min-height:3em}
+.sig-row{display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px dotted #1a1020}
+.sig-row .k{color:#555}
+.sig-row .v{color:#aa8aca}
+.absence{color:#c44 !important}
+#monsterCanvas{width:100%;height:auto;display:block;border-radius:4px;background:#000}
+.ca-row{display:flex;gap:6px;align-items:center;margin-top:6px;font-size:.65em;color:#666}
+.ca-row span{white-space:nowrap}
+#fullCanvas{width:100%;height:auto;border-radius:3px;border:1px solid #1a1020;margin-top:4px}
+.crop-frame{position:relative;display:inline-block}
+.state-bar{display:flex;gap:2px;margin-top:6px;flex-wrap:wrap}
+.state-cell{padding:2px 5px;font-size:.55em;border-radius:2px;background:#1a0e22;color:#555}
+.state-cell.active{background:#9a3abc;color:#fff;box-shadow:0 0 8px rgba(154,58,188,.6)}
+.note{font-size:.6em;color:#444;margin-top:6px;line-height:1.5}
+.btn{background:#1a0e22;color:#7a5a9a;border:1px solid #2a1e3a;padding:4px 10px;border-radius:3px;cursor:pointer;font-size:.65em;font-family:monospace}
+.btn:hover{background:#2a1e3a;color:#aa8aca}
+.controls{display:flex;gap:4px;margin-top:6px;flex-wrap:wrap}
+.pulse{animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.loading{color:#554;font-size:.7em;font-style:italic}
+@media(max-width:600px){.panel-right{flex:1}}
+</style>
+</head>
+<body>
+<div class="header">
+<h1>▲ MONSTER DECODER ▲</h1>
+<div class="sub">ingesting nondata from <a href="https://github.com/handyc/monswtch" style="color:#7a5a9a">handyc/monswtch</a></div>
+</div>
+<div class="wrap">
+<div class="layout">
+<div class="panel panel-left">
+<h2>▣ NONDATA SIGNAL</h2>
+<div id="signals"><span class="loading">fetching nondata...</span></div>
+<h2 style="margin-top:8px">▣ HANB STRING (64-char)</h2>
+<div id="nondataStr">—</div>
+<h2 style="margin-top:8px">▣ SWITCH STATE</h2>
+<div id="switchState">—</div>
+<div class="state-bar" id="stateBar"></div>
+<div class="controls">
+<button class="btn" onclick="decode()">⚡ Re-decode</button>
+<button class="btn" onclick="togglePause()" id="pauseBtn">⏸ Pause</button>
+<button class="btn" onclick="stepCA()">→ Step</button>
+</div>
+</div>
+<div class="panel panel-right">
+<h2>▣ THE MONSTER <span style="color:#444;font-size:.8em">(central crop of hex CA)</span></h2>
+<div class="crop-frame">
+<canvas id="monsterCanvas" width="300" height="300"></canvas>
+</div>
+<div class="ca-row">
+<span>CA steps:</span><span id="stepCount">0</span>
+<span>| grid:</span><span id="gridInfo">128×128</span>
+<span>| crop:</span><span id="cropInfo">48×48</span>
+<span>| re-decode in:</span><span id="reCount">—</span>
+</div>
+<h2 style="margin-top:8px">▣ FULL HEX CA <span style="color:#444;font-size:.8em">(beanotv algorithm)</span></h2>
+<canvas id="fullCanvas" width="400" height="400"></canvas>
+<div class="note" id="note">the decoder ingests nondata from the monswtch repo — the shape of absence, the patterns of not-doing — encodes it as a 64-character hanb string, and feeds it into a hexagonal cellular automaton. the monster is the central crop of the active CA.</div>
+</div>
+</div>
+</div>
+
+<script>
+// ===== HANB ALPHABET (64 chars: a-z, A-Z, 0-9, '-', '.') =====
+const HANB = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-.';
+const HANB_LEN = HANB.length; // 64
+
+// ===== PALETTES =====
+const PALETTES = [
+  ['#000033','#334499','#7799dd','#ddeeff'],
+  ['#1a0a00','#8B4513','#FFD700','#FFFACD'],
+  ['#0a1a0a','#228B22','#90EE90','#F0FFF0'],
+  ['#1a001a','#8B008B','#FF69B4','#FFE4E1'],
+  ['#0a0a1a','#4169E1','#00CED1','#E0FFFF'],
+  ['#1a1a0a','#DAA520','#FF8C00','#FFF8DC'],
+  ['#0a1a1a','#2F4F44','#20B2AA','#AFEEEE'],
+  ['#1a0a1a','#4B0082','#9370DB','#E6E6FA'],
+  ['#0a0a0a','#333333','#888888','#cccccc'],
+  ['#1a0a0a','#8B0000','#DC143C','#FFB6C1'],
+];
+let palette = PALETTES[7]; // purple default
+
+function hexToRgb(hex){const r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16);return{r,g,b}}
+
+// ===== MONSWTCH NONDATA EXTRACTION =====
+const REPO = 'handyc/monswtch';
+let nondataRaw = {};
+let nondataStr = '';
+let lastDecode = 0;
+
+async function fetchNondata() {
+  const now = Date.now();
+  try {
+    const [repoRes, commitsRes, eventsRes] = await Promise.all([
+      fetch(`https://api.github.com/repos/${REPO}`),
+      fetch(`https://api.github.com/repos/${REPO}/commits?per_page=30`),
+      fetch(`https://api.github.com/users/handyc/events/public?per_page=30`)
+    ]);
+    const repo = await repoRes.json();
+    const commits = await commitsRes.json();
+    const events = await eventsRes.json();
+
+    const lastCommitDate = commits[0] ? new Date(commits[0].commit.author.date) : new Date(0);
+    const secsSinceCommit = Math.floor((now - lastCommitDate.getTime()) / 1000);
+
+    // Count monswtch vs other-repo events
+    const monswtchEvents = events.filter(e => e.repo.name === REPO).length;
+    const otherEvents = events.filter(e => e.repo.name !== REPO).length;
+
+    // README info
+    let readmeSize = 0;
+    try {
+      const readmeRes = await fetch(`https://api.github.com/repos/${REPO}/contents/README.md`);
+      const readme = await readmeRes.json();
+      readmeSize = readme.size || 0;
+    } catch(e) {}
+
+    nondataRaw = {
+      commitCount: commits.length,
+      lastCommitAgo: secsSinceCommit,
+      issues: repo.open_issues_count || 0,
+      forks: repo.forks_count || 0,
+      stars: repo.stargazers_count || 0,
+      watchers: repo.subscribers_count || 0,
+      watchers2: repo.watchers_count || 0,
+      branches: 1, // default
+      hasIssues: repo.has_issues ? 1 : 0,
+      hasWiki: repo.has_wiki ? 1 : 0,
+      hasPages: repo.has_pages ? 1 : 0,
+      hasDiscussions: repo.has_discussions ? 1 : 0,
+      readmeSize: readmeSize,
+      repoAgeDays: Math.floor((now - new Date(repo.created_at).getTime()) / 86400000),
+      monswtchEvents: monswtchEvents,
+      otherEvents: otherEvents,
+      activityAsymmetry: otherEvents - monswtchEvents,
+      description: repo.description ? repo.description.length : 0,
+      license: repo.license ? 1 : 0,
+      archived: repo.archived ? 1 : 0,
+      disabled: repo.disabled ? 1 : 0,
+      defaultBranch: repo.default_branch ? repo.default_branch.length : 0,
+      fileSize: 2, // README + LICENSE
+      networkCount: repo.network_count || 0,
+      subscribersCount: repo.subscribers_count || 0,
+      commitGaps: computeCommitGaps(commits),
+    };
+
+    return true;
+  } catch(e) {
+    console.error('fetch error', e);
+    return false;
+  }
+}
+
+function computeCommitGaps(commits) {
+  if (commits.length < 2) return 0;
+  let totalGap = 0;
+  for (let i = 0; i < commits.length - 1; i++) {
+    const d1 = new Date(commits[i].commit.author.date).getTime();
+    const d2 = new Date(commits[i+1].commit.author.date).getTime();
+    totalGap += Math.abs(d1 - d2);
+  }
+  return Math.floor(totalGap / 1000);
+}
+
+// ===== NONDATA → 64-CHAR HANB STRING =====
+function encodeNondata() {
+  const d = nondataRaw;
+  // We need exactly 64 characters from the hanb alphabet.
+  // Each signal contributes to specific positions.
+  const vals = [
+    d.commitCount,
+    d.lastCommitAgo,
+    d.issues,
+    d.forks,
+    d.stars,
+    d.watchers,
+    d.watchers2,
+    d.branches,
+    d.hasIssues,
+    d.hasWiki,
+    d.hasPages,
+    d.hasDiscussions,
+    d.readmeSize,
+    d.repoAgeDays,
+    d.monswtchEvents,
+    d.otherEvents,
+    d.activityAsymmetry,
+    d.description,
+    d.license,
+    d.archived,
+    d.disabled,
+    d.defaultBranch,
+    d.fileSize,
+    d.networkCount,
+    d.subscribersCount,
+    d.commitGaps,
+    d.lastCommitAgo % 3600,     // minutes within hour
+    Math.floor(d.lastCommitAgo / 3600) % 24, // hours
+    Math.floor(d.lastCommitAgo / 86400),     // days
+    d.commitCount > 0 ? 1 : 0,
+    d.issues === 0 ? 1 : 0,     // absence of issues
+    d.forks === 0 ? 1 : 0,      // absence of forks
+    d.stars === 0 ? 1 : 0,      // absence of stars
+    d.watchers === 0 ? 1 : 0,   // absence of watchers
+    d.monswtchEvents === 0 ? 1 : 0, // absence of recent activity
+    d.readmeSize === 0 ? 1 : 0,
+    d.hasPages === 0 ? 1 : 0,
+    d.hasWiki === 0 ? 1 : 0,
+    d.hasDiscussions === 0 ? 1 : 0,
+    d.license === 0 ? 1 : 0,
+    d.archived === 0 ? 1 : 0,
+    d.disabled === 0 ? 1 : 0,
+    d.commitGaps === 0 ? 1 : 0,
+    d.repoAgeDays % 7,          // day of week
+    d.repoAgeDays % 30,         // day of month
+    d.lastCommitAgo % 60,       // seconds within minute
+    Math.floor(d.lastCommitAgo / 60) % 60, // minutes
+    d.readmeSize % 100,
+    d.description % 50,
+    d.activityAsymmetry % 100,
+    d.otherEvents % 20,
+    d.commitCount % 10,
+    (d.lastCommitAgo >> 4) & 63,
+    (d.lastCommitAgo >> 10) & 63,
+    (d.repoAgeDays >> 3) & 63,
+    (d.readmeSize >> 2) & 63,
+    (d.commitGaps >> 4) & 63,
+    (d.activityAsymmetry >> 2) & 63,
+    (d.stars ^ d.forks) & 63,
+    (d.commitCount ^ d.issues) & 63,
+    (d.watchers ^ d.monswtchEvents) & 63,
+    ((d.lastCommitAgo * 2654435761) >>> 0) & 63, // hash
+  ];
+
+  // Ensure exactly 64 values
+  while (vals.length < 64) vals.push(0);
+  vals.length = 64;
+
+  return vals.map(v => HANB[((v % HANB_LEN) + HANB_LEN) % HANB_LEN]).join('');
+}
+
+// ===== SWITCH STATE SPECTRUM =====
+const STATES = ['PRESSED','RELEASING','WATCHING','BREATHING','STIRRING','AWAKENING','LOOSE','INHERITED'];
+
+function computeState() {
+  const s = nondataRaw.lastCommitAgo || 0;
+  if (s < 60) return 0;         // < 1 min: pressed
+  if (s < 600) return 1;       // < 10 min: releasing
+  if (s < 3600) return 2;      // < 1 hr: watching
+  if (s < 21600) return 3;     // < 6 hr: breathing
+  if (s < 86400) return 4;     // < 1 day: stirring
+  if (s < 604800) return 5;    // < 1 week: awakening
+  if (s < 2592000) return 6;   // < 30 days: loose
+  return 7;                    // > 30 days: inherited
+}
+
+function renderSignals() {
+  const d = nondataRaw;
+  const el = document.getElementById('signals');
+  const rows = [
+    ['commits', d.commitCount],
+    ['last pressure', formatTime(d.lastCommitAgo)],
+    ['issues', d.issues, d.issues === 0],
+    ['forks', d.forks, d.forks === 0],
+    ['stars', d.stars, d.stars === 0],
+    ['watchers', d.watchers, d.watchers === 0],
+    ['readme bytes', d.readmeSize],
+    ['repo age', d.repoAgeDays + 'd'],
+    ['monswtch events', d.monswtchEvents, d.monswtchEvents === 0],
+    ['other-repo events', d.otherEvents],
+    ['activity asymmetry', d.activityAsymmetry, d.activityAsymmetry > 0],
+    ['commit gaps (s)', d.commitGaps],
+    ['has pages', d.hasPages ? 'yes' : 'NO', !d.hasPages],
+    ['has wiki', d.hasWiki ? 'yes' : 'NO', !d.hasWiki],
+    ['has discussions', d.hasDiscussions ? 'yes' : 'NO', !d.hasDiscussions],
+    ['license', d.license ? 'yes' : 'NO', !d.license],
+  ];
+  el.innerHTML = rows.map(([k,v,absent]) =>
+    `<div class="sig-row"><span class="k">${k}</span><span class="v${absent?' absence':''}">${v}</span></div>`
+  ).join('');
+}
+
+function formatTime(secs) {
+  if (secs < 60) return secs + 's';
+  if (secs < 3600) return Math.floor(secs/60) + 'm ' + (secs%60) + 's';
+  if (secs < 86400) return Math.floor(secs/3600) + 'h ' + Math.floor((secs%3600)/60) + 'm';
+  return Math.floor(secs/86400) + 'd ' + Math.floor((secs%86400)/3600) + 'h';
+}
+
+function renderStateBar() {
+  const idx = computeState();
+  document.getElementById('switchState').innerHTML =
+    `<span style="color:${palette[idx % 4]};font-weight:bold">${STATES[idx]}</span>`;
+  document.getElementById('stateBar').innerHTML = STATES.map((s,i) =>
+    `<div class="state-cell${i===idx?' active':''}">${s}</div>`
+  ).join('');
+
+  // Pick palette based on state
+  const paletteIdx = [7, 4, 8, 5, 1, 3, 9, 0];
+  palette = PALETTES[paletteIdx[idx]];
+}
+
+// ===== HEXAGONAL CA (from beanotv) =====
+const GRID_SIZE = 128;
+const CROP_SIZE = 48; // central crop
+let caGrid = new Array(GRID_SIZE * GRID_SIZE).fill(0);
+let ruleTable = null;
+let caRunning = true;
+let caPaused = false;
+let stepCount = 0;
+let animFrame = null;
+let reDecodeTimer = 60; // re-decode every 60 steps
+
+const monsterCanvas = document.getElementById('monsterCanvas');
+const monsterCtx = monsterCanvas.getContext('2d');
+const fullCanvas = document.getElementById('fullCanvas');
+const fullCtx = fullCanvas.getContext('2d');
+
+// PRNG seeded from hanb string
+function makePRNG(seed) {
+  let s = 0;
+  for (let i = 0; i < seed.length; i++) s = ((s * 31) + seed.charCodeAt(i)) >>> 0;
+  return function() { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+}
+
+function getNeighbors(x, y) {
+  const offsets = (x % 2 === 0) ? [
+    [0,-1],[1,-1],[1,0],[0,1],[-1,0],[-1,-1]
+  ] : [
+    [0,-1],[1,0],[1,1],[0,1],[-1,1],[-1,0]
+  ];
+  return offsets.map(([dx,dy]) => [x+dx, y+dy]);
+}
+
+function encodeNeighborhood(x, y) {
+  const self = caGrid[y*GRID_SIZE+x] || 0;
+  const nbrs = getNeighbors(x, y);
+  let n = 0;
+  n = n*4 + self;
+  for (const [nx, ny] of nbrs) {
+    const v = (nx>=0 && nx<GRID_SIZE && ny>=0 && ny<GRID_SIZE) ? caGrid[ny*GRID_SIZE+nx] : 0;
+    n = n*4 + v;
+  }
+  return n;
+}
+
+function buildRuleTable(str) {
+  const rng = makePRNG(str);
+  ruleTable = new Array(16384);
+  for (let i = 0; i < 16384; i++) {
+    // Mix PRNG with hanb char values for richer rules
+    const charIdx = i % 64;
+    const charVal = HANB.indexOf(str[charIdx]);
+    const r = rng();
+    ruleTable[i] = Math.floor((r * 4 + (charVal / 64) * 0.5) % 4);
+  }
+}
+
+function seedGrid(str) {
+  caGrid = new Array(GRID_SIZE * GRID_SIZE).fill(0);
+  const cx = Math.floor(GRID_SIZE / 2);
+  const cy = Math.floor(GRID_SIZE / 2);
+  // Seed center with pattern derived from the hanb string
+  const seedSize = 8; // 8x8 seed region
+  for (let dy = 0; dy < seedSize; dy++) {
+    for (let dx = 0; dx < seedSize; dx++) {
+      const charIdx = dy * seedSize + dx; // 0-63
+      const v = HANB.indexOf(str[charIdx % str.length]);
+      const cellVal = v % 4;
+      const gx = cx + dx - Math.floor(seedSize/2);
+      const gy = cy + dy - Math.floor(seedSize/2);
+      if (gx >= 0 && gx < GRID_SIZE && gy >= 0 && gy < GRID_SIZE) {
+        caGrid[gy*GRID_SIZE+gx] = cellVal;
+      }
+    }
+  }
+  // Also scatter some noise based on the string for richer evolution
+  const rng = makePRNG(str + 'noise');
+  for (let i = 0; i < 200; i++) {
+    const x = Math.floor(rng() * GRID_SIZE);
+    const y = Math.floor(rng() * GRID_SIZE);
+    const c = Math.floor(rng() * 64);
+    caGrid[y*GRID_SIZE+x] = HANB.indexOf(str[c % str.length]) % 4;
+  }
+}
+
+function stepCAOnce() {
+  if (!ruleTable) return;
+  const newGrid = new Array(GRID_SIZE * GRID_SIZE).fill(0);
+  for (let y = 0; y < GRID_SIZE; y++) {
+    for (let x = 0; x < GRID_SIZE; x++) {
+      const idx = encodeNeighborhood(x, y);
+      newGrid[y*GRID_SIZE+x] = ruleTable[idx % ruleTable.length] || 0;
+    }
+  }
+  caGrid = newGrid;
+  stepCount++;
+}
+
+function renderCA(canvas, ctx, crop) {
+  const w = canvas.width, h = canvas.height;
+  const imgData = ctx.createImageData(w, h);
+  const data = imgData.data;
+
+  const startX = crop ? Math.floor((GRID_SIZE - CROP_SIZE) / 2) : 0;
+  const startY = crop ? Math.floor((GRID_SIZE - CROP_SIZE) / 2) : 0;
+  const sz = crop ? CROP_SIZE : GRID_SIZE;
+
+  const cellW = w / sz, cellH = h / sz;
+  const rx = Math.max(1, cellW / 2);
+  const ry = Math.max(1, cellH / 2);
+
+  for (let cy = 0; cy < sz; cy++) {
+    for (let cx = 0; cx < sz; cx++) {
+      const gx = startX + cx, gy = startY + cy;
+      const v = caGrid[gy*GRID_SIZE+gx] || 0;
+      const rgb = hexToRgb(palette[v % palette.length]);
+
+      const px = Math.floor(cx * cellW);
+      const py = Math.floor(cy * cellH);
+
+      for (let dy = -Math.ceil(ry); dy <= Math.ceil(ry); dy++) {
+        for (let dx = -Math.ceil(rx); dx <= Math.ceil(rx); dx++) {
+          const fx = px + dx, fy = py + dy;
+          if (fx >= 0 && fx < w && fy >= 0 && fy < h) {
+            if (Math.abs(dx)/rx + Math.abs(dy)/ry <= 1) {
+              const idx = (fy*w+fx)*4;
+              data[idx]=rgb.r; data[idx+1]=rgb.g; data[idx+2]=rgb.b; data[idx+3]=255;
+            }
+          }
+        }
+      }
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+}
+
+function renderBoth() {
+  renderCA(monsterCanvas, monsterCtx, true);
+  renderCA(fullCanvas, fullCtx, false);
+}
+
+// ===== MAIN DECODE =====
+async function decode() {
+  document.getElementById('signals').innerHTML = '<span class="loading pulse">fetching nondata...</span>';
+  const ok = await fetchNondata();
+  if (!ok) {
+    document.getElementById('signals').innerHTML = '<span class="absence">⚠ could not reach github api (rate limit?)</span>';
+    // Use fallback nondata based on time
+    nondataRaw = {
+      commitCount: 3, lastCommitAgo: Math.floor((Date.now() - new Date('2026-07-15T14:42:50Z').getTime())/1000),
+      issues: 0, forks: 0, stars: 0, watchers: 0, watchers2: 0, branches: 1,
+      hasIssues: 1, hasWiki: 1, hasPages: 0, hasDiscussions: 0,
+      readmeSize: 1200, repoAgeDays: 0, monswtchEvents: 3, otherEvents: 5,
+      activityAsymmetry: 2, description: 120, license: 1, archived: 0, disabled: 0,
+      defaultBranch: 4, fileSize: 2, networkCount: 0, subscribersCount: 0, commitGaps: 31,
+    };
+  }
+
+  nondataStr = encodeNondata();
+  document.getElementById('nondataStr').textContent = nondataStr;
+
+  renderSignals();
+  renderStateBar();
+
+  // Build CA from the nondata string
+  buildRuleTable(nondataStr);
+  seedGrid(nondataStr);
+  stepCount = 0;
+  reDecodeTimer = 60;
+
+  // Run a few steps immediately to show initial pattern
+  for (let i = 0; i < 5; i++) stepCAOnce();
+  renderBoth();
+  document.getElementById('stepCount').textContent = stepCount;
+  lastDecode = Date.now();
+}
+
+// ===== ANIMATION LOOP =====
+let loopSpeed = 10; // steps per second
+function loop() {
+  if (!caPaused && ruleTable) {
+    stepCAOnce();
+    renderBoth();
+    document.getElementById('stepCount').textContent = stepCount;
+    reDecodeTimer--;
+    if (reDecodeTimer <= 0) {
+      // Re-decode nondata (time-based components will have changed)
+      decode();
+    }
+    document.getElementById('reCount').textContent = reDecodeTimer + ' steps';
+  }
+  animFrame = setTimeout(() => requestAnimationFrame(loop), 1000/loopSpeed);
+}
+
+function togglePause() {
+  caPaused = !caPaused;
+  document.getElementById('pauseBtn').textContent = caPaused ? '▶ Resume' : '⏸ Pause';
+}
+
+function stepCA() {
+  if (!ruleTable) return;
+  stepCAOnce();
+  renderBoth();
+  document.getElementById('stepCount').textContent = stepCount;
+}
+
+// Start
+decode().then(() => loop());
+</script>
+</body>
+</html>
