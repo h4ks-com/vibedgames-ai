@@ -474,6 +474,228 @@ function monsterHunt() {
   isHunting = false;
 }
 
+// ===== GENETIC ALGORITHM MONSTER BREEDER =====
+// Population of 16 monsters. Each individual = a Mandelbrot-derived CA rule (16384-entry array).
+// Genome: rule table array. Fitness = monstrosity score.
+// Selection: tournament (size 3). Crossover: uniform per-cell. Mutation: random replacement.
+// Elitism: top 2 carried over unchanged.
+
+const GA_POP_SIZE = 16;
+const GA_ELITE = 2;
+const GA_MUTATION_RATE = 0.03;
+const GA_TOURNAMENT_SIZE = 3;
+const RULE_SIZE = 16384;
+
+let gaPopulation = [];
+let gaGeneration = 0;
+let gaActive = false;
+let gaBestEver = { monstrosity: 0, rule: null, generation: 0 };
+
+function gaRandomIndividual() {
+  const loc = LOCATIONS[Math.floor(Math.random() * LOCATIONS.length)];
+  const cRe = loc.re + (Math.random() - 0.5) * 0.01 / loc.zoom;
+  const cIm = loc.im + (Math.random() - 0.5) * 0.01 / loc.zoom;
+  const zoom = loc.zoom * (0.5 + Math.random());
+  const maxIter = 50 + Math.floor(Math.random() * 100);
+  renderMandel(cRe, cIm, zoom, maxIter);
+  const rule = new Array(RULE_SIZE);
+  extractRuleToArray(rule);
+  const score = measureMonstrosity(rule);
+  return { rule, score, cRe, cIm, zoom, maxIter, fitness: score.monstrosity };
+}
+
+function gaInitPopulation() {
+  gaPopulation = [];
+  for (let i = 0; i < GA_POP_SIZE; i++) {
+    gaPopulation.push(gaRandomIndividual());
+  }
+  gaPopulation.sort((a, b) => b.fitness - a.fitness);
+}
+
+function gaTournament() {
+  let best = null;
+  for (let i = 0; i < GA_TOURNAMENT_SIZE; i++) {
+    const idx = Math.floor(Math.random() * gaPopulation.length);
+    const ind = gaPopulation[idx];
+    if (!best || ind.fitness > best.fitness) best = ind;
+  }
+  return best;
+}
+
+function gaCrossover(parent1, parent2) {
+  const child = new Array(RULE_SIZE);
+  for (let i = 0; i < RULE_SIZE; i++) {
+    child[i] = Math.random() < 0.5 ? parent1.rule[i] : parent2.rule[i];
+  }
+  return child;
+}
+
+function gaMutate(rule) {
+  for (let i = 0; i < RULE_SIZE; i++) {
+    if (Math.random() < GA_MUTATION_RATE) {
+      rule[i] = Math.floor(Math.random() * 4);
+    }
+  }
+  return rule;
+}
+
+function gaEvolveStep() {
+  const newPop = [];
+
+  // Elitism: carry top individuals
+  for (let i = 0; i < GA_ELITE; i++) {
+    newPop.push(gaPopulation[i]);
+  }
+
+  // Breed rest
+  while (newPop.length < GA_POP_SIZE) {
+    const p1 = gaTournament();
+    const p2 = gaTournament();
+    let childRule = gaCrossover(p1, p2);
+    childRule = gaMutate(childRule);
+    const score = measureMonstrosity(childRule);
+    newPop.push({ rule: childRule, score, fitness: score.monstrosity });
+  }
+
+  gaPopulation = newPop;
+  gaPopulation.sort((a, b) => b.fitness - a.fitness);
+  gaGeneration++;
+
+  // Track best ever
+  const best = gaPopulation[0];
+  if (best.fitness > gaBestEver.monstrosity) {
+    gaBestEver = {
+      monstrosity: best.fitness,
+      rule: best.rule.slice(),
+      generation: gaGeneration,
+      stability: best.score.stability,
+      fixedSize: best.score.fixedSize,
+      avgSize: best.score.avgSize,
+    };
+    // Catalogue new record
+    catalogueMonster({
+      monstrosity: best.fitness,
+      stability: best.score.stability,
+      fixedSize: best.score.fixedSize,
+      avgSize: best.score.avgSize,
+      cRe: 0, cIm: 0, zoom: 0, maxIter: 0,
+      huntNum: 1000 + gaGeneration,
+      rule: best.rule.slice(),
+    });
+    // Update monstrosity display
+    monstrosityHighScore = Math.max(monstrosityHighScore, best.fitness);
+    currentMonstrosity = best.fitness;
+    monstrosityHistory.push(best.fitness);
+  }
+
+  // Apply best of generation to the display
+  ruleTable = best.rule;
+  seedGrid(nondataStr || HANB);
+  stepCount = 0;
+  reDecodeTimer = 60;
+  const pct = (v) => (v * 100).toFixed(1) + '%';
+  document.getElementById('monoValue').textContent = best.fitness.toFixed(4);
+  document.getElementById('monoSub').innerHTML = 'Stability: ' + pct(best.score.stability) + ' | Fixed Size: ' + pct(best.score.fixedSize);
+  document.getElementById('monoBar').style.width = (best.fitness * 100) + '%';
+  document.getElementById('monoBest').innerHTML = '★ GA Best: ' + gaBestEver.monstrosity.toFixed(4) + ' (Gen ' + gaBestEver.generation + ')';
+
+  renderGAPopulation();
+
+  const huntInfo = document.getElementById('huntInfo');
+  huntInfo.innerHTML =
+    '🧬 <b>Gen ' + gaGeneration + '</b> — Best M=' + best.fitness.toFixed(4) +
+    ' | All-time: ' + gaBestEver.monstrosity.toFixed(4) + ' (Gen ' + gaBestEver.generation + ')' +
+    ' | Avg M=' + (gaPopulation.reduce((a, b) => a + b.fitness, 0) / gaPopulation.length).toFixed(4) +
+    ' | Pop: ' + gaPopulation.length;
+
+  if (caPaused) { caPaused = false; document.getElementById('pauseBtn').textContent = '⏸ Pause'; }
+  if (!loopRunning) { loopRunning = true; loop(); }
+}
+
+function renderGAPopulation() {
+  const el = document.getElementById('ga-pop');
+  const statsEl = document.getElementById('ga-stats');
+  document.getElementById('ga-gen').textContent = gaGeneration;
+  el.innerHTML = gaPopulation.map((ind, i) => {
+    const barW = Math.round(ind.fitness * 100);
+    const isElite = i < GA_ELITE;
+    return '<div class="ga-ind' + (isElite ? ' elite' : '') + '" onclick="gaShowIndividual(' + i + ')" title="M=' + ind.fitness.toFixed(4) + '">' +
+      '<span class="ind-m">' + ind.fitness.toFixed(3) + '</span>' +
+      '<div class="ind-bar"><div class="ind-bar-fill" style="width:' + barW + '%"></div></div>' +
+      '<span class="ind-gen">gen ' + gaGeneration + '</span>' +
+    '</div>';
+  }).join('');
+  const avg = gaPopulation.reduce((a, b) => a + b.fitness, 0) / gaPopulation.length;
+  const max = gaPopulation[0].fitness;
+  const min = gaPopulation[gaPopulation.length - 1].fitness;
+  statsEl.innerHTML =
+    'Avg: ' + avg.toFixed(4) + ' | Max: ' + max.toFixed(4) + ' | Min: ' + min.toFixed(4) +
+    ' | Best Ever: ' + gaBestEver.monstrosity.toFixed(4) + ' (Gen ' + gaBestEver.generation + ')';
+}
+
+function gaShowIndividual(idx) {
+  const ind = gaPopulation[idx];
+  if (!ind) return;
+  ruleTable = ind.rule.slice();
+  seedGrid(nondataStr || HANB);
+  stepCount = 0;
+  reDecodeTimer = 60;
+  currentMonstrosity = ind.fitness;
+  const pct = (v) => (v * 100).toFixed(1) + '%';
+  document.getElementById('monoValue').textContent = ind.fitness.toFixed(4);
+  document.getElementById('monoSub').innerHTML = 'Stability: ' + pct(ind.score.stability) + ' | Fixed Size: ' + pct(ind.score.fixedSize);
+  document.getElementById('monoBar').style.width = (ind.fitness * 100) + '%';
+  document.getElementById('huntInfo').innerHTML = '🧬 Viewing Gen ' + gaGeneration + ' Individual #' + (idx + 1) + ' — M=' + ind.fitness.toFixed(4) + ' (S:' + pct(ind.score.stability) + ' F:' + pct(ind.score.fixedSize) + ')';
+  if (!loopRunning) { loopRunning = true; loop(); }
+}
+
+let gaTimer = null;
+function toggleGA() {
+  gaActive = !gaActive;
+  const btn = document.getElementById('gaBtn');
+  const panel = document.getElementById('ga-panel');
+  if (gaActive) {
+    panel.style.display = 'block';
+    btn.textContent = '⏹ Stop Breeder';
+    btn.style.background = '#2a3a2a';
+    // Initialize if needed
+    if (gaPopulation.length === 0) {
+      gaGeneration = 0;
+      gaBestEver = { monstrosity: 0, rule: null, generation: 0 };
+      gaInitPopulation();
+      gaPopulation.sort((a, b) => b.fitness - a.fitness);
+      renderGAPopulation();
+      document.getElementById('huntInfo').innerHTML = '🧬 Population initialized — ' + GA_POP_SIZE + ' random monsters. Click 🧬 again to stop, or wait for evolution.';
+      // Apply best initial individual
+      const best = gaPopulation[0];
+      ruleTable = best.rule;
+      seedGrid(nondataStr || HANB);
+      stepCount = 0;
+      reDecodeTimer = 60;
+      currentMonstrosity = best.fitness;
+      const pct = (v) => (v * 100).toFixed(1) + '%';
+      document.getElementById('monoValue').textContent = best.fitness.toFixed(4);
+      document.getElementById('monoSub').innerHTML = 'Stability: ' + pct(best.score.stability) + ' | Fixed Size: ' + pct(best.score.fixedSize);
+      document.getElementById('monoBar').style.width = (best.fitness * 100) + '%';
+      document.getElementById('monoBest').innerHTML = '★ GA Best: ' + gaBestEver.monstrosity.toFixed(4);
+    }
+    gaTimer = setTimeout(gaEvolveLoop, 3000);
+    if (caPaused) { caPaused = false; document.getElementById('pauseBtn').textContent = '⏸ Pause'; }
+    if (!loopRunning) { loopRunning = true; loop(); }
+  } else {
+    btn.textContent = '🧬 Genetic Breeder';
+    btn.style.background = '';
+    if (gaTimer) { clearTimeout(gaTimer); gaTimer = null; }
+    panel.style.display = 'none';
+  }
+}
+
+function gaEvolveLoop() {
+  if (!gaActive) return;
+  gaEvolveStep();
+  gaTimer = setTimeout(gaEvolveLoop, 3000);
+}
+
 // ===== MONSWTCH NONDATA EXTRACTION =====
 const REPO = 'handyc/monswtch';
 let nondataRaw = {};
