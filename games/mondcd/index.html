@@ -298,24 +298,75 @@ function measureMonstrosity(testRule) {
   return { monstrosity, stability: stabilityScore, fixedSize: sizeScore, avgSize, avgHamming };
 }
 
+let monstrosityHighScore = 0;
+let currentMonstrosity = 0;
+let monstrosityHistory = [];
+let isHunting = false;
+
 function monsterHunt() {
-  const loc = LOCATIONS[Math.floor(Math.random()*LOCATIONS.length)];
-  const cRe = loc.re + (Math.random()-0.5)*0.01/loc.zoom;
-  const cIm = loc.im + (Math.random()-0.5)*0.01/loc.zoom;
-  const zoom = loc.zoom * (0.5 + Math.random());
-  const maxIter = 50 + Math.floor(Math.random()*100);
-  renderMandel(cRe, cIm, zoom, maxIter);
-  extractRuleFromMandel();
-  // Re-seed with current nondata string (keeps the monster's identity)
+  if (isHunting) return;
+  isHunting = true;
+  const huntInfo = document.getElementById('huntInfo');
+  const NUM_CANDIDATES = 12;
+  const candidates = [];
+  huntInfo.innerHTML = '<span class="pulse">🔍 Hunting for monsters of increasing monstrosity...</span>';
+
+  // Generate candidates synchronously
+  const savedGrid = caGrid.slice();
+  const savedRule = ruleTable;
+  const savedStep = stepCount;
+
+  for (let c = 0; c < NUM_CANDIDATES; c++) {
+    const loc = LOCATIONS[Math.floor(Math.random()*LOCATIONS.length)];
+    const cRe = loc.re + (Math.random()-0.5)*0.01/loc.zoom;
+    const cIm = loc.im + (Math.random()-0.5)*0.01/loc.zoom;
+    const zoom = loc.zoom * (0.5 + Math.random());
+    const maxIter = 50 + Math.floor(Math.random()*100);
+    renderMandel(cRe, cIm, zoom, maxIter);
+    const candidateRule = new Array(16384);
+    extractRuleToArray(candidateRule);
+    const score = measureMonstrosity(candidateRule);
+    candidates.push({ rule: candidateRule, score, cRe, cIm, zoom, maxIter });
+  }
+
+  // Restore original state
+  caGrid = savedGrid;
+  ruleTable = savedRule;
+  stepCount = savedStep;
+
+  // Pick the best candidate that beats the high score if possible,
+  // otherwise just pick the best of this batch
+  candidates.sort((a, b) => b.score.monstrosity - a.score.monstrosity);
+  const best = candidates[0];
+
+  // Apply the winning rule
+  ruleTable = best.rule;
   seedGrid(nondataStr || HANB);
   stepCount = 0;
   reDecodeTimer = 60;
-  document.getElementById('huntInfo').innerHTML =
-    '🎯 Hunted: Re='+cRe.toFixed(10)+' Im='+cIm.toFixed(10)+
-    ' zoom='+zoom.toFixed(1)+' iters='+maxIter+
-    ' → <b>new rule extracted from M-set boundary</b>';
+  currentMonstrosity = best.score.monstrosity;
+
+  // Track progression
+  monstrosityHistory.push(currentMonstrosity);
+  if (currentMonstrosity > monstrosityHighScore) {
+    monstrosityHighScore = currentMonstrosity;
+  }
+
+  const pct = (v) => (v * 100).toFixed(1) + '%';
+  const isNewRecord = currentMonstrosity >= monstrosityHighScore;
+  huntInfo.innerHTML =
+    '🎯 <b>Monster Found!</b> M=' + currentMonstrosity.toFixed(4) +
+    (isNewRecord ? ' <span style="color:#9a3abc">★ NEW RECORD</span>' : ' (best: ' + monstrosityHighScore.toFixed(4) + ')') +
+    '<br> Stability: ' + pct(best.score.stability) +
+    ' | Fixed Size: ' + pct(best.score.fixedSize) +
+    ' | Avg Size: ' + best.score.avgSize.toFixed(0) + '/' + (CROP_SIZE*CROP_SIZE) +
+    ' cells<br> Re=' + best.cRe.toFixed(10) + ' Im=' + best.cIm.toFixed(10) +
+    ' zoom=' + best.zoom.toFixed(1) + ' iters=' + best.maxIter +
+    '<br> Hunt #' + monstrosityHistory.length + ' | Candidates: ' + NUM_CANDIDATES;
+
   if (caPaused) { caPaused = false; document.getElementById('pauseBtn').textContent='⏸ Pause'; }
   if (!loopRunning) { loopRunning = true; loop(); }
+  isHunting = false;
 }
 
 // ===== MONSWTCH NONDATA EXTRACTION =====
