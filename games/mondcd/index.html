@@ -300,6 +300,61 @@ function measureMonstrosity(testRule) {
 
 let isHunting = false;
 
+// ===== AUTOHUNT + CATALOGUE =====
+let autohuntActive = false;
+let autohuntTimer = null;
+let monsterCatalogue = []; // Array of {monstrosity, stability, fixedSize, avgSize, cRe, cIm, zoom, maxIter, huntNum, rule}
+
+function renderCatalogue() {
+  const el = document.getElementById('catalogue');
+  if (!el) return;
+  if (monsterCatalogue.length === 0) {
+    el.innerHTML = '<span style="color:#332">Catalogue empty. Hunt or Autohunt to find monsters.</span>';
+    return;
+  }
+  el.innerHTML = '<div style="color:#7a5a9a;margin-bottom:3px"> 📋 MONSTER CATALOGUE — ' + monsterCatalogue.length + ' specimen(s) catalogued | Best M=' + monstrosityHighScore.toFixed(4) + '</div>' +
+    monsterCatalogue.map((m, i) => {
+      const barW = Math.round(m.monstrosity * 100);
+      return '<div style="display:flex;align-items:center;gap:4px;padding:1px 0">' +
+        '<span style="color:#9a3abc;font-weight:bold;width:28px">#' + (i+1) + '</span>' +
+        '<span style="width:52px;color:#aa8aca">M=' + m.monstrosity.toFixed(3) + '</span>' +
+        '<span style="width:80px">S:' + (m.stability*100).toFixed(0) + '% F:' + (m.fixedSize*100).toFixed(0) + '%</span>' +
+        '<span style="flex:1;height:8px;background:#1a0e22;border-radius:2px;overflow:hidden">' +
+          '<span style="display:block;height:100%;width:' + barW + '%;background:linear-gradient(90deg,#4a2a6a,#9a3abc)"></span>' +
+        '</span>' +
+        '<span style="width:40px;color:#444;text-align:right">hunt#' + m.huntNum + '</span>' +
+      '</div>';
+    }).join('');
+}
+
+function catalogueMonster(monster) {
+  monsterCatalogue.push(monster);
+  monsterCatalogue.sort((a,b) => b.monstrosity - a.monstrosity);
+  renderCatalogue();
+}
+
+function toggleAutohunt() {
+  autohuntActive = !autohuntActive;
+  const btn = document.getElementById('autohuntBtn');
+  if (autohuntActive) {
+    btn.textContent = '⏹ Stop Autohunt';
+    btn.style.background = '#2a1e3a';
+    runAutohuntStep();
+  } else {
+    btn.textContent = '🔁 Autohunt';
+    btn.style.background = '';
+    if (autohuntTimer) { clearTimeout(autohuntTimer); autohuntTimer = null; }
+  }
+}
+
+function runAutohuntStep() {
+  if (!autohuntActive) return;
+  if (!isHunting) {
+    monsterHunt();
+  }
+  autohuntTimer = setTimeout(runAutohuntStep, 2000);
+}
+
 function monsterHunt() {
   if (isHunting) return;
   isHunting = true;
@@ -308,7 +363,6 @@ function monsterHunt() {
   const candidates = [];
   huntInfo.innerHTML = '<span class="pulse">🔍 Hunting for monsters of increasing monstrosity...</span>';
 
-  // Generate candidates synchronously
   const savedGrid = caGrid.slice();
   const savedRule = ruleTable;
   const savedStep = stepCount;
@@ -326,34 +380,38 @@ function monsterHunt() {
     candidates.push({ rule: candidateRule, score, cRe, cIm, zoom, maxIter });
   }
 
-  // Restore original state
   caGrid = savedGrid;
   ruleTable = savedRule;
   stepCount = savedStep;
 
-  // Pick the best candidate that beats the high score if possible,
-  // otherwise just pick the best of this batch
   candidates.sort((a, b) => b.score.monstrosity - a.score.monstrosity);
   const best = candidates[0];
 
-  // Apply the winning rule
   ruleTable = best.rule;
   seedGrid(nondataStr || HANB);
   stepCount = 0;
   reDecodeTimer = 60;
   currentMonstrosity = best.score.monstrosity;
 
-  // Track progression
   monstrosityHistory.push(currentMonstrosity);
-  if (currentMonstrosity > monstrosityHighScore) {
+  const isNewRecord = currentMonstrosity > monstrosityHighScore;
+  if (isNewRecord) {
     monstrosityHighScore = currentMonstrosity;
+    catalogueMonster({
+      monstrosity: currentMonstrosity,
+      stability: best.score.stability,
+      fixedSize: best.score.fixedSize,
+      avgSize: best.score.avgSize,
+      cRe: best.cRe, cIm: best.cIm, zoom: best.zoom, maxIter: best.maxIter,
+      huntNum: monstrosityHistory.length,
+      rule: best.rule,
+    });
   }
 
   const pct = (v) => (v * 100).toFixed(1) + '%';
-  const isNewRecord = currentMonstrosity >= monstrosityHighScore;
   huntInfo.innerHTML =
     '🎯 <b>Monster Found!</b> M=' + currentMonstrosity.toFixed(4) +
-    (isNewRecord ? ' <span style="color:#9a3abc">★ NEW RECORD</span>' : ' (best: ' + monstrosityHighScore.toFixed(4) + ')') +
+    (isNewRecord ? ' <span style="color:#9a3abc">★ NEW RECORD — catalogued!</span>' : ' (best: ' + monstrosityHighScore.toFixed(4) + ')') +
     '<br> Stability: ' + pct(best.score.stability) +
     ' | Fixed Size: ' + pct(best.score.fixedSize) +
     ' | Avg Size: ' + best.score.avgSize.toFixed(0) + '/' + (CROP_SIZE*CROP_SIZE) +
