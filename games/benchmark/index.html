@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>⚡ H4KS Benchmark Suite</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #0a0a1a; color: #c8d6e5; font-family: 'Segoe UI', system-ui, sans-serif;
+  min-height: 100vh; padding: 20px;
+}
+.container { max-width: 900px; margin: 0 auto; }
+h1 { text-align: center; font-size: 2em; background: linear-gradient(135deg, #00f2fe, #4facfe, #a855f7); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 5px; }
+.subtitle { text-align: center; color: #667; font-size: .9em; margin-bottom: 25px; }
+.card {
+  background: linear-gradient(135deg, rgba(30,30,60,.8), rgba(20,20,40,.8));
+  border: 1px solid rgba(79,172,254,.2); border-radius: 12px; padding: 20px; margin-bottom: 16px;
+  backdrop-filter: blur(10px);
+}
+.card h2 { font-size: 1.1em; color: #4facfe; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+.btn-run {
+  display: block; width: 100%; padding: 16px; font-size: 1.2em; font-weight: 700;
+  background: linear-gradient(135deg, #4facfe, #00f2fe); color: #000; border: none;
+  border-radius: 8px; cursor: pointer; transition: all .3s;
+}
+.btn-run:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(79,172,254,.4); }
+.btn-run:disabled { opacity: .5; cursor: wait; }
+.progress-bar { height: 8px; background: rgba(255,255,255,.1); border-radius: 4px; overflow: hidden; margin: 12px 0; }
+.progress-fill { height: 100%; background: linear-gradient(90deg, #4facfe, #a855f7); transition: width .5s; width: 0%; }
+
+/* === LOADING ANIMATION === */
+.loading-overlay {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  background: rgba(10,10,26,.95); z-index: 9999;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  opacity: 0; pointer-events: none; transition: opacity .3s;
+}
+.loading-overlay.active { opacity: 1; pointer-events: all; }
+.loading-radar {
+  width: 120px; height: 120px; border-radius: 50%;
+  border: 3px solid rgba(79,172,254,.15);
+  border-top-color: #4facfe; border-right-color: #a855f7;
+  animation: radar-spin 1.2s linear infinite;
+  position: relative; margin-bottom: 30px;
+}
+.loading-radar::before {
+  content: ''; position: absolute; top: 50%; left: 50%;
+  width: 60%; height: 60%; border-radius: 50%;
+  border: 2px solid rgba(79,172,254,.1); border-top-color: #00f2fe;
+  transform: translate(-50%,-50%); animation: radar-spin 0.8s linear infinite reverse;
+}
+.loading-radar::after {
+  content: ''; position: absolute; top: 50%; left: 50%;
+  width: 30%; height: 30%; border-radius: 50%;
+  background: linear-gradient(135deg, #4facfe, #a855f7);
+  transform: translate(-50%,-50%); animation: pulse 1s ease-in-out infinite;
+}
+@keyframes radar-spin { to { transform: rotate(360deg); } }
+@keyframes pulse { 0%,100% { opacity:.6; transform: translate(-50%,-50%) scale(1); } 50% { opacity:1; transform: translate(-50%,-50%) scale(1.3); } }
+
+.loading-title {
+  font-size: 1.4em; font-weight: 700; color: #4facfe; margin-bottom: 8px;
+  text-align: center;
+}
+.loading-subtitle {
+  color: #667; font-size: .9em; margin-bottom: 25px; text-align: center;
+}
+.loading-tests { width: 320px; max-width: 90vw; }
+.loading-test-row {
+  display: flex; align-items: center; gap: 10px; padding: 6px 0;
+  opacity: .3; transition: opacity .3s;
+}
+.loading-test-row.active { opacity: 1; }
+.loading-test-row.done { opacity: .7; }
+.loading-test-icon {
+  width: 18px; height: 18px; border-radius: 50%;
+  border: 2px solid rgba(79,172,254,.2); flex-shrink: 0;
+}
+.loading-test-row.active .loading-test-icon {
+  border-top-color: #4facfe; animation: radar-spin .6s linear infinite;
+}
+.loading-test-row.done .loading-test-icon {
+  border: none; background: #2ed573; position: relative;
+}
+.loading-test-row.done .loading-test-icon::after {
+  content: '✓'; position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  color: #000; font-size: 11px; font-weight: 900;
+}
+.loading-test-name { font-size: .9em; flex: 1; }
+.loading-test-val { font-size: .8em; color: #2ed573; font-weight: 700; }
+
+.bench-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.05); }
+.bench-label { font-size: .95em; }
+.bench-value { font-weight: 700; color: #4facfe; }
+.bench-status { font-size: .8em; color: #555; }
+.bench-status.running { color: #feca57; }
+.bench-status.done { color: #2ed573; }
+.sys-info { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.sys-item { display: flex; flex-direction: column; }
+.sys-label { font-size: .75em; color: #667; text-transform: uppercase; }
+.sys-value { font-size: .95em; color: #e8e8e8; }
+canvas { max-width: 400px; display: block; margin: 0 auto; }
+.score-display { text-align: center; padding: 15px; }
+.score-big { font-size: 2.5em; font-weight: 800; }
+.score-label { font-size: .8em; color: #667; text-transform: uppercase; letter-spacing: 2px; }
+.score-cat { display: inline-block; margin: 0 20px; }
+.ref-bar-container { margin: 6px 0; }
+.ref-bar-label { display: flex; justify-content: space-between; font-size: .8em; margin-bottom: 3px; }
+.ref-bar-track { height: 18px; background: rgba(255,255,255,.05); border-radius: 9px; overflow: hidden; position: relative; }
+.ref-bar-fill { height: 100%; border-radius: 9px; transition: width 1s; display: flex; align-items: center; padding-left: 8px; font-size: .7em; color: rgba(0,0,0,.6); font-weight: 700; }
+.share-section { text-align: center; margin-top: 10px; }
+.btn-share {
+  padding: 12px 24px; font-size: 1em; font-weight: 600;
+  background: linear-gradient(135deg, #a855f7, #ec4899); color: #fff; border: none;
+  border-radius: 8px; cursor: pointer; transition: all .3s;
+}
+.btn-share:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(168,85,247,.4); }
+.share-url { margin-top: 10px; width: 100%; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1); color: #4facfe; padding: 10px; border-radius: 8px; font-size: .8em; font-family: monospace; resize: none; }
+.readonly-badge { display: inline-block; background: linear-gradient(135deg, #f59e0b, #ef4444); color: #fff; padding: 4px 14px; border-radius: 20px; font-size: .8em; font-weight: 600; margin-bottom: 12px; }
+.hidden { display: none; }
+@media(max-width:600px){ .sys-info{grid-template-columns:1fr} .score-cat{margin:0 10px} .score-big{font-size:2em} }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>⚡ H4KS BENCHMARK SUITE</h1>
+  <p class="subtitle">Multi-dimensional CPU · GPU · Memory evaluation — all in your browser</p>
+
+  <div id="readonlyBadge" class="hidden" style="text-align:center"><span class="readonly-badge">👁️ Shared Read-Only Results</span></div>
+
+  <!-- System Info -->
+  <div class="card">
+    <h2>🖥️ System Information</h2>
+    <div class="sys-info" id="sysInfo"></div>
+  </div>
+
+  <!-- Run Button -->
+  <div id="runSection" class="card">
+    <button class="btn-run" id="runBtn" onclick="runBenchmarks()">🚀 Run Benchmark</button>
+    <div class="progress-bar hidden" id="progressBar"><div class="progress-fill" id="progressFill"></div></div>
+    <p id="statusText" style="text-align:center;color:#667;margin-top:8px;font-size:.85em"></p>
+  </div>
+
+  <!-- Results -->
+  <div id="resultsSection" class="hidden">
+    <div class="card">
+      <h2>📊 Benchmark Results</h2>
+      <div id="benchResults"></div>
+    </div>
+    <div class="card">
+      <h2>🎯 Performance Profile</h2>
+      <canvas id="radar" width="400" height="400"></canvas>
+      <div class="score-display" id="scoreDisplay"></div>
+    </div>
+    <div class="card">
+      <h2>📈 VS Reference Hardware</h2>
+      <div id="refBars"></div>
+    </div>
+    <div class="card share-section" id="shareSection">
+      <button class="btn-share" onclick="generateShareLink()">📋 Generate Shareable Link</button>
+      <textarea class="share-url hidden" id="shareUrl" readonly rows="3"></textarea>
+    </div>
+  </div>
+</div>
+
+<!-- Loading Overlay -->
+<div class="loading-overlay" id="loadingOverlay">
+  <div class="loading-radar"></div>
+  <div class="loading-title" id="loadingTitle">Initializing...</div>
+  <div class="loading-subtitle" id="loadingSubtitle">Preparing benchmark modules</div>
+  <div class="loading-tests" id="loadingTests"></div>
+</div>
+
+<script>
+// ============= STATE =============
+let results = {};
+let sysInfo = {};
+
+// ============= SYSTEM INFO =============
+function gatherSysInfo() {
+  const gl = document.createElement('canvas').getContext('webgl');
+  let gpu = 'Unknown';
+  if (gl) {
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    if (dbg) { gpu = gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) || 'Unknown'; }
+  }
+  return {
+    cores: navigator.hardwareConcurrency || '?',
+    memory: navigator.deviceMemory ? navigator.deviceMemory + ' GB (capped)' : 'Unknown',
+    gpu: gpu,
+    platform: navigator.platform || 'Unknown',
+    ua: navigator.userAgent.substring(0, 80),
+    coresRaw: navigator.hardwareConcurrency || 0,
+  };
+}
+
+function displaySysInfo(info) {
+  document.getElementById('sysInfo').innerHTML = `
+    <div class="sys-item"><span class="sys-label">CPU Threads</span><span class="sys-value">${info.cores}</span></div>
+    <div class="sys-item"><span class="sys-label">Memory (reported)</span><span class="sys-value">${info.memory}</span></div>
+    <div class="sys-item"><span class="sys-label">GPU</span><span class="sys-value">${info.gpu}</span></div>
+    <div class="sys-item"><span class="sys-label">Platform</span><span class="sys-value">${info.platform}</span></div>
+    <div class="sys-item"><span class="sys-label">Browser</span><span class="sys-value" style="font-size:.75em">${info.ua}</span></div>
+    <div class="sys-item"><span class="sys-label">Resolution</span><span class="sys-value">${screen.width}×${screen.height}</span></div>
+  `;
+}
+
+// ============= BENCHMARKS =============
+function benchInt(durationMs) {
+  const end = performance.now() + durationMs;
+  let result = 1, count = 0;
+  while (performance.now() < end) {
+    for (let i = 0; i < 100000; i++) { result = (result * 31 + i) % 2147483647; count++; }
+  }
+  return Math.round(count / durationMs * 1000);
+}
+
+function benchFloat(durationMs) {
+  const end = performance.now() + durationMs;
+  let result = 0, count = 0;
+  while (performance.now() < end) {
+    for (let i = 0; i < 100000; i++) { result += Math.sin(i * 0.001) * Math.cos(i * 0.002) * Math.sqrt(i + 1); count++; }
+  }
+  return Math.round(count / durationMs * 1000);
+}
+
+function benchPrime(durationMs) {
+  const end = performance.now() + durationMs;
+  let primes = 0;
+  while (performance.now() < end) {
+    for (let n = 2; n < 5000; n++) {
+      let isPrime = true;
+      for (let d = 2; d * d <= n; d++) { if (n % d === 0) { isPrime = false; break; } }
+      if (isPrime) primes++;
+    }
+  }
+  return Math.round(primes / durationMs * 1000);
+}
+
+function benchMemRW(durationMs) {
+  const arr = new Float64Array(2000000);
+  const end = performance.now() + durationMs;
+  let total = 0;
+  while (performance.now() < end) {
+    for (let i = 0; i < arr.length; i++) arr[i] = i * 1.1;
+    total++;
+  }
+  const bytes = total * arr.length * 8 * 2;
+  return (bytes / durationMs / 1000 / 1000).toFixed(1);
+}
+
+function benchMemCopy(durationMs) {
+  const src = new Float64Array(2000000);
+  const dst = new Float64Array(2000000);
+  const end = performance.now() + durationMs;
+  let total = 0;
+  while (performance.now() < end) { dst.set(src); total++; }
+  const bytes = total * src.length * 8;
+  return (bytes / durationMs / 1000 / 1000).toFixed(1);
+}
+
+function benchLatency(durationMs) {
+  const size = 1024 * 1024;
+  const arr = new Uint32Array(size);
+  for (let i = 0; i < size; i++) { arr[i] = (i + 64) % size; }
+  const end = performance.now() + durationMs;
+  let idx = 0, count = 0;
+  while (performance.now() < end) { idx = arr[idx]; count++; }
+  return (count / durationMs * 1000 / 1000000).toFixed(2);
+}
+
+function benchGPU(durationMs) {
+  return new Promise((resolve) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 800; canvas.height = 600;
+    const gl = canvas.getContext('webgl');
+    if (!gl) { resolve(0); return; }
+    const vs = 'attribute vec2 p; attribute vec3 c; uniform float t; varying vec3 vc;\nvoid main(){gl_Position=vec4(p.x+sin(t)*0.05,p.y+cos(t)*0.05,0.,1.);vc=c;}';
+    const fs = 'precision mediump float; varying vec3 vc;\nvoid main(){gl_FragColor=vec4(vc,1.);}';
+    function sh(type, src) { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s; }
+    const prog = gl.createProgram();
+    gl.attachShader(prog, sh(gl.VERTEX_SHADER, vs));
+    gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(prog); gl.useProgram(prog);
+    const verts = [];
+    for (let i = 0; i < 4000; i++) {
+      const x = (Math.random() - .5) * 2, y = (Math.random() - .5) * 2;
+      const r = Math.random(), g = Math.random(), b = Math.random();
+      verts.push(x, y, 0, r, g, b, x + .05, y, 0, r, g, b, x, y + .05, 0, r, g, b);
+    }
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(verts), gl.STATIC_DRAW);
+    const pLoc = gl.getAttribLocation(prog, 'p');
+    const cLoc = gl.getAttribLocation(prog, 'c');
+    gl.enableVertexAttribArray(pLoc); gl.vertexAttribPointer(pLoc, 2, gl.FLOAT, false, 24, 0);
+    gl.enableVertexAttribArray(cLoc); gl.vertexAttribPointer(cLoc, 3, gl.FLOAT, false, 24, 8);
+    const tLoc = gl.getUniformLocation(prog, 't');
+    let frames = 0;
+    const start = performance.now();
+    const end = start + durationMs;
+    function render() {
+      if (performance.now() >= end) {
+        const fps = Math.round(frames / (durationMs / 1000));
+        resolve(fps);
+        return;
+      }
+      gl.viewport(0, 0, 800, 600); gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.uniform1f(tLoc, (performance.now() - start) / 1000);
+      gl.drawArrays(gl.TRIANGLES, 0, 12000);
+      frames++;
+      requestAnimationFrame(render);
+    }
+    render();
+  });
+}
+
+// ============= RUNNER =============
+async function runBenchmarks() {
+  const benchmarks = [
+    { key: 'int', name: 'Integer Math', icon: '🔢', fn: () => benchInt(2500), unit: 'ops/s' },
+    { key: 'float', name: 'Floating Point', icon: '📐', fn: () => benchFloat(2500), unit: 'ops/s' },
+    { key: 'prime', name: 'Prime Sieve', icon: '🔍', fn: () => benchPrime(2500), unit: 'primes/s' },
+    { key: 'memRW', name: 'Mem Read/Write', icon: '📝', fn: () => benchMemRW(2000), unit: 'GB/s' },
+    { key: 'memCopy', name: 'Mem Copy', icon: '📋', fn: () => benchMemCopy(2000), unit: 'GB/s' },
+    { key: 'latency', name: 'Latency', icon: '⏱️', fn: () => benchLatency(2000), unit: 'M acc/s' },
+    { key: 'gpu', name: 'GPU FPS', icon: '🎮', fn: () => benchGPU(3000), unit: 'FPS' },
+  ];
+
+  // Show loading overlay
+  const overlay = document.getElementById('loadingOverlay');
+  overlay.classList.add('active');
+
+  // Build loading test rows
+  document.getElementById('loadingTests').innerHTML = benchmarks.map(b =>
+    `<div class="loading-test-row" id="lt-${b.key}">
+      <div class="loading-test-icon"></div>
+      <span class="loading-test-name">${b.icon} ${b.name}</span>
+      <span class="loading-test-val" id="ltv-${b.key}"></span>
+    </div>`
+  ).join('');
+
+  document.getElementById('runBtn').disabled = true;
+  document.getElementById('runBtn').textContent = '⏳ Running...';
+  document.getElementById('progressBar').classList.remove('hidden');
+  document.getElementById('resultsSection').classList.add('hidden');
+
+  // Bench results table (hidden behind overlay)
+  document.getElementById('benchResults').innerHTML = benchmarks.map(b =>
+    `<div class="bench-item" id="row-${b.key}"><span class="bench-label">${b.icon} ${b.name}</span><span class="bench-status" id="status-${b.key}">Queued...</span></div>`
+  ).join('');
+
+  results = {};
+  for (let i = 0; i < benchmarks.length; i++) {
+    const b = benchmarks[i];
+    const pct = Math.round((i / benchmarks.length) * 100);
+
+    // Update loading overlay
+    document.getElementById('loadingTitle').textContent = `Running: ${b.icon} ${b.name}`;
+    document.getElementById('loadingSubtitle').textContent = `Test ${i+1} of ${benchmarks.length} — ${pct}% complete`;
+    const ltRow = document.getElementById('lt-' + b.key);
+    ltRow.classList.add('active');
+
+    // Update progress bar
+    document.getElementById('statusText').textContent = `Running: ${b.name}...`;
+    document.getElementById('progressFill').style.width = pct + '%';
+    const el = document.getElementById('status-' + b.key);
+    el.textContent = 'Running...';
+    el.className = 'bench-status running';
+
+    // Yield to let UI paint
+    await new Promise(r => setTimeout(r, 80));
+
+    const value = await b.fn();
+    results[b.key] = { value, unit: b.unit };
+
+    // Update loading row → done
+    ltRow.classList.remove('active');
+    ltRow.classList.add('done');
+    document.getElementById('ltv-' + b.key).textContent = `${value} ${b.unit}`;
+
+    // Update hidden bench table
+    el.textContent = `${value} ${b.unit}`;
+    el.className = 'bench-status done';
+  }
+
+  document.getElementById('progressFill').style.width = '100%';
+  document.getElementById('statusText').textContent = 'Done!';
+
+  // Update loading overlay → finishing
+  document.getElementById('loadingTitle').textContent = '✅ Complete!';
+  document.getElementById('loadingSubtitle').textContent = 'Calculating scores...';
+
+  // Yield for animation
+  await new Promise(r => setTimeout(r, 600));
+
+  // Hide overlay
+  overlay.classList.remove('active');
+
+  document.getElementById('runBtn').disabled = false;
+  document.getElementById('runBtn').textContent = '🚀 Run Benchmark';
+  document.getElementById('resultsSection').classList.remove('hidden');
+  displayResults();
+}
+
+// ============= SCORING =============
+function calcScores() {
+  const ref = { int: 50000000, float: 30000000, prime: 200000, memRW: 20, memCopy: 20, latency: 100, gpu: 60 };
+  const raw = {};
+  for (const k in ref) {
+    raw[k] = Math.min(100, Math.round((results[k]?.value || 0) / ref[k] * 100));
+  }
+  const cpuScore = Math.round((raw.int + raw.float + raw.prime) / 3);
+  const memScore = Math.round((raw.memRW + raw.memCopy + raw.latency) / 3);
+  const gpuScore = raw.gpu;
+  const total = Math.round((cpuScore * 0.4 + memScore * 0.3 + gpuScore * 0.3));
+  return { raw, cpuScore, memScore, gpuScore, total };
+}
+
+function rank(score) {
+  if (score >= 90) return { name: '🚀 Beast Mode', color: '#00f2fe' };
+  if (score >= 70) return { name: '💪 Strong', color: '#2ed573' };
+  if (score >= 50) return { name: '👍 Solid', color: '#feca57' };
+  if (score >= 30) return { name: '😅 Getting By', color: '#ff9f43' };
+  return { name: '🥔 Potato Status', color: '#ff5252' };
+}
+
+function displayResults() {
+  const s = calcScores();
+  const r = rank(s.total);
+
+  const benchNames = {
+    int: '🔢 Integer Math', float: '📐 Floating Point', prime: '🔍 Prime Sieve',
+    memRW: '📝 Mem Read/Write', memCopy: '📋 Mem Copy', latency: '⏱️ Latency', gpu: '🎮 GPU FPS'
+  };
+  document.getElementById('benchResults').innerHTML = Object.keys(results).map(k =>
+    `<div class="bench-item"><span class="bench-label">${benchNames[k]}</span><span class="bench-value">${results[k].value} ${results[k].unit}</span></div>`
+  ).join('');
+
+  document.getElementById('scoreDisplay').innerHTML = `
+    <div class="score-cat"><div class="score-big" style="color:#4facfe">${s.cpuScore}</div><div class="score-label">CPU</div></div>
+    <div class="score-cat"><div class="score-big" style="color:#feca57">${s.memScore}</div><div class="score-label">Memory</div></div>
+    <div class="score-cat"><div class="score-big" style="color:#a855f7">${s.gpuScore}</div><div class="score-label">GPU</div></div>
+    <div style="margin-top:15px"><div class="score-big" style="color:${r.color};font-size:1.5em">${s.total}/100</div><div class="score-label">${r.name}</div></div>
+  `;
+
+  drawRadar(s.raw);
+  drawRefBars(s);
+}
+
+function drawRadar(raw) {
+  const canvas = document.getElementById('radar');
+  const ctx = canvas.getContext('2d');
+  const cx = 200, cy = 200, maxR = 150;
+  const labels = ['Integer', 'Float', 'Prime', 'Mem R/W', 'Mem Copy', 'Latency', 'GPU'];
+  const keys = ['int', 'float', 'prime', 'memRW', 'memCopy', 'latency', 'gpu'];
+  const n = keys.length;
+
+  ctx.clearRect(0, 0, 400, 400);
+  ctx.strokeStyle = 'rgba(79,172,254,.15)';
+  ctx.lineWidth = 1;
+  for (let ring = 1; ring <= 5; ring++) {
+    ctx.beginPath();
+    const r = (maxR / 5) * ring;
+    for (let i = 0; i <= n; i++) {
+      const a = (i / n) * Math.PI * 2 - Math.PI / 2;
+      const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 - Math.PI / 2;
+    ctx.beginPath(); ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + Math.cos(a) * maxR, cy + Math.sin(a) * maxR); ctx.stroke();
+  }
+  ctx.beginPath();
+  for (let i = 0; i <= n; i++) {
+    const idx = i % n;
+    const val = (raw[keys[idx]] || 0) / 100;
+    const r = val * maxR;
+    const a = (i / n) * Math.PI * 2 - Math.PI / 2;
+    const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(79,172,254,.2)'; ctx.fill();
+  ctx.strokeStyle = '#4facfe'; ctx.lineWidth = 2; ctx.stroke();
+
+  ctx.fillStyle = '#8899bb';
+  ctx.font = '12px Segoe UI';
+  ctx.textAlign = 'center';
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 - Math.PI / 2;
+    const x = cx + Math.cos(a) * (maxR + 22);
+    const y = cy + Math.sin(a) * (maxR + 22) + 4;
+    ctx.fillText(labels[i], x, y);
+  }
+}
+
+function drawRefBars(s) {
+  const refs = [
+    { name: '🥔 Core2 Duo', total: 15 },
+    { name: '💻 i5-4590', total: 32 },
+    { name: '🖥️ Ryzen 5 3600', total: 52 },
+    { name: '🔥 Ryzen 7 5800X', total: 68 },
+    { name: '🚀 i7-13700K+RTX4070', total: 92 },
+    { name: '⭐ YOUR MACHINE', total: s.total, highlight: true },
+  ].sort((a, b) => a.total - b.total);
+
+  document.getElementById('refBars').innerHTML = refs.map((ref, i) => {
+    const colors = ['#e84118', '#ee5a24', '#ff9f43', '#feca57', '#2ed573'];
+    return `
+    <div class="ref-bar-container">
+      <div class="ref-bar-label"><span>${ref.name}</span><span>${ref.total}/100</span></div>
+      <div class="ref-bar-track">
+        <div class="ref-bar-fill" style="width:0%;background:${ref.highlight ? 'linear-gradient(90deg,#00f2fe,#a855f7)' : colors[i % colors.length]}" data-w="${ref.total}%"></div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Animate bars in
+  setTimeout(() => {
+    document.querySelectorAll('.ref-bar-fill').forEach(el => {
+      el.style.width = el.dataset.w;
+    });
+  }, 100);
+}
+
+// ============= SHARE =============
+function generateShareLink() {
+  const s = calcScores();
+  const params = new URLSearchParams();
+  params.set('int', results.int?.value || 0);
+  params.set('float', results.float?.value || 0);
+  params.set('prime', results.prime?.value || 0);
+  params.set('memRW', results.memRW?.value || 0);
+  params.set('memCopy', results.memCopy?.value || 0);
+  params.set('latency', results.latency?.value || 0);
+  params.set('gpu', results.gpu?.value || 0);
+  params.set('total', s.total);
+  params.set('s_cores', sysInfo.coresRaw || 0);
+  params.set('s_mem', navigator.deviceMemory || 0);
+  params.set('s_gpu', sysInfo.gpu || '');
+  params.set('s_plat', sysInfo.platform || '');
+
+  const url = location.origin + location.pathname + '?' + params.toString();
+  const ta = document.getElementById('shareUrl');
+  ta.value = url;
+  ta.classList.remove('hidden');
+  ta.select();
+  document.execCommand('copy');
+}
+
+// ============= SHARED RESULTS LOADER =============
+function loadShared() {
+  const p = new URLSearchParams(location.search);
+  if (!p.has('int')) return false;
+
+  results = {
+    int: { value: parseFloat(p.get('int')), unit: 'ops/s' },
+    float: { value: parseFloat(p.get('float')), unit: 'ops/s' },
+    prime: { value: parseFloat(p.get('prime')), unit: 'primes/s' },
+    memRW: { value: parseFloat(p.get('memRW')), unit: 'GB/s' },
+    memCopy: { value: parseFloat(p.get('memCopy')), unit: 'GB/s' },
+    latency: { value: parseFloat(p.get('latency')), unit: 'M acc/s' },
+    gpu: { value: parseFloat(p.get('gpu')), unit: 'FPS' },
+  };
+
+  // Show read-only badge, hide run section + share
+  document.getElementById('readonlyBadge').classList.remove('hidden');
+  document.getElementById('runSection').classList.add('hidden');
+  document.getElementById('shareSection').classList.add('hidden');
+
+  // System info from params
+  const sharedSys = {
+    cores: p.get('s_cores') || '?',
+    memory: p.get('s_mem') ? p.get('s_mem') + ' GB (capped)' : 'Unknown',
+    gpu: p.get('s_gpu') || 'Unknown',
+    platform: p.get('s_plat') || 'Unknown',
+    ua: 'Shared result',
+    coresRaw: 0,
+  };
+  displaySysInfo(sharedSys);
+
+  // Show results
+  document.getElementById('resultsSection').classList.remove('hidden');
+
+  // If total is in URL, temporarily override calcScores
+  const sharedTotal = parseFloat(p.get('total'));
+  displayResults();
+
+  // Animate radar in
+  const canvas = document.getElementById('radar');
+  canvas.style.opacity = '0';
+  canvas.style.transition = 'opacity .8s';
+  setTimeout(() => canvas.style.opacity = '1', 200);
+
+  return true;
+}
+
+// ============= INIT =============
+window.addEventListener('DOMContentLoaded', () => {
+  sysInfo = gatherSysInfo();
+  displaySysInfo(sysInfo);
+
+  if (!loadShared()) {
+    // Normal mode — ready to run
+  }
+});
+</script>
+</body>
+</html>
