@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Spectrometer</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a12;color:#e0e0ff;font-family:'Segoe UI',system-ui,sans-serif;overflow:hidden;height:100vh;display:flex;flex-direction:column}
+#bg{position:fixed;inset:0;background:radial-gradient(ellipse at 50% 100%,rgba(40,20,80,.4),transparent 60%),radial-gradient(ellipse at 20% 0%,rgba(20,60,100,.3),transparent 50%),linear-gradient(180deg,#080810,#0d0d1a);z-index:0}
+#wrap{position:relative;z-index:1;display:flex;flex-direction:column;height:100vh}
+#topbar{padding:8px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:rgba(10,10,20,.85);border-bottom:1px solid rgba(100,100,200,.2)}
+#topbar h1{font-size:14px;font-weight:600;letter-spacing:1px;text-transform:uppercase;background:linear-gradient(90deg,#8360c3,#2ebf91);-webkit-background-clip:text;-webkit-text-fill-color:transparent;white-space:nowrap}
+.btn{background:rgba(60,60,120,.5);border:1px solid rgba(120,120,200,.4);color:#ccccee;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:12px;transition:.2s}
+.btn:hover{background:rgba(80,80,160,.6);border-color:rgba(150,150,255,.6)}
+.btn.active{background:rgba(90,60,160,.6);border-color:rgba(160,120,255,.7)}
+#fileInput{display:none}
+#urlInput{background:rgba(20,20,40,.7);border:1px solid rgba(80,80,160,.4);color:#aabbdd;padding:5px 10px;border-radius:6px;font-size:12px;width:200px}
+#urlInput::placeholder{color:#555577}
+#canvasWrap{flex:1;position:relative;display:flex;align-items:center;justify-content:center;overflow:hidden}
+#spec{display:block;width:100%;height:100%}
+#freqLabels{position:absolute;left:0;top:0;bottom:0;width:42px;display:flex;flex-direction:column-reverse;justify-content:space-between;padding:4px 0;pointer-events:none;z-index:2}
+.freqLabel{font-size:9px;color:rgba(150,150,220,.5);text-align:right;padding-right:4px;font-family:monospace}
+#controls{background:rgba(10,10,20,.9);border-top:1px solid rgba(100,100,200,.2);padding:8px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+#playPause{width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#8360c3,#2ebf91);border:none;color:#fff;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+#seekWrap{flex:1;min-width:120px;height:6px;background:rgba(30,30,50,.8);border-radius:3px;cursor:pointer;position:relative}
+#seekFill{height:100%;background:linear-gradient(90deg,#8360c3,#2ebf91);border-radius:3px;width:0;transition:width .05s}
+#timeLabel{font-size:11px;color:#8888aa;font-family:monospace;white-space:nowrap}
+#volWrap{display:flex;align-items:center;gap:6px}
+#volIcon{font-size:14px;cursor:pointer}
+#vol{width:80px;height:4px;-webkit-appearance:none;appearance:none;background:rgba(40,40,70,.8);border-radius:2px;outline:none}
+#vol::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:#8360c3;cursor:pointer}
+#vol::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:#8360c3;cursor:pointer;border:none}
+#status{font-size:11px;color:#6666aa;text-align:center;padding:2px}
+.glow{text-shadow:0 0 10px rgba(131,96,195,.5)}
+#dropHint{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;color:rgba(120,120,180,.4);font-size:18px;pointer-events:none;z-index:3}
+#dropHint.hidden{display:none}
+</style>
+</head>
+<body>
+<div id="bg"></div>
+<div id="wrap">
+<div id="topbar">
+<h1 class="glow">🌈 Spectrometer</h1>
+<input type="file" id="fileInput" accept="audio/*">
+<button class="btn" onclick="document.getElementById('fileInput').click()">📁 Upload</button>
+<input type="text" id="urlInput" placeholder="paste audio URL...">
+<button class="btn" id="loadUrlBtn">Load URL</button>
+<button class="btn" id="demoBtn">🎵 Demo Tone</button>
+</div>
+<div id="canvasWrap">
+<canvas id="spec"></canvas>
+<div id="freqLabels"></div>
+<div id="dropHint">📁 Drop an audio file here<br>or paste a URL above<br><br><span style="font-size:13px;opacity:.6">or click Demo Tone</span></div>
+</div>
+<div id="controls">
+<button id="playPause">▶</button>
+<div id="seekWrap"><div id="seekFill"></div></div>
+<span id="timeLabel">0:00 / 0:00</span>
+<div id="volWrap"><span id="volIcon">🔊</span><input type="range" id="vol" min="0" max="1" step="0.01" value="0.7"></div>
+</div>
+<div id="status">Ready — load an audio file or paste a URL</div>
+</div>
+<script>
+const canvas=document.getElementById('spec');
+const ctx=canvas.getContext('2d');
+const fileInput=document.getElementById('fileInput');
+const urlInput=document.getElementById('urlInput');
+const loadUrlBtn=document.getElementById('loadUrlBtn');
+const demoBtn=document.getElementById('demoBtn');
+const playPauseBtn=document.getElementById('playPause');
+const seekWrap=document.getElementById('seekWrap');
+const seekFill=document.getElementById('seekFill');
+const timeLabel=document.getElementById('timeLabel');
+const volSlider=document.getElementById('vol');
+const volIcon=document.getElementById('volIcon');
+const statusEl=document.getElementById('status');
+const dropHint=document.getElementById('dropHint');
+const freqLabelsEl=document.getElementById('freqLabels');
+
+let audioCtx,audioBuffer,sourceNode,analyser,gainNode,startTime=0,offset=0,isPlaying=false,rafId=null;
+const FFT_SIZE=16384;
+const MIN_FREQ=20,MAX_FREQ=20000;
+const SAMPLE_RATE_OUT=44100;
+let scrollImg=null,scrollCtx=null;
+let pendingFile=null;
+
+function resizeCanvas(){
+ const r=canvas.parentElement.getBoundingClientRect();
+ canvas.width=r.width;canvas.height=r.height;
+ scrollImg=document.createElement('canvas');
+ scrollImg.width=canvas.width;scrollImg.height=canvas.height;
+ scrollCtx=scrollImg.getContext('2d');
+ scrollCtx.fillStyle='#0a0a12';
+ scrollCtx.fillRect(0,0,scrollImg.width,scrollImg.height);
+ buildFreqLabels();
+ drawScroll();
+}
+window.addEventListener('resize',resizeCanvas);
+
+function buildFreqLabels(){
+ const freqs=[20,50,100,200,500,1000,2000,5000,10000,20000];
+ freqLabelsEl.innerHTML='';
+ freqs.forEach(f=>{
+  const el=document.createElement('div');
+  el.className='freqLabel';
+  el.textContent=f>=1000?(f/1000)+'k':f;
+  freqLabelsEl.appendChild(el);
+ });
+}
+
+function freqToX(freq){
+ const logMin=Math.log(MIN_FREQ),logMax=Math.log(MAX_FREQ);
+ return (Math.log(freq)-logMin)/(logMax-logMin)*canvas.width;
+}
+
+function inferno(t){
+ t=Math.max(0,Math.min(1,t));
+ const stops=[[0,0,0,4],[.13,22,8,45],[.25,50,5,100],[.38,105,12,130],[.5,160,25,100],[.63,210,60,40],[.75,240,120,10],[.87,250,190,50],[1,252,255,170]];
+ let i=0;while(i<stops.length-1&&t>stops[i+1][0])i++;
+ const s1=stops[i],s2=stops[i+1];const lt=(t-s1[0])/(s2[0]-s1[0]);
+ return[Math.round(s1[1]+(s2[1]-s1[1])*lt),Math.round(s1[2]+(s2[2]-s1[2])*lt),Math.round(s1[3]+(s2[3]-s1[3])*lt)];
+}
+
+function drawScroll(){
+ if(!scrollImg)return;
+ ctx.clearRect(0,0,canvas.width,canvas.height);
+ ctx.drawImage(scrollImg,0,0);
+ // freq grid lines
+ ctx.strokeStyle='rgba(100,100,180,.08)';ctx.lineWidth=1;
+ [50,100,200,500,1000,2000,5000,10000].forEach(f=>{
+  const x=freqToX(f);
+  if(x>0&&x<canvas.width){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,canvas.height);ctx.stroke();}
+ });
+}
+
+function addColumn(freqData){
+ if(!scrollCtx)return;
+ const h=canvas.height;
+ // shift up by 1px
+ const imgData=scrollCtx.getImageData(0,0,scrollImg.width,h);
+ scrollCtx.putImageData(imgData,0,-1);
+ // draw new column at bottom
+ const binCount=freqData.length;
+ const nyquist=audioCtx?audioCtx.sampleRate/2:SAMPLE_RATE_OUT/2;
+ const colData=scrollCtx.createImageData(scrollImg.width,2);
+ for(let x=0;x<scrollImg.width;x++){
+  const logMin=Math.log(MIN_FREQ),logMax=Math.log(MAX_FREQ);
+  const freq=Math.exp(logMin+(x/scrollImg.width)*(logMax-logMin));
+  const bin=Math.max(0,Math.min(binCount-1,Math.round(freq/nyquist*binCount)));
+  const val=freqData[bin]/255;
+  const[r,g,b]=inferno(val);
+  for(let dy=0;dy<2;dy++){
+   const idx=(dy*scrollImg.width+x)*4;
+   colData.data[idx]=r;colData.data[idx+1]=g;colData.data[idx+2]=b;colData.data[idx+3]=255;
+  }
+ }
+ scrollCtx.putImageData(colData,0,h-2);
+}
+
+function initAudio(){
+ if(!audioCtx){
+  audioCtx=new(window.AudioContext||window.webkitAudioContext)();
+  analyser=audioCtx.createAnalyser();
+  analyser.fftSize=FFT_SIZE;
+  analyser.smoothingTimeConstant=0.3;
+  gainNode=audioCtx.createGain();
+  gainNode.gain.value=parseFloat(volSlider.value);
+  gainNode.connect(audioCtx.destination);
+  analyser.connect(gainNode);
+ }
+}
+
+function decodeAudio(arrayBuffer,name){
+ statusEl.textContent='Decoding '+name+'...';
+ initAudio();
+ audioCtx.decodeAudioData(arrayBuffer,function(buf){
+  audioBuffer=buf;
+  offset=0;
+  dropHint.classList.add('hidden');
+  statusEl.textContent='Loaded: '+name+' ('+buf.duration.toFixed(1)+'s, '+buf.sampleRate+'Hz)';
+  play();
+ },function(e){
+  statusEl.textContent='Error decoding audio: '+e;
+ });
+}
+
+function play(){
+ if(!audioBuffer)return;
+ if(sourceNode){sourceNode.stop();}
+ sourceNode=audioCtx.createBufferSource();
+ sourceNode.buffer=audioBuffer;
+ sourceNode.connect(analyser);
+ startTime=audioCtx.currentTime-offset;
+ sourceNode.start(0,offset);
+ isPlaying=true;
+ playPauseBtn.textContent='⏸';
+ sourceNode.onended=function(){
+  if(isPlaying&&offset>=audioBuffer.duration-.1){
+   isPlaying=false;offset=0;playPauseBtn.textContent='▶';seekFill.style.width='0%';timeLabel.textContent='0:00 / '+fmtTime(audioBuffer.duration);
+  }
+ };
+ loop();
+}
+
+function pause(){
+ if(!sourceNode)return;
+ isPlaying=false;
+ offset=audioCtx.currentTime-startTime;
+ if(offset<0)offset=0;
+ sourceNode.stop();
+ playPauseBtn.textContent='▶';
+ cancelAnimationFrame(rafId);
+}
+
+function loop(){
+ if(!isPlaying)return;
+ const freqData=new Uint8Array(analyser.frequencyBinCount);
+ analyser.getByteFrequencyData(freqData);
+ addColumn(freqData);
+ drawScroll();
+ // update seek
+ const elapsed=audioCtx.currentTime-startTime;
+ if(audioBuffer){
+  const pct=Math.min(100,elapsed/audioBuffer.duration*100);
+  seekFill.style.width=pct+'%';
+  timeLabel.textContent=fmtTime(elapsed)+' / '+fmtTime(audioBuffer.duration);
+ }
+ rafId=requestAnimationFrame(loop);
+}
+
+function fmtTime(t){
+ if(!t||t<0)return'0:00';
+ const m=Math.floor(t/60),s=Math.floor(t%60);
+ return m+':'+(s<10?'0':'')+s;
+}
+
+fileInput.addEventListener('change',e=>{
+ const f=e.target.files[0];if(!f)return;
+ const reader=new FileReader();
+ reader.onload=e=>decodeAudio(e.target.result,f.name);
+ reader.readAsArrayBuffer(f);
+});
+
+loadUrlBtn.addEventListener('click',()=>{
+ const url=urlInput.value.trim();if(!url)return;
+ statusEl.textContent='Fetching '+url+'...';
+ fetch(url).then(r=>{if(!r.ok)throw'HTTP '+r.status;return r.arrayBuffer();})
+ .then(buf=>decodeAudio(buf,url.split('/').pop()||'url'))
+ .catch(e=>statusEl.textContent='Error: '+e+' (CORS may block cross-origin)');
+});
+
+demoBtn.addEventListener('click',()=>{
+ initAudio();
+ const sr=audioCtx.sampleRate;
+ const dur=8;
+ const buf=audioCtx.createBuffer(1,sr*dur,sr);
+ const data=buf.getChannelData(0);
+ for(let i=0;i<data.length;i++){
+  const t=i/sr;
+  let v=0;
+  // sweep from 20 to 20k
+  const sweepFreq=20*Math.pow(1000,t/dur);
+  v+=Math.sin(2*Math.PI*sweepFreq*t)*0.15;
+  // harmonics
+  v+=Math.sin(2*Math.PI*sweepFreq*3*t)*0.05;
+  v+=Math.sin(2*Math.PI*sweepFreq*5*t)*0.03;
+  // bass pulse
+  v+=Math.sin(2*Math.PI*40*t)*0.1*Math.sin(2*Math.PI*2*t);
+  data[i]=v;
+ }
+ audioBuffer=buf;offset=0;dropHint.classList.add('hidden');
+ statusEl.textContent='Demo tone: 20Hz→20kHz sweep ('+dur+'s)';
+ play();
+});
+
+playPauseBtn.addEventListener('click',()=>{
+ if(!audioBuffer){demoBtn.click();return;}
+ if(isPlaying)pause();else{if(offset>=audioBuffer.duration-.1)offset=0;play();}
+});
+
+seekWrap.addEventListener('click',e=>{
+ if(!audioBuffer)return;
+ const r=seekWrap.getBoundingClientRect();
+ const pct=(e.clientX-r.left)/r.width;
+ offset=pct*audioBuffer.duration;
+ if(isPlaying){pause();play();}
+ seekFill.style.width=(pct*100)+'%';
+ timeLabel.textContent=fmtTime(offset)+' / '+fmtTime(audioBuffer.duration);
+});
+
+volSlider.addEventListener('input',()=>{
+ if(gainNode)gainNode.gain.value=parseFloat(volSlider.value);
+ if(parseFloat(volSlider.value)===0)volIcon.textContent='🔇';
+ else if(parseFloat(volSlider.value)<.5)volIcon.textContent='🔉';
+ else volIcon.textContent='🔊';
+});
+
+// drag & drop
+document.addEventListener('dragover',e=>{e.preventDefault();});
+document.addEventListener('drop',e=>{
+ e.preventDefault();
+ const f=e.dataTransfer.files[0];
+ if(f&&f.type.startsWith('audio/')){
+  const reader=new FileReader();
+  reader.onload=ev=>decodeAudio(ev.target.result,f.name);
+  reader.readAsArrayBuffer(f);
+ }
+});
+
+// init
+resizeCanvas();
+</script>
+</body>
+</html>
