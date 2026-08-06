@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>⌨️ Typist — The Idle Keystroke Game</title>
+<style>
+:root {
+  --bg: #1a1b26; --fg: #c0caf5; --muted: #565f89; --accent: #7aa2f7;
+  --accent2: #bb9af7; --gold: #e0af68; --panel: #24283b; --border: #2a2e46;
+  --green: #9ece6a; --red: #f7768e; --cursor: #7aa2f7;
+  --paper-bg: #16161e; --paper-fg: #c0caf5;
+  --font: 'Courier New', monospace;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:var(--bg); color:var(--fg); font-family:var(--font); height:100vh; overflow:hidden; display:flex; flex-direction:column; -webkit-tap-highlight-color:transparent; }
+
+#topbar { display:flex; align-items:center; justify-content:space-between; padding:6px 16px; background:var(--panel); border-bottom:1px solid var(--border); font-size:12px; z-index:100; gap:12px; flex-shrink:0; }
+#topbar .title { font-size:16px; font-weight:bold; color:var(--accent); white-space:nowrap; }
+#stats { display:flex; gap:20px; flex-wrap:wrap; }
+.stat { display:flex; flex-direction:column; align-items:center; gap:1px; }
+.stat .label { font-size:9px; color:var(--muted); text-transform:uppercase; letter-spacing:1px; }
+.stat .val { font-size:16px; font-weight:bold; }
+#themeSelect { background:var(--bg); color:var(--fg); border:1px solid var(--border); padding:4px 8px; font-family:var(--font); font-size:11px; border-radius:4px; cursor:pointer; }
+#themeSelect:hover { border-color:var(--accent); }
+
+#main { display:flex; flex:1; overflow:hidden; }
+
+#paperContainer { flex:1; overflow:hidden; display:flex; flex-direction:column; background:var(--paper-bg); position:relative; }
+#paper { flex:1; overflow-y:auto; padding:32px 48px; font-family:var(--font); font-size:15px; line-height:1.8; color:var(--paper-fg); outline:none; white-space:pre-wrap; word-wrap:break-word; cursor:text; position:relative; }
+#paper::after { content:'▎'; color:var(--cursor); animation:blink 1s infinite; }
+@keyframes blink { 0%,50%{opacity:1;} 51%,100%{opacity:0;} }
+
+/* Hidden input for mobile keyboard */
+#mobileInput {
+  position:absolute; top:0; left:0; width:1px; height:1px;
+  opacity:0; border:none; outline:none; font-size:16px;
+  caret-color:transparent; z-index:-1;
+}
+
+.floatGain { position:absolute; font-size:13px; font-weight:bold; color:var(--gold); pointer-events:none; animation:floatUp 1.2s ease-out forwards; z-index:10; text-shadow:0 0 6px rgba(224,175,104,0.4); }
+@keyframes floatUp { 0%{transform:translateY(0);opacity:1;} 100%{transform:translateY(-40px);opacity:0;} }
+
+#inputBar { padding:8px 16px; background:var(--panel); border-top:1px solid var(--border); display:flex; align-items:center; gap:10px; flex-shrink:0; }
+#inputBar .hint { font-size:10px; color:var(--muted); white-space:nowrap; }
+#clearBtn { background:transparent; border:1px solid var(--border); color:var(--muted); padding:4px 10px; font-family:var(--font); font-size:10px; border-radius:4px; cursor:pointer; }
+#clearBtn:hover { border-color:var(--red); color:var(--red); }
+
+#sidebar { width:300px; background:var(--panel); border-left:1px solid var(--border); display:flex; flex-direction:column; overflow:hidden; flex-shrink:0; }
+#sidebarTabs { display:flex; border-bottom:1px solid var(--border); }
+.sidebarTab { flex:1; padding:8px; text-align:center; font-size:11px; cursor:pointer; color:var(--muted); border-bottom:2px solid transparent; }
+.sidebarTab:hover { color:var(--fg); }
+.sidebarTab.active { color:var(--accent); border-bottom-color:var(--accent); }
+#shopContent, #achievementsContent { overflow-y:auto; padding:8px; flex:1; }
+#achievementsContent { display:none; }
+.shopItem { padding:8px; margin-bottom:4px; border:1px solid var(--border); border-radius:6px; cursor:pointer; transition:border-color 0.2s, opacity 0.2s; }
+.shopItem:hover { border-color:var(--accent); }
+.shopItem.disabled { opacity:0.45; cursor:not-allowed; }
+.shopItem.disabled:hover { border-color:var(--border); }
+.itemName { font-size:12px; font-weight:bold; color:var(--fg); }
+.itemDesc { font-size:10px; color:var(--muted); margin-top:1px; }
+.itemBottom { display:flex; justify-content:space-between; align-items:center; margin-top:4px; }
+.itemCost { font-size:12px; color:var(--gold); font-weight:bold; }
+.itemCount { font-size:10px; color:var(--accent); }
+.achItem { padding:6px 8px; margin-bottom:4px; border-radius:6px; }
+.achItem.locked { opacity:0.5; }
+.achItem.unlocked { background:rgba(158,206,106,0.1); border:1px solid var(--green); }
+.achName { font-size:11px; font-weight:bold; }
+.achDesc { font-size:10px; color:var(--muted); }
+
+#wpmDisplay { position:absolute; top:8px; left:16px; z-index:50; text-align:center; }
+#wpmLabel { font-size:9px; color:var(--muted); text-transform:uppercase; }
+#wpmValue { font-size:20px; font-weight:bold; color:var(--green); }
+#comboDisplay { position:absolute; top:8px; right:16px; z-index:50; text-align:center; }
+#comboText { font-size:9px; color:var(--muted); text-transform:uppercase; }
+#comboMult { font-size:20px; font-weight:bold; color:var(--accent); }
+#comboTimer { width:60px; height:3px; background:var(--border); border-radius:2px; overflow:hidden; margin-top:2px; }
+#comboTimerBar { height:100%; background:var(--accent); width:0%; transition:width 0.1s linear; }
+.particle { position:absolute; width:4px; height:4px; border-radius:50%; pointer-events:none; z-index:5; }
+
+@media (max-width:700px) {
+  #sidebar { width:200px; }
+  #paper { padding:20px 16px; font-size:13px; }
+  #stats { gap:10px; }
+  .stat .val { font-size:13px; }
+  #topbar .title { font-size:14px; }
+  .stat .label { font-size:8px; }
+}
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <span class="title">⌨️ Typist</span>
+  <div id="stats">
+    <div class="stat"><span class="label">Credits</span><span class="val" id="creditsVal" style="color:var(--gold)">0</span></div>
+    <div class="stat"><span class="label">Per Key</span><span class="val" id="perKeyVal" style="color:var(--accent)">1</span></div>
+    <div class="stat"><span class="label">Per Sec</span><span class="val" id="perSecVal" style="color:var(--green)">0</span></div>
+    <div class="stat"><span class="label">Total Keys</span><span class="val" id="totalKeysVal">0</span></div>
+  </div>
+  <select id="themeSelect">
+    <option value="tokyonight">🌃 Tokyo Night</option>
+    <option value="hacker">💀 Hacker</option>
+    <option value="medieval">📜 Medieval Scribe</option>
+    <option value="scifi">🚀 Sci-Fi Terminal</option>
+    <option value="candy">🍬 Candy Land</option>
+  </select>
+</div>
+
+<div id="main">
+  <div id="paperContainer">
+    <input type="text" id="mobileInput" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+    <div id="wpmDisplay">
+      <div id="wpmLabel">WPM</div>
+      <div id="wpmValue">0</div>
+    </div>
+    <div id="comboDisplay">
+      <div id="comboText">Combo</div>
+      <div id="comboMult">×1.0</div>
+      <div id="comboTimer"><div id="comboTimerBar" style="width:0%;"></div></div>
+    </div>
+    <div id="paper" tabindex="0"></div>
+    <div id="inputBar">
+      <span class="hint">Type anywhere → earn credits → buy upgrades</span>
+      <span style="flex:1"></span>
+      <button id="clearBtn">Clear Page</button>
+    </div>
+  </div>
+
+  <div id="sidebar">
+    <div id="sidebarTabs">
+      <div class="sidebarTab active" data-tab="shop">⬆ Upgrades</div>
+      <div class="sidebarTab" data-tab="ach">🏆 Stats</div>
+    </div>
+    <div id="shopContent"></div>
+    <div id="achievementsContent"></div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════
+// GAME STATE
+// ═══════════════════════════════════════
+const state = {
+  credits:0, totalKeys:0, perKey:1, perSec:0,
+  combo:1, comboTimer:0, comboMax:1.0, comboDecay:2.5,
+  lastKeyTime:0, recentKeys:[], upgrades:{}, achievements:{},
+  theme:'tokyonight', startTime:Date.now(), totalEarned:0,
+  paperContent:'', themesTried:new Set(['tokyonight']),
+  mobileInputVal:'',
+};
+
+// ═══════════════════════════════════════
+// THEMES
+// ═══════════════════════════════════════
+const THEMES = {
+  tokyonight: {
+    name:'🌃 Tokyo Night',
+    vars:{'--bg':'#1a1b26','--fg':'#c0caf5','--muted':'#565f89','--accent':'#7aa2f7','--accent2':'#bb9af7','--gold':'#e0af68','--panel':'#24283b','--border':'#2a2e46','--green':'#9ece6a','--red':'#f7768e','--paper-bg':'#16161e','--paper-fg':'#c0caf5','--cursor':'#7aa2f7'},
+    upgrades:[
+      {id:'better_keys',name:'Better Keys',desc:'+1 credit per keystroke',baseCost:15,costMult:1.15,effect:{perKey:1}},
+      {id:'auto_pen',name:'Auto-Pen',desc:'Auto-types 1 key/sec',baseCost:50,costMult:1.18,effect:{perSec:1}},
+      {id:'sharper_font',name:'Sharper Font',desc:'+5 per keystroke',baseCost:200,costMult:1.2,effect:{perKey:5}},
+      {id:'ghost_writer',name:'Ghost Writer',desc:'+10 auto-keys/sec',baseCost:500,costMult:1.2,effect:{perSec:10}},
+      {id:'focus_chip',name:'Focus Chip',desc:'Combo lasts 0.3s longer',baseCost:300,costMult:1.5,effect:{comboDecayAdd:0.3}},
+      {id:'gold_keys',name:'Gold Keys',desc:'+50 per keystroke',baseCost:2000,costMult:1.25,effect:{perKey:50}},
+      {id:'ai_assistant',name:'AI Assistant',desc:'+100 auto-keys/sec',baseCost:5000,costMult:1.25,effect:{perSec:100}},
+      {id:'quantum_boost',name:'Quantum Boost',desc:'+500 per keystroke',baseCost:20000,costMult:1.3,effect:{perKey:500}},
+      {id:'auto_typist',name:'Auto-Typist Pro',desc:'+1000 auto-keys/sec',baseCost:50000,costMult:1.3,effect:{perSec:1000}},
+      {id:'singularity',name:'Singularity Engine',desc:'All earnings ×2',baseCost:100000,costMult:3,effect:{mult:2}},
+      {id:'singularity_key',name:'Singularity Keys',desc:'+10000 per keystroke',baseCost:500000,costMult:1.4,effect:{perKey:10000}},
+      {id:'singularity_auto',name:'Singularity Auto-Typer',desc:'+50000 auto-keys/sec',baseCost:1000000,costMult:1.4,effect:{perSec:50000}},
+    ],
+  },
+  hacker: {
+    name:'💀 Hacker',
+    vars:{'--bg':'#000000','--fg':'#00ff00','--muted':'#004400','--accent':'#00ff00','--accent2':'#00cc00','--gold':'#00ff00','--panel':'#001100','--border':'#003300','--green':'#00ff00','--red':'#ff0000','--paper-bg':'#000000','--paper-fg':'#00ff00','--cursor':'#00ff00'},
+    upgrades:[
+      {id:'better_keys',name:'Better Exploit',desc:'+1 per hack',baseCost:15,costMult:1.15,effect:{perKey:1}},
+      {id:'auto_pen',name:'Auto-Script',desc:'Auto-hacks 1/sec',baseCost:50,costMult:1.18,effect:{perSec:1}},
+      {id:'sharper_font',name:'Zero-Day',desc:'+5 per hack',baseCost:200,costMult:1.2,effect:{perKey:5}},
+      {id:'ghost_writer',name:'Botnet',desc:'+10 auto-hacks/sec',baseCost:500,costMult:1.2,effect:{perSec:10}},
+      {id:'focus_chip',name:'Rootkit',desc:'Combo lasts 0.3s longer',baseCost:300,costMult:1.5,effect:{comboDecayAdd:0.3}},
+      {id:'gold_keys',name:'Quantum Exploit',desc:'+50 per hack',baseCost:2000,costMult:1.25,effect:{perKey:50}},
+      {id:'ai_assistant',name:'AI Cracker',desc:'+100 auto-hacks/sec',baseCost:5000,costMult:1.25,effect:{perSec:100}},
+      {id:'quantum_boost',name:'Mainframe Hack',desc:'+500 per hack',baseCost:20000,costMult:1.3,effect:{perKey:500}},
+      {id:'auto_typist',name:'Script Kiddie Swarm',desc:'+1000 auto-hacks/sec',baseCost:50000,costMult:1.3,effect:{perSec:1000}},
+      {id:'singularity',name:'Mainframe Override',desc:'All earnings ×2',baseCost:100000,costMult:3,effect:{mult:2}},
+      {id:'singularity_key',name:'Singularity Breach',desc:'+10000 per hack',baseCost:500000,costMult:1.4,effect:{perKey:10000}},
+      {id:'singularity_auto',name:'The Matrix',desc:'+50000 auto-hacks/sec',baseCost:1000000,costMult:1.4,effect:{perSec:50000}},
+    ],
+  },
+  medieval: {
+    name:'📜 Medieval Scribe',
+    vars:{'--bg':'#3e2c1c','--fg':'#d4b896','--muted':'#8a7044','--accent':'#c19a3e','--accent2':'#cd853f','--gold':'#ffd700','--panel':'#4a3728','--border':'#5c4429','--green':'#8fbc5e','--red':'#cd5c5c','--paper-bg':'#2a1f14','--paper-fg':'#d4b896','--cursor':'#c19a3e'},
+    upgrades:[
+      {id:'better_keys',name:'Sharper Quill',desc:'+1 gold per letter',baseCost:15,costMult:1.15,effect:{perKey:1}},
+      {id:'auto_pen',name:'Scribe Apprentice',desc:'Auto-writes 1 letter/sec',baseCost:50,costMult:1.18,effect:{perSec:1}},
+      {id:'sharper_font',name:'Fine Ink',desc:'+5 per letter',baseCost:200,costMult:1.2,effect:{perKey:5}},
+      {id:'ghost_writer',name:'Monk Order',desc:'+10 auto-letters/sec',baseCost:500,costMult:1.2,effect:{perSec:10}},
+      {id:'focus_chip',name:'Scribe\'s Rhythm',desc:'Combo lasts 0.3s longer',baseCost:300,costMult:1.5,effect:{comboDecayAdd:0.3}},
+      {id:'gold_keys',name:'Gold Leaf Ink',desc:'+50 per letter',baseCost:2000,costMult:1.25,effect:{perKey:50}},
+      {id:'ai_assistant',name:'Scriptorium',desc:'+100 auto-letters/sec',baseCost:5000,costMult:1.25,effect:{perSec:100}},
+      {id:'quantum_boost',name:'Printing Press',desc:'+500 per letter',baseCost:20000,costMult:1.3,effect:{perKey:500}},
+      {id:'auto_typist',name:'Scribe Guild',desc:'+1000 auto-letters/sec',baseCost:50000,costMult:1.3,effect:{perSec:1000}},
+      {id:'singularity',name:'Royal Decree',desc:'All earnings ×2',baseCost:100000,costMult:3,effect:{mult:2}},
+      {id:'singularity_key',name:'Holy Manuscript',desc:'+10000 per letter',baseCost:500000,costMult:1.4,effect:{perKey:10000}},
+      {id:'singularity_auto',name:'Eternal Scroll',desc:'+50000 auto-letters/sec',baseCost:1000000,costMult:1.4,effect:{perSec:50000}},
+    ],
+  },
+  scifi: {
+    name:'🚀 Sci-Fi Terminal',
+    vars:{'--bg':'#0d1117','--fg':'#58a6ff','--muted':'#30363d','--accent':'#00d4ff','--accent2':'#bc8cff','--gold':'#00ffe5','--panel':'#161b22','--border':'#21262d','--green':'#3fb950','--red':'#f85149','--paper-bg':'#0a0e14','--paper-fg':'#58a6ff','--cursor':'#00d4ff'},
+    upgrades:[
+      {id:'better_keys',name:'Neural Link',desc:'+1 data unit per key',baseCost:15,costMult:1.15,effect:{perKey:1}},
+      {id:'auto_pen',name:'Data Drone',desc:'Auto-processes 1/sec',baseCost:50,costMult:1.18,effect:{perSec:1}},
+      {id:'sharper_font',name:'Cyber Implant',desc:'+5 per key',baseCost:200,costMult:1.2,effect:{perKey:5}},
+      {id:'ghost_writer',name:'AI Core',desc:'+10 auto/sec',baseCost:500,costMult:1.2,effect:{perSec:10}},
+      {id:'focus_chip',name:'Focus Chip',desc:'Combo lasts 0.3s longer',baseCost:300,costMult:1.5,effect:{comboDecayAdd:0.3}},
+      {id:'gold_keys',name:'Plasma Keys',desc:'+50 per key',baseCost:2000,costMult:1.25,effect:{perKey:50}},
+      {id:'ai_assistant',name:'Nanoswarm',desc:'+100 auto/sec',baseCost:5000,costMult:1.25,effect:{perSec:100}},
+      {id:'quantum_boost',name:'Warp Drive',desc:'+500 per key',baseCost:20000,costMult:1.3,effect:{perKey:500}},
+      {id:'auto_typist',name:'Fleet AI',desc:'+1000 auto/sec',baseCost:50000,costMult:1.3,effect:{perSec:1000}},
+      {id:'singularity',name:'Galactic Command',desc:'All earnings ×2',baseCost:100000,costMult:3,effect:{mult:2}},
+      {id:'singularity_key',name:'Quantum Keys',desc:'+10000 per key',baseCost:500000,costMult:1.4,effect:{perKey:10000}},
+      {id:'singularity_auto',name:'Stellar Engine',desc:'+50000 auto/sec',baseCost:1000000,costMult:1.4,effect:{perSec:50000}},
+    ],
+  },
+  candy: {
+    name:'🍬 Candy Land',
+    vars:{'--bg':'#2a0a3e','--fg':'#ff69b4','--muted':'#8b3a8b','--accent':'#ff85c1','--accent2':'#c0a0ff','--gold':'#ffd1dc','--panel':'#3d1a5c','--border':'#5c2a7e','--green':'#98fb98','--red':'#ff6b6b','--paper-bg':'#1a0a2e','--paper-fg':'#ff69b4','--cursor':'#ff85c1'},
+    upgrades:[
+      {id:'better_keys',name:'Sugar Keys',desc:'+1 sweet per key',baseCost:15,costMult:1.15,effect:{perKey:1}},
+      {id:'auto_pen',name:'Candy Bot',desc:'Auto-makes 1/sec',baseCost:50,costMult:1.18,effect:{perSec:1}},
+      {id:'sharper_font',name:'Gummy Boost',desc:'+5 per key',baseCost:200,costMult:1.2,effect:{perKey:5}},
+      {id:'ghost_writer',name:'Sugar Sprite',desc:'+10 auto/sec',baseCost:500,costMult:1.2,effect:{perSec:10}},
+      {id:'focus_chip',name:'Sugar Rush',desc:'Combo lasts 0.3s longer',baseCost:300,costMult:1.5,effect:{comboDecayAdd:0.3}},
+      {id:'gold_keys',name:'Caramel Keys',desc:'+50 per key',baseCost:2000,costMult:1.25,effect:{perKey:50}},
+      {id:'ai_assistant',name:'Lollipop Factory',desc:'+100 auto/sec',baseCost:5000,costMult:1.25,effect:{perSec:100}},
+      {id:'quantum_boost',name:'Chocolate Fountain',desc:'+500 per key',baseCost:20000,costMult:1.3,effect:{perKey:500}},
+      {id:'auto_typist',name:'Sugar Empire',desc:'+1000 auto/sec',baseCost:50000,costMult:1.3,effect:{perSec:1000}},
+      {id:'singularity',name:'Candy Kingdom',desc:'All earnings ×2',baseCost:100000,costMult:3,effect:{mult:2}},
+      {id:'singularity_key',name:'Divine Sweet',desc:'+10000 per key',baseCost:500000,costMult:1.4,effect:{perKey:10000}},
+      {id:'singularity_auto',name:'Eternal Feast',desc:'+50000 auto/sec',baseCost:1000000,costMult:1.4,effect:{perSec:50000}},
+    ],
+  },
+};
+
+// ═══════════════════════════════════════
+// ACHIEVEMENTS
+// ═══════════════════════════════════════
+const ACHIEVEMENTS = [
+  {id:'first_key',name:'Hello World',desc:'Type your first key',check:s=>s.totalKeys>=1},
+  {id:'100_keys',name:'Getting Warmed Up',desc:'Type 100 keys',check:s=>s.totalKeys>=100},
+  {id:'1000_keys',name:'Wordsmith',desc:'Type 1,000 keys',check:s=>s.totalKeys>=1000},
+  {id:'10000_keys',name:'Prolific',desc:'Type 10,000 keys',check:s=>s.totalKeys>=10000},
+  {id:'combo5',name:'On a Roll',desc:'Reach ×5 combo',check:s=>s.comboMax>=5},
+  {id:'combo10',name:'Unstoppable',desc:'Reach ×10 combo',check:s=>s.comboMax>=10},
+  {id:'first_upgrade',name:'Investor',desc:'Buy your first upgrade',check:s=>Object.values(s.upgrades).some(v=>v>0)},
+  {id:'rich1',name:'Pocket Change',desc:'Earn 1,000 total',check:s=>s.totalEarned>=1000},
+  {id:'rich2',name:'Big Spender',desc:'Earn 100,000 total',check:s=>s.totalEarned>=100000},
+  {id:'rich3',name:'Tycoon',desc:'Earn 1,000,000 total',check:s=>s.totalEarned>=1000000},
+  {id:'wpm30',name:'Fast Fingers',desc:'Hit 30 WPM',check:s=>getCurrentWPM()>=30},
+  {id:'wpm60',name:'Speed Demon',desc:'Hit 60 WPM',check:s=>getCurrentWPM()>=60},
+  {id:'wpm100',name:'Inhuman',desc:'Hit 100 WPM',check:s=>getCurrentWPM()>=100},
+  {id:'all_themes',name:'Identity Crisis',desc:'Try all themes',check:s=>s.themesTried&&s.themesTried.size>=Object.keys(THEMES).length},
+  {id:'10_upgrades',name:'Armed to the Teeth',desc:'Own 10 upgrades total',check:s=>Object.values(s.upgrades).reduce((a,b)=>a+b,0)>=10},
+];
+
+// ═══════════════════════════════════════
+// UTILITIES
+// ═══════════════════════════════════════
+function fmt(n) {
+  if(n>=1e12)return(n/1e12).toFixed(2)+'T';
+  if(n>=1e9)return(n/1e9).toFixed(2)+'B';
+  if(n>=1e6)return(n/1e6).toFixed(2)+'M';
+  if(n>=1e3)return(n/1e3).toFixed(1)+'K';
+  return Math.floor(n).toString();
+}
+function getUpgradeCost(up,owned){return Math.ceil(up.baseCost*Math.pow(up.costMult,owned));}
+function getActiveUpgrades(){return THEMES[state.theme].upgrades;}
+
+function recalcStats() {
+  let perKey=1,perSec=0,comboDecay=2.5,mult=1;
+  for(const up of getActiveUpgrades()){
+    const owned=state.upgrades[up.id]||0;
+    if(owned>0){
+      if(up.effect.perKey)perKey+=up.effect.perKey*owned;
+      if(up.effect.perSec)perSec+=up.effect.perSec*owned;
+      if(up.effect.comboDecayAdd)comboDecay+=up.effect.comboDecayAdd*owned;
+      if(up.effect.mult)mult*=Math.pow(up.effect.mult,owned);
+    }
+  }
+  state.perKey=perKey*mult;
+  state.perSec=perSec*mult;
+  state.comboDecay=comboDecay;
+}
+
+function getCurrentWPM() {
+  const now=Date.now();
+  const recent=state.recentKeys.filter(t=>now-t<60000);
+  return Math.round(recent.length/5);
+}
+
+// ═══════════════════════════════════════
+// THEME
+// ═══════════════════════════════════════
+function applyTheme(name) {
+  state.theme=name;
+  state.themesTried.add(name);
+  const theme=THEMES[name];
+  for(const[k,v]of Object.entries(theme.vars)){
+    document.documentElement.style.setProperty(k,v);
+  }
+  document.body.style.fontFamily=theme.vars['--font']||"'Courier New',monospace";
+  recalcStats();
+  renderShop();
+}
+
+function buildThemeSelect() {
+  const sel=document.getElementById('themeSelect');
+  sel.onchange=()=>applyTheme(sel.value);
+}
+
+// ═══════════════════════════════════════
+// KEYSTROKE — unified handler for both desktop + mobile
+// ═══════════════════════════════════════
+const paper=document.getElementById('paper');
+const paperContainer=document.getElementById('paperContainer');
+const mobileInput=document.getElementById('mobileInput');
+
+function processChar(char) {
+  // Combo system
+  const now=Date.now();
+  if(now-state.lastKeyTime<2000){
+    state.combo=Math.min(state.combo+0.05,50);
+  } else {
+    state.combo=1;
+  }
+  state.comboMax=Math.max(state.comboMax,state.combo);
+  state.comboTimer=state.comboDecay;
+  state.lastKeyTime=now;
+
+  // Track for WPM
+  state.recentKeys.push(now);
+  state.recentKeys=state.recentKeys.filter(t=>now-t<60000);
+
+  // Calculate earnings
+  const earn=state.perKey*state.combo;
+  state.credits+=earn;
+  state.totalEarned+=earn;
+  state.totalKeys++;
+
+  // Show text
+  state.paperContent+=char;
+  if(state.paperContent.length>5000){
+    state.paperContent=state.paperContent.slice(-3000);
+  }
+  renderPaper();
+
+  // Floating gain + particles
+  showFloatGain(earn);
+  spawnParticles();
+}
+
+// Desktop: keydown
+document.addEventListener('keydown',(e)=>{
+  if(e.target.tagName==='SELECT'||e.target.tagName==='INPUT')return;
+  if(e.target===mobileInput)return; // handled by input event
+  if(e.ctrlKey||e.metaKey||e.altKey)return;
+
+  let char=e.key;
+  if(char.length!==1){
+    if(char==='Enter')char='\n';
+    else if(char==='Tab'){e.preventDefault();char='  ';}
+    else return;
+  }
+  e.preventDefault();
+  processChar(char);
+});
+
+// Mobile: hidden input captures keystrokes
+mobileInput.addEventListener('input',(e)=>{
+  const val=mobileInput.value;
+  // Process all new characters since last check
+  if(val.length>state.mobileInputVal.length){
+    const newChars=val.slice(state.mobileInputVal.length);
+    for(const char of newChars){
+      if(char==='\n'){
+        processChar('\n');
+      } else if(char.length===1){
+        processChar(char);
+      }
+    }
+  }
+  // Clear input periodically to prevent it growing unbounded
+  if(val.length>50){
+    mobileInput.value='';
+    state.mobileInputVal='';
+  } else {
+    state.mobileInputVal=val;
+  }
+  // Keep mobile input focused
+  mobileInput.focus();
+});
+
+mobileInput.addEventListener('keydown',(e)=>{
+  // Handle Enter on mobile
+  if(e.key==='Enter'){
+    e.preventDefault();
+    processChar('\n');
+    mobileInput.value='';
+    state.mobileInputVal='';
+  }
+});
+
+// Tap on paper focuses hidden input (mobile)
+paperContainer.addEventListener('click',(e)=>{
+  if(e.target.tagName==='SELECT'||e.target.tagName==='INPUT'||e.target.tagName==='BUTTON')return;
+  if(e.target.classList.contains('sidebarTab'))return;
+  // Focus hidden input for mobile keyboard
+  mobileInput.focus();
+  // Also focus paper for desktop
+  paper.focus();
+});
+
+// Touch handler for mobile — bring up keyboard
+paperContainer.addEventListener('touchstart',(e)=>{
+  if(e.target.tagName==='SELECT'||e.target.tagName==='INPUT'||e.target.tagName==='BUTTON')return;
+  setTimeout(()=>mobileInput.focus(),100);
+},{passive:true});
+
+// ═══════════════════════════════════════
+// RENDER
+// ═══════════════════════════════════════
+function renderPaper(){
+  paper.textContent=state.paperContent;
+  paper.scrollTop=paper.scrollHeight;
+}
+
+function showFloatGain(amount){
+  const el=document.createElement('div');
+  el.className='floatGain';
+  el.textContent='+'+fmt(amount);
+  const rect=paper.getBoundingClientRect();
+  el.style.left=(rect.width/2-30+Math.random()*60)+'px';
+  el.style.top=(rect.height/2-20+Math.random()*40)+'px';
+  paperContainer.appendChild(el);
+  setTimeout(()=>el.remove(),1200);
+}
+
+function spawnParticles(){
+  const colors=[getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(),getComputedStyle(document.documentElement).getPropertyValue('--gold').trim(),getComputedStyle(document.documentElement).getPropertyValue('--accent2').trim()];
+  const rect=paperContainer.getBoundingClientRect();
+  const cx=rect.width/2,cy=rect.height/2;
+  for(let i=0;i<4;i++){
+    const p=document.createElement('div');
+    p.className='particle';
+    p.style.background=colors[i%colors.length];
+    p.style.left=cx+'px';
+    p.style.top=cy+'px';
+    paperContainer.appendChild(p);
+    const angle=Math.random()*Math.PI*2;
+    const dist=30+Math.random()*50;
+    const dx=Math.cos(angle)*dist;
+    const dy=Math.sin(angle)*dist;
+    p.animate([
+      {transform:'translate(0,0)',opacity:1},
+      {transform:`translate(${dx}px,${dy}px)`,opacity:0},
+    ],{duration:600,easing:'ease-out'});
+    setTimeout(()=>p.remove(),600);
+  }
+}
+
+// ═══════════════════════════════════════
+// UI UPDATE
+// ═══════════════════════════════════════
+function updateUI(){
+  document.getElementById('creditsVal').textContent=fmt(state.credits);
+  document.getElementById('perKeyVal').textContent=fmt(state.perKey);
+  document.getElementById('perSecVal').textContent=fmt(state.perSec);
+  document.getElementById('totalKeysVal').textContent=fmt(state.totalKeys);
+  document.getElementById('wpmValue').textContent=getCurrentWPM();
+  document.getElementById('comboMult').textContent='×'+state.combo.toFixed(1);
+  const pct=state.comboTimer>0?(state.comboTimer/state.comboDecay)*100:0;
+  document.getElementById('comboTimerBar').style.width=pct+'%';
+}
+
+// ═══════════════════════════════════════
+// SHOP
+// ═══════════════════════════════════════
+function renderShop(){
+  const c=document.getElementById('shopContent');
+  c.innerHTML='';
+  for(const up of getActiveUpgrades()){
+    const owned=state.upgrades[up.id]||0;
+    const cost=getUpgradeCost(up,owned);
+    const canAfford=state.credits>=cost;
+    const el=document.createElement('div');
+    el.className='shopItem'+(canAfford?'':' disabled');
+    el.innerHTML=`<div class="itemName">${up.name}</div><div class="itemDesc">${up.desc}</div><div class="itemBottom"><span class="itemCost">${fmt(cost)} ⛁</span><span class="itemCount">×${owned}</span></div>`;
+    el.onclick=()=>buyUpgrade(up.id);
+    c.appendChild(el);
+  }
+}
+
+function buyUpgrade(id){
+  const up=getActiveUpgrades().find(u=>u.id===id);
+  if(!up)return;
+  const owned=state.upgrades[id]||0;
+  const cost=getUpgradeCost(up,owned);
+  if(state.credits<cost)return;
+  state.credits-=cost;
+  state.upgrades[id]=owned+1;
+  recalcStats();
+  renderShop();
+  updateUI();
+}
+
+// ═══════════════════════════════════════
+// ACHIEVEMENTS
+// ═══════════════════════════════════════
+function renderAchievements(){
+  const c=document.getElementById('achievementsContent');
+  c.innerHTML='';
+  const playTime=Math.floor((Date.now()-state.startTime)/1000);
+  const statsEl=document.createElement('div');
+  statsEl.style.cssText='padding:8px 4px;margin-bottom:8px;border-bottom:1px solid var(--border);';
+  statsEl.innerHTML=`<div style="font-size:11px;color:var(--muted);margin-bottom:6px;">SESSION STATS</div><div style="font-size:11px;line-height:1.8;">Play time: <b>${Math.floor(playTime/60)}m ${playTime%60}s</b><br>Total keys: <b>${fmt(state.totalKeys)}</b><br>Total earned: <b>${fmt(state.totalEarned)}</b><br>Max combo: <b>×${state.comboMax.toFixed(1)}</b><br>Upgrades owned: <b>${Object.values(state.upgrades).reduce((a,b)=>a+b,0)}</b><br>WPM: <b>${getCurrentWPM()}</b></div>`;
+  c.appendChild(statsEl);
+  const header=document.createElement('div');
+  header.style.cssText='font-size:11px;color:var(--muted);padding:4px;margin-bottom:4px;';
+  const unlocked=ACHIEVEMENTS.filter(a=>state.achievements[a.id]).length;
+  header.textContent=`ACHIEVEMENTS (${unlocked}/${ACHIEVEMENTS.length})`;
+  c.appendChild(header);
+  for(const ach of ACHIEVEMENTS){
+    const u=state.achievements[ach.id];
+    const el=document.createElement('div');
+    el.className='achItem '+(u?'unlocked':'locked');
+    el.innerHTML=`<div class="achName">${u?'✅':'🔒'} ${ach.name}</div><div class="achDesc">${ach.desc}</div>`;
+    c.appendChild(el);
+  }
+}
+
+function checkAchievements(){
+  for(const ach of ACHIEVEMENTS){
+    if(!state.achievements[ach.id]&&ach.check(state)){
+      state.achievements[ach.id]=true;
+      showAchievementPopup(ach);
+    }
+  }
+}
+
+function showAchievementPopup(ach){
+  const el=document.createElement('div');
+  el.style.cssText=`position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--panel);border:2px solid var(--gold);border-radius:12px;padding:20px 40px;z-index:9999;text-align:center;box-shadow:0 0 40px rgba(224,175,104,0.5);animation:achPop 3s ease forwards;`;
+  el.innerHTML=`<div style="font-size:32px;margin-bottom:8px;">🏆</div><div style="font-size:18px;font-weight:bold;color:var(--gold);margin-bottom:4px;">${ach.name}</div><div style="font-size:12px;color:var(--muted);">${ach.desc}</div>`;
+  if(!document.getElementById('achStyle')){
+    const s=document.createElement('style');
+    s.id='achStyle';
+    s.textContent='@keyframes achPop{0%{opacity:0;transform:translate(-50%,-50%) scale(0.5);}10%{opacity:1;transform:translate(-50%,-50%) scale(1);}80%{opacity:1;}100%{opacity:0;transform:translate(-50%,-60%) scale(1);}}';
+    document.head.appendChild(s);
+  }
+  document.body.appendChild(el);
+  setTimeout(()=>el.remove(),3000);
+}
+
+// ═══════════════════════════════════════
+// GAME LOOP
+// ═══════════════════════════════════════
+let lastTick=Date.now();
+let lastShopRender=0;
+
+function gameLoop(){
+  const now=Date.now();
+  const dt=(now-lastTick)/1000;
+  lastTick=now;
+
+  if(state.perSec>0){
+    const idleEarn=state.perSec*dt;
+    state.credits+=idleEarn;
+    state.totalEarned+=idleEarn;
+  }
+
+  if(state.comboTimer>0){
+    state.comboTimer-=dt;
+    if(state.comboTimer<=0){state.combo=1;state.comboTimer=0;}
+  }
+
+  updateUI();
+
+  if(now-lastShopRender>500){
+    renderShop();
+    renderAchievements();
+    checkAchievements();
+    lastShopRender=now;
+  }
+  requestAnimationFrame(gameLoop);
+}
+
+// ═══════════════════════════════════════
+// SIDEBAR TABS
+// ═══════════════════════════════════════
+document.querySelectorAll('.sidebarTab').forEach(tab=>{
+  tab.onclick=()=>{
+    document.querySelectorAll('.sidebarTab').forEach(t=>t.classList.remove('active'));
+    tab.classList.add('active');
+    const target=tab.dataset.tab;
+    document.getElementById('shopContent').style.display=target==='shop'?'block':'none';
+    document.getElementById('achievementsContent').style.display=target==='ach'?'block':'none';
+  };
+});
+
+// Clear button
+document.getElementById('clearBtn').onclick=()=>{
+  state.paperContent='';
+  renderPaper();
+};
+
+// ═══════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════
+buildThemeSelect();
+applyTheme('tokyonight');
+recalcStats();
+renderShop();
+renderAchievements();
+
+// Focus management — try to bring up keyboard on mobile
+mobileInput.focus();
+paper.focus();
+
+// Welcome text
+state.paperContent='Welcome to Typist.\n\nEvery keystroke earns credits.\nType anything — notes, code, your thoughts.\nThe faster you type, the more you earn.\n\nStart typing to begin...\n\n';
+renderPaper();
+
+// Re-focus mobile input on any touch/click in the paper area
+document.addEventListener('touchend',()=>{
+  setTimeout(()=>{if(document.activeElement!==mobileInput&&document.activeElement.tagName!=='SELECT')mobileInput.focus();},200);
+},{passive:true});
+
+gameLoop();
+</script>
+</body>
+</html>
