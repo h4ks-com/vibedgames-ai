@@ -1,0 +1,931 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Blendr</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html,body { width:100%; height:100%; overflow:hidden; background:#1a1a20; font-family:'Segoe UI',system-ui,sans-serif; color:#ddd; font-size:13px; user-select:none; }
+canvas { display:block; }
+
+/* === LAYOUT === */
+#app { display:flex; width:100%; height:100%; }
+#viewport { flex:1; position:relative; overflow:hidden; }
+#viewport canvas { position:absolute; top:0; left:0; }
+
+/* === TOP MENU BAR === */
+#topbar { position:absolute; top:0; left:0; right:0; height:32px; background:#25252e; border-bottom:1px solid #15151a; display:flex; align-items:center; padding:0 8px; gap:4px; z-index:10; }
+#topbar .logo { font-weight:bold; color:#5aaaff; font-size:14px; margin-right:8px; }
+.tb-btn { background:#33333d; color:#ccc; border:1px solid #404049; padding:3px 10px; border-radius:3px; cursor:pointer; font-size:12px; }
+.tb-btn:hover { background:#3d3d47; }
+.tb-btn.active { background:#4773aa; color:#fff; border-color:#5aaaff; }
+.tb-sep { width:1px; height:18px; background:#404049; margin:0 4px; }
+
+/* === MODE TABS === */
+#mode-tabs { position:absolute; top:32px; left:0; height:28px; background:#20202a; border-bottom:1px solid #15151a; display:flex; align-items:center; padding:0 8px; gap:2px; z-index:10; }
+.mode-tab { background:#2a2a34; color:#888; border:none; padding:4px 14px; border-radius:4px 4px 0 0; cursor:pointer; font-size:12px; }
+.mode-tab.active { background:#1a1a20; color:#5aaaff; }
+
+/* === TOOLBAR (LEFT) === */
+#toolbar { position:absolute; top:60px; left:0; width:48px; background:#25252e; border-right:1px solid #15151a; display:flex; flex-direction:column; align-items:center; padding:8px 0; gap:4px; z-index:10; }
+.tool-btn { width:36px; height:36px; background:#33333d; border:1px solid #404049; border-radius:4px; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:16px; color:#aaa; }
+.tool-btn:hover { background:#3d3d47; color:#fff; }
+.tool-btn.active { background:#4773aa; color:#fff; border-color:#5aaaff; }
+.tool-sep { width:28px; height:1px; background:#404049; margin:4px 0; }
+.tool-label { font-size:9px; color:#666; text-align:center; }
+
+/* === RIGHT PANEL === */
+#right-panel { width:290px; background:#25252e; border-left:1px solid #15151a; overflow-y:auto; overflow-x:hidden; flex-shrink:0; }
+#right-panel::-webkit-scrollbar { width:6px; }
+#right-panel::-webkit-scrollbar-thumb { background:#404049; border-radius:3px; }
+.panel-section { border-bottom:1px solid #15151a; }
+.panel-header { background:#2e2e38; padding:6px 12px; font-size:11px; font-weight:bold; color:#888; text-transform:uppercase; letter-spacing:0.5px; cursor:pointer; display:flex; align-items:center; gap:4px; }
+.panel-header:hover { color:#aaa; }
+.panel-header .arrow { font-size:9px; }
+.panel-body { padding:8px 12px; }
+.panel-body.collapsed { display:none; }
+
+/* === ROW LAYOUT === */
+.row { display:flex; align-items:center; margin-bottom:6px; gap:6px; }
+.row-label { width:42px; text-align:right; font-size:11px; color:#777; flex-shrink:0; }
+.row-tri { display:flex; gap:3px; margin-bottom:6px; }
+.row-tri .tri-label { width:14px; text-align:center; font-size:10px; font-weight:bold; flex-shrink:0; }
+.tri-label.x { color:#c54; }
+.tri-label.y { color:#4c5; }
+.tri-label.z { color:#55c; }
+
+/* === DRAGNUMBER WIDGET === */
+.dn-wrap { display:flex; align-items:center; flex:1; gap:0; }
+.dn { flex:1; background:rgba(90,170,255,0.06); border:1px solid #3a3a44; color:#8cb8e8; padding:3px 8px; border-radius:3px; cursor:ew-resize; font-family:'SF Mono',Consolas,monospace; font-size:11px; text-align:center; min-width:0; transition:background 0.1s, border-color 0.1s; position:relative; overflow:hidden; user-select:none; }
+.dn:hover { background:rgba(90,170,255,0.12); border-color:#4a5060; }
+.dn.dragging { background:rgba(90,170,255,0.22); border-color:#5aaaff; color:#a8d0ff; }
+.dn.editing { background:#0d0d12; border-color:#5aaaff; }
+.dn-bar { position:absolute; bottom:0; left:0; height:2px; background:linear-gradient(90deg, #5aaaff44, #5aaaffaa); pointer-events:none; }
+.dn-input { flex:1; background:#0d0d12; border:1px solid #5aaaff; color:#a8d0ff; padding:3px 8px; border-radius:3px; font-family:'SF Mono',Consolas,monospace; font-size:11px; text-align:center; outline:none; min-width:0; }
+.dn-input:focus { box-shadow:0 0 4px rgba(90,170,255,0.3); }
+
+/* === COLOR INPUT === */
+input[type="color"] { width:36px; height:24px; border:1px solid #3a3a44; border-radius:3px; background:none; cursor:pointer; padding:0; }
+
+/* === CHECKBOX === */
+.dn-check { display:flex; align-items:center; gap:6px; cursor:pointer; }
+.dn-check input { accent-color:#5aaaff; }
+
+/* === STATS === */
+.stat-row { display:flex; justify-content:space-between; padding:2px 0; font-size:11px; }
+.stat-row .key { color:#777; }
+.stat-row .val { color:#aaa; font-family:monospace; }
+
+/* === OUTLINER === */
+#outliner { position:absolute; top:60px; right:300px; width:200px; max-height:240px; background:#25252eee; border:1px solid #15151a; border-radius:0 0 4px 0; overflow-y:auto; z-index:10; }
+#outliner::-webkit-scrollbar { width:5px; }
+#outliner::-webkit-scrollbar-thumb { background:#404049; }
+#outliner .ol-header { padding:4px 8px; font-size:10px; color:#666; text-transform:uppercase; border-bottom:1px solid #15151a; }
+#outliner .ol-item { padding:3px 8px 3px 16px; font-size:11px; cursor:pointer; display:flex; align-items:center; gap:4px; }
+#outliner .ol-item:hover { background:#33333d; }
+#outliner .ol-item.selected { background:rgba(90,170,255,0.15); color:#8cb8e8; }
+.ol-icon { font-size:10px; opacity:0.6; }
+
+/* === HINT BAR === */
+#hint { position:absolute; bottom:0; left:0; right:0; height:24px; background:#25252e; border-top:1px solid #15151a; display:flex; align-items:center; justify-content:center; font-size:10px; color:#666; z-index:10; }
+
+/* === AXIS GIZMO === */
+#gizmo { position:absolute; bottom:30px; right:300px; width:70px; height:70px; z-index:10; pointer-events:none; }
+
+/* === ADD MENU === */
+#add-menu { position:absolute; top:32px; left:50%; transform:translateX(-50%); background:#2e2e38; border:1px solid #404049; border-radius:0 0 6px 6px; padding:6px 0; display:none; z-index:20; min-width:160px; box-shadow:0 4px 12px rgba(0,0,0,0.5); }
+#add-menu.show { display:block; }
+.add-item { padding:5px 16px; cursor:pointer; font-size:12px; display:flex; align-items:center; gap:6px; }
+.add-item:hover { background:#4773aa; color:#fff; }
+.add-cat { padding:3px 16px; font-size:10px; color:#666; text-transform:uppercase; }
+
+/* === TOAST === */
+#toast { position:absolute; bottom:36px; left:50%; transform:translateX(-50%); background:#2e2e38ee; border:1px solid #5aaaff55; border-radius:4px; padding:6px 16px; font-size:12px; color:#aaa; pointer-events:none; opacity:0; transition:opacity 0.3s; z-index:30; }
+#toast.show { opacity:1; }
+</style>
+</head>
+<body>
+<div id="app">
+<div id="viewport">
+  <div id="topbar">
+    <span class="logo">∇ Blendr</span>
+    <button class="tb-btn" onclick="toggleAddMenu()">+ Add</button>
+    <div class="tb-sep"></div>
+    <button class="tb-btn" onclick="duplicateSelected()" title="Duplicate (Shift+D)">Duplicate</button>
+    <button class="tb-btn" onclick="deleteSelected()" title="Delete (X)">Delete</button>
+    <div class="tb-sep"></div>
+    <span style="color:#555;font-size:11px;margin-left:auto;padding-right:8px;" id="obj-count">0 objects</span>
+  </div>
+
+  <div id="mode-tabs">
+    <button class="mode-tab active">Object Mode</button>
+  </div>
+
+  <div id="toolbar">
+    <button class="tool-btn active" data-tool="select" title="Select (A)">🮺<div class="tool-label">SEL</div></button>
+    <button class="tool-btn" data-tool="move" title="Move (G)">✛<div class="tool-label">MOV</div></button>
+    <button class="tool-btn" data-tool="rotate" title="Rotate (R)">⟲<div class="tool-label">ROT</div></button>
+    <button class="tool-btn" data-tool="scale" title="Scale (S)">⤢<div class="tool-label">SCL</div></button>
+    <div class="tool-sep"></div>
+    <button class="tool-btn" onclick="snapToGround()" title="Snap to Ground (Shift+G)">⬓<div class="tool-label">SHP</div></button>
+    <button class="tool-btn" onclick="toggleWireframe()" title="Wireframe (Z)">⊞<div class="tool-label">WIR</div></button>
+    <button class="tool-btn" onclick="shadeSmooth()" title="Smooth">●<div class="tool-label">SMO</div></button>
+    <button class="tool-btn" onclick="shadeFlat()" title="Flat">⬡<div class="tool-label">FLT</div></button>
+  </div>
+
+  <div id="add-menu">
+    <div class="add-cat">Mesh</div>
+    <div class="add-item" onclick="addObject('box')">🧊 Cube</div>
+    <div class="add-item" onclick="addObject('sphere')">⬤ UV Sphere</div>
+    <div class="add-item" onclick="addObject('cylinder')">⬭ Cylinder</div>
+    <div class="add-item" onclick="addObject('cone')">▲ Cone</div>
+    <div class="add-item" onclick="addObject('torus')">🍩 Torus</div>
+    <div class="add-item" onclick="addObject('plane')">▭ Plane</div>
+    <div class="add-cat">Light</div>
+    <div class="add-item" onclick="addLight()">💡 Point Light</div>
+    <div class="add-cat">Other</div>
+    <div class="add-item" onclick="addCamera()">📷 Camera</div>
+  </div>
+
+  <div id="gizmo"></div>
+
+  <div id="hint">Drag = orbit • Shift+Drag = pan • Scroll = zoom • G=Move R=Rotate S=Scale A=Select X=Delete Shift+D=Duplicate Z=Wireframe</div>
+  <div id="toast"></div>
+</div>
+
+<div id="outliner">
+  <div class="ol-header">Scene Collection</div>
+  <div id="ol-items"></div>
+</div>
+
+<div id="right-panel">
+  <!-- TRANSFORM -->
+  <div class="panel-section">
+    <div class="panel-header" onclick="toggleSection(this)"><span class="arrow">▼</span> Transform</div>
+    <div class="panel-body">
+      <div style="font-size:10px;color:#666;margin-bottom:4px;">Location</div>
+      <div class="row-tri" id="pos-row"></div>
+      <div style="font-size:10px;color:#666;margin:4px 0;">Rotation</div>
+      <div class="row-tri" id="rot-row"></div>
+      <div style="font-size:10px;color:#666;margin:4px 0;">Scale</div>
+      <div class="row-tri" id="scl-row"></div>
+      <div class="row" id="dimensions-row" style="margin-top:6px;"></div>
+    </div>
+  </div>
+  <!-- MATERIAL -->
+  <div class="panel-section">
+    <div class="panel-header" onclick="toggleSection(this)"><span class="arrow">▼</span> Material</div>
+    <div class="panel-body">
+      <div class="row" id="mat-row">
+        <span class="row-label">Color</span>
+        <input type="color" id="mat-color" value="#cccccc" oninput="setMaterialColor(this.value)">
+      </div>
+      <div id="mat-metallic-row" class="row"></div>
+      <div id="mat-rough-row" class="row"></div>
+    </div>
+  </div>
+  <!-- GEOMETRY -->
+  <div class="panel-section">
+    <div class="panel-header" onclick="toggleSection(this)"><span class="arrow">▼</span> Geometry</div>
+    <div class="panel-body" id="geom-body">
+      <div class="stat-row"><span class="key">—</span><span class="val">No selection</span></div>
+    </div>
+  </div>
+  <!-- SCENE -->
+  <div class="panel-section">
+    <div class="panel-header" onclick="toggleSection(this)"><span class="arrow">▼</span> Scene / Render</div>
+    <div class="panel-body">
+      <div class="row" id="bg-row">
+        <span class="row-label">Background</span>
+        <input type="color" id="bg-color" value="#1a1a20" oninput="setBgColor(this.value)">
+      </div>
+      <div id="grid-size-row" class="row"></div>
+      <div class="row">
+        <span class="row-label">Grid</span>
+        <label class="dn-check"><input type="checkbox" id="grid-show" checked oninput="toggleGrid(this.checked)"> Show</label>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+}}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ============ DRAGNUMBER WIDGET ============
+class DragNumber {
+  constructor(el, value, normalSpeed, fineSpeed, decimals, min, max) {
+    this.el = el;
+    this.val = value;
+    this.norm = normalSpeed;
+    this.fine = fineSpeed;
+    this.dec = decimals;
+    this.min = min;
+    this.max = max;
+    this.onChange = null;
+    this.dragging = false;
+    this.barEl = null;
+    this._build();
+  }
+  _build() {
+    this.el.classList.add('dn');
+    this._fmt();
+    // bar
+    this.barEl = document.createElement('div');
+    this.barEl.className = 'dn-bar';
+    this._updateBar();
+    this.el.appendChild(this.barEl);
+    // events
+    this.el.addEventListener('mousedown', e => this._start(e));
+    this.el.addEventListener('dblclick', e => this._edit(e));
+  }
+  _fmt() {
+    let t = this.val.toFixed(this.dec);
+    this.el.childNodes[0] ? this.el.childNodes[0].nodeValue = t : this.el.textContent = t;
+  }
+  _updateBar() {
+    if (this.barEl && this.min !== null && this.max !== null && this.max > this.min) {
+      let pct = ((this.val - this.min) / (this.max - this.min)) * 100;
+      this.barEl.style.width = Math.max(0, Math.min(100, pct)) + '%';
+    }
+  }
+  _start(e) {
+    e.preventDefault();
+    this.dragging = true;
+    this.el.classList.add('dragging');
+    let startX = e.clientX, startVal = this.val;
+    const move = ev => {
+      let dx = ev.clientX - startX;
+      let spd = ev.shiftKey ? this.fine : this.norm;
+      let nv = startVal + dx * spd;
+      nv = Math.max(this.min, Math.min(this.max, nv));
+      this.val = nv;
+      this._fmt();
+      this._updateBar();
+      if (this.onChange) this.onChange(this.val);
+    };
+    const up = () => {
+      this.dragging = false;
+      this.el.classList.remove('dragging');
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  }
+  _edit(e) {
+    e.stopPropagation();
+    let input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'dn-input';
+    input.value = this.val.toFixed(this.dec);
+    let parent = this.el.parentNode;
+    parent.replaceChild(input, this.el);
+    input.focus();
+    input.select();
+    const commit = () => {
+      let v = parseFloat(input.value);
+      if (!isNaN(v)) {
+        v = Math.max(this.min, Math.min(this.max, v));
+        this.val = v;
+      }
+      parent.replaceChild(this.el, input);
+      this.el.classList.remove('editing');
+      this._fmt();
+      this._updateBar();
+      if (this.onChange) this.onChange(this.val);
+    };
+    input.addEventListener('keydown', ev => {
+      if (ev.key === 'Enter') { commit(); }
+      else if (ev.key === 'Escape') { parent.replaceChild(this.el, input); this.el.classList.remove('editing'); }
+    });
+    input.addEventListener('blur', commit);
+  }
+  get() { return this.val; }
+  set(v, silent) {
+    this.val = Math.max(this.min, Math.min(this.max, v));
+    this._fmt();
+    this._updateBar();
+    if (this.onChange && !silent) this.onChange(this.val);
+  }
+}
+
+window.DragNumber = DragNumber;
+
+// ============ SCENE SETUP ============
+const viewport = document.getElementById('viewport');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1a20);
+
+const camera = new THREE.PerspectiveCamera(50, viewport.clientWidth / viewport.clientHeight, 0.1, 1000);
+camera.position.set(7, 5, 7);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(viewport.clientWidth, viewport.clientHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+viewport.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+
+// Lights
+const ambient = new THREE.AmbientLight(0x404050, 1.2);
+scene.add(ambient);
+const sunLight = new THREE.DirectionalLight(0xffffff, 0.8);
+sunLight.position.set(5, 10, 5);
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.set(2048, 2048);
+sunLight.shadow.camera.left = -20;
+sunLight.shadow.camera.right = 20;
+sunLight.shadow.camera.top = 20;
+sunLight.shadow.camera.bottom = -20;
+scene.add(sunLight);
+
+// Grid
+const gridHelper = new THREE.GridHelper(20, 20, 0x555560, 0x2a2a34);
+scene.add(gridHelper);
+
+// Ground plane for shadows
+const groundGeo = new THREE.PlaneGeometry(50, 50);
+const groundMat = new THREE.ShadowMaterial({ opacity: 0.3 });
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = -0.001;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// Axis helper
+const axesHelper = new THREE.AxesHelper(2);
+scene.add(axesHelper);
+
+// ============ STATE ============
+const objects = [];
+let selected = null;
+let currentTool = 'select';
+let objCounter = 0;
+
+const COLORS = ['cccccc', 'ff6b6b', '4ecdc4', 'ffe66d', 'a8e6cf', 'c7a8ff', 'ffa07a', '87ceeb', 'dda0dd', '98fb98'];
+
+// ============ OBJECT MANAGEMENT ============
+function createGeometry(type) {
+  switch(type) {
+    case 'box': return new THREE.BoxGeometry(1,1,1);
+    case 'sphere': return new THREE.SphereGeometry(0.7, 32, 24);
+    case 'cylinder': return new THREE.CylinderGeometry(0.5, 0.5, 1.4, 32);
+    case 'cone': return new THREE.ConeGeometry(0.7, 1.4, 32);
+    case 'torus': return new THREE.TorusGeometry(0.5, 0.2, 16, 48);
+    case 'plane': return new THREE.PlaneGeometry(2, 2);
+    default: return new THREE.BoxGeometry(1,1,1);
+  }
+}
+
+window.addObject = function(type) {
+  const geo = createGeometry(type);
+  const color = COLORS[objCounter % COLORS.length];
+  const mat = new THREE.MeshStandardMaterial({ color: parseInt(color, 16), metalness: 0.1, roughness: 0.5 });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(0, type === 'plane' ? 0.001 : 0.7, 0);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  objCounter++;
+  const name = type.charAt(0).toUpperCase() + type.slice(1) + '.' + String(objCounter).padStart(3, '0');
+  mesh.name = name;
+  mesh.userData.type = type;
+  mesh.userData.metalness = 0.1;
+  mesh.userData.roughness = 0.5;
+  scene.add(mesh);
+  objects.push(mesh);
+  selectObject(mesh);
+  updateOutliner();
+  updateCount();
+  hideAddMenu();
+  showToast('Added ' + name);
+};
+
+window.addLight = function() {
+  const light = new THREE.PointLight(0xffffff, 1, 20);
+  light.position.set(2, 4, 2);
+  light.castShadow = true;
+  objCounter++;
+  light.name = 'PointLight.' + String(objCounter).padStart(3, '0');
+  light.userData.type = 'light';
+  // small helper sphere to visualize
+  const helper = new THREE.Mesh(
+    new THREE.SphereGeometry(0.15, 12, 8),
+    new THREE.MeshBasicMaterial({ color: 0xffff00 })
+  );
+  light.add(helper);
+  scene.add(light);
+  objects.push(light);
+  selectObject(light);
+  updateOutliner();
+  updateCount();
+  hideAddMenu();
+  showToast('Added ' + light.name);
+};
+
+window.addCamera = function() {
+  objCounter++;
+  const cam = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+  cam.position.set(-3, 3, -3);
+  cam.name = 'Camera.' + String(objCounter).padStart(3, '0');
+  cam.userData.type = 'camera';
+  const helper = new THREE.Mesh(
+    new THREE.BoxGeometry(0.4, 0.3, 0.5),
+    new THREE.MeshBasicMaterial({ color: 0x222222, wireframe: true })
+  );
+  cam.add(helper);
+  scene.add(cam);
+  objects.push(cam);
+  selectObject(cam);
+  updateOutliner();
+  updateCount();
+  hideAddMenu();
+  showToast('Added ' + cam.name);
+};
+
+function selectObject(obj) {
+  if (selected) {
+    // remove outline
+  }
+  selected = obj;
+  updateOutlinerSelection();
+  updatePanel();
+}
+
+window.deleteSelected = function() {
+  if (!selected) return;
+  const name = selected.name;
+  scene.remove(selected);
+  if (selected.geometry) selected.geometry.dispose();
+  if (selected.material) selected.material.dispose();
+  const idx = objects.indexOf(selected);
+  if (idx > -1) objects.splice(idx, 1);
+  selected = null;
+  updateOutliner();
+  updateCount();
+  updatePanel();
+  showToast('Deleted ' + name);
+};
+
+window.duplicateSelected = function() {
+  if (!selected || !selected.geometry) return;
+  const geo = selected.geometry.clone();
+  const mat = selected.material.clone();
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.copy(selected.position);
+  mesh.position.x += 1.5;
+  mesh.rotation.copy(selected.rotation);
+  mesh.scale.copy(selected.scale);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  objCounter++;
+  const baseName = selected.name.split('.')[0];
+  mesh.name = baseName + '.' + String(objCounter).padStart(3, '0');
+  mesh.userData.type = selected.userData.type;
+  mesh.userData.metalness = selected.userData.metalness;
+  mesh.userData.roughness = selected.userData.roughness;
+  scene.add(mesh);
+  objects.push(mesh);
+  selectObject(mesh);
+  updateOutliner();
+  updateCount();
+  showToast('Duplicated → ' + mesh.name);
+};
+
+window.snapToGround = function() {
+  if (!selected) return;
+  const box = new THREE.Box3().setFromObject(selected);
+  selected.position.y -= box.min.y;
+  updatePanel();
+  showToast('Snapped to ground');
+};
+
+window.toggleWireframe = function() {
+  if (!selected || !selected.material) return;
+  selected.material.wireframe = !selected.material.wireframe;
+  showToast('Wireframe ' + (selected.material.wireframe ? 'ON' : 'OFF'));
+};
+
+window.shadeSmooth = function() {
+  if (!selected || !selected.geometry) return;
+  selected.geometry.computeVertexNormals();
+  showToast('Shade smooth');
+};
+
+window.shadeFlat = function() {
+  if (!selected || !selected.geometry) return;
+  showToast('Shade flat');
+};
+
+// ============ PANEL WIDGETS ============
+const dnWidgets = {};
+
+function createTriRow(rowEl, prefix, values, min, max, norm, fine, dec, onChange) {
+  rowEl.innerHTML = '';
+  ['x', 'y', 'z'].forEach((axis, i) => {
+    let cell = document.createElement('div');
+    cell.style.flex = '1';
+    cell.style.display = 'flex';
+    cell.style.flexDirection = 'column';
+    let label = document.createElement('div');
+    label.className = 'tri-label ' + axis;
+    label.textContent = axis.toUpperCase();
+    label.style.marginBottom = '2px';
+    let dnEl = document.createElement('div');
+    dnEl.className = 'dn';
+    dnEl.textContent = values[i].toFixed(dec);
+    cell.appendChild(label);
+    let wrap = document.createElement('div');
+    wrap.style.display = 'flex';
+    wrap.appendChild(dnEl);
+    cell.appendChild(wrap);
+    rowEl.appendChild(cell);
+    let dn = new DragNumber(dnEl, values[i], norm, fine, dec, min, max);
+    dn.onChange = v => onChange(axis, v);
+    dnWidgets[prefix + '_' + axis] = dn;
+  });
+}
+
+function createSingleRow(rowEl, label, value, norm, fine, dec, min, max, onChange) {
+  rowEl.innerHTML = '';
+  let lab = document.createElement('span');
+  lab.className = 'row-label';
+  lab.textContent = label;
+  let dnEl = document.createElement('div');
+  dnEl.className = 'dn';
+  dnEl.textContent = value.toFixed(dec);
+  rowEl.appendChild(lab);
+  rowEl.appendChild(dnEl);
+  let dn = new DragNumber(dnEl, value, norm, fine, dec, min, max);
+  dn.onChange = onChange;
+  return dn;
+}
+
+function updatePanel() {
+  const geomBody = document.getElementById('geom-body');
+  if (!selected) {
+    geomBody.innerHTML = '<div class="stat-row"><span class="key">—</span><span class="val">No selection</span></div>';
+    // Reset to defaults
+    createTriRow(document.getElementById('pos-row'), 'pos', [0,0,0], -10, 10, 0.02, 0.005, 3, ()=>{});
+    createTriRow(document.getElementById('rot-row'), 'rot', [0,0,0], -360, 360, 0.5, 0.1, 1, ()=>{});
+    createTriRow(document.getElementById('scl-row'), 'scl', [1,1,1], 0.01, 10, 0.02, 0.005, 3, ()=>{});
+    return;
+  }
+
+  const p = selected.position;
+  const r = [THREE.MathUtils.radToDeg(selected.rotation.x), THREE.MathUtils.radToDeg(selected.rotation.y), THREE.MathUtils.radToDeg(selected.rotation.z)];
+  const s = selected.scale;
+
+  createTriRow(document.getElementById('pos-row'), 'pos', [p.x, p.y, p.z], -10, 10, 0.02, 0.005, 3, (axis, v) => {
+    if (!selected) return;
+    selected.position[axis] = v;
+  });
+  createTriRow(document.getElementById('rot-row'), 'rot', r, -360, 360, 0.5, 0.1, 1, (axis, v) => {
+    if (!selected) return;
+    selected.rotation[axis] = THREE.MathUtils.degToRad(v);
+  });
+  createTriRow(document.getElementById('scl-row'), 'scl', [s.x, s.y, s.z], 0.01, 10, 0.02, 0.005, 3, (axis, v) => {
+    if (!selected) return;
+    selected.scale[axis] = v;
+  });
+
+  // Material
+  if (selected.material) {
+    document.getElementById('mat-color').value = '#' + selected.material.color.getHexString();
+    let mtRow = document.getElementById('mat-metallic-row');
+    dnWidgets.metallic = createSingleRow(mtRow, 'Metallic', selected.userData.metalness || 0, 0.01, 0.002, 2, 0, 1, v => {
+      if (selected && selected.material) {
+        selected.material.metalness = v;
+        selected.userData.metalness = v;
+      }
+    });
+    let rgRow = document.getElementById('mat-rough-row');
+    dnWidgets.roughness = createSingleRow(rgRow, 'Rough', selected.userData.roughness || 0.5, 0.01, 0.002, 2, 0, 1, v => {
+      if (selected && selected.material) {
+        selected.material.roughness = v;
+        selected.userData.roughness = v;
+      }
+    });
+  }
+
+  // Geometry stats
+  if (selected.geometry) {
+    const geo = selected.geometry;
+    const verts = geo.attributes.position ? geo.attributes.position.count : 0;
+    const tris = geo.index ? geo.index.count / 3 : verts / 3;
+    const box = new THREE.Box3().setFromObject(selected);
+    const size = box.getSize(new THREE.Vector3());
+    geomBody.innerHTML = `
+      <div class="stat-row"><span class="key">Type</span><span class="val">${selected.userData.type}</span></div>
+      <div class="stat-row"><span class="key">Vertices</span><span class="val">${verts}</span></div>
+      <div class="stat-row"><span class="key">Triangles</span><span class="val">${Math.floor(tris)}</span></div>
+      <div class="stat-row"><span class="key">Width</span><span class="val">${size.x.toFixed(3)}</span></div>
+      <div class="stat-row"><span class="key">Height</span><span class="val">${size.y.toFixed(3)}</span></div>
+      <div class="stat-row"><span class="key">Depth</span><span class="val">${size.z.toFixed(3)}</span></div>
+    `;
+  } else {
+    geomBody.innerHTML = '<div class="stat-row"><span class="key">Type</span><span class="val">'+selected.userData.type+'</span></div>';
+  }
+}
+
+// Init scene widgets
+dnWidgets.gridSize = createSingleRow(document.getElementById('grid-size-row'), 'Size', 20, 0.5, 0.1, 1, 2, 100, v => {
+  scene.remove(gridHelper);
+  gridHelper.geometry?.dispose();
+  gridHelper.material?.dispose();
+  const newGrid = new THREE.GridHelper(v, Math.min(v, 40), 0x555560, 0x2a2a34);
+  scene.add(newGrid);
+  // can't reassign const, work around
+  newGrid.material.opacity = 0.5;
+  newGrid.material.transparent = true;
+  window.__grid = newGrid;
+});
+
+window.setBgColor = function(hex) {
+  scene.background = new THREE.Color(parseInt(hex.replace('#',''), 16));
+};
+
+window.setMaterialColor = function(hex) {
+  if (selected && selected.material) {
+    selected.material.color.set(hex);
+  }
+};
+
+window.toggleGrid = function(show) {
+  gridHelper.visible = show;
+  if (window.__grid) window.__grid.visible = show;
+};
+
+// ============ OUTLINER ============
+function updateOutliner() {
+  const ol = document.getElementById('ol-items');
+  ol.innerHTML = '';
+  objects.forEach(obj => {
+    const item = document.createElement('div');
+    item.className = 'ol-item' + (obj === selected ? ' selected' : '');
+    let icon = '🧊';
+    if (obj.userData.type === 'light') icon = '💡';
+    else if (obj.userData.type === 'camera') icon = '📷';
+    else if (obj.userData.type === 'sphere') icon = '⬤';
+    else if (obj.userData.type === 'cylinder') icon = '⬭';
+    else if (obj.userData.type === 'cone') icon = '▲';
+    else if (obj.userData.type === 'torus') icon = '🍩';
+    else if (obj.userData.type === 'plane') icon = '▭';
+    item.innerHTML = `<span class="ol-icon">${icon}</span>${obj.name}`;
+    item.onclick = () => selectObject(obj);
+    ol.appendChild(item);
+  });
+}
+
+function updateOutlinerSelection() {
+  updateOutliner();
+}
+
+function updateCount() {
+  document.getElementById('obj-count').textContent = objects.length + (objects.length === 1 ? ' object' : ' objects');
+}
+
+// ============ ADD MENU ============
+window.toggleAddMenu = function() {
+  document.getElementById('add-menu').classList.toggle('show');
+};
+function hideAddMenu() {
+  document.getElementById('add-menu').classList.remove('show');
+}
+document.addEventListener('click', e => {
+  if (!e.target.closest('#add-menu') && !e.target.closest('.tb-btn')) hideAddMenu();
+});
+
+// ============ TOOLS ============
+document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tool-btn[data-tool]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentTool = btn.dataset.tool;
+    showToast(currentTool.charAt(0).toUpperCase() + currentTool.slice(1) + ' tool');
+  });
+});
+
+// ============ KEYBOARD ============
+let dragState = null;
+document.addEventListener('keydown', e => {
+  // Don't interfere with typing
+  if (e.target.tagName === 'INPUT') return;
+
+  if (e.key === 'a' || e.key === 'A') {
+    document.querySelector('.tool-btn[data-tool="select"]').click();
+  } else if (e.key === 'g' || e.key === 'G') {
+    startDragMode('move');
+  } else if (e.key === 'r' || e.key === 'R') {
+    startDragMode('rotate');
+  } else if (e.key === 's' || e.key === 'S') {
+    if (e.ctrlKey || e.metaKey) return;
+    startDragMode('scale');
+  } else if ((e.key === 'x' || e.key === 'X' || e.key === 'Delete') && selected) {
+    deleteSelected();
+  } else if ((e.key === 'd' || e.key === 'D') && e.shiftKey) {
+    e.preventDefault();
+    duplicateSelected();
+  } else if (e.key === 'z' || e.key === 'Z') {
+    toggleWireframe();
+  }
+});
+
+function startDragMode(mode) {
+  if (!selected) return;
+  if (dragState) return;
+  dragState = { mode, axis: null, start: { x: 0, y: 0 }, origPos: selected.position.clone(), origRot: selected.rotation.clone(), origScl: selected.scale.clone() };
+  showToast(mode.toUpperCase() + ' — move mouse, then click to confirm. X/Y/Z to lock axis.');
+
+  const onMove = ev => {
+    if (!dragState || !selected) return;
+    const dx = ev.clientX - dragState.start.x;
+    const dy = ev.clientY - dragState.start.y;
+    const factor = ev.shiftKey ? 0.005 : 0.02;
+
+    if (dragState.mode === 'move') {
+      if (!dragState.axis || dragState.axis === 'x') selected.position.x = dragState.origPos.x + dx * factor;
+      if (!dragState.axis || dragState.axis === 'y') selected.position.y = dragState.origPos.y - dy * factor;
+      if (dragState.axis === 'z') selected.position.z = dragState.origPos.z + dx * factor;
+    } else if (dragState.mode === 'rotate') {
+      const ang = dx * 0.02;
+      if (!dragState.axis || dragState.axis === 'z') selected.rotation.z = dragState.origRot.z + ang;
+      if (dragState.axis === 'y') selected.rotation.y = dragState.origRot.y + ang;
+      if (dragState.axis === 'x') selected.rotation.x = dragState.origRot.x + ang;
+    } else if (dragState.mode === 'scale') {
+      const sf = 1 + dx * factor;
+      if (!dragState.axis) {
+        selected.scale.set(dragState.origScl.x * sf, dragState.origScl.y * sf, dragState.origScl.z * sf);
+      } else {
+        selected.scale[dragState.axis] = dragState.origScl[dragState.axis] * sf;
+      }
+    }
+    updatePanel();
+  };
+
+  const onClick = () => {
+    dragState = null;
+    window.removeEventListener('mousemove', onMove);
+    window.removeEventListener('click', onClick);
+    window.removeEventListener('keydown', onAxis);
+    updatePanel();
+    showToast('Confirmed');
+  };
+
+  const onAxis = ev => {
+    if (ev.key === 'x' || ev.key === 'X') dragState.axis = 'x';
+    else if (ev.key === 'y' || ev.key === 'Y') dragState.axis = 'y';
+    else if (ev.key === 'z' || ev.key === 'Z') dragState.axis = 'z';
+    else if (ev.key === 'Escape') { 
+      selected.position.copy(dragState.origPos);
+      selected.rotation.copy(dragState.origRot);
+      selected.scale.copy(dragState.origScl);
+      dragState = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('click', onClick);
+      window.removeEventListener('keydown', onAxis);
+      updatePanel();
+    }
+  };
+
+  dragState.start.x = 0;
+  dragState.start.y = 0;
+  // Set start to current mouse via a synthetic initial
+  window.addEventListener('mousemove', e => {
+    if (dragState && dragState.start.x === 0 && dragState.start.y === 0) {
+      dragState.start.x = e.clientX;
+      dragState.start.y = e.clientY;
+    }
+  }, { once: true });
+
+  window.addEventListener('mousemove', onMove);
+  setTimeout(() => window.addEventListener('click', onClick), 50);
+  window.addEventListener('keydown', onAxis);
+}
+
+// ============ RAYCAST / CLICK SELECT ============
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+
+renderer.domElement.addEventListener('click', e => {
+  // Don't select if we just finished a drag operation
+  if (dragState) return;
+
+  const rect = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+  raycaster.setFromCamera(mouse, camera);
+  const meshes = objects.filter(o => o.isMesh);
+  const hits = raycaster.intersectObjects(meshes);
+
+  if (hits.length > 0) {
+    selectObject(hits[0].object);
+  }
+});
+
+// ============ AXIS GIZMO ============
+const gizmoScene = new THREE.Scene();
+const gizmoCam = new THREE.OrthographicCamera(-1.5, 1.5, 1.5, -1.5, 0.1, 10);
+
+// Custom gizmo
+function makeGizmo() {
+  const group = new THREE.Group();
+  const axes = [
+    { dir: new THREE.Vector3(1,0,0), color: 0xcc5544, label: 'X' },
+    { dir: new THREE.Vector3(0,1,0), color: 0x44cc55, label: 'Y' },
+    { dir: new THREE.Vector3(0,0,1), color: 0x4477cc, label: 'Z' },
+  ];
+  axes.forEach(ax => {
+    const geo = new THREE.CylinderGeometry(0.03, 0.03, 1, 8);
+    geo.translate(0, 0.5, 0);
+    const mat = new THREE.MeshBasicMaterial({ color: ax.color });
+    const line = new THREE.Mesh(geo, mat);
+    line.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), ax.dir);
+    group.add(line);
+    const ball = new THREE.Mesh(
+      new THREE.SphereGeometry(0.12, 16, 12),
+      new THREE.MeshBasicMaterial({ color: ax.color })
+    );
+    ball.position.copy(ax.dir);
+    group.add(ball);
+  });
+  // Center sphere
+  group.add(new THREE.Mesh(
+    new THREE.SphereGeometry(0.15, 16, 12),
+    new THREE.MeshBasicMaterial({ color: 0x888888 })
+  ));
+  return group;
+}
+
+const gizmoGroup = makeGizmo();
+gizmoScene.add(gizmoGroup);
+
+const gizmoEl = document.getElementById('gizmo');
+const gizmoRenderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+gizmoRenderer.setSize(70, 70);
+gizmoEl.appendChild(gizmoRenderer.domElement);
+
+// ============ TOAST ============
+let toastTimer;
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2000);
+}
+window.showToast = showToast;
+
+// ============ COLLAPSE ============
+window.toggleSection = function(header) {
+  const body = header.nextElementSibling;
+  body.classList.toggle('collapsed');
+  const arrow = header.querySelector('.arrow');
+  arrow.textContent = body.classList.contains('collapsed') ? '▶' : '▼';
+};
+
+// ============ RENDER LOOP ============
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+
+  // Update gizmo rotation to match camera
+  gizmoGroup.quaternion.copy(camera.quaternion).invert();
+  gizmoCam.position.set(0, 0, 3);
+  gizmoCam.lookAt(0, 0, 0);
+
+  renderer.render(scene, camera);
+  gizmoRenderer.render(gizmoScene, gizmoCam);
+}
+
+// ============ RESIZE ============
+window.addEventListener('resize', () => {
+  camera.aspect = viewport.clientWidth / viewport.clientHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(viewport.clientWidth, viewport.clientHeight);
+});
+
+// Init
+updatePanel();
+animate();
+
+// Add default cube
+setTimeout(() => addObject('box'), 100);
+
+</script>
+</body>
+</html>
