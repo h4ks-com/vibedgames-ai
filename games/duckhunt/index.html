@@ -1,197 +1,326 @@
 <!DOCTYPE html>
 <html>
-  <head>
-    <title>Duck Clicker</title>
-    <style>
-      body {
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        height: 100vh;
-        margin: 0;
-        background-color: #f0f0f0;
-        overflow: hidden; /* Prevent scrollbars */
-        position: relative;
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>QUACK HUNT: ROAD TO 1000/1000</title>
+<style>
+html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#0a0e1e;font-family:'Courier New',Courier,monospace;user-select:none;-webkit-user-select:none}
+#c{display:block;cursor:none;touch-action:none}
+.overlay{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(8,12,28,.88);color:#fff;z-index:10;text-align:center;padding:24px;box-sizing:border-box}
+.hidden{display:none!important}
+h1{font-size:clamp(22px,5vw,44px);margin:0 0 6px;color:#ffd24a;letter-spacing:2px;text-shadow:3px 3px 0 #7a3b00}
+h1 span{color:#ff7bac}
+.lore{max-width:560px;font-size:14px;line-height:1.7;color:#cdd6f4;margin:10px 0 4px}
+.lore b{color:#fff}
+.warn{color:#ff7bac;font-weight:bold}
+.btn{margin-top:22px;font-family:inherit;font-size:18px;letter-spacing:2px;padding:14px 38px;background:#ffd24a;color:#3a2000;border:3px solid #fff3;box-shadow:0 4px 0 #7a5a00;cursor:pointer;font-weight:bold}
+.btn:active{transform:translateY(3px);box-shadow:0 1px 0 #7a5a00}
+.ctrl{margin-top:14px;font-size:12px;color:#8a93b8;line-height:1.8}
+#banner{position:fixed;top:16%;left:0;right:0;text-align:center;z-index:5;pointer-events:none;opacity:0;transition:opacity .25s,transform .25s;transform:translateY(-12px)}
+#banner.show{opacity:1;transform:none}
+#banner .big{font-size:clamp(26px,6vw,52px);color:#ffd24a;text-shadow:3px 3px 0 #000;letter-spacing:4px;font-weight:bold}
+#banner .sub{font-size:14px;color:#fff;text-shadow:2px 2px 0 #000;margin-top:4px}
+.stats{display:grid;grid-template-columns:auto auto;gap:4px 22px;font-size:14px;margin-top:14px;color:#cdd6f4;text-align:left}
+.stats b{color:#ffd24a;text-align:right}
+#verdict{margin-top:16px;font-style:italic;color:#ff7bac;max-width:480px}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="banner"><div class="big"></div><div class="sub"></div></div>
+
+<div id="menu" class="overlay">
+  <h1>QUACK HUNT <span>♥</span></h1>
+  <div style="font-size:15px;color:#ffd24a;letter-spacing:2px">THE ROAD BACK TO 1000/1000</div>
+  <div class="lore">
+    <b>MATTF'S DUCK RECORD</b> — 976 killed &nbsp;/&nbsp; 1,002 befriended<br>
+    You had a perfect kill record within reach. Then you typed <b>.bef</b> and befriended a duck in 3:56.
+    This is the road back. Fill each wave's kill quota before your ammo runs dry.
+    <br><br>
+    <span class="warn">DO NOT SHOOT THE PINK HEART DUCKS.</span> They still believe you're friends. Betrayal costs a life and 500 points.
+  </div>
+  <div class="ctrl">
+    MOUSE aim · CLICK shoot · limited ammo per wave<br>
+    ducks DODGE your crosshair — lead your shots · golden ducks = 1000 pts<br>
+    P = pause
+  </div>
+  <button class="btn" id="startBtn">BEGIN THE CULL</button>
+</div>
+
+<div id="over" class="overlay hidden">
+  <h1>THE DUCKS <span>WON</span></h1>
+  <div class="stats" id="finalStats"></div>
+  <div id="verdict"></div>
+  <button class="btn" id="againBtn">HUNT AGAIN</button>
+</div>
+
+<script>
+'use strict';
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');
+let W=innerWidth,H=innerHeight,DPR=Math.min(2,devicePixelRatio||1);
+function resize(){W=innerWidth;H=innerHeight;cv.width=W*DPR;cv.height=H*DPR;cv.style.width=W+'px';cv.style.height=H+'px';ctx.setTransform(DPR,0,0,DPR,0,0);}
+resize();addEventListener('resize',resize);
+
+// ---------- audio ----------
+let AC=null;
+function ac(){if(!AC){try{AC=new (window.AudioContext||window.webkitAudioContext)()}catch(e){}}return AC;}
+function env(g,t,a,d,v){g.gain.setValueAtTime(0.0001,t);g.gain.linearRampToValueAtTime(v,t+a);g.gain.exponentialRampToValueAtTime(0.0001,t+a+d);}
+function sShot(){const a=ac();if(!a)return;const t=a.currentTime,n=a.createBufferSource(),len=a.sampleRate*0.12,buf=a.createBuffer(1,len,a.sampleRate),ch=buf.getChannelData(0);for(let i=0;i<len;i++)ch[i]=(Math.random()*2-1)*Math.pow(1-i/len,2);n.buffer=buf;const f=a.createBiquadFilter();f.type='highpass';f.frequency.value=350;const g=a.createGain();env(g,t,0.002,0.11,0.5);n.connect(f).connect(g).connect(a.destination);n.start(t);}
+function sQuack(){const a=ac();if(!a)return;const t=a.currentTime,o=a.createOscillator();o.type='sawtooth';o.frequency.setValueAtTime(340,t);o.frequency.linearRampToValueAtTime(210,t+0.09);const f=a.createBiquadFilter();f.type='lowpass';f.frequency.value=1300;const g=a.createGain();env(g,t,0.01,0.1,0.16);o.connect(f).connect(g).connect(a.destination);o.start(t);o.stop(t+0.14);}
+function sHit(){const a=ac();if(!a)return;const t=a.currentTime,o=a.createOscillator();o.type='square';o.frequency.setValueAtTime(620,t);o.frequency.linearRampToValueAtTime(940,t+0.07);const g=a.createGain();env(g,t,0.005,0.09,0.22);o.connect(g).connect(a.destination);o.start(t);o.stop(t+0.12);}
+function sBetray(){const a=ac();if(!a)return;const t=a.currentTime,o=a.createOscillator();o.type='sine';o.frequency.setValueAtTime(440,t);o.frequency.linearRampToValueAtTime(120,t+0.5);const g=a.createGain();env(g,t,0.01,0.5,0.3);o.connect(g).connect(a.destination);o.start(t);o.stop(t+0.55);}
+function sClear(){const a=ac();if(!a)return;const t=a.currentTime;[523,659,784].forEach((f,i)=>{const o=a.createOscillator();o.type='triangle';o.frequency.value=f;const g=a.createGain();env(g,t+i*0.09,0.01,0.18,0.2);o.connect(g).connect(a.destination);o.start(t+i*0.09);o.stop(t+i*0.09+0.25);});}
+function sEmpty(){const a=ac();if(!a)return;const t=a.currentTime,o=a.createOscillator();o.type='square';o.frequency.value=160;const g=a.createGain();env(g,t,0.002,0.04,0.12);o.connect(g).connect(a.destination);o.start(t);o.stop(t+0.06);}
+
+// ---------- types ----------
+const TYPES={
+  norm:  {r:19, sp:1.00, evade:130, pts:100, c:'#8a5a2b', c2:'#6d451f', name:''},
+  fast:  {r:16, sp:1.55, evade:200, pts:250, c:'#2e9e9e', c2:'#227a7a', name:''},
+  dodger:{r:18, sp:1.18, evade:310, pts:400, c:'#8a4fd0', c2:'#6d3ca6', name:''},
+  gold:  {r:13, sp:1.95, evade:340, pts:1000,c:'#ffd24a', c2:'#d9a616', name:''},
+  heart: {r:21, sp:0.82, evade:55,  pts:0,   c:'#ff7bac', c2:'#d95f8d', name:''}
+};
+
+// ---------- state ----------
+const S={};
+function reset(){Object.assign(S,{state:'menu',wave:0,score:0,hearts:3,ammo:0,ducks:[],feathers:[],pops:[],clouds:[],
+ spawned:0,killed:0,escaped:0,quota:0,hunters:0,plan:[],spawnTimer:0,combo:0,bestCombo:0,shots:0,hits:0,betrayed:0,
+ totalKilled:0,totalEscaped:0,waveEnd:0,recoil:0,shakeT:0,paused:false,quackT:2+Math.random()*3});}
+reset();
+for(let i=0;i<7;i++)S.clouds.push({x:Math.random()*W,y:40+Math.random()*H*0.4,s:0.5+Math.random()*1.1,v:6+Math.random()*10});
+let best=+(localStorage.getItem('quackhunt1000_best')||0);
+
+// ---------- helpers ----------
+const R=Math.random,hyp=Math.hypot;
+function banner(big,sub,dur){const b=document.getElementById('banner');b.querySelector('.big').textContent=big;b.querySelector('.sub').textContent=sub||'';b.classList.add('show');clearTimeout(b._t);b._t=setTimeout(()=>b.classList.remove('show'),dur||1800);}
+function pop(x,y,text,color,big){S.pops.push({x,y,text,color:color||'#fff',t:0,big:!!big});}
+function feathers(d){const T=TYPES[d.type];for(let i=0;i<9;i++)S.feathers.push({x:d.x,y:d.y,vx:(R()*2-1)*140,vy:-60-R()*120,rot:R()*6,vr:(R()*2-1)*8,c:R()<0.8?T.c:'#fff',t:0,life:0.7+R()*0.6});}
+
+// ---------- waves ----------
+function rollWave(n){
+  const hunters=3+n,arr=[];
+  for(let i=0;i<hunters;i++){const r=R();
+    if(n>=5&&r<0.07)arr.push('gold');
+    else if(n>=4&&r<0.30)arr.push('dodger');
+    else if(n>=2&&r<0.55)arr.push('fast');
+    else arr.push('norm');}
+  if(n>=3){arr.splice(Math.floor(R()*arr.length),0,'heart');if(n>=7&&R()<0.5)arr.push('heart');}
+  for(let i=arr.length-1;i>0;i--){const j=Math.floor(R()*(i+1));[arr[i],arr[j]]=[arr[j],arr[i]];}
+  return arr;
+}
+function startWave(n){
+  S.wave=n;S.plan=rollWave(n);
+  S.hunters=S.plan.filter(t=>t!=='heart').length;
+  S.quota=Math.ceil(S.hunters*0.7);
+  S.ammo=S.quota+2+Math.floor(S.hunters*0.35);
+  S.spawned=0;S.killed=0;S.escaped=0;S.spawnTimer=0.7;S.waveEnd=0;
+  S.state='playing';
+  banner('WAVE '+n,'kill '+S.quota+' of '+S.hunters+'  ·  '+S.ammo+' shells'+(n>=3?'  ·  spare the pink ♥':''),2000);
+}
+function spawnDuck(){
+  const type=S.plan[S.spawned++];const T=TYPES[type];const n=S.wave;
+  const side=R()<0.5?-1:1;
+  const base=(62+Math.min(n,15)*10+R()*28)*T.sp;
+  S.ducks.push({type,x:side<0?-50:W+50,y0:H*(0.16+R()*0.42),x2:0,y2:0,vx:(side<0?1:-1)*base,vy:0,base,r:T.r,t:0,flap:R()*6,phase:R()*Math.PI*2,amp:26+R()*40,freq:1.4+R()*1.1,life:Math.max(3.0,6.5-n*0.28),state:'fly',spook:0,nextTurn:1.5+R()*2,x2:0,y2:0});
+  const d=S.ducks[S.ducks.length-1];d.y=d.y0;
+}
+
+// ---------- shooting ----------
+const aim={x:W/2,y:H/2};let onTarget=false;
+function shoot(x,y){
+  if(S.state!=='playing'||S.paused)return;
+  aim.x=x;aim.y=y;
+  if(S.ammo<=0){sEmpty();return;}
+  S.ammo--;S.shots++;S.recoil=6;sShot();
+  let best=null,bd=1e9;
+  for(const d of S.ducks){if(d.state!=='fly')continue;const hr=d.r*1.25+9;const dist=hyp(x-d.x,y-d.y);if(dist<hr&&dist<bd){bd=dist;best=d;}}
+  if(best){hitDuck(best);}
+  else{
+    S.combo=0;
+    let dodged=false;
+    for(const d of S.ducks){if(d.state!=='fly')continue;
+      if(hyp(x-d.x,y-d.y)<d.r*2.1+40){d.spook=0.8;dodged=true;}}
+    if(dodged)pop(x,y-20,'DODGED!','#8a93b8');
+  }
+}
+function hitDuck(d){
+  if(d.type==='heart'){
+    sBetray();S.betrayed++;S.hearts--;S.score=Math.max(0,S.score-500);S.combo=0;
+    feathers(d);pop(d.x,d.y-30,'BETRAYED  −500','#ff7bac',true);
+    S.ducks.splice(S.ducks.indexOf(d),1);
+    if(S.hearts<=0)gameOver();return;
+  }
+  const T=TYPES[d.type];S.hits++;S.killed++;S.totalKilled++;S.combo++;S.bestCombo=Math.max(S.bestCombo,S.combo);
+  const mult=1+0.1*Math.min(S.combo-1,10);
+  const pts=Math.round(T.pts*mult);
+  S.score+=pts;sHit();feathers(d);
+  pop(d.x,d.y-24,'+'+pts+(S.combo>2?'  x'+S.combo:''),d.type==='gold'?'#ffd24a':'#fff',d.type==='gold');
+  if(d.type==='gold')banner('GOLDEN DUCK!','+'+pts,1200);
+  S.ducks.splice(S.ducks.indexOf(d),1);
+}
+function gameOver(){
+  S.state='over';
+  if(S.score>best){best=S.score;localStorage.setItem('quackhunt1000_best',best);}
+  const acc=S.shots?Math.round(100*S.hits/S.shots):0;
+  document.getElementById('finalStats').innerHTML=
+    '<b>'+S.score+'</b><span>final score (best '+best+')</span>'+
+    '<b>'+S.wave+'</b><span>wave reached</span>'+
+    '<b>'+S.totalKilled+'</b><span>ducks shot</span>'+
+    '<b>'+acc+'%</b><span>accuracy</span>'+
+    '<b>x'+S.bestCombo+'</b><span>best combo</span>'+
+    '<b>'+S.betrayed+'</b><span>heart ducks betrayed</span>';
+  document.getElementById('verdict').textContent=
+    S.betrayed>0?'You shot the ones that loved you. 1,002 friendships, undone.':
+    S.wave<5?'The ducks of #lobby send their regards.':
+    'A valiant cull. The 1000/1000 dream lives on.';
+  document.getElementById('over').classList.remove('hidden');
+}
+
+// ---------- drawing ----------
+function heartShape(x,y,s,color){ctx.save();ctx.translate(x,y);ctx.scale(s/10,s/10);ctx.fillStyle=color;ctx.beginPath();ctx.moveTo(0,4);ctx.bezierCurveTo(-11,-4,-6,-13,0,-6);ctx.bezierCurveTo(6,-13,11,-4,0,4);ctx.fill();ctx.restore();}
+function drawDuck(d){
+  const T=TYPES[d.type];const fly=d.state==='escape';
+  ctx.save();ctx.translate(d.x,d.y);
+  const dir=fly?(d.vx<0?-1:1):(d.vx<0?-1:1);ctx.scale(dir*(d.r/19),(d.r/19));
+  const bob=Math.sin(d.flap)*2.2;
+  if(d.type==='gold'){ctx.shadowColor='#ffd24a';ctx.shadowBlur=18;}
+  ctx.fillStyle=T.c2;
+  ctx.beginPath();ctx.moveTo(-13,-2+bob);ctx.lineTo(-27,-9+bob);ctx.lineTo(-24,5+bob);ctx.closePath();ctx.fill();
+  ctx.fillStyle=T.c;ctx.beginPath();ctx.ellipse(0,bob,17,11,0,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.arc(14,-10+bob,8,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#f5a623';ctx.beginPath();ctx.moveTo(20,-12+bob);ctx.lineTo(31,-8+bob);ctx.lineTo(20,-5+bob);ctx.closePath();ctx.fill();
+  ctx.fillStyle='#111';ctx.beginPath();ctx.arc(16,-12+bob,1.7,0,Math.PI*2);ctx.fill();
+  const wr=Math.sin(d.flap)*0.95;
+  ctx.save();ctx.translate(-2,bob-2);ctx.rotate(wr*0.75-0.35);
+  ctx.fillStyle=T.c2;ctx.beginPath();ctx.ellipse(-4,-6,12,6,-0.5,0,Math.PI*2);ctx.fill();ctx.restore();
+  if(d.type==='heart')heartShape(1,bob,9,'#fff');
+  if(fly){heartShape(d.type==='heart'?-16:-16,-12+bob,5,'#ff7bac');}
+  ctx.restore();
+}
+function drawScene(){
+  const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#4a90d9');g.addColorStop(0.55,'#87ceeb');g.addColorStop(0.8,'#c9e8f5');ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='rgba(255,240,180,.9)';ctx.beginPath();ctx.arc(W*0.82,H*0.14,38,0,Math.PI*2);ctx.fill();
+  for(const c of S.clouds){ctx.fillStyle='rgba(255,255,255,.75)';ctx.beginPath();ctx.ellipse(c.x,c.y,44*c.s,16*c.s,0,0,Math.PI*2);ctx.ellipse(c.x+30*c.s,c.y+4*c.s,30*c.s,12*c.s,0,0,Math.PI*2);ctx.ellipse(c.x-32*c.s,c.y+5*c.s,26*c.s,11*c.s,0,0,Math.PI*2);ctx.fill();}
+  const gy=H*0.80;ctx.fillStyle='#5aa845';ctx.fillRect(0,gy,W,H-gy);
+  ctx.fillStyle='#4c9139';for(let x=0;x<W;x+=14){const bh=6+((x*7919)%9);ctx.beginPath();ctx.moveTo(x,gy);ctx.lineTo(x+4,gy-bh);ctx.lineTo(x+8,gy);ctx.fill();}
+}
+function drawHUD(){
+  ctx.save();ctx.font='bold 20px "Courier New"';ctx.textBaseline='top';
+  ctx.fillStyle='#fff';ctx.strokeStyle='rgba(0,0,0,.55)';ctx.lineWidth=4;
+  const st='SCORE '+S.score;ctx.strokeText(st,16,12);ctx.fillText(st,16,12);
+  ctx.fillStyle='#ffd24a';const bt='BEST '+best;ctx.strokeText(bt,16,38);ctx.fillText(bt,16,38);
+  const wt='WAVE '+S.wave;ctx.fillStyle='#fff';ctx.strokeText(wt,W-16-ctx.measureText(wt).width,12);ctx.fillText(wt,W-16-ctx.measureText(wt).width,12);
+  let hs='';for(let i=0;i<3;i++)hs+=i<S.hearts?'♥':'·';
+  ctx.fillStyle='#ff7bac';ctx.font='bold 26px "Courier New"';ctx.strokeText(hs,W-16-ctx.measureText(hs).width,34);ctx.fillText(hs,W-16-ctx.measureText(hs).width,34);
+  // quota
+  const q='KILL '+S.killed+'/'+S.quota;ctx.font='bold 18px "Courier New"';ctx.fillStyle=S.killed>=S.quota?'#7dff7d':'#fff';
+  ctx.strokeText(q,W/2-ctx.measureText(q).width/2,12);ctx.fillText(q,W/2-ctx.measureText(q).width/2,12);
+  // ammo
+  const n=Math.min(S.ammo,20);ctx.fillStyle='#e8a33d';
+  for(let i=0;i<n;i++){ctx.fillRect(16+i*11,H-34,7,18);}
+  if(S.ammo>20){ctx.fillStyle='#fff';ctx.font='bold 14px "Courier New"';ctx.fillText('×'+S.ammo,16+20*11,H-32);}
+  if(S.ammo===0){ctx.fillStyle='#ff5a5a';ctx.font='bold 16px "Courier New"';ctx.fillText('OUT OF SHELLS',16,H-36);}
+  if(S.combo>2){ctx.fillStyle='#ffd24a';ctx.font='bold 22px "Courier New"';const ct='COMBO x'+S.combo;ctx.strokeText(ct,W/2-ctx.measureText(ct).width/2,38);ctx.fillText(ct,W/2-ctx.measureText(ct).width/2,38);}
+  ctx.restore();
+}
+function drawCross(){
+  if(S.state!=='playing')return;
+  const ox=(R()*2-1)*S.recoil,oy=(R()*2-1)*S.recoil;
+  const x=aim.x+ox,y=aim.y+oy;
+  ctx.save();ctx.strokeStyle=onTarget?'#fff':'#ff3b3b';ctx.lineWidth=2;
+  ctx.beginPath();ctx.arc(x,y,13,0,Math.PI*2);ctx.stroke();
+  ctx.beginPath();ctx.arc(x,y,3,0,Math.PI*2);ctx.fillStyle=onTarget?'#fff':'#ff3b3b';ctx.fill();
+  [[0,-1],[0,1],[-1,0],[1,0]].forEach(([dx,dy])=>{ctx.beginPath();ctx.moveTo(x+dx*7,y+dy*7);ctx.lineTo(x+dx*19,y+dy*19);ctx.stroke();});
+  ctx.restore();
+}
+
+// ---------- loop ----------
+let last=performance.now();
+function loop(now){
+  requestAnimationFrame(loop);
+  let dt=Math.min(0.05,(now-last)/1000);last=now;
+  if(S.paused)dt=0;
+  for(const c of S.clouds){c.x+=c.v*dt;if(c.x>W+80)c.x=-80;}
+
+  if(S.state==='playing'&&!S.paused){
+    // spawn
+    const maxConc=Math.min(6,3+Math.floor(S.wave/2));
+    S.spawnTimer-=dt;
+    if(S.spawned<S.plan.length&&S.ducks.length<maxConc&&S.spawnTimer<=0){spawnDuck();S.spawnTimer=Math.max(0.5,1.6-S.wave*0.08)+R()*0.4;}
+    // ducks
+    for(let i=S.ducks.length-1;i>=0;i--){const d=S.ducks[i];d.t+=dt;d.flap+=dt*(9+d.base/26);
+      if(d.state==='fly'){
+        // random turn
+        if(d.t>d.nextTurn){d.nextTurn=d.t+1.5+R()*2.5;if(R()<0.22){d.vx*=-1;}}
+        const desVy=Math.sin(d.t*d.freq*2+d.phase)*d.amp*d.freq;
+        d.vy+=(desVy-d.vy)*Math.min(1,dt*4);
+        // evasion
+        const ax=aim.x-d.x,ay=aim.y-d.y,dist=hyp(ax,ay);
+        if(dist<150&&dist>0.01){const f=(1-dist/150)*TYPES[d.type].evade;d.vx+=(-ax/dist)*f*dt;d.vy+=(-ay/dist)*f*dt;}
+        if(d.spook>0){d.spook-=dt;}
+        // clamp speed
+        const cap=d.base*3.2,sp=hyp(d.vx,d.vy);
+        if(sp>cap){d.vx*=cap/sp;d.vy*=cap/sp;}
+        const minH=Math.abs(d.base*0.55)*(d.vx<0?-1:1);
+        if(Math.abs(d.vx)<Math.abs(minH))d.vx=minH;
+        d.x+=d.vx*dt*(d.spook>0?1.9:1);d.y+=d.vy*dt;
+        if(d.y<34)d.y=34,d.vy=Math.abs(d.vy)*0.5;
+        if(d.y>H*0.74)d.y=H*0.74,d.vy=-Math.abs(d.vy)*0.5;
+        if(d.x<-90){d.x=-90;d.vx=Math.abs(d.vx);}
+        if(d.x>W+90){d.x=W+90;d.vx=-Math.abs(d.vx);}
+        if(d.t>d.life){d.state='escape';d.vy=-380-R()*80;d.vx*=0.5;}
+      }else{ // escaping
+        d.y+=d.vy*dt;d.x+=d.vx*dt;d.vy-=120*dt;
+        if(d.y<-70){S.ducks.splice(i,1);S.escaped++;S.totalEscaped++;pop(d.x,60,'escaped','#9aa3c0');continue;}
       }
-      #score {
-        font-size: 2rem;
-        text-align: center;
-        position: absolute;
-        top: 10px;
-      }
-      .duck {
-        position: absolute;
-        background-repeat: no-repeat;
-        background-size: contain;
-        transition: all 0.5s ease-in-out;
-        cursor: pointer;
-      }
-      .duck-left {
-        transform: scaleX(-1);
-      }
+    }
+    // wave resolution
+    if(S.spawned>=S.plan.length&&S.ducks.length===0&&!S.waveEnd){
+      if(S.killed>=S.quota){
+        const bonus=S.ammo*25+(S.escaped===0?200:0);
+        S.score+=bonus;sClear();
+        banner('WAVE '+S.wave+' CLEARED','ammo bonus +'+(S.ammo*25)+(S.escaped===0?'  ·  PERFECT +200':''),2000);
+        S.waveEnd=2.2;
+      }else gameOver();
+    }
+    if(S.waveEnd>0){S.waveEnd-=dt;if(S.waveEnd<=0)startWave(S.wave+1);}
+    // ambient quack
+    S.quackT-=dt;
+    if(S.quackT<=0){S.quackT=1.5+R()*4;if(S.ducks.length&&R()<0.6)sQuack();}
+  }
 
-      @keyframes moveLeft {
-        from {
-          right: -50px;
-        }
-        to {
-          right: 100%;
-        }
-      }
+  // particles
+  for(let i=S.feathers.length-1;i>=0;i--){const f=S.feathers[i];f.t+=dt;f.x+=f.vx*dt;f.y+=f.vy*dt;f.vy+=260*dt;f.rot+=f.vr*dt;f.vx*=0.985;if(f.t>f.life)S.feathers.splice(i,1);}
+  for(let i=S.pops.length-1;i>=0;i--){const p=S.pops[i];p.t+=dt;p.y-=40*dt;if(p.t>1.1)S.pops.splice(i,1);}
+  S.recoil=Math.max(0,S.recoil-dt*40);
 
-      @keyframes moveRight {
-        from {
-          left: -50px;
-        }
-        to {
-          left: 100%;
-        }
-      }
+  // onTarget check
+  onTarget=false;
+  if(S.state==='playing')for(const d of S.ducks){if(d.state==='fly'&&hyp(aim.x-d.x,aim.y-d.y)<d.r*1.25+9){onTarget=true;break;}}
 
-      #credits {
-        position: absolute;
-        top: 100%; /* Start below the viewport */
-        left: 50%;
-        transform: translateX(-50%);
-        font-size: 1.5rem;
-        color: black;
-        animation: scrollCredits 60s linear forwards; /* Adjust timing as needed */
-        white-space: pre; /* Preserve line breaks */
-      }
+  // render
+  ctx.save();
+  if(S.recoil>0.5){ctx.translate((R()*2-1)*S.recoil*0.6,(R()*2-1)*S.recoil*0.6);}
+  drawScene();
+  for(const d of S.ducks)drawDuck(d);
+  for(const f of S.feathers){ctx.save();ctx.translate(f.x,f.y);ctx.rotate(f.rot);ctx.globalAlpha=Math.max(0,1-f.t/f.life);ctx.fillStyle=f.c;ctx.beginPath();ctx.ellipse(0,0,6,2.6,0,0,Math.PI*2);ctx.fill();ctx.restore();}
+  for(const p of S.pops){ctx.save();ctx.globalAlpha=Math.max(0,1-p.t/1.1);ctx.font='bold '+(p.big?24:17)+'px "Courier New"';ctx.fillStyle=p.color;ctx.strokeStyle='rgba(0,0,0,.6)';ctx.lineWidth=3;ctx.textAlign='center';ctx.strokeText(p.text,p.x,p.y);ctx.fillText(p.text,p.x,p.y);ctx.restore();}
+  ctx.restore();
+  if(S.state==='playing')drawHUD();
+  drawCross();
+  if(S.paused){ctx.fillStyle='rgba(0,0,0,.5)';ctx.fillRect(0,0,W,H);ctx.fillStyle='#fff';ctx.font='bold 34px "Courier New"';ctx.textAlign='center';ctx.fillText('PAUSED',W/2,H/2);ctx.textAlign='left';}
+}
+requestAnimationFrame(loop);
 
-      @keyframes scrollCredits {
-        0% {
-          top: 100%;
-        }
-        100% {
-          top: -300%; /* Scroll credits far off screen */
-        }
-      }
-    </style>
-  </head>
-  <body>
-    <div id="score">Score: 0</div>
-    <script>
-      const score = document.getElementById('score');
-      let points = 0;
-      const gameWindowHeight = window.innerHeight;
-      let gameRunning = true;
-
-      const fakeNames = [
-        'Alice Smith', 'Bob Johnson', 'Charlie Brown', 'Diana Miller', 'Eve Davis',
-        'Frank Wilson', 'Grace Moore', 'Henry Taylor', 'Ivy Anderson', 'Jack Thomas',
-        'Kelly White', 'Liam Jackson', 'Mia Harris', 'Noah Martin', 'Olivia Thompson',
-        'Peter Garcia', 'Quinn Rodriguez', 'Ryan Lewis', 'Sophia Lee', 'Tom Walker',
-        'Uma Hall', 'Victor Allen', 'Wendy Young', 'Xavier King', 'Yara Wright', 'Zach Green',
-        'Ava Hill', 'Ben Carter', 'Chloe Roberts', 'Daniel Phillips', 'Ella Campbell',
-        'Finn Mitchell', 'Georgia Edwards', 'Hugo Collins', 'Isla Stewart', 'Jacob Morris',
-        'Lily Rogers', 'Max Cook', 'Nora Morgan', 'Owen Bell', 'Penny Baker',
-        'Quentin Clark', 'Ruby Griffin', 'Samuel Cooper', 'Tara Reed', 'Ulysses Kelly',
-        'Violet Wood', 'William Long', 'Xenia Price', 'Yvette Ross', 'Zane Howard',
-        'Abigail Ward', 'Blake Barnes', 'Catherine Gray', 'Dominic Fisher', 'Emily Powell',
-        'Felix Hayes', 'Gina Jenkins', 'Harry Perry', 'Imogen Bryant', 'Joseph Stevens',
-        'Karen Wells', 'Leo Murray', 'Megan Chapman', 'Nathan Dunn', 'Oscar Hunter',
-        'Paige Newman', 'Riley Knight', 'Scarlett Stone', 'Toby Lawson', 'Ursula Fuller',
-        'Vincent Arnold', 'Willow Simmons', 'Xander Holmes', 'Zara Russell', 'Adam Gibson',
-        'Bella Tucker', 'Caleb Ellis', 'Daisy Cole', 'Ethan Sanders', 'Faith Dean',
-        'George West', 'Hazel Parsons', 'Isaac Shaw', 'Jasmine Dixon', 'Kevin Lane',
-        'Lucy Atkinson', 'Michael Barber', 'Nancy Black', 'Oliver Knight', 'Penelope Sutton'
-      ];
-
-      function getRandomHeight() {
-        const minHeight = 50;
-        const maxHeight = gameWindowHeight - 100;
-        return Math.floor(Math.random() * (maxHeight - minHeight + 1) + minHeight);
-      }
-
-      function getRandomSize() {
-        const minSize = 40;
-        const maxSize = 80;
-        return Math.floor(Math.random() * (maxSize - minSize + 1) + minSize);
-      }
-
-      function spawnDuck() {
-        if (!gameRunning) return; // Stop spawning if game is won
-
-        const duck = document.createElement('div');
-        duck.classList.add('duck');
-
-        const duckSize = getRandomSize();
-        duck.style.width = `${duckSize}px`;
-        duck.style.height = `${duckSize}px`;
-
-        const direction = Math.random() > 0.5 ? 'left' : 'right';
-        const duckHeight = getRandomHeight();
-
-        duck.style.top = `${duckHeight}px`;
-
-        if (direction === 'left') {
-          duck.classList.add('duck-left');
-          duck.style.right = '-50px';
-        } else {
-          duck.style.left = '-50px';
-        }
-
-        duck.style.backgroundImage = `url('https://i.ibb.co/PSPNVMd/duck.gif')`;
-        document.body.appendChild(duck);
-
-        const animationDuration = 7.5;
-
-        const timeoutId = setTimeout(() => {
-          duck.remove();
-          checkWinCondition();
-        }, animationDuration * 1000);
-
-        duck.addEventListener('click', () => {
-          clearTimeout(timeoutId); // Prevent the timeout from running if clicked
-          duck.remove();
-          points++;
-          score.textContent = `Score: ${points}`;
-          checkWinCondition();
-        });
-
-        if (direction === 'left') {
-          duck.style.animation = `moveLeft ${animationDuration}s forwards linear`;
-        } else {
-          duck.style.animation = `moveRight ${animationDuration}s forwards linear`;
-        }
-      }
-
-      function spawnMultipleDucks() {
-        if (!gameRunning) return; // Stop spawning if game is won
-
-        const numberOfDucks = Math.floor(Math.random() * 3) + 1;
-        for (let i = 0; i < numberOfDucks; i++) {
-          spawnDuck();
-        }
-        setTimeout(spawnMultipleDucks, Math.random() * 3000 + 1000);
-      }
-
-      function checkWinCondition() {
-        const ducks = document.querySelectorAll('.duck');
-        if (points > 10 && ducks.length === 0 && gameRunning) {
-          gameRunning = false; // Stop spawning new ducks
-          showCredits();
-        }
-      }
-
-      function showCredits() {
-        const creditsDiv = document.createElement('div');
-        creditsDiv.id = 'credits';
-        let creditsText = 'Duck Clicker\n\n';
-        creditsText += 'Directed by: YOU!\n\n';
-        creditsText += 'Starring:\nThe Ducks\n\n';
-        creditsText += 'Fake Names:\n';
-        for (let i = 0; i < 100; i++) {
-          creditsText += fakeNames[Math.floor(Math.random() * fakeNames.length)] + '\n';
-        }
-        creditsText += '\nSpecial Thanks:\nYOU for Playing!\n';
-
-        creditsDiv.textContent = creditsText;
-        document.body.appendChild(creditsDiv);
-      }
-
-      spawnMultipleDucks();
-    </script>
-  </body>
+// ---------- input ----------
+addEventListener('pointermove',e=>{aim.x=e.clientX;aim.y=e.clientY;});
+cv.addEventListener('pointerdown',e=>{e.preventDefault();ac();aim.x=e.clientX;aim.y=e.clientY;shoot(e.clientX,e.clientY);});
+addEventListener('keydown',e=>{if(e.key==='p'||e.key==='P'){if(S.state==='playing')S.paused=!S.paused;}});
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&S.state==='playing')S.paused=true;});
+document.getElementById('startBtn').addEventListener('click',()=>{ac();document.getElementById('menu').classList.add('hidden');reset();S.clouds.forEach(c=>c.x=Math.random()*W);startWave(1);});
+document.getElementById('againBtn').addEventListener('click',()=>{document.getElementById('over').classList.add('hidden');reset();startWave(1);});
+</script>
+</body>
 </html>
