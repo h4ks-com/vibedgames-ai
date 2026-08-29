@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hexquest: The Beano Saga</title>
+<style>
+:root{--bg:#241a10;--accent:#d9a05b;--panel:#2e2116;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:#e8dcc8;font-family:'Segoe UI',system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;min-height:100vh;transition:background .8s}
+#hud{width:100%;max-width:660px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 14px;position:sticky;top:0;background:rgba(0,0,0,.55);backdrop-filter:blur(4px);z-index:5}
+.badge{background:var(--accent);color:#1c130a;font-weight:700;padding:3px 10px;border-radius:6px;font-size:13px}
+.lvname{font-weight:700;font-size:15px}
+.goal{font-size:12.5px;color:var(--accent);width:100%}
+.stat{font-size:13px;background:rgba(255,255,255,.08);padding:3px 9px;border-radius:6px}
+.bar{width:90px;height:10px;background:#3a2020;border-radius:5px;overflow:hidden;display:inline-block;vertical-align:middle;margin:0 4px}
+.bar>div{height:100%;background:#d84a4a;border-radius:5px;transition:width .3s}
+#board{flex:0 0 auto}
+#board.shake{animation:shake .3s}
+@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-6px)}75%{transform:translateX(6px)}}
+svg{display:block;margin:4px auto}
+.cell{cursor:pointer}
+.cell:hover{filter:brightness(1.25)}
+#log{max-width:660px;width:100%;min-height:64px;padding:4px 18px 16px;font-size:13px;color:#c9bda5;line-height:1.5}
+#log b{color:var(--accent)}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;z-index:10}
+.panel{background:var(--panel);border:2px solid var(--accent);border-radius:12px;padding:22px 30px;text-align:center;max-width:440px;box-shadow:0 8px 40px rgba(0,0,0,.6)}
+.panel h2{color:var(--accent);margin-bottom:8px}
+.panel p{margin:6px 0;font-size:14px}
+button{background:var(--accent);border:0;color:#1c130a;font-weight:700;padding:9px 20px;border-radius:8px;font-size:14px;cursor:pointer;margin:6px 4px}
+button.sec{background:rgba(255,255,255,.12);color:#e8dcc8}
+.big{width:180px;height:12px}
+.hint{font-size:11.5px;color:#8d8168;padding-bottom:10px}
+</style>
+</head>
+<body>
+<div id="hud"></div>
+<div id="board"></div>
+<div id="log"></div>
+<div class="hint">Click an adjacent hex to move · ⚠n = n adjacent monsters · reach the goal to complete the level</div>
+<div id="modal"></div>
+<script>
+const LEVELS=[
+{name:"Beano's House",goal:"The Door of the House",icon:"🚪",bg:"#241a10",panel:"#2e2116",accent:"#d9a05b",grass:"#a8834f",rock:"#4a3c2c",fog:"#171009",pool:["🪳","🕷️","🐭","🦟"]},
+{name:"Beano's Street",goal:"Mr. Anthony's House",icon:"🏠",bg:"#26292e",panel:"#2f333a",accent:"#8fb8d8",grass:"#6fae5f",rock:"#6f7377",fog:"#14161a",pool:["🐀","🦝","🐕","🦆"]},
+{name:"Beano's Town",goal:"The Mayor's Office",icon:"🏛️",bg:"#2c2a24",panel:"#34312a",accent:"#d8b46a",grass:"#79b061",rock:"#7a7266",fog:"#191813",pool:["🐗","🦃","🐺"]},
+{name:"Beano's County",goal:"Judge Corncob's County Court",icon:"⚖️",bg:"#2a2718",panel:"#322f1f",accent:"#cdb35c",grass:"#86b95e",rock:"#665637",fog:"#17150c",pool:["🐄","🦅","🐗"]},
+{name:"Bean Kingdom",goal:"King Bean's Castle",icon:"🏰",bg:"#1c2420",panel:"#232e29",accent:"#e3c65f",grass:"#58a84e",rock:"#5a635c",fog:"#101613",pool:["👺","🐲","🧟"]},
+{name:"Bean Empire",goal:"Emperor Bean's Imperial Bean Palace",icon:"👑",bg:"#221a2e",panel:"#2a2036",accent:"#c58ae0",grass:"#5fae7a",rock:"#4c3f5e",fog:"#151020",pool:["👾","🦂","🧟"]},
+{name:"Planet Bean",goal:"United Federation of Bean HQ — Paris",icon:"🏢",bg:"#131233",panel:"#1a1940",accent:"#6fd8e8",grass:"#45c8b0",rock:"#3a3550",fog:"#0c0b22",pool:["👽","🛸","🦑"]},
+];
+const S=26,SQ3=Math.sqrt(3);
+const hexes=[];
+for(let q=-4;q<=4;q++)for(let r=-4;r<=4;r++)if(Math.abs(q+r)<=4)hexes.push([q,r]);
+const K=(q,r)=>q+","+r;
+const parse=k=>k.split(",").map(Number);
+const px=(q,r)=>[S*SQ3*(q+r/2),S*1.5*r];
+function neighbors(q,r){return[[1,0],[1,-1],[0,-1],[-1,0],[-1,1],[0,1]].map(d=>[q+d[0],r+d[1]]).filter(([a,b])=>Math.abs(a)<=4&&Math.abs(b)<=4&&Math.abs(a+b)<=4);}
+function hexDist(a,b){const dq=a[0]-b[0],dr=a[1]-b[1];return(Math.abs(dq)+Math.abs(dr)+Math.abs(dq+dr))/2;}
+function shuffle(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;}
+const ri=n=>1+Math.floor(Math.random()*n);
+
+function genLevel(li){
+ for(let t=0;t<80;t++){
+  const cells={};
+  cells[K(0,0)]={t:"grass"};
+  const ks=shuffle(hexes.slice(1));
+  let i=0;
+  const put=(tp,n)=>{for(let k2=0;k2<n;k2++){const[q,r]=ks[i++];cells[K(q,r)]={t:tp};}};
+  put("grass",29);put("treasure",1);put("weapon",1);put("monster",3);
+  for(const[q,r]of hexes){const k=K(q,r);if(!cells[k])cells[k]={t:"rock"};}
+  // monsters get stats
+  const pool=shuffle(LEVELS[li].pool.slice());
+  Object.values(cells).forEach(c=>{if(c.t==="monster"){c.hp=5+2*li;c.maxHp=c.hp;c.atk=2+li;c.emoji=pool.pop()||"👻";}});
+  // BFS from start over passable (monsters block)
+  const seen=new Set([K(0,0)]);const st=[K(0,0)];
+  while(st.length){const cur=st.pop();
+   for(const nb of neighbors(...parse(cur))){const nk=K(nb[0],nb[1]),cc=cells[nk];
+    if(!cc||cc.t==="rock"||cc.t==="monster"||seen.has(nk))continue;seen.add(nk);st.push(nk);}}
+  if(seen.size<8)continue;
+  // goal: reachable grass far from start
+  const cands=[...seen].filter(k=>k!==K(0,0)&&cells[k].t==="grass").map(k=>[k,hexDist([0,0],parse(k))]);
+  const far=cands.filter(c=>c[1]>=3);
+  const pick=(far.length?far:cands).sort((a,b)=>b[1]-a[1])[0];
+  if(!pick)continue;
+  cells[pick[0]].goal=true;
+  return{cells,goal:pick[0]};
+ }
+ throw new Error("gen failed");
+}
+
+let G;
+function applyPalette(li){const L=LEVELS[li],s=document.documentElement.style;
+ s.setProperty("--bg",L.bg);s.setProperty("--accent",L.accent);s.setProperty("--panel",L.panel);}
+function log(msg){G.log.push(msg);if(G.log.length>4)G.log.shift();}
+function revealAround(k){const cells=[k,...neighbors(...parse(k)).map(a=>K(...a))];
+ for(const c of cells){const cc=G.level.cells[c];if(cc)cc.revealed=true;}}
+
+function startGame(){
+ G={li:0,hp:20,maxHp:20,atk:3,gold:0,kills:0,swords:0,log:[],battle:null,prev:null};
+ G.level=genLevel(0);G.pos=K(0,0);
+ applyPalette(0);revealAround(G.pos);
+ log("<b>Level 0 — Beano's House.</b> Reach <b>🚪 The Door</b>.");
+ render();
+}
+function nextLevel(){
+ G.li++;G.level=genLevel(G.li);G.pos=K(0,0);G.prev=null;G.battle=null;
+ G.maxHp+=3;G.hp=Math.min(G.maxHp,G.hp+8);
+ applyPalette(G.li);revealAround(G.pos);
+ const L=LEVELS[G.li];
+ log("<b>Level "+G.li+" — "+L.name+".</b> Reach <b>"+L.icon+" "+L.goal+"</b>.");
+ modal.innerHTML="";render();
+}
+function levelDone(){
+ const L=LEVELS[G.li];
+ if(G.li>=6){
+  const score=G.gold+G.hp*3+G.kills*25;
+  modal.innerHTML=`<div class="panel"><div style="font-size:54px">🎉</div>
+   <h2>THE BEANO SAGA IS COMPLETE!</h2>
+   <p>You reached <b>${L.icon} ${L.goal}</b>.</p>
+   <p>Gold ${G.gold} · HP ${G.hp} · Kills ${G.kills}</p>
+   <h2 style="margin-top:8px">Score: ${score}</h2>
+   <button onclick="startGame()">Play again</button></div>`;
+  return;
+ }
+ modal.innerHTML=`<div class="panel"><div style="font-size:46px">${L.icon}</div>
+  <h2>Level ${G.li} complete!</h2>
+  <p>You arrived at <b>${L.goal}</b>.</p>
+  <p>Resting… +8 HP, +3 max HP</p>
+  <button onclick="nextLevel()">Onward to Level ${G.li+1}: ${LEVELS[G.li+1].name} →</button></div>`;
+}
+function gameOver(){
+ modal.innerHTML=`<div class="panel"><div style="font-size:54px">💀</div>
+  <h2>You fell…</h2><p>Progress: Level ${G.li} — ${LEVELS[G.li].name}</p>
+  <button onclick="startGame()">Begin anew</button></div>`;
+}
+
+function clickCell(k){
+ if(G.battle)return;
+ const nbs=neighbors(...parse(G.pos)).map(a=>K(...a));
+ if(!nbs.includes(k))return;
+ const c=G.level.cells[k];
+ if(c.t==="rock"){const b=document.getElementById("board");b.classList.remove("shake");void b.offsetWidth;b.classList.add("shake");log("Impassable rock.");render();return;}
+ if(c.t==="monster"){G.battle=k;showBattle();return;}
+ G.prev=G.pos;moveIn(k);
+}
+function moveIn(k){
+ G.pos=k;const c=G.level.cells[k];
+ revealAround(k);
+ if(c.t==="treasure"){c.t="grass";G.gold+=100;log("💰 Treasure! <b>+100 gold</b>.");}
+ else if(c.t==="weapon"){c.t="grass";G.atk+=4;G.swords++;log("⚔️ Found a blade! <b>+4 ATK</b>.");}
+ render();
+ if(c.goal)levelDone();
+}
+
+function showBattle(){
+ const c=G.level.cells[G.battle];
+ modal.innerHTML=`<div class="panel">
+  <div style="font-size:52px">${c.emoji}</div>
+  <h2>A wild foe!</h2>
+  <p>HP <span id="mhp">${c.hp}</span>/${c.maxHp}</p>
+  <div class="bar big"><div id="mbar" style="width:${c.hp/c.maxHp*100}%"></div></div>
+  <p style="margin-top:10px">Your HP ${G.hp}/${G.maxHp}</p>
+  <div class="bar big"><div style="width:${G.hp/G.maxHp*100}%"></div></div>
+  <p style="margin-top:6px"><button onclick="hit()">⚔️ Attack</button>
+  <button class="sec" onclick="flee()">🏃 Flee</button></p></div>`;
+}
+function hit(){
+ const c=G.level.cells[G.battle];
+ const d=ri(6)+G.atk;c.hp-=d;
+ log(`You strike the ${c.emoji} for <b>${d}</b>.`);
+ if(c.hp<=0){c.t="grass";G.kills++;log(`${c.emoji} defeated!`);const bk=G.battle;G.battle=null;modal.innerHTML="";moveIn(bk);return;}
+ const md=ri(6)+c.atk;G.hp-=md;
+ log(`The ${c.emoji} hits you for <b>${md}</b>.`);
+ if(G.hp<=0){G.battle=null;render();gameOver();return;}
+ showBattle();render();
+}
+function flee(){
+ const c=G.level.cells[G.battle];
+ if(Math.random()<0.6){
+  log("You slip away!");
+  const p=G.prev||K(0,0);G.battle=null;modal.innerHTML="";G.pos=p;revealAround(p);render();
+ }else{
+  const md=ri(6)+c.atk;G.hp-=md;
+  log(`Flee failed! The ${c.emoji} hits for <b>${md}</b>.`);
+  if(G.hp<=0){G.battle=null;render();gameOver();return;}
+  showBattle();render();
+ }
+}
+
+function render(){
+ const L=LEVELS[G.li],cells=G.level.cells;
+ let svg=`<svg width="310" height="448" viewBox="-155 -224 310 448" id="hsvg">`;
+ for(const[q,r]of hexes){
+  const k=K(q,r),c=cells[k],[x,y]=px(q,r);
+  let pts="";
+  for(const a of[-90,-30,30,90,150,210]){const rad=a*Math.PI/180;pts+=(x+S*Math.cos(rad)).toFixed(1)+","+(y+S*Math.sin(rad)).toFixed(1)+" ";}
+  const rev=c.revealed;
+  let fill=L.fog,emoji="",stroke="#0000";
+  if(rev){
+   fill=(c.t==="rock")?L.rock:L.grass;
+   if(c.t==="monster"&&c.hp>0){emoji=c.emoji;stroke="#c04040";}
+   if(c.t==="treasure")emoji="💰";
+   if(c.t==="weapon")emoji="⚔️";
+   if(c.goal)emoji=L.icon;
+  }
+  svg+=`<polygon class="cell" data-k="${k}" points="${pts}" fill="${fill}" stroke="${c.t==="monster"&&rev?stroke:"#00000022"}" stroke-width="2" onclick="clickCell('${k}')"/>`;
+  if(rev){
+   if(emoji)svg+=`<text x="${x}" y="${y}" text-anchor="middle" dominant-baseline="central" font-size="${(S*0.95).toFixed(0)}" pointer-events="none">${emoji}</text>`;
+   else if(c.t!=="rock"){
+    const n=neighbors(q,r).filter(nb=>{const cc=cells[K(...nb)];return cc&&cc.t==="monster"&&cc.hp>0;}).length;
+    if(n>0)svg+=`<text x="${x}" y="${y-S*0.62}" text-anchor="middle" font-size="11" fill="#ffd97a" font-weight="bold" pointer-events="none">⚠${n}</text>`;
+   }
+  }
+ }
+ const[pxp,pyp]=px(...parse(G.pos));
+ svg+=`<text x="${pxp}" y="${pyp}" text-anchor="middle" dominant-baseline="central" font-size="${(S*1.05).toFixed(0)}" pointer-events="none">🫘</text>`;
+ svg+=`</svg>`;
+ document.getElementById("board").innerHTML=svg;
+ const dist=hexDist(parse(G.pos),parse(G.level.goal));
+ document.getElementById("hud").innerHTML=
+  `<span class="badge">LV ${G.li}</span><span class="lvname">${L.name}</span>`+
+  `<span class="stat">❤️ <span class="bar"><div style="width:${Math.max(0,G.hp/G.maxHp*100)}%"></div></span>${G.hp}/${G.maxHp}</span>`+
+  `<span class="stat">🗡️ ${G.atk}</span><span class="stat">💰 ${G.gold}</span><span class="stat">☠️ ${G.kills}</span>`+
+  `<span class="stat">🏁 ${dist} hex</span><span class="goal">Goal: ${L.icon} ${L.goal}</span>`;
+ document.getElementById("log").innerHTML=G.log.map(m=>"• "+m).join("<br>");
+}
+startGame();
+</script>
+</body>
+</html>
