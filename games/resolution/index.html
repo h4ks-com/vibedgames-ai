@@ -1,0 +1,766 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Resolution — a hanb model universe</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Source+Serif+4:ital,opsz,wght@0,8..60,300..700&display=swap" rel="stylesheet">
+<style>
+/* ─── Resolution ────────────────────────────────────────────────────────────
+   A single self-contained file. Nothing is loaded except the two webfonts,
+   and it plays fine without them.
+
+   The plates in ../demos/ are printed on paper; this is the instrument itself,
+   so it inverts their palette: the game's own voice (amber) leads, and the
+   analyst's ink recedes to labels.
+   ─────────────────────────────────────────────────────────────────────────── */
+:root {
+  color-scheme: dark;
+  --void:   #0a0f1e;
+  --deep:   #101828;
+  --panel:  #16203a;
+  --line:   rgba(180, 200, 240, .13);
+  --ink:    #e9eefb;
+  --ink-2:  #9dabc9;
+  --ink-3:  #6c7a99;
+  --gold:   #f5c542;
+  --brass:  #d09a1a;
+  --blue:   #5aa2f0;
+  --tier1:  #6b4a08;
+  --tier2:  #9a6c0c;
+  --tier3:  #d09a1a;
+  --tier4:  #f5c542;
+  --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --mono:  "DM Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: radial-gradient(120% 90% at 50% 0%, #16203a 0%, var(--void) 60%);
+  color: var(--ink); font-family: var(--serif); font-size: 16px; line-height: 1.55;
+  min-height: 100%;
+}
+h1 { font-size: 1.5rem; font-weight: 600; letter-spacing: -.02em; margin: 0; }
+h2 { font-size: .78rem; font-family: var(--mono); font-weight: 400; color: var(--ink-3);
+     margin: 0 0 .55rem; letter-spacing: .02em; }
+p { margin: 0 0 .8rem; }
+a { color: var(--blue); }
+
+.shell { max-width: 1180px; margin: 0 auto; padding: 1.4rem 1.2rem 3rem; }
+.top { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem 1.1rem; margin-bottom: 1rem; }
+.top .sub { font-family: var(--mono); font-size: .76rem; color: var(--ink-3); }
+.top .spacer { flex: 1; }
+
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) 21.5rem; gap: 1.2rem; align-items: start; }
+@media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+
+.card { background: var(--deep); border: 1px solid var(--line); border-radius: 4px; }
+.card + .card { margin-top: 1rem; }
+.pad { padding: .95rem 1rem; }
+
+/* ─── the board ─── */
+.stage { position: relative; padding: .8rem; }
+.scalebar {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem .9rem;
+  font-family: var(--mono); font-size: .76rem; color: var(--ink-2);
+  padding: 0 .3rem .7rem;
+}
+.scalebar .glyph {
+  font-size: 1.5rem; color: var(--gold); line-height: 1; padding: 0 .18rem;
+  border: 1px solid var(--line); border-radius: 3px; background: var(--panel);
+}
+.scalebar .of { color: var(--ink-3); }
+svg { display: block; width: 100%; height: auto; touch-action: manipulation; }
+.cell { cursor: pointer; }
+.cell .hex { fill: #0d1424; stroke: var(--line); stroke-width: 1.2; transition: fill .18s; }
+.cell.filled .hex { stroke: rgba(245,197,66,.35); }
+.cell.pick .hex { stroke: var(--gold); stroke-width: 2.4; }
+.cell.transient .hex { stroke: #fff6d8; stroke-width: 3; }
+.cell .spark { fill: #fff6d8; stroke: rgba(255,255,255,.65); stroke-width: 2; pointer-events: none; }
+.cell.transient { animation: pulse 1.1s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
+.cell .spark { display: none; }
+.cell.transient .spark { display: block; }
+/* a purchase has to be visible from the other side of the screen */
+.cell .hex { transform-box: fill-box; transform-origin: center; }
+.cell.land .hex { animation: land .5s cubic-bezier(.2,.9,.3,1.2); }
+@keyframes land {
+  0%   { transform: scale(.25); opacity: .15; }
+  55%  { transform: scale(1.18); }
+  100% { transform: scale(1); opacity: 1; }
+}
+.stat.flash .v { animation: statflash .5s ease-out; }
+@keyframes statflash { 0% { color: #fff6d8; } 100% { } }
+.spend {
+  display: block; font-family: var(--mono); font-size: .72rem; color: var(--brass);
+  height: 1em; opacity: 0; transition: opacity .12s;
+}
+.spend.show { opacity: 1; }
+.buy.bought { border-color: var(--gold); background: #2a3a63; }
+.picking .cell.filled:hover .hex { fill: #3b2c06; stroke: var(--gold); }
+.addr {
+  font-family: var(--mono); font-size: .74rem; color: var(--ink-3);
+  padding: .55rem .3rem 0; word-break: break-all;
+}
+.addr b { color: var(--gold); font-weight: 400; }
+
+/* ─── readouts ─── */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+         gap: 1px; background: var(--line); border-top: 1px solid var(--line); }
+.stat { background: var(--deep); padding: .6rem .8rem .7rem; }
+.stat .k { display: block; font-family: var(--mono); font-size: .68rem; color: var(--ink-3); }
+.stat .v { font-family: var(--mono); font-size: 1.18rem; color: var(--ink); }
+.stat .v.gold { color: var(--gold); }
+
+/* ─── shop ─── */
+.buy {
+  display: grid; grid-template-columns: 1.6rem 1fr auto; gap: .6rem; align-items: center;
+  width: 100%; text-align: left; background: var(--panel); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 3px; padding: .5rem .6rem;
+  font-family: var(--serif); font-size: .93rem; cursor: pointer; margin-bottom: .45rem;
+}
+.buy:hover:not(:disabled) { border-color: var(--brass); background: #1b2848; }
+.buy:disabled { opacity: .4; cursor: default; }
+.buy .pip { width: 1.05rem; height: 1.05rem; border-radius: 2px; }
+.buy .nm { line-height: 1.25; }
+.buy .nm small { display: block; font-family: var(--mono); font-size: .67rem; color: var(--ink-3); }
+.buy .pr { font-family: var(--mono); font-size: .8rem; color: var(--gold); text-align: right; white-space: nowrap; }
+.buy:disabled .pr { color: var(--ink-3); }
+
+.act {
+  display: block; width: 100%; font-family: var(--mono); font-size: .84rem;
+  background: var(--gold); color: #241a00; border: 0; border-radius: 3px;
+  padding: .7rem; cursor: pointer; font-weight: 500;
+}
+.act:disabled { background: var(--panel); color: var(--ink-3); cursor: default; }
+.act.ghost { background: transparent; color: var(--ink-2); border: 1px solid var(--line); }
+.act.ghost:hover { border-color: var(--brass); color: var(--ink); }
+
+.observe {
+  width: 100%; padding: 1.15rem; font-family: var(--mono); font-size: 1rem;
+  background: linear-gradient(#1d2a4a, #16203a); color: var(--gold);
+  border: 1px solid rgba(245,197,66,.28); border-radius: 4px; cursor: pointer;
+}
+.observe:active { background: #24345c; }
+.observe small { display: block; font-family: var(--mono); font-size: .68rem; color: var(--ink-3); margin-top: .2rem; }
+
+.log { font-family: var(--mono); font-size: .72rem; color: var(--ink-2);
+       max-height: 11rem; overflow-y: auto; }
+.log div { padding: .16rem 0; border-bottom: 1px solid rgba(180,200,240,.06); }
+.log .hi { color: var(--gold); }
+
+details { margin-top: 1rem; font-size: .9rem; color: var(--ink-2); }
+details summary { font-family: var(--mono); font-size: .76rem; color: var(--ink-3); cursor: pointer; }
+details p { margin: .7rem 0; max-width: 62ch; }
+details code { font-family: var(--mono); font-size: .84em; color: var(--gold); }
+
+.toast {
+  position: fixed; left: 50%; bottom: 1.6rem; transform: translateX(-50%);
+  background: var(--gold); color: #241a00; font-family: var(--mono); font-size: .82rem;
+  padding: .55rem 1rem; border-radius: 3px; z-index: 9; pointer-events: none;
+}
+.toast[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <div class="top">
+    <h1>Resolution</h1>
+    <span class="sub">a hanb model universe</span>
+    <span class="spacer"></span>
+    <span class="sub" id="depth-line">—</span>
+  </div>
+
+  <div class="layout">
+    <div>
+      <div class="card">
+        <div class="stage">
+          <div class="scalebar">
+            <span class="glyph" id="glyph">.</span>
+            <span>board <b id="board-size">10²⁷ m</b></span>
+            <span class="of">·</span>
+            <span>each cell <b id="cell-size">10²⁶ m</b></span>
+            <span class="of">·</span>
+            <span id="level-label">the cosmic web</span>
+          </div>
+          <svg id="board" role="img" aria-label="61-cell hanb board"></svg>
+          <div class="addr">address <b id="address">.</b></div>
+        </div>
+        <div class="stats">
+          <div class="stat"><span class="k">bits</span><span class="v gold" id="st-bits">0</span><span class="spend" id="spend"></span></div>
+          <div class="stat"><span class="k">per second</span><span class="v" id="st-rate">0</span></div>
+          <div class="stat"><span class="k">board</span><span class="v" id="st-fill">1 / 61</span></div>
+          <div class="stat"><span class="k">depth</span><span class="v" id="st-depth">0</span></div>
+        </div>
+      </div>
+
+      <details>
+        <summary>what this is, and what it assumes about hanb</summary>
+        <p>Every board is 61 hexagonal cells. A cell holds a region one order of magnitude
+        smaller than the board that contains it, so resolving a cell reveals a whole new
+        board — the recursion that makes hanb work. You spend <b>bits</b> to resolve objects
+        into cells; resolved objects produce more bits; fill all 61 and you may descend into
+        any one of them.</p>
+        <p>Scale characters follow the published anchors. Reading the 64-character alphabet
+        <code>a–z A–Z 0–9 - .</code> as indices 0–63, the exponent of a character's scale in
+        metres is <code>index − 36</code>. That reproduces all three anchors in the README
+        exactly: <code>A</code> = 10⁻¹⁰ m, <code>K</code> = 10⁰ m, <code>.</code> = 10²⁷ m.
+        The address string appends the index character of each cell you descend into, so it
+        lengthens as the object gets smaller.</p>
+        <p>Two things here are guesses rather than readings, and are easy to change. Boards
+        alternate between flat-top and pointy-top orientation with depth, which is how I read
+        "the rotations differ between levels". And cells fill outward in a spiral from the
+        centre, which the notation does not specify.</p>
+        <p>The economics are the ones worked out on the plates: prices within a kind rise by
+        1.15 each time, each additional cell on a board costs 6% more than the last, upgrades
+        multiply rather than add, and every scale is arithmetically identical to every other —
+        so a board always takes about the same time to fill, however large the numbers on it
+        have become. That last property is the whole point.</p>
+        <p>Built on <a href="https://github.com/handyc/hanb">hanb</a>. This file is
+        self-contained — copy it anywhere and it runs.</p>
+      </details>
+    </div>
+
+    <div>
+      <div class="card pad">
+        <button class="observe" id="observe">Observe
+          <small id="observe-yield">+1 bit</small></button>
+      </div>
+
+      <div class="card pad">
+        <h2 id="shop-title">resolve into a cell</h2>
+        <div id="shop"></div>
+      </div>
+
+      <div class="card pad">
+        <h2>refinements</h2>
+        <div id="upgrades"></div>
+      </div>
+
+      <div class="card pad">
+        <button class="act" id="descend" disabled>fill the board to descend</button>
+        <div style="height:.5rem"></div>
+        <button class="act ghost" id="reset">start over</button>
+      </div>
+
+      <div class="card pad">
+        <h2>log</h2>
+        <div class="log" id="log"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script>
+(function () {
+'use strict';
+
+/* ═══ hanb ════════════════════════════════════════════════════════════════ */
+
+var ALPHABET = (function () {
+  var s = '';
+  for (var c = 97; c <= 122; c++) s += String.fromCharCode(c);   // a–z
+  for (c = 65; c <= 90; c++) s += String.fromCharCode(c);        // A–Z
+  for (c = 48; c <= 57; c++) s += String.fromCharCode(c);        // 0–9
+  return s + '-.';                                               // 64 characters
+})();
+var ZERO_AT = 36;                       // index of 'K', which the README fixes at 10^0 m
+
+function glyphFor(exp) { return ALPHABET[exp + ZERO_AT] || '?'; }
+
+var SUPER = { '-': '⁻', '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
+              '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹' };
+function metres(exp) {
+  return '10' + String(exp).split('').map(function (d) { return SUPER[d]; }).join('') + ' m';
+}
+
+/* ═══ the catalogue ═══════════════════════════════════════════════════════
+   One entry per order of magnitude, largest first. `e` is the size of a CELL
+   on that board in metres, so the board itself is 10^(e+1).
+
+   Four kinds per level, ordered common → spectacular, plus one rare kind that
+   only ever turns up in a transient. This block is the whole content of the
+   game: add rows to make it deeper, edit names to make it about something else
+   entirely. Everything below this array is machinery.
+   ═════════════════════════════════════════════════════════════════════════ */
+
+var LEVELS = [
+  [26, 'the cosmic web', ['a void wall', 'the Sloan Great Wall', 'the KBC Void', 'the Hercules–Corona Borealis Great Wall'], 'a filament junction'],
+  [25, 'great walls and voids', ['a supercluster filament', 'the Boötes Void', 'the Huge-LQG', 'the South Pole Wall'], 'the CfA2 Great Wall'],
+  [24, 'supercluster complexes', ['a galaxy filament', 'the Shapley Supercluster', 'Laniakea', 'the Pisces–Cetus Complex'], 'the Great Attractor'],
+  [23, 'superclusters', ['a galaxy group', 'the Virgo Supercluster', 'the Coma Supercluster', 'the Hydra–Centaurus Supercluster'], 'a supervoid'],
+  [22, 'clusters of galaxies', ['a galaxy pair', 'the Local Group', 'the Fornax Cluster', 'the Coma Cluster'], 'a gravitational lens'],
+  [21, 'galaxies', ['a dwarf galaxy', 'the Triangulum Galaxy', 'the Milky Way', 'the Andromeda Galaxy'], 'IC 1101'],
+  [20, 'galactic structure', ['a star stream', 'the Small Magellanic Cloud', 'the Large Magellanic Cloud', 'the galactic bulge'], 'the Sagittarius Dwarf'],
+  [19, 'spiral arms', ['a star-forming region', 'the Orion Arm', 'the galactic bar', 'the Gould Belt'], 'a hypervelocity star'],
+  [18, 'stellar neighbourhoods', ['an open cluster', 'the Local Bubble', 'Omega Centauri', 'the Carina Nebula'], 'the Tarantula Nebula'],
+  [17, 'nebulae', ['a dark cloud', 'the Pleiades', 'the Orion Nebula', 'the Eagle Nebula'], 'the Crab Nebula'],
+  [16, 'star systems', ['a comet cloud', 'the Oort Cloud', 'the Pillars of Creation', 'the Alpha Centauri system'], 'the Helix Nebula'],
+  [15, 'birthplaces', ['a molecular cloud core', 'the Hills Cloud', 'a protostellar envelope', 'a Bok globule'], 'a Herbig–Haro jet'],
+  [14, 'the outer reaches', ['a scattered-disc object', "Sedna's orbit", 'a nova shell', "a hypergiant's wind shell"], 'a rogue planet'],
+  [13, 'planetary orbits', ['the Kuiper Belt', "Neptune's orbit", "Pluto's orbit", 'the heliopause'], 'an interstellar comet'],
+  [12, 'the largest stars', ["Saturn's orbit", "Jupiter's orbit", 'UY Scuti', 'VY Canis Majoris'], 'a red supergiant'],
+  [11, 'inner orbits', ["Mercury's orbit", "Earth's orbit", 'the asteroid belt', 'Rigel'], 'a coronal mass ejection'],
+  [10, 'giant stars', ['a stellar corona', 'Arcturus', 'Pollux', 'Aldebaran'], 'a flare loop'],
+  [9, 'stars', ['a red dwarf', 'the Sun', 'Procyon A', 'Sirius A'], 'a solar prominence'],
+  [8, 'gas giants', ['a brown dwarf', 'Proxima Centauri', 'Saturn', 'Jupiter'], 'the Great Red Spot'],
+  [7, 'planets', ['Venus', 'Earth', 'Neptune', 'Uranus'], 'a planetary aurora'],
+  [6, 'moons and dwarf planets', ['Pluto', 'the Moon', 'Titan', 'Mars'], "Europa's ice shell"],
+  [5, 'small worlds', ['Enceladus', 'Vesta', 'Ceres', 'a hurricane'], 'a shepherd moonlet'],
+  [4, 'landscapes', ['a thunderstorm cell', 'a city', 'Mount Everest', 'Phobos'], 'a caldera'],
+  [3, 'built things', ['a village', 'a container ship', 'the Burj Khalifa', 'a meteor crater'], 'a glacier tongue'],
+  [2, 'large objects', ['a football pitch', 'a city block', 'a redwood', 'the Statue of Liberty'], 'a lightning bolt'],
+  [1, 'rooms and animals', ['a bus', 'a house', 'an oak tree', 'a blue whale'], 'a giant squid'],
+  [0, 'human scale', ['a bicycle', 'a person', 'a door', 'a horse'], 'an ostrich egg'],
+  [-1, 'things in the hand', ['a book', 'a duck', 'a cat', 'a human hand'], 'a hummingbird'],
+  [-2, 'small creatures', ['a coin', 'a bee', 'a mouse', 'a mushroom'], "a hummingbird's egg"],
+  [-3, 'grains and insects', ['a grain of sand', 'a mosquito', 'an ant', 'a snowflake'], 'a tardigrade'],
+  [-4, 'the edge of sight', ['a sheet of paper', 'a dust mite', 'a human egg cell', 'a water flea'], 'a diatom'],
+  [-5, 'the largest cells', ['a human hair', 'a pollen grain', 'a plant cell', "a neuron's cell body"], 'a paramecium'],
+  [-6, 'cells', ['a bacterium', 'a mitochondrion', 'a red blood cell', 'a yeast cell'], 'a chloroplast'],
+  [-7, 'viruses', ['a mycoplasma', 'an influenza virus', 'a bacteriophage', 'a synaptic vesicle'], 'a giant mimivirus'],
+  [-8, 'the machinery of the cell', ['a cell membrane', 'a ribosome', 'an antibody', 'a nuclear pore'], 'a microtubule'],
+  [-9, 'molecules', ['a glucose molecule', 'a DNA double helix', 'a haemoglobin molecule', 'a buckyball'], 'a chlorophyll molecule']
+];
+
+/* ═══ economy ═════════════════════════════════════════════════════════════
+   Tuned on the plates. Base cost and base output are both multiplied by
+   10^depth, so every level is arithmetically the same level — only the
+   numbers, and the subject matter, change.
+   ═════════════════════════════════════════════════════════════════════════ */
+
+var KIND_COST = [20, 180, 1600, 14000];
+var KIND_RATE = [3, 22, 150, 1060];
+var PRICE_STEP = 1.15;      // each further copy of a kind
+var CELL_TAX   = 1.06;      // each further cell on the board
+var UPGRADES   = [1800, 24000, 360000];
+var UPGRADE_X  = 2;
+var CELLS      = 61;
+var TRANSIENT_CHANCE = 1 / 45;   // per second
+var TRANSIENT_LIFE   = 9;        // seconds on screen
+var TRANSIENT_PAYS   = 30;       // seconds of output
+var OFFLINE_CAP      = 4 * 3600;
+var SAVE_KEY = 'hanb-resolution-v1';
+
+/* ═══ state ═══════════════════════════════════════════════════════════════ */
+
+var S;
+function fresh() {
+  return {
+    depth: 0, bits: 0, lifetime: 0,
+    owned: [1, 0, 0, 0],          // one free object: the board is never empty
+    cells: [0],                   // kind index in each filled cell, spiral order
+    ups: 0, address: '', started: Date.now(), saved: Date.now(),
+    transient: null               // { cell, until }
+  };
+}
+function level() { return LEVELS[Math.min(S.depth, LEVELS.length - 1)]; }
+function scaleMul() { return Math.pow(10, S.depth); }
+function upgradeMul() { return Math.pow(UPGRADE_X, S.ups); }
+function rate() {
+  var r = 0;
+  for (var i = 0; i < 4; i++) r += S.owned[i] * KIND_RATE[i];
+  return r * scaleMul() * upgradeMul();
+}
+function clickYield() { return scaleMul() * upgradeMul(); }
+function kindCost(i) {
+  return KIND_COST[i] * Math.pow(PRICE_STEP, S.owned[i]) *
+         Math.pow(CELL_TAX, S.cells.length) * scaleMul();
+}
+function upgradeCost() {
+  return S.ups < UPGRADES.length ? UPGRADES[S.ups] * scaleMul() : Infinity;
+}
+function boardFull() { return S.cells.length >= CELLS; }
+
+/* ═══ number formatting ═══════════════════════════════════════════════════ */
+
+var SUFF = ['', 'k', 'M', 'B', 'T', 'Qa', 'Qi', 'Sx', 'Sp', 'Oc', 'No', 'Dc',
+            'Ud', 'Dd', 'Td', 'Qad', 'Qid', 'Sxd', 'Spd', 'Ocd', 'Nod', 'Vg'];
+/* `mode` is 'up' for prices and 'down' for money held, so that whenever the screen
+   shows bits >= price the purchase is genuinely affordable. Rounding a price down
+   was itself a way to make a button look wrong. */
+function num(n, mode) {
+  if (!isFinite(n)) return '∞';
+  if (n < 0) return '−' + num(-n, mode);
+  var adj = mode === 'up' ? Math.ceil : mode === 'down' ? Math.floor : Math.round;
+  if (n < 1000) {
+    if (n < 10) return String(adj(n * 10) / 10);
+    return String(adj(n));
+  }
+  var t = Math.floor(Math.log10(n) / 3);
+  if (t >= SUFF.length) return n.toExponential(2).replace('e+', '×10^');
+  var v = adj(n / Math.pow(1000, t) * 100) / 100;
+  if (v >= 1000) { t += 1; v = adj(n / Math.pow(1000, t) * 100) / 100; }
+  if (t >= SUFF.length) return n.toExponential(2).replace('e+', '×10^');
+  return v.toFixed(2) + ' ' + SUFF[t];
+}
+
+/* ═══ hex geometry ════════════════════════════════════════════════════════ */
+
+var DIRS = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]];
+var SPIRAL = (function (radius) {
+  var out = [[0, 0]], q, r, k, d, i;
+  for (k = 1; k <= radius; k++) {
+    q = DIRS[4][0] * k; r = DIRS[4][1] * k;
+    for (d = 0; d < 6; d++) {
+      for (i = 0; i < k; i++) {
+        out.push([q, r]);
+        q += DIRS[d][0]; r += DIRS[d][1];
+      }
+    }
+  }
+  return out;                       // 1 + 6(1+2+3+4) = 61
+})(4);
+
+function centre(q, r, size, pointy) {
+  return pointy
+    ? [size * Math.sqrt(3) * (q + r / 2), size * 1.5 * r]
+    : [size * 1.5 * q, size * Math.sqrt(3) * (r + q / 2)];
+}
+function corners(cx, cy, size, pointy) {
+  var pts = [];
+  for (var i = 0; i < 6; i++) {
+    var a = Math.PI / 180 * (60 * i - (pointy ? 30 : 0));
+    pts.push((cx + size * 0.93 * Math.cos(a)).toFixed(2) + ',' +
+             (cy + size * 0.93 * Math.sin(a)).toFixed(2));
+  }
+  return pts.join(' ');
+}
+
+/* ═══ rendering ═══════════════════════════════════════════════════════════ */
+
+var $ = function (s) { return document.querySelector(s); };
+var boardEl = $('#board'), picking = false;
+
+/* The DOM is built once per level and updated in place afterwards.
+   Rebuilding it on every tick used to destroy each button between a click's
+   mousedown and its mouseup, which silently swallowed the purchase. */
+var cellNodes = [], builtFor = null;
+
+function buildBoard() {
+  var pointy = S.depth % 2 === 1;      // orientation flips with every descent
+  var size = 34, pts = [], minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+  SPIRAL.forEach(function (h) {
+    var c = centre(h[0], h[1], size, pointy);
+    pts.push(c);
+    minX = Math.min(minX, c[0]); maxX = Math.max(maxX, c[0]);
+    minY = Math.min(minY, c[1]); maxY = Math.max(maxY, c[1]);
+  });
+  var pad = size * 1.15;
+  boardEl.setAttribute('viewBox',
+    (minX - pad) + ' ' + (minY - pad) + ' ' +
+    (maxX - minX + pad * 2) + ' ' + (maxY - minY + pad * 2));
+
+  var html = '';
+  for (var i = 0; i < CELLS; i++) {
+    var c = pts[i];
+    html += '<g class="cell" data-i="' + i + '">' +
+      '<polygon class="hex" points="' + corners(c[0], c[1], size, pointy) + '"><title></title></polygon>' +
+      '<circle class="spark" cx="' + c[0].toFixed(2) + '" cy="' + c[1].toFixed(2) +
+      '" r="' + (size * 0.30).toFixed(2) + '"/></g>';
+  }
+  boardEl.innerHTML = html;
+  cellNodes = [].slice.call(boardEl.querySelectorAll('.cell'));
+  builtFor = S.depth;
+}
+
+function refreshBoard(landed) {
+  var names = level()[2];
+  for (var i = 0; i < CELLS; i++) {
+    var g = cellNodes[i];
+    if (!g) continue;
+    var kind = i < S.cells.length ? S.cells[i] : -1;
+    var isT = !!(S.transient && S.transient.cell === i);
+    var cls = 'cell' + (kind >= 0 ? ' filled' : '') + (isT ? ' transient' : '');
+    if (i === landed) cls += ' land';
+    if (g.getAttribute('class') !== cls) g.setAttribute('class', cls);
+    var poly = g.firstChild;
+    poly.style.fill = kind >= 0 ? 'var(--tier' + (kind + 1) + ')' : '';
+    var label = isT ? 'something transient — click it' : kind >= 0 ? names[kind] : 'unresolved';
+    if (poly.firstChild.textContent !== label) poly.firstChild.textContent = label;
+  }
+  if (landed != null) {
+    var g2 = cellNodes[landed];
+    setTimeout(function () {
+      if (g2 && /\bland\b/.test(g2.getAttribute('class') || '')) {
+        g2.setAttribute('class', g2.getAttribute('class').replace(' land', ''));
+      }
+    }, 520);
+  }
+}
+
+function buildShop() {
+  var names = level()[2], shop = '';
+  for (var i = 0; i < 4; i++) {
+    shop += '<button class="buy" data-kind="' + i + '">' +
+      '<span class="pip" style="background:var(--tier' + (i + 1) + ')"></span>' +
+      '<span class="nm">' + names[i] + '<small data-sub></small></span>' +
+      '<span class="pr" data-price></span></button>';
+  }
+  $('#shop').innerHTML = shop;
+  $('#upgrades').innerHTML =
+    '<button class="buy" data-up="1">' +
+      '<span class="pip" style="background:var(--blue)"></span>' +
+      '<span class="nm">sharpen the instrument<small data-sub></small></span>' +
+      '<span class="pr" data-price></span></button>' +
+    '<p data-done style="display:none;font-family:var(--mono);font-size:.72rem;color:var(--ink-3);margin:0"></p>';
+}
+
+function setText(el, sel, text) {
+  var t = el.querySelector(sel);
+  if (t && t.textContent !== text) t.textContent = text;
+}
+
+function refreshShop() {
+  var full = boardFull(), sm = scaleMul() * upgradeMul();
+  var btns = $('#shop').querySelectorAll('.buy');
+  for (var i = 0; i < btns.length; i++) {
+    var cost = kindCost(i), can = S.bits >= cost && !full;
+    setText(btns[i], '[data-price]', num(cost, 'up'));
+    setText(btns[i], '[data-sub]', num(KIND_RATE[i] * sm) + '/s · ' + S.owned[i] + ' resolved');
+    btns[i].disabled = !can;
+  }
+  $('#shop-title').textContent = full ? 'the board is full' : 'resolve into a cell';
+
+  var ub = $('#upgrades').querySelector('.buy'), done = $('#upgrades').querySelector('[data-done]');
+  if (S.ups < UPGRADES.length) {
+    var uc = upgradeCost();
+    ub.style.display = ''; done.style.display = 'none';
+    setText(ub, '[data-price]', num(uc, 'up'));
+    setText(ub, '[data-sub]', '×2 to everything · ' + S.ups + ' of ' + UPGRADES.length);
+    ub.disabled = S.bits < uc;
+  } else {
+    ub.style.display = 'none'; done.style.display = '';
+    done.textContent = 'fully sharpened at this scale (×' + upgradeMul() + ')';
+  }
+}
+
+function paint() {
+  if (builtFor !== S.depth) { buildBoard(); buildShop(); refreshBoard(); }
+  var L = level();
+  $('#glyph').textContent = glyphFor(L[0] + 1);
+  $('#board-size').textContent = metres(L[0] + 1);
+  $('#cell-size').textContent = metres(L[0]);
+  $('#level-label').textContent = L[1];
+  $('#address').textContent = '.' + S.address;
+  $('#depth-line').textContent = 'depth ' + S.depth + ' of ' + (LEVELS.length - 1) +
+    ' · lifetime ' + num(S.lifetime) + ' bits';
+
+  $('#st-bits').textContent = num(S.bits, 'down');
+  $('#st-rate').textContent = num(rate()) + '/s';
+  $('#st-fill').textContent = S.cells.length + ' / ' + CELLS;
+  $('#st-depth').textContent = S.depth;
+  var y = clickYield();
+  $('#observe-yield').textContent = '+' + num(y) + (y === 1 ? ' bit' : ' bits');
+
+  refreshShop();
+
+  var d = $('#descend');
+  if (S.depth >= LEVELS.length - 1) {
+    d.disabled = true; d.textContent = 'the catalogue ends here';
+  } else if (picking) {
+    d.disabled = false; d.textContent = 'pick a cell on the board';
+  } else if (boardFull()) {
+    d.disabled = false; d.textContent = 'descend into a cell →';
+  } else {
+    d.disabled = true; d.textContent = 'fill the board to descend';
+  }
+}
+
+/* short-lived confirmation that a purchase landed */
+var spendTimer, flashTimer;
+function confirmSpend(cost, button) {
+  var el = $('#spend');
+  el.textContent = '−' + num(cost, 'up');
+  el.classList.add('show');
+  clearTimeout(spendTimer);
+  spendTimer = setTimeout(function () { el.classList.remove('show'); }, 900);
+
+  var stat = $('#st-fill').parentNode;
+  stat.classList.remove('flash');
+  void stat.offsetWidth;                       // restart the animation
+  stat.classList.add('flash');
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(function () { stat.classList.remove('flash'); }, 520);
+
+  if (button) {
+    button.classList.add('bought');
+    setTimeout(function () { button.classList.remove('bought'); }, 220);
+  }
+}
+
+var logLines = [];
+function log(text, hi) {
+  logLines.unshift('<div' + (hi ? ' class="hi"' : '') + '>' + text + '</div>');
+  if (logLines.length > 60) logLines.pop();
+  $('#log').innerHTML = logLines.join('');
+}
+
+var toastTimer;
+function toast(text) {
+  var t = $('#toast');
+  t.textContent = text; t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { t.hidden = true; }, 2600);
+}
+
+/* ═══ actions ═════════════════════════════════════════════════════════════ */
+
+function observe() {
+  S.bits += clickYield(); S.lifetime += clickYield();
+  paint();
+}
+
+function place(kind, button) {
+  var cost = kindCost(kind);
+  if (S.bits < cost || boardFull()) return false;
+  S.bits -= cost;
+  S.owned[kind] += 1;
+  S.cells.push(kind);
+  if (S.owned[kind] === 1) log('first ' + level()[2][kind] + ' resolved');
+  if (boardFull()) {
+    log('board complete at ' + metres(level()[0] + 1) + ' — you may descend', true);
+    toast('board complete');
+  }
+  refreshBoard(S.cells.length - 1);
+  confirmSpend(cost, button);
+  paint();
+  return true;
+}
+
+function buyUpgrade() {
+  var c = upgradeCost();
+  if (S.bits < c) return;
+  S.bits -= c; S.ups += 1;
+  log('instrument sharpened — ×' + upgradeMul() + ' at this scale');
+  confirmSpend(c, $('#upgrades').querySelector('.buy'));
+  toast('×' + upgradeMul() + ' at this scale');
+  paint();
+}
+
+function descend(cellIndex) {
+  var into = level()[2][S.cells[cellIndex]];
+  S.address += ALPHABET[cellIndex];
+  S.depth += 1;
+  S.bits = 0; S.owned = [1, 0, 0, 0]; S.cells = [0]; S.ups = 0; S.transient = null;
+  picking = false;
+  document.body.classList.remove('picking');
+  var L = level();
+  log('descended into ' + into + ' — now at ' + metres(L[0] + 1) + ', ' + L[1], true);
+  toast('scale ' + glyphFor(L[0] + 1) + ' · ' + L[1]);
+  buildBoard(); buildShop(); refreshBoard(); paint(); save();
+}
+
+function tick(dt) {
+  var gained = rate() * dt;
+  S.bits += gained; S.lifetime += gained;
+
+  if (S.transient) {
+    if (Date.now() > S.transient.until) {
+      S.transient = null;
+      log('a transient came and went unobserved');
+      refreshBoard();
+    }
+  } else if (S.cells.length > 3 && Math.random() < TRANSIENT_CHANCE * dt) {
+    S.transient = { cell: Math.floor(Math.random() * S.cells.length),
+                    until: Date.now() + TRANSIENT_LIFE * 1000 };
+    refreshBoard();
+  }
+  paint();
+}
+
+function catchTransient() {
+  var pay = rate() * TRANSIENT_PAYS;
+  if (pay <= 0) pay = clickYield() * 30;
+  S.bits += pay; S.lifetime += pay;
+  log('transient: ' + level()[3] + ' — +' + num(pay) + ' bits', true);
+  toast(level()[3]);
+  S.transient = null;
+  refreshBoard(); paint();
+}
+
+/* ═══ persistence ═════════════════════════════════════════════════════════ */
+
+function save() {
+  S.saved = Date.now();
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(S)); } catch (e) { /* private mode */ }
+}
+function load() {
+  try {
+    var raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return null;
+    var s = JSON.parse(raw);
+    if (typeof s.depth !== 'number' || !Array.isArray(s.cells)) return null;
+    s.transient = null;
+    return s;
+  } catch (e) { return null; }
+}
+
+/* ═══ wiring ══════════════════════════════════════════════════════════════ */
+
+$('#observe').addEventListener('click', observe);
+
+$('#shop').addEventListener('click', function (e) {
+  var b = e.target.closest('[data-kind]');
+  if (b) place(+b.getAttribute('data-kind'), b);
+});
+$('#upgrades').addEventListener('click', function (e) {
+  if (e.target.closest('[data-up]')) buyUpgrade();
+});
+
+$('#descend').addEventListener('click', function () {
+  if (!boardFull() || S.depth >= LEVELS.length - 1) return;
+  picking = !picking;
+  document.body.classList.toggle('picking', picking);
+  paint();
+});
+
+boardEl.addEventListener('click', function (e) {
+  var g = e.target.closest('.cell');
+  if (!g) return;
+  var i = +g.getAttribute('data-i');
+  if (S.transient && S.transient.cell === i) { catchTransient(); return; }
+  if (picking && i < S.cells.length) { descend(i); return; }
+  if (!picking) observe();        // the board itself is the click target
+});
+
+$('#reset').addEventListener('click', function () {
+  if (!confirm('Start over from the observable universe? This clears your saved run.')) return;
+  S = fresh(); logLines = [];
+  log('a new simulation at ' + metres(LEVELS[0][0] + 1));
+  buildBoard(); buildShop(); refreshBoard(); paint(); save();
+});
+
+/* ═══ boot ════════════════════════════════════════════════════════════════ */
+
+S = load() || fresh();
+if (S.saved) {
+  var away = Math.min(OFFLINE_CAP, (Date.now() - S.saved) / 1000);
+  if (away > 60) {
+    var got = rate() * away;
+    S.bits += got; S.lifetime += got;
+    log('away ' + Math.round(away / 60) + ' min — the simulation ran on, +' + num(got) + ' bits');
+  }
+}
+log('board at ' + metres(level()[0] + 1) + ' · ' + level()[1]);
+buildBoard(); buildShop(); refreshBoard(); paint();
+
+var last = Date.now();
+setInterval(function () {
+  var now = Date.now(), dt = Math.min(2, (now - last) / 1000);
+  last = now;
+  tick(dt);
+}, 100);
+setInterval(save, 10000);
+window.addEventListener('beforeunload', save);
+
+})();
+</script>
+</body>
+</html>
