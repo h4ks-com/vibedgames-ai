@@ -384,9 +384,11 @@
         const S3_API = 'https://s3-api.t3ks.com/suno/';
         const KEY_PAGE_SIZE = 1000;
         const JSON_BATCH_SIZE = 18;
+        const FETCH_CONCURRENCY = 24;
         const audioPlayer = document.getElementById('audio-player');
         let tracks = [];
         let allKeys = [];
+        let allTracks = [];
         let nextKeyIndex = 0;
         let currentTrackIndex = -1;
         let isPlaying = false;
@@ -469,6 +471,7 @@
         async function loadTracks() {
             try {
                 await loadAllKeys();
+                await loadAllTracks();
                 await loadMoreTracks(true);
                 loadingEl.style.display = 'none';
                 playerContentEl.style.display = 'grid';
@@ -496,15 +499,33 @@
                     if (!key.endsWith('.json')) return;
                     collected.push({
                         key,
-                        id: key.replace(/^songs\//, '').replace(/\.json$/, ''),
-                        lastModified: getText(item, 'LastModified')
+                        id: key.replace(/^songs\//, '').replace(/\.json$/, '')
                     });
                 });
                 const next = xmlDoc.getElementsByTagName('NextContinuationToken')[0];
                 token = next ? next.textContent : null;
             } while (token);
-            collected.sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified));
             allKeys = collected;
+        }
+
+        function trackTime(track) {
+            const stamp = track.created_at || track.suno_created_at;
+            const ms = stamp ? Date.parse(stamp) : NaN;
+            return Number.isNaN(ms) ? 0 : ms;
+        }
+
+        // Order comes from each sidecar's own created_at. The object's LastModified
+        // only says when the bucket was last written, so any bulk rewrite of the
+        // sidecars would otherwise scramble the running order.
+        async function loadAllTracks() {
+            const loaded = [];
+            for (let i = 0; i < allKeys.length; i += FETCH_CONCURRENCY) {
+                const slice = allKeys.slice(i, i + FETCH_CONCURRENCY);
+                const batch = await Promise.all(slice.map(entry => fetchTrackFromKey(entry.key)));
+                batch.filter(Boolean).forEach(track => loaded.push(track));
+            }
+            loaded.sort((a, b) => trackTime(b) - trackTime(a));
+            allTracks = loaded;
         }
 
         async function loadMoreTracks(isInitial) {
@@ -512,11 +533,10 @@
             loadingPage = true;
             listLoaderEl.classList.toggle('show', !isInitial);
             try {
-                const batch = allKeys.slice(nextKeyIndex, nextKeyIndex + JSON_BATCH_SIZE);
+                const batch = allTracks.slice(nextKeyIndex, nextKeyIndex + JSON_BATCH_SIZE);
                 nextKeyIndex += batch.length;
-                reachedEnd = nextKeyIndex >= allKeys.length;
-                const loaded = await Promise.all(batch.map(entry => fetchTrackFromKey(entry.key)));
-                loaded.filter(Boolean).forEach(track => tracks.push(track));
+                reachedEnd = nextKeyIndex >= allTracks.length;
+                batch.forEach(track => tracks.push(track));
                 renderTrackList();
             } finally {
                 loadingPage = false;
@@ -535,7 +555,7 @@
                     ...td,
                     id,
                     path: key,
-                    audioPath: key.replace(/\.json$/, '.mp3'),
+                    audioPath: key.replace(/\.json$/, '.m4a'),
                     _displayTitle: getDisplayTitle(td)
                 };
             } catch(e) {
