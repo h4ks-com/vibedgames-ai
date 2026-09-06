@@ -1,0 +1,3037 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>hanb — a world of nested boards</title>
+<style>
+/* ------------------------------------------------------------------ *
+ * hanb.  A port of dwarfhouse's --hanb mode to one HTML file.
+ * No web fonts, no CDN, no network: everything the page needs is here.
+ * ------------------------------------------------------------------ */
+:root{
+  --bg:#100f0e; --panel:#171512; --panel2:#1d1a16;
+  --line:#2e2a25; --line-lit:#4a443c;
+  --text:#d9d2c7; --dim:#8c847a; --faint:#5e574f;
+  --head:#ffd7af; --key:#ffaf5f; --good:#5fd787; --bad:#ff6b6b; --warn:#ffd75f;
+  --tan:#d7af87; --amber:#ffaf5f;
+  --mono: ui-monospace, "DejaVu Sans Mono", "Liberation Mono", Menlo, Consolas, monospace;
+  --u: 34px;          /* one hex-spacing unit, set by script */
+  --radius:3px;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font-family:var(--mono); font-size:15px; line-height:1.45;
+  -webkit-text-size-adjust:100%; overflow:hidden;
+}
+[hidden]{display:none!important}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+h1,h2,h3{font-weight:600;margin:0}
+.sc{ text-transform:uppercase; letter-spacing:.14em; font-size:.72rem; color:var(--dim) }
+
+/* ---------- screens ---------- */
+.screen{position:absolute;inset:0;display:flex;flex-direction:column}
+
+/* ---------- setup ---------- */
+#setup{overflow:auto;align-items:center;justify-content:flex-start;padding:clamp(16px,4vh,56px) 16px}
+.setup-inner{width:100%;max-width:680px}
+#setup h1{font-size:2.6rem;letter-spacing:.3em;color:var(--head);text-indent:.3em}
+#setup .tag{color:var(--dim);margin:.2em 0 1.6em;font-size:.9rem}
+.field{display:grid;grid-template-columns:7.5em 1fr;gap:10px;align-items:center;
+  padding:7px 10px;border:1px solid transparent;border-radius:var(--radius)}
+.field.sel{border-color:var(--line-lit);background:var(--panel)}
+.field .lab{color:var(--dim)}
+.field.sel .lab{color:var(--head)}
+.field .val{display:flex;align-items:center;gap:8px}
+.field .val .v{flex:1;padding:2px 8px;background:var(--panel2);border:1px solid var(--line);
+  border-radius:var(--radius);color:var(--text);min-height:1.9em;display:flex;align-items:center}
+.field.sel .val .v{border-color:var(--line-lit);color:var(--head)}
+.field input{all:unset;flex:1;padding:2px 8px;background:var(--panel2);
+  border:1px solid var(--line-lit);border-radius:var(--radius);color:var(--head);min-height:1.9em}
+.arrow{padding:0 8px;color:var(--faint);border:1px solid transparent;border-radius:var(--radius)}
+.arrow:hover{color:var(--key);border-color:var(--line)}
+.setout{margin-top:18px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.btn{padding:8px 20px;border:1px solid var(--line-lit);border-radius:var(--radius);
+  color:var(--head);background:var(--panel)}
+.btn:hover{border-color:var(--key);color:var(--key)}
+.btn.primary{border-color:var(--good);color:var(--good)}
+.btn.primary:hover{background:rgba(95,215,135,.1)}
+.help{color:var(--faint);font-size:.85rem;margin-top:10px;min-height:1.4em}
+.blurb{margin-top:2em;color:var(--faint);font-size:.85rem;white-space:pre-wrap;
+  border-top:1px solid var(--line);padding-top:1.2em}
+.blurb b{color:var(--dim);font-weight:600}
+
+/* ---------- game frame ---------- */
+#game{display:grid;grid-template-rows:auto minmax(0,1fr) auto auto auto auto;gap:0}
+#topbar{display:flex;justify-content:space-between;gap:12px;padding:5px 12px;
+  background:var(--tan);color:#1a1611;font-weight:600;font-size:.85rem;letter-spacing:.04em}
+#topbar .right{opacity:.8;font-weight:400}
+main{display:grid;grid-template-columns:minmax(0,1fr) 21em;min-height:0}
+#boardwrap{position:relative;min-height:0;display:flex;align-items:center;justify-content:center;padding:8px}
+#board{position:relative}
+aside#panel{border-left:1px solid var(--line);padding:10px 12px;overflow:auto;background:var(--panel)}
+
+/* ---------- the board ---------- */
+.cell{position:absolute;display:flex;align-items:center;justify-content:center;
+  width:var(--u);height:calc(var(--u)*1.1547);
+  clip-path:polygon(50% 0,100% 25%,100% 75%,50% 100%,0 75%,0 25%);
+  font-size:calc(var(--u)*.56);line-height:1;user-select:none;cursor:pointer;
+  transition:filter .08s}
+.cell:hover{filter:brightness(1.35)}
+.cell.here{font-weight:700}
+.cell.hostile{font-weight:700;text-shadow:0 0 6px currentColor}
+.cell.here{background:#f2e4cf!important;color:#141210!important}
+#boardnote{position:absolute;left:10px;bottom:6px;color:var(--faint);font-size:.72rem;
+  letter-spacing:.1em;text-transform:uppercase;pointer-events:none}
+
+/* ---------- side panel ---------- */
+#panel h2{font-size:1rem;color:var(--head)}
+#panel .terr{margin-bottom:.6em}
+#panel .grp{margin-top:1em;border-top:1px solid var(--line);padding-top:.7em}
+#panel .row{display:flex;justify-content:space-between;gap:8px;font-size:.85rem;color:var(--dim)}
+#panel .row b{color:var(--text);font-weight:400}
+.hpbar{height:8px;border:1px solid var(--line-lit);border-radius:2px;overflow:hidden;
+  background:var(--panel2);margin:.35em 0}
+.hpbar i{display:block;height:100%;background:var(--good)}
+.beings li{list-style:none;display:flex;gap:8px;align-items:baseline;font-size:.85rem}
+.beings{margin:.3em 0 0;padding:0}
+.site{color:var(--amber)}
+
+/* ---------- ladder ---------- */
+#ladder{border-top:1px solid var(--line);background:var(--panel);padding:2px 0}
+.rung{display:grid;grid-template-columns:1.6em 2.2em 6.5em 5em 2em 1fr;gap:6px;
+  align-items:center;padding:1px 12px;font-size:.82rem;color:var(--dim);cursor:pointer;
+  border-left:2px solid transparent}
+.rung:hover{background:var(--panel2)}
+.rung.on{color:var(--head);border-left-color:var(--key);background:var(--panel2)}
+.rung .lv{color:var(--text);font-weight:600}
+.rung.on .lv{color:var(--key)}
+.rung .sz,.rung .ti{color:var(--faint)}
+.rung .ch{color:var(--key);text-align:center}
+.rung .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ---------- log + status ---------- */
+#log{border-top:1px solid var(--line);padding:5px 12px;height:5.1em;overflow:auto;
+  font-size:.85rem;display:flex;flex-direction:column;justify-content:flex-end}
+#log p{margin:0;color:var(--faint)}
+#log p:last-child{color:var(--text)}
+#statusbar{display:flex;gap:18px;flex-wrap:wrap;padding:4px 12px;border-top:1px solid var(--line);
+  color:var(--faint);font-size:.78rem;background:var(--panel)}
+#statusbar b{color:var(--key);font-weight:400}
+
+/* ---------- controls ---------- */
+#pad{display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:6px 12px 8px;
+  border-top:1px solid var(--line)}
+#pad .dirs{display:grid;grid-template-columns:repeat(3,2.1em);grid-template-rows:repeat(2,1.9em);gap:3px}
+#pad button{border:1px solid var(--line);border-radius:var(--radius);color:var(--dim);
+  padding:2px 8px;font-size:.8rem}
+#pad button:hover{border-color:var(--key);color:var(--key)}
+#pad .dirs button{padding:0;color:var(--text)}
+#pad .sep{width:1px;align-self:stretch;background:var(--line);margin:0 4px}
+#pad kbd{color:var(--faint);font-size:.72rem}
+
+/* ---------- dialogs ---------- */
+#modal{position:absolute;inset:0;background:rgba(8,7,6,.72);display:flex;
+  align-items:center;justify-content:center;padding:16px;z-index:10}
+.dialog{background:var(--panel);border:1px solid var(--line-lit);border-radius:var(--radius);
+  max-width:min(760px,100%);max-height:100%;display:flex;flex-direction:column;
+  box-shadow:0 18px 48px rgba(0,0,0,.6)}
+.dialog>h2{padding:8px 14px;border-bottom:1px solid var(--line);color:var(--head);font-size:.95rem;
+  letter-spacing:.08em;text-transform:uppercase}
+.dialog .body{padding:12px 16px;overflow:auto;white-space:pre-wrap;font-size:.88rem}
+.dialog .body .h{color:var(--head)}
+.dialog .body .d{color:var(--dim)}
+.dialog .body .k{color:var(--key)}
+.dialog .body .b{color:var(--bad)}
+.dialog .body .g{color:var(--good)}
+.dialog .body .a{color:var(--amber)}
+.dialog .body pre{margin:.6em 0;color:var(--tan);font-size:.85rem;line-height:1.25;overflow:auto}
+.dialog footer{padding:7px 14px;border-top:1px solid var(--line);color:var(--faint);font-size:.78rem;
+  display:flex;justify-content:space-between;gap:12px}
+.talk{display:grid;grid-template-columns:11em 1fr;min-height:0}
+.talk .topics{border-right:1px solid var(--line);padding:8px 0;overflow:auto}
+.talk .topics button{display:block;width:100%;text-align:left;padding:4px 14px;color:var(--dim)}
+.talk .topics button.on{background:var(--head);color:#141210}
+.talk .topics button:hover:not(.on){color:var(--key)}
+.talk .said{padding:10px 16px;overflow:auto}
+.talk .said p{margin:0 0 .55em;color:var(--text)}
+.goto input{all:unset;display:block;width:100%;margin:.5em 0;padding:6px 10px;background:var(--panel2);
+  border:1px solid var(--line-lit);border-radius:var(--radius);color:var(--key);
+  letter-spacing:.35em;font-size:1.2rem}
+.err{color:var(--bad);min-height:1.3em;font-size:.82rem}
+.dead{color:var(--bad);text-align:center;font-size:1.1rem;padding:.4em}
+
+/* ---------- narrow screens ---------- */
+@media (max-width:900px){
+  body{font-size:14px}
+  main{grid-template-columns:1fr;grid-template-rows:minmax(0,1fr) auto}
+  aside#panel{border-left:none;border-top:1px solid var(--line);max-height:12em}
+  .rung{grid-template-columns:1.4em 2em 0 4.5em 1.8em 1fr}
+  .rung .ti{display:none}
+}
+</style>
+</head>
+<body>
+
+<div id="setup" class="screen">
+ <div class="setup-inner">
+  <h1>hanb</h1>
+  <p class="tag">seven nested boards of sixty-one hexagonal cells &mdash; R region, Q kingdom,
+     P province, O borough, N district, M hamlet, L lot. You are a K.</p>
+  <div id="fields"></div>
+  <div class="setout">
+    <button class="btn primary" id="go">Set out</button>
+    <button class="btn" id="reroll">New name</button>
+  </div>
+  <p class="help" id="worldname"></p>
+  <p class="help" id="setuphelp"></p>
+  <p class="blurb"><b>Nothing is generated until it is looked at.</b>  A board is a pure function of
+the world seed and the path taken to reach it, so leaving somewhere and
+coming back finds it unchanged.  A child board's sixty-one cells are an
+interpolation of the parent cell and its six neighbours plus noise, so a
+mountain on the Q board is still a mountain six levels below.
+
+Your address is seven hanb characters, one per level: <b>5CYu7Ic</b> names a
+single square metre of the world.  Say it to anyone and they will know the
+very metre you were standing on.</p>
+ </div>
+</div>
+
+<div id="game" class="screen" hidden>
+  <header id="topbar"><span id="who"></span><span class="right" id="scale"></span></header>
+  <main>
+    <section id="boardwrap"><div id="board"></div><div id="boardnote"></div></section>
+    <aside id="panel"></aside>
+  </main>
+  <section id="ladder"></section>
+  <section id="log"></section>
+  <footer id="statusbar"></footer>
+  <nav id="pad">
+    <div class="dirs">
+      <button data-dir="NW" title="northwest (y)">y</button>
+      <button data-dir="W"  title="west (h)">h</button>
+      <button data-dir="NE" title="northeast (u)">u</button>
+      <button data-dir="SW" title="southwest (b)">b</button>
+      <button data-dir="E"  title="east (l)">l</button>
+      <button data-dir="SE" title="southeast (n)">n</button>
+    </div>
+    <span class="sep"></span>
+    <button data-key="&lt;">&lt; out</button>
+    <button data-key="&gt;">&gt; in</button>
+    <span class="sep"></span>
+    <button data-key="t">talk</button>
+    <button data-key="r">rest</button>
+    <button data-key="R">rest 8h</button>
+    <button data-key="Enter">look</button>
+    <button data-key="c">self</button>
+    <button data-key="m">log</button>
+    <button data-key="v">hanb</button>
+    <button data-key="g">go to</button>
+    <button data-key="?">help</button>
+  </nav>
+</div>
+
+<div id="modal" hidden></div>
+
+<script>
+"use strict";
+/* ==ENGINE-START== */
+/* ====================================================================
+ * 0.  The pieces that have to agree with Python, bit for bit.
+ *
+ * dwarfhouse derives every board, name and settlement from BLAKE2b
+ * digests fed into random.Random -- Python's Mersenne Twister.  A port
+ * that used Math.random(), or any other hash, would build a different
+ * planet from the same seed.  So both are reimplemented here exactly:
+ * BLAKE2b on 32-bit word pairs, and MT19937 with CPython's own seeding
+ * and its _randbelow / choice / randint semantics.
+ * ==================================================================== */
+
+const B2B_IV32 = new Uint32Array([
+  0xf3bcc908, 0x6a09e667, 0x84caa73b, 0xbb67ae85,
+  0xfe94f82b, 0x3c6ef372, 0x5f1d36f1, 0xa54ff53a,
+  0xade682d1, 0x510e527f, 0x2b3e6c1f, 0x9b05688c,
+  0xfb41bd6b, 0x1f83d9ab, 0x137e2179, 0x5be0cd19]);
+
+const B2B_SIGMA = [
+  0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,
+  14,10,4,8,9,15,13,6,1,12,0,2,11,7,5,3,
+  11,8,12,0,5,2,15,13,10,14,3,6,7,1,9,4,
+  7,9,3,1,13,12,11,14,2,6,5,10,4,0,15,8,
+  9,0,5,7,2,4,10,15,14,1,11,12,6,8,3,13,
+  2,12,6,10,0,11,8,3,4,13,7,5,15,14,1,9,
+  12,5,1,15,14,13,4,10,0,7,6,3,9,2,8,11,
+  13,11,7,14,12,1,3,9,5,0,15,4,8,6,2,10,
+  6,15,14,9,11,3,0,8,12,2,13,7,1,4,10,5,
+  10,2,8,4,7,6,1,5,15,11,9,14,3,12,13,0,
+  0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,
+  14,10,4,8,9,15,13,6,1,12,0,2,11,7,5,3].map(x => x * 2);
+
+const _v = new Uint32Array(32), _m = new Uint32Array(32);
+
+function ADD64AA(v, a, b){
+  const o0 = v[a] + v[b];
+  let o1 = v[a+1] + v[b+1];
+  if (o0 >= 0x100000000) o1++;
+  v[a] = o0; v[a+1] = o1;
+}
+function ADD64AC(v, a, b0, b1){
+  let o0 = v[a] + b0;
+  if (b0 < 0) o0 += 0x100000000;
+  let o1 = v[a+1] + b1;
+  if (o0 >= 0x100000000) o1++;
+  v[a] = o0; v[a+1] = o1;
+}
+function B2B_G(a, b, c, d, ix, iy){
+  const x0 = _m[ix], x1 = _m[ix+1], y0 = _m[iy], y1 = _m[iy+1];
+  let xor0, xor1;
+  ADD64AA(_v, a, b); ADD64AC(_v, a, x0, x1);
+  xor0 = _v[d] ^ _v[a]; xor1 = _v[d+1] ^ _v[a+1];
+  _v[d] = xor1; _v[d+1] = xor0;                          /* rotr 32 */
+  ADD64AA(_v, c, d);
+  xor0 = _v[b] ^ _v[c]; xor1 = _v[b+1] ^ _v[c+1];
+  _v[b] = (xor0 >>> 24) ^ (xor1 << 8);                   /* rotr 24 */
+  _v[b+1] = (xor1 >>> 24) ^ (xor0 << 8);
+  ADD64AA(_v, a, b); ADD64AC(_v, a, y0, y1);
+  xor0 = _v[d] ^ _v[a]; xor1 = _v[d+1] ^ _v[a+1];
+  _v[d] = (xor0 >>> 16) ^ (xor1 << 16);                  /* rotr 16 */
+  _v[d+1] = (xor1 >>> 16) ^ (xor0 << 16);
+  ADD64AA(_v, c, d);
+  xor0 = _v[b] ^ _v[c]; xor1 = _v[b+1] ^ _v[c+1];
+  _v[b] = (xor1 >>> 31) ^ (xor0 << 1);                   /* rotr 63 */
+  _v[b+1] = (xor0 >>> 31) ^ (xor1 << 1);
+}
+function b2bCompress(ctx, last){
+  let i;
+  for (i = 0; i < 16; i++){ _v[i] = ctx.h[i]; _v[i+16] = B2B_IV32[i]; }
+  _v[24] = _v[24] ^ (ctx.t >>> 0);
+  _v[25] = _v[25] ^ (Math.floor(ctx.t / 0x100000000) >>> 0);
+  if (last){ _v[28] = ~_v[28]; _v[29] = ~_v[29]; }
+  for (i = 0; i < 32; i++){
+    const j = 4 * i, b = ctx.b;
+    _m[i] = b[j] ^ (b[j+1] << 8) ^ (b[j+2] << 16) ^ (b[j+3] << 24);
+  }
+  for (i = 0; i < 12; i++){
+    const s = i * 16;
+    B2B_G(0, 8, 16, 24, B2B_SIGMA[s+0],  B2B_SIGMA[s+1]);
+    B2B_G(2, 10, 18, 26, B2B_SIGMA[s+2], B2B_SIGMA[s+3]);
+    B2B_G(4, 12, 20, 28, B2B_SIGMA[s+4], B2B_SIGMA[s+5]);
+    B2B_G(6, 14, 22, 30, B2B_SIGMA[s+6], B2B_SIGMA[s+7]);
+    B2B_G(0, 10, 20, 30, B2B_SIGMA[s+8], B2B_SIGMA[s+9]);
+    B2B_G(2, 12, 22, 24, B2B_SIGMA[s+10], B2B_SIGMA[s+11]);
+    B2B_G(4, 14, 16, 26, B2B_SIGMA[s+12], B2B_SIGMA[s+13]);
+    B2B_G(6, 8, 18, 28, B2B_SIGMA[s+14], B2B_SIGMA[s+15]);
+  }
+  for (i = 0; i < 16; i++) ctx.h[i] = ctx.h[i] ^ _v[i] ^ _v[i+16];
+}
+
+function utf8Bytes(str){
+  const out = [];
+  for (let i = 0; i < str.length; i++){
+    let c = str.charCodeAt(i);
+    if (c < 0x80) out.push(c);
+    else if (c < 0x800){ out.push(0xc0 | (c >> 6), 0x80 | (c & 63)); }
+    else if (c >= 0xd800 && c <= 0xdbff && i + 1 < str.length){
+      const c2 = str.charCodeAt(++i);
+      c = 0x10000 + ((c - 0xd800) << 10) + (c2 - 0xdc00);
+      out.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 63),
+               0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+    } else out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+  }
+  return out;
+}
+
+/** BLAKE2b of a string, `outlen` bytes.  Matches hashlib.blake2b(digest_size=n). */
+function blake2b(str, outlen){
+  const ctx = { b: new Uint8Array(128), h: new Uint32Array(B2B_IV32), t: 0, c: 0 };
+  ctx.h[0] ^= 0x01010000 ^ outlen;
+  const input = utf8Bytes(str);
+  for (let i = 0; i < input.length; i++){
+    if (ctx.c === 128){ ctx.t += ctx.c; b2bCompress(ctx, false); ctx.c = 0; }
+    ctx.b[ctx.c++] = input[i];
+  }
+  ctx.t += ctx.c;
+  while (ctx.c < 128) ctx.b[ctx.c++] = 0;
+  b2bCompress(ctx, true);
+  const out = new Uint8Array(outlen);
+  for (let i = 0; i < outlen; i++) out[i] = (ctx.h[i >> 2] >> (8 * (i & 3))) & 0xff;
+  return out;
+}
+
+/** int.from_bytes(digest, "big") as a BigInt. */
+function bytesBig(b){
+  let n = 0n;
+  for (let i = 0; i < b.length; i++) n = (n << 8n) | BigInt(b[i]);
+  return n;
+}
+/** The same, as a double -- safe for four bytes. */
+function bytesNum(b){
+  let n = 0;
+  for (let i = 0; i < b.length; i++) n = n * 256 + b[i];
+  return n;
+}
+
+/* -------------------------------------------------------------------
+ * MT19937, seeded and consumed exactly as CPython's random.Random does.
+ * ------------------------------------------------------------------- */
+const MT_N = 624, MT_M = 397;
+
+class PyRandom {
+  constructor(seed){
+    this.mt = new Uint32Array(MT_N);
+    this.mti = MT_N + 1;
+    let n = (typeof seed === "bigint") ? seed : BigInt(Math.trunc(seed));
+    if (n < 0n) n = -n;                       /* random_seed uses abs() */
+    const key = [];
+    if (n === 0n) key.push(0);
+    while (n > 0n){ key.push(Number(n & 0xffffffffn)); n >>= 32n; }
+    this._initByArray(key);
+  }
+  _initGenrand(s){
+    const mt = this.mt;
+    mt[0] = s >>> 0;
+    for (let i = 1; i < MT_N; i++){
+      const prev = mt[i-1] ^ (mt[i-1] >>> 30);
+      mt[i] = (Math.imul(1812433253, prev) + i) >>> 0;
+    }
+    this.mti = MT_N;
+  }
+  _initByArray(key){
+    this._initGenrand(19650218);
+    const mt = this.mt;
+    let i = 1, j = 0;
+    let k = Math.max(MT_N, key.length);
+    for (; k; k--){
+      const prev = mt[i-1] ^ (mt[i-1] >>> 30);
+      mt[i] = (((mt[i] ^ Math.imul(prev, 1664525)) >>> 0) + key[j] + j) >>> 0;
+      i++; j++;
+      if (i >= MT_N){ mt[0] = mt[MT_N-1]; i = 1; }
+      if (j >= key.length) j = 0;
+    }
+    for (k = MT_N - 1; k; k--){
+      const prev = mt[i-1] ^ (mt[i-1] >>> 30);
+      mt[i] = (((mt[i] ^ Math.imul(prev, 1566083941)) >>> 0) - i) >>> 0;
+      i++;
+      if (i >= MT_N){ mt[0] = mt[MT_N-1]; i = 1; }
+    }
+    mt[0] = 0x80000000;
+  }
+  genrand(){
+    const mt = this.mt;
+    let y;
+    if (this.mti >= MT_N){
+      let kk;
+      for (kk = 0; kk < MT_N - MT_M; kk++){
+        y = ((mt[kk] & 0x80000000) | (mt[kk+1] & 0x7fffffff)) >>> 0;
+        mt[kk] = (mt[kk+MT_M] ^ (y >>> 1) ^ ((y & 1) ? 0x9908b0df : 0)) >>> 0;
+      }
+      for (; kk < MT_N - 1; kk++){
+        y = ((mt[kk] & 0x80000000) | (mt[kk+1] & 0x7fffffff)) >>> 0;
+        mt[kk] = (mt[kk + (MT_M - MT_N)] ^ (y >>> 1) ^ ((y & 1) ? 0x9908b0df : 0)) >>> 0;
+      }
+      y = ((mt[MT_N-1] & 0x80000000) | (mt[0] & 0x7fffffff)) >>> 0;
+      mt[MT_N-1] = (mt[MT_M-1] ^ (y >>> 1) ^ ((y & 1) ? 0x9908b0df : 0)) >>> 0;
+      this.mti = 0;
+    }
+    y = mt[this.mti++];
+    y ^= (y >>> 11);
+    y = (y ^ ((y << 7) & 0x9d2c5680)) >>> 0;
+    y = (y ^ ((y << 15) & 0xefc60000)) >>> 0;
+    y ^= (y >>> 18);
+    return y >>> 0;
+  }
+  random(){
+    const a = this.genrand() >>> 5, b = this.genrand() >>> 6;
+    return (a * 67108864 + b) * (1.0 / 9007199254740992.0);
+  }
+  getrandbits(k){
+    if (k <= 32) return this.genrand() >>> (32 - k);
+    let out = 0n, shift = 0n, left = k;
+    while (left > 0){
+      let r = this.genrand();
+      if (left < 32) r >>>= (32 - left);
+      out |= BigInt(r >>> 0) << shift;
+      shift += 32n; left -= 32;
+    }
+    return out;
+  }
+  _randbelow(n){
+    if (n <= 0) return 0;
+    let k = 0, t = n;
+    while (t){ k++; t >>>= 1; }          /* n.bit_length() */
+    let r = this.getrandbits(k);
+    while (r >= n) r = this.getrandbits(k);
+    return r;
+  }
+  randrange(start, stop){
+    if (stop === undefined){ stop = start; start = 0; }
+    const width = stop - start;
+    return start + this._randbelow(width);
+  }
+  randint(a, b){ return this.randrange(a, b + 1); }
+  choice(seq){ return seq[this._randbelow(seq.length)]; }
+  uniform(a, b){ return a + (b - a) * this.random(); }
+}
+
+/* -------------------------------------------------------------------
+ * Small pieces of Python's formatting that the text depends on.
+ * ------------------------------------------------------------------- */
+/* CPython's math.hypot, reimplemented so it agrees to the last bit.
+ * A JS engine's Math.hypot is free to be a little different, and this is
+ * called five hundred times per board -- enough for a last-bit
+ * disagreement to eventually land on the wrong side of a coastline. */
+const _f64 = new Float64Array(1), _u32 = new Uint32Array(_f64.buffer);
+_f64[0] = 2.0;
+const HI = _u32[1] ? 1 : 0, LO = 1 - HI;
+function frexpExp(x){
+  _f64[0] = x;
+  let e = (_u32[HI] >>> 20) & 0x7ff;
+  if (e === 0){ _f64[0] = x * 4503599627370496; e = ((_u32[HI] >>> 20) & 0x7ff) - 52; }
+  return e - 1022;
+}
+function ldexp1(e){
+  if (e >= -1022 && e <= 1023){ _u32[HI] = (e + 1023) << 20; _u32[LO] = 0; return _f64[0]; }
+  return Math.pow(2, e);
+}
+const DEKKER = 134217729.0;                 /* 2**27 + 1 */
+function dlMul(x, y, out){                  /* the exact product, in two halves */
+  let p = x * DEKKER;
+  const hx = (x - p) + p, tx = x - hx;
+  p = y * DEKKER;
+  const hy = (y - p) + p, ty = y - hy;
+  p = hx * hy;
+  const q = (hx * ty) + (tx * hy);
+  const z = p + q;
+  out[0] = z; out[1] = ((p - z) + q) + (tx * ty);
+}
+function dlFastSum(a, b, out){              /* |a| >= |b| */
+  const x = a + b;
+  out[0] = x; out[1] = (a - x) + b;
+}
+const _pr = [0, 0], _sm = [0, 0];
+function hypot(x, y){
+  x = Math.abs(x); y = Math.abs(y);
+  const max = x > y ? x : y;
+  if (max === 0.0 || !isFinite(max)) return isNaN(x + y) ? NaN : max;
+  const scale = ldexp1(-frexpExp(max));
+  let csum = 1.0, frac1 = 0.0, frac2 = 0.0, t;
+  t = x * scale;
+  dlMul(t, t, _pr); dlFastSum(csum, _pr[0], _sm);
+  csum = _sm[0]; frac1 += _pr[1]; frac2 += _sm[1];
+  t = y * scale;
+  dlMul(t, t, _pr); dlFastSum(csum, _pr[0], _sm);
+  csum = _sm[0]; frac1 += _pr[1]; frac2 += _sm[1];
+  let h = Math.sqrt(csum - 1.0 + (frac1 + frac2));
+  dlMul(-h, h, _pr); dlFastSum(csum, _pr[0], _sm);
+  csum = _sm[0]; frac1 += _pr[1]; frac2 += _sm[1];
+  h += (csum - 1.0 + (frac1 + frac2)) / (2.0 * h);   /* differential correction */
+  return h / scale;
+}
+const sq = x => x * x;
+
+function pyRound(x){                       /* round() -- ties to even */
+  const f = Math.floor(x), d = x - f;
+  if (d > 0.5) return f + 1;
+  if (d < 0.5) return f;
+  return (f % 2 === 0) ? f : f + 1;
+}
+function fmt(x, places){                   /* "%.Nf" */
+  return x.toFixed(places);
+}
+function cap(s){ return s ? s[0].toUpperCase() + s.slice(1) : s; }
+function pad(s, n){ s = String(s); return s.length >= n ? s : s + " ".repeat(n - s.length); }
+function padL(s, n){ s = String(s); return s.length >= n ? s : " ".repeat(n - s.length) + s; }
+
+/* ====================================================================
+ * 1.  The hanb board format.
+ *
+ * Taken from the reference implementation at github.com/handyc/hanb,
+ * not invented here: 64 characters of alphabet, 61 cells in rows of
+ * 5 6 7 8 9 8 7 6 5, row-major order, and the "edgeboard" rotation for
+ * printing them.  referenceOK() checks the renderer against the
+ * reference project's own recorded test output.
+ * ==================================================================== */
+const ALPHABET = "abcdefghijklmnopqrstuvwxyz" +
+                 "ABCDEFGHIJKLMNOPQRSTUVWXYZ" + "0123456789-.";
+const SIZES = ALPHABET + "#";
+const BOARD_SIZE = 61, RETURN_SIZE = 3, DIAGONAL = 9, RADIUS = 4;
+const DEFAULT_CELL = "a", DEFAULT_RETURN = "9-.";
+const METRE_INDEX = ALPHABET.indexOf("K");      /* 'K' is one metre */
+const SECOND_INDEX = ALPHABET.indexOf("S");     /* and one second */
+const ROWS = [5, 6, 7, 8, 9, 8, 7, 6, 5];
+
+const SCALE_NAMES = {
+  a:"quantum foam", b:"Planck particle", c:"combined particle",
+  q:"smallest observed matter", u:"quark",
+  A:"atom", B:"small molecule", E:"micrometre", F:"fine hair",
+  G:"pixel", H:"hair", I:"coin", J:"jar", K:"person",
+  L:"lot", M:"hamlet", N:"neighborhood", O:"borough",
+  P:"province", Q:"kingdom", R:"region", S:"planet-moon system",
+  T:"solar diameter", U:"light-minute", V:"Venus distance",
+  W:"light-hour", X:"star system", Y:"light-week",
+  Z:"light-month", "0":"light-year", "-":"filament", ".":"universe",
+  "#":"matrix"};
+
+const UNITS = [[1e30,"Qm"],[1e27,"Rm"],[1e24,"Ym"],[1e21,"Zm"],[1e18,"Em"],
+  [1e15,"Pm"],[1e12,"Tm"],[1e9,"Gm"],[1e6,"Mm"],[1e3,"km"],[1.0,"m"],
+  [1e-2,"cm"],[1e-3,"mm"],[1e-6,"µm"],[1e-9,"nm"],[1e-12,"pm"],[1e-15,"fm"]];
+const TIME_UNITS = [[31557600.0,"years"],[86400.0,"days"],[3600.0,"hours"],
+  [60.0,"minutes"],[1.0,"seconds"]];
+
+const indexOfChar = ch => ALPHABET.indexOf(ch);
+const charAt = i => ALPHABET[((i % 64) + 64) % 64];
+const metres = ch => Math.pow(10, indexOfChar(ch) - METRE_INDEX);
+const below = (ch, steps = 1) => charAt(Math.max(0, indexOfChar(ch) - steps));
+const above = (ch, steps = 1) => charAt(Math.min(63, indexOfChar(ch) + steps));
+
+function fmtG(x){                      /* "%g" for the values we produce */
+  const s = String(Number(x.toPrecision(6)));
+  return s;
+}
+function sizeLabel(ch){
+  const m = metres(ch);
+  for (const [scale, unit] of UNITS){
+    if (m >= scale * 0.999){
+      const value = m / scale;
+      if (value >= 9.95) return pyRound(value) + " " + unit;
+      return fmtG(Number(value.toFixed(2))) + " " + unit;
+    }
+  }
+  return m.toExponential(0) + " m";
+}
+function timeChar(secs){
+  if (secs <= 0) return ALPHABET[0];
+  const idx = pyRound(Math.log10(secs)) + SECOND_INDEX;
+  return charAt(Math.max(0, Math.min(63, idx)));
+}
+function timeLabel(secs){
+  for (const [scale, unit] of TIME_UNITS){
+    if (secs >= scale){
+      const value = secs / scale;
+      if (value >= 9.95) return pyRound(value) + " " + unit;
+      return value.toFixed(1) + " " + unit;
+    }
+  }
+  return pyRound(secs) + " seconds";
+}
+function describeChar(ch){
+  const name = SCALE_NAMES[ch];
+  return name ? sizeLabel(ch) + " (" + name + ")" : sizeLabel(ch);
+}
+
+/* --- geometry ------------------------------------------------------
+ * Axial coordinates (q, r) on a hexagon of radius 4: a cell is on the
+ * board when |q|, |r| and |q + r| are all at most 4.
+ * ------------------------------------------------------------------- */
+const inBoard = (q, r) => Math.abs(q) <= RADIUS && Math.abs(r) <= RADIUS &&
+                          Math.abs(q + r) <= RADIUS;
+
+const COORDS = [], INDEX = new Map();
+for (let r = -RADIUS; r <= RADIUS; r++){
+  for (let q = Math.max(-RADIUS, -RADIUS - r); q <= Math.min(RADIUS, RADIUS - r); q++){
+    INDEX.set(q + "," + r, COORDS.length);
+    COORDS.push([q, r]);
+  }
+}
+const idx = (q, r) => INDEX.get(q + "," + r);
+const CENTRE = idx(0, 0);
+
+/* Insertion order matters: Python iterates this dict when it sums a
+ * cell's neighbours and when it picks the lowest one, and floating
+ * point addition is not associative. */
+const DIRS = [["E",1,0], ["W",-1,0], ["NE",1,-1], ["NW",0,-1],
+              ["SE",0,1], ["SW",-1,1]];
+const DIR_BY_NAME = {}; for (const d of DIRS) DIR_BY_NAME[d[0]] = [d[1], d[2]];
+
+function neighbours(q, r){
+  const out = [];
+  for (const [name, dq, dr] of DIRS){
+    const nq = q + dq, nr = r + dr;
+    if (inBoard(nq, nr)) out.push([name, idx(nq, nr)]);
+  }
+  return out;
+}
+function hexDistance(a, b){
+  return (Math.abs(a[0]-b[0]) + Math.abs(a[0]+a[1]-b[0]-b[1]) + Math.abs(a[1]-b[1])) / 2;
+}
+function axialToXY(q, r){ return [q + r * 0.5, r * 0.8660254]; }
+
+/** The on-board cell whose centre is closest to a cartesian point. */
+function nearestCell(x, y){
+  let best = 0, bestD = null;
+  for (let i = 0; i < BOARD_SIZE; i++){
+    const [cx, cy] = axialToXY(COORDS[i][0], COORDS[i][1]);
+    const d = (cx - x) * (cx - x) + (cy - y) * (cy - y);
+    if (bestD === null || d < bestD){ best = i; bestD = d; }
+  }
+  return best;
+}
+
+/* --- boards -------------------------------------------------------- */
+function boardRows(cells){
+  const out = []; let i = 0;
+  for (const n of ROWS){ out.push(cells.slice(i, i + n)); i += n; }
+  return out;
+}
+/** The edgeboard rotation, exactly as the reference project prints it. */
+function renderBoard(cells, width = 40, pitch = 4, margin = 3){
+  return boardRows(cells).map(row => {
+    const indent = margin + 2 * (DIAGONAL - row.length);
+    const line = " ".repeat(indent) + row.join(" ".repeat(pitch - 1));
+    return pad(line, width);
+  }).join("\n");
+}
+function cellRenderXY(index, pitch = 4, margin = 3){
+  let i = 0;
+  for (let row = 0; row < ROWS.length; row++){
+    if (index < i + ROWS[row])
+      return [margin + 2 * (DIAGONAL - ROWS[row]) + (index - i) * pitch, row];
+    i += ROWS[row];
+  }
+  return [0, 0];
+}
+
+const REFERENCE_BOARD = "ADBDDBFJBDFJKSJFKJSBKJBFJDKJSBDJFDJ";
+const REFERENCE_RENDER = [
+  "           A   D   B   D   D            ",
+  "         B   F   J   B   D   F          ",
+  "       J   K   S   J   F   K   J        ",
+  "     S   B   K   J   B   F   J   D      ",
+  "   K   J   S   B   D   J   F   D   J    ",
+  "     a   a   a   a   a   a   a   a      ",
+  "       a   a   a   a   a   a   a        ",
+  "         a   a   a   a   a   a          ",
+  "           a   a   a   a   a            "].join("\n");
+
+/** Check this renderer against the reference project's own test output. */
+function referenceOK(){
+  const cells = REFERENCE_BOARD.split("");
+  while (cells.length < BOARD_SIZE) cells.push(DEFAULT_CELL);
+  return renderBoard(cells) === REFERENCE_RENDER;
+}
+
+/* ====================================================================
+ * 2.  The word pools, terrain tables and creature tables, transcribed
+ *     from the Python module they came from.  Order is preserved
+ *     everywhere: Python iterates these dicts to make its choices,
+ *     so a reordering would be a different world.
+ * ==================================================================== */
+const NOUNS_T = [
+  ["axe","WAR CRAFT METAL"],["hammer","WAR CRAFT METAL"],["sword","WAR METAL"],
+  ["shield","WAR CRAFT"],["spear","WAR METAL"],["helm","WAR CRAFT"],["blade","WAR METAL"],
+  ["anvil","CRAFT METAL EARTH"],["forge","CRAFT FIRE"],["gate","CRAFT EARTH"],
+  ["wall","CRAFT EARTH"],["tower","CRAFT"],["hall","CRAFT DOMESTIC"],
+  ["vault","CRAFT EARTH MYSTERY"],["mine","EARTH CRAFT"],["tunnel","EARTH"],
+  ["chasm","EARTH DARK"],["mountain","EARTH NATURE"],["hill","EARTH NATURE"],
+  ["peak","EARTH NATURE"],["stone","EARTH"],["boulder","EARTH"],["iron","METAL EARTH"],
+  ["steel","METAL WAR"],["copper","METAL"],["silver","METAL BEAUTY"],
+  ["gold","METAL BEAUTY"],["gem","BEAUTY EARTH"],["diamond","BEAUTY EARTH"],
+  ["river","WATER NATURE"],["lake","WATER NATURE"],["sea","WATER NATURE"],
+  ["spring","WATER GOOD"],["flood","WATER VIOLENT"],["rain","WATER NATURE"],
+  ["storm","WATER VIOLENT"],["wave","WATER"],["mist","WATER MYSTERY"],
+  ["fire","FIRE VIOLENT"],["flame","FIRE"],["ember","FIRE"],["ash","FIRE DEATH"],
+  ["smoke","FIRE DARK"],["forest","PLANT NATURE"],["oak","PLANT NATURE"],
+  ["root","PLANT EARTH"],["thorn","PLANT VIOLENT"],["leaf","PLANT NATURE"],
+  ["flower","PLANT BEAUTY"],["seed","PLANT GOOD"],["grove","PLANT NATURE PEACE"],
+  ["wolf","ANIMAL VIOLENT"],["bear","ANIMAL VIOLENT"],["raven","ANIMAL DARK"],
+  ["eagle","ANIMAL GOOD"],["serpent","ANIMAL EVIL"],["dragon","ANIMAL EVIL FIRE"],
+  ["horse","ANIMAL DOMESTIC"],["hound","ANIMAL DOMESTIC"],["boar","ANIMAL VIOLENT"],
+  ["moth","ANIMAL MYSTERY"],["spider","ANIMAL EVIL"],["blood","VIOLENT DEATH"],
+  ["bone","DEATH EARTH"],["grave","DEATH"],["tomb","DEATH MYSTERY"],
+  ["ghost","DEATH MYSTERY"],["corpse","DEATH"],["shadow","DARK MYSTERY"],
+  ["night","DARK TIME"],["dusk","DARK TIME"],["dawn","LIGHT TIME GOOD"],
+  ["sun","LIGHT GOOD"],["star","LIGHT MYSTERY"],["moon","LIGHT TIME MYSTERY"],
+  ["light","LIGHT GOOD"],["king","PEACE WAR"],["crown","BEAUTY PEACE"],["throne","PEACE"],
+  ["oath","PEACE GOOD"],["song","BEAUTY PEACE"],["tale","MYSTERY PEACE"],
+  ["wisdom","GOOD MYSTERY"],["hope","GOOD PEACE"],["wonder","GOOD BEAUTY"],
+  ["terror","EVIL VIOLENT"],["doom","EVIL DEATH"],["wrath","EVIL VIOLENT"],
+  ["curse","EVIL MYSTERY"],["sorrow","EVIL DEATH"],["hunger","EVIL"],["chain","EVIL CRAFT"],
+  ["whip","EVIL VIOLENT"],["pit","EVIL DARK EARTH"],["winter","TIME NATURE"],
+  ["summer","TIME NATURE"],["age","TIME"],["wind","NATURE"],["sky","NATURE LIGHT"],
+  ["cloud","NATURE"],["beer","DOMESTIC GOOD"],["bread","DOMESTIC GOOD"],
+  ["hearth","DOMESTIC FIRE"],["key","CRAFT MYSTERY"],["coin","CRAFT"],["wheel","CRAFT"],
+  ["boat","CRAFT WATER"],["bridge","CRAFT"],["road","CRAFT"],
+];
+const ADJECTIVES_T = [
+  ["iron","METAL WAR"],["golden","BEAUTY METAL"],["silver","BEAUTY METAL"],
+  ["bronze","METAL"],["stone","EARTH"],["deep","EARTH MYSTERY"],["high","EARTH"],
+  ["hidden","MYSTERY DARK"],["lost","MYSTERY DEATH"],["ancient","TIME MYSTERY WAR"],
+  ["eternal","TIME GOOD"],["final","TIME DEATH WAR"],["bloody","VIOLENT DEATH WAR"],
+  ["savage","VIOLENT WAR"],["cruel","EVIL VIOLENT WAR"],["grim","DARK EVIL WAR"],
+  ["black","DARK WAR"],["pale","DARK DEATH"],["bright","LIGHT GOOD"],
+  ["shining","LIGHT BEAUTY"],["clear","LIGHT GOOD"],["green","PLANT NATURE"],
+  ["wild","NATURE VIOLENT"],["still","PEACE"],["quiet","PEACE"],["blessed","GOOD PEACE"],
+  ["cursed","EVIL MYSTERY"],["broken","DEATH VIOLENT WAR"],["burning","FIRE VIOLENT WAR"],
+  ["frozen","NATURE DEATH"],["sunken","WATER DEATH"],["roaring","WATER VIOLENT"],
+  ["misty","WATER MYSTERY"],["singing","BEAUTY PEACE"],["whispering","MYSTERY PEACE"],
+  ["gasping","DEATH MYSTERY"],["howling","VIOLENT NATURE"],["fanged","VIOLENT ANIMAL"],
+  ["clever","GOOD CRAFT"],["stout","GOOD DOMESTIC"],
+];
+const PAST_T = [
+  ["murder","murdered"],["smash","smashed"],["burn","burned"],["drown","drowned"],
+  ["guard","guarded"],["forge","forged"],["bind","bound"],["carve","carved"],
+  ["sing","sung"],["wander","wandered"],["endure","endured"],["conquer","conquered"],
+  ["betray","betrayed"],["shield","shielded"],["delve","delved"],["wake","woken"],
+  ["swallow","swallowed"],["rend","rent"],
+];
+const VERBS_T = [
+  ["murder","VIOLENT DEATH"],["smash","VIOLENT WAR"],["burn","FIRE VIOLENT"],
+  ["drown","WATER DEATH"],["guard","WAR PEACE"],["forge","CRAFT FIRE"],
+  ["bind","CRAFT MYSTERY"],["carve","CRAFT EARTH"],["sing","BEAUTY PEACE"],
+  ["wander","MYSTERY TIME"],["endure","GOOD TIME"],["conquer","WAR VIOLENT"],
+  ["betray","EVIL DEATH"],["shield","WAR GOOD"],["delve","EARTH CRAFT"],
+  ["wake","MYSTERY TIME"],["swallow","EVIL DEATH"],["rend","VIOLENT"],
+];
+const PHONOLOGIES = {
+  DWARF: {name:"Dwarven", onsets:["", "", "b", "d", "g", "k", "t", "m", "n", "r", "s", "z", "th", "sh", "kh", "gr", "br", "dr", "st", "tr", "v", "l"], nuclei:["a", "o", "u", "e", "i", "a", "o", "u"], codas:["", "k", "m", "n", "r", "l", "th", "sh", "t", "d", "st", "ng", "z", "b", "g", "sp"], syllables:[1, 2], syl_weights:[4, 6]},
+  ELF: {name:"Elvish", onsets:["", "l", "n", "s", "th", "v", "m", "f", "c", "qu", "r", "y"], nuclei:["a", "e", "i", "ae", "ia", "ea", "io", "e", "a"], codas:["", "", "l", "n", "r", "s", "th"], syllables:[2, 3], syl_weights:[7, 3]},
+  HUMAN: {name:"Human", onsets:["", "b", "br", "c", "d", "f", "g", "h", "l", "m", "n", "p", "r", "s", "t", "w", "st", "gr"], nuclei:["a", "e", "i", "o", "u", "ea", "ai"], codas:["", "n", "l", "r", "s", "d", "t", "m", "ck", "ld", "st"], syllables:[1, 2], syl_weights:[3, 7]},
+  GOBLIN: {name:"Goblin", onsets:["", "sn", "gr", "x", "z", "k", "g", "b", "sp", "sk", "th", "kr", "zg", "st"], nuclei:["u", "a", "o", "i", "u", "a"], codas:["", "k", "g", "sp", "st", "x", "z", "ng", "rk", "sh", "th"], syllables:[1, 2], syl_weights:[5, 5]},
+  KOBOLD: {name:"Kobold", onsets:["", "k", "sn", "t", "p", "y", "ch", "sk", "n", "r", "gl"], nuclei:["i", "u", "a", "e", "ee", "oo"], codas:["", "k", "t", "p", "n", "sh", "tt"], syllables:[1, 2], syl_weights:[7, 3]},
+};
+const PHON_KEYS = ["DWARF", "ELF", "HUMAN", "GOBLIN", "KOBOLD"];
+
+/* Terrain: key, name, glyph, fg, bg, prominence, passable, water, trees */
+const TERRAIN_T = [
+  ["deep","deep water","≈",27,17,0,false,2,0],
+  ["sea","water","≈",39,18,0,false,2,0],
+  ["shore","shallows","~",45,24,0,true,1,0],
+  ["ice","ice","░",231,153,1,true,0,0],
+  ["glacier","glacier","░",231,145,2,true,0,0],
+  ["tundra","tundra","·",187,101,1,true,0,0],
+  ["taiga","taiga","♠",29,22,3,true,0,3],
+  ["forest","forest","♣",41,28,3,true,0,3],
+  ["jungle","jungle","♣",47,22,3,true,0,3],
+  ["dry_forest","dry forest","♣",107,58,2,true,0,2],
+  ["marsh","marsh","≡",78,23,2,true,1,0],
+  ["swamp","swamp","≡",65,22,2,true,1,2],
+  ["grass","grassland","\"",191,70,1,true,0,0],
+  ["savanna","savanna","\"",185,100,1,true,0,1],
+  ["steppe","steppe","\"",144,101,1,true,0,0],
+  ["scrub","scrub","•",149,64,1,true,0,1],
+  ["desert","desert","·",229,179,0,true,0,0],
+  ["badland","badlands","·",173,130,1,true,0,0],
+  ["hills","hills","∩",145,94,2,true,0,0],
+  ["mountain","mountains","▲",188,240,3,true,0,0],
+  ["peak","high peaks","▲",231,247,3,true,0,0],
+  ["river","running water","~",45,24,1,true,1,0],
+  ["lake","still water","≈",51,24,0,false,2,0],
+];
+
+/* Single objects that stand in one person-sized cell */
+const DETAIL_T = [
+  ["_CLEAR","open ground","·",101,4,true,0],
+  ["_GRASS","grass","\"",71,3,true,0],
+  ["_TALL","tall grass","\"",107,2,true,1],
+  ["_SHRUB","a shrub","*",108,2,true,1],
+  ["_TREE","a tree","♣",34,1,false,2],
+  ["_PINE","a pine","♠",29,1,false,2],
+  ["_PALM","a palm","♣",78,1,false,2],
+  ["_DEAD","a dead tree","♠",137,1,false,1],
+  ["_ROCK","a rock","0",246,2,true,0],
+  ["_BOULDER","a boulder","0",249,1,false,0],
+  ["_SCREE","scree","·",245,3,true,0],
+  ["_SAND","sand","·",223,4,true,0],
+  ["_SNOW","snow","·",255,3,true,0],
+  ["_ICE","ice","·",195,3,true,0],
+  ["_MUD","mud","·",137,3,true,0],
+  ["_REEDS","reeds","|",106,2,true,1],
+  ["_POOL","a pool","~",45,4,false,0],
+  ["_WATER","water","~",39,4,false,0],
+  ["_CACTUS","a cactus","‡",71,2,true,1],
+  ["_BUILDING","a building","⌂",214,1,false,0],
+  ["_WALL","a wall","█",180,1,false,0],
+  ["_FLOOR","a floor","·",180,4,true,0],
+  ["_ROAD","a road","·",137,4,true,0],
+];
+const DETAILS_T = [
+  ["forest",[[30,"_TREE"],[18,"_SHRUB"],[22,"_TALL"],[22,"_GRASS"],[5,"_ROCK"],[3,"_CLEAR"]]],
+  ["taiga",[[32,"_PINE"],[14,"_SHRUB"],[20,"_TALL"],[18,"_GRASS"],[10,"_ROCK"],[6,"_SNOW"]]],
+  ["jungle",[[34,"_PALM"],[24,"_SHRUB"],[24,"_TALL"],[12,"_GRASS"],[6,"_POOL"]]],
+  ["dry_forest",[[20,"_TREE"],[18,"_SHRUB"],[30,"_TALL"],[26,"_GRASS"],[6,"_ROCK"]]],
+  ["grass",[[6,"_TREE"],[10,"_SHRUB"],[30,"_TALL"],[48,"_GRASS"],[6,"_CLEAR"]]],
+  ["savanna",[[5,"_TREE"],[14,"_SHRUB"],[34,"_TALL"],[40,"_GRASS"],[7,"_CLEAR"]]],
+  ["steppe",[[2,"_SHRUB"],[26,"_TALL"],[54,"_GRASS"],[12,"_CLEAR"],[6,"_ROCK"]]],
+  ["scrub",[[22,"_SHRUB"],[26,"_TALL"],[34,"_GRASS"],[12,"_CLEAR"],[6,"_ROCK"]]],
+  ["desert",[[78,"_SAND"],[10,"_ROCK"],[6,"_CLEAR"],[6,"_CACTUS"]]],
+  ["badland",[[40,"_SCREE"],[26,"_ROCK"],[24,"_CLEAR"],[10,"_SAND"]]],
+  ["hills",[[10,"_TREE"],[16,"_SHRUB"],[30,"_TALL"],[30,"_GRASS"],[14,"_ROCK"]]],
+  ["mountain",[[34,"_SCREE"],[26,"_BOULDER"],[20,"_ROCK"],[14,"_CLEAR"],[6,"_SNOW"]]],
+  ["peak",[[28,"_SCREE"],[24,"_BOULDER"],[30,"_SNOW"],[18,"_ICE"]]],
+  ["tundra",[[10,"_DEAD"],[20,"_SHRUB"],[34,"_GRASS"],[24,"_SNOW"],[12,"_ROCK"]]],
+  ["glacier",[[60,"_ICE"],[34,"_SNOW"],[6,"_ROCK"]]],
+  ["ice",[[70,"_ICE"],[30,"_SNOW"]]],
+  ["marsh",[[30,"_REEDS"],[26,"_MUD"],[20,"_POOL"],[18,"_TALL"],[6,"_SHRUB"]]],
+  ["swamp",[[22,"_TREE"],[24,"_REEDS"],[22,"_MUD"],[20,"_POOL"],[12,"_TALL"]]],
+  ["river",[[80,"_WATER"],[12,"_REEDS"],[8,"_MUD"]]],
+  ["lake",[[92,"_WATER"],[8,"_REEDS"]]],
+  ["shore",[[60,"_WATER"],[24,"_SAND"],[16,"_MUD"]]],
+  ["sea",[[100,"_WATER"]]],
+  ["deep",[[100,"_WATER"]]],
+];
+
+const PLACE_NOUNS = {1:["Land", "Reach", "Expanse"], 2:["Province", "March", "Country"], 3:["Borough", "Holding", "Country"], 4:["District", "Vale", "Hollow", "Downs"], 5:["Lot", "Field", "Ground"]};
+const TERRAIN_NOUNS = {
+  "forest":["Forest", "Woods", "Wilds"],
+  "taiga":["Pinewood", "Taiga"],
+  "jungle":["Jungle", "Rainforest"],
+  "dry_forest":["Dry Wood", "Scrubwood"],
+  "grass":["Plains", "Grassland", "Meadows"],
+  "savanna":["Savanna", "Veldt"],
+  "steppe":["Steppe", "Barrens"],
+  "scrub":["Scrubland", "Heath"],
+  "desert":["Desert", "Sands"],
+  "badland":["Badlands", "Wastes"],
+  "hills":["Hills", "Downs"],
+  "mountain":["Mountains", "Peaks", "Range"],
+  "peak":["High Peaks", "Spires"],
+  "tundra":["Tundra", "Waste"],
+  "glacier":["Glacier", "Ice"],
+  "ice":["Ice", "Floes"],
+  "marsh":["Marsh", "Fen"],
+  "swamp":["Swamp", "Mire"],
+  "sea":["Sea", "Waters"],
+  "deep":["Deep", "Ocean"],
+  "shore":["Shore", "Strand"],
+  "river":["River"],
+  "lake":["Lake"],
+};
+const TERRAIN_SYMBOL = {
+  "forest":"PLANT",
+  "taiga":"PLANT",
+  "jungle":"PLANT",
+  "dry_forest":"PLANT",
+  "grass":"NATURE",
+  "savanna":"NATURE",
+  "steppe":"TIME",
+  "scrub":"NATURE",
+  "desert":"DEATH",
+  "badland":"DEATH",
+  "hills":"NATURE",
+  "mountain":"EARTH",
+  "peak":"EARTH",
+  "tundra":"TIME",
+  "glacier":"DEATH",
+  "ice":"DEATH",
+  "marsh":"MYSTERY",
+  "swamp":"MYSTERY",
+  "sea":"WATER",
+  "deep":"WATER",
+  "shore":"WATER",
+  "river":"WATER",
+  "lake":"WATER",
+};
+const SETTLEMENT_KINDS = {
+  DWARF:["Mountainhome", "Hillocks", "Delving"],
+  ELF:["Retreat", "Grove"],
+  HUMAN:["Hamlet", "Town", "Steading"],
+  GOBLIN:["Pit", "Camp"],
+  KOBOLD:["Warren"],
+};
+/* Each race reads the same land differently. */
+const RACE_TASTE = [
+  ["DWARF",[["mountain",6.0],["peak",3.0],["hills",4.0],["forest",1.0]]],
+  ["ELF",[["forest",6.0],["jungle",5.0],["taiga",3.0],["grass",1.0]]],
+  ["HUMAN",[["grass",6.0],["hills",4.0],["savanna",3.0],["forest",3.0],["steppe",2.0],["shore",2.0]]],
+  ["GOBLIN",[["badland",4.0],["swamp",4.0],["steppe",3.0],["hills",3.0],["desert",3.0],["mountain",2.0]]],
+  ["KOBOLD",[["mountain",4.0],["forest",3.0],["hills",3.0]]],
+];
+const SITE_POP = {"Mountainhome":[180,900], "Town":[120,600], "Hamlet":[30,140], "Retreat":[40,200], "Pit":[60,300], "Warren":[15,70]};
+
+const RACES = {
+  DWARF:{key:"DWARF", name:"dwarf", plural:"dwarves", color:208, glyph:"d"},
+  ELF:{key:"ELF", name:"elf", plural:"elves", color:41, glyph:"e"},
+  HUMAN:{key:"HUMAN", name:"human", plural:"humans", color:220, glyph:"h"},
+  GOBLIN:{key:"GOBLIN", name:"goblin", plural:"goblins", color:196, glyph:"g"},
+  KOBOLD:{key:"KOBOLD", name:"kobold", plural:"kobolds", color:137, glyph:"k"},
+};
+const PROFESSIONS = {
+  DWARF:["miner", "smith", "mason", "brewer", "axedwarf", "engraver", "metalcrafter", "hammerdwarf", "jeweler"],
+  ELF:["bowman", "woodcrafter", "herbalist", "druid", "ranger", "poet"],
+  HUMAN:["swordsman", "merchant", "farmer", "mason", "scholar", "pikeman", "weaponsmith", "priest"],
+  GOBLIN:["lasher", "pikegoblin", "snatcher", "torturer", "bowgoblin"],
+  KOBOLD:["thief", "skulker", "trapper"],
+};
+
+const BODY_PARTS = ["head", "upper body", "lower body", "left arm", "right arm", "left leg", "right leg", "left hand", "right hand", "throat"];
+const ANIMAL_PARTS = ["head", "body", "left front leg", "right front leg", "left hind leg", "right hind leg", "tail", "throat"];
+const WEAPONS = {
+  "fists":[3,"punch","punches"],
+  "dagger":[7,"stab","stabs"],
+  "short sword":[10,"slash","slashes"],
+  "sword":[13,"slash","slashes"],
+  "axe":[14,"hack","hacks"],
+  "battle axe":[16,"hack","hacks"],
+  "hammer":[13,"bash","bashes"],
+  "war hammer":[17,"bash","bashes"],
+  "spear":[12,"thrust at","thrusts at"],
+  "pike":[14,"thrust at","thrusts at"],
+  "mace":[12,"bash","bashes"],
+  "bow":[9,"shoot","shoots"],
+  "whip":[8,"lash","lashes"],
+  "crossbow":[11,"shoot","shoots"],
+  "staff":[8,"strike","strikes"],
+  "pick":[11,"hack","hacks"],
+};
+const PROFESSION_WEAPON = {
+  "axedwarf":"battle axe", "hammerdwarf":"war hammer", "miner":"pick", "swordsman":"sword", 
+  "pikeman":"pike", "bowman":"bow", "lasher":"whip", "pikegoblin":"pike", 
+  "bowgoblin":"bow", "thief":"dagger", "skulker":"dagger", "snatcher":"dagger", 
+  "ranger":"bow", "druid":"staff", "priest":"mace", "scholar":"staff", "torturer":"whip", 
+  "trapper":"dagger", 
+};
+/* (name, glyph, colour, hp, attack, dodge, danger, group, verb) */
+const WILDLIFE = {
+  "FOREST":[
+    ["deer","D",180,14,2,7,0,[1,4],"kicks"],
+    ["fox","f",208,8,3,8,0,[1,1],"bites"],
+    ["boar","b",137,22,6,4,2,[1,2],"gores"],
+    ["grey wolf","w",246,18,6,6,2,[2,5],"bites"],
+    ["black bear","B",94,38,10,3,3,[1,1],"mauls"],
+    ["giant spider","S",129,24,9,7,3,[1,1],"bites"],
+    ["elk","D",179,26,5,4,1,[1,3],"gores"],
+  ],
+  "GRASSLAND":[
+    ["rabbit","r",223,4,1,9,0,[1,3],"nips"],
+    ["horse","H",137,26,4,5,0,[2,6],"kicks"],
+    ["gazelle","G",180,12,2,9,0,[2,6],"kicks"],
+    ["dingo","c",179,14,5,7,1,[2,4],"bites"],
+    ["hyena","y",143,20,6,6,2,[2,4],"bites"],
+    ["lion","L",179,36,11,6,4,[1,3],"mauls"],
+    ["giant eagle","E",208,24,8,8,3,[1,1],"rakes"],
+  ],
+  "SWAMP":[
+    ["frog","f",71,3,1,6,0,[1,4],"nips"],
+    ["water moccasin","s",65,8,7,7,2,[1,1],"bites"],
+    ["giant leech","l",89,12,5,2,1,[1,3],"latches onto"],
+    ["alligator","A",100,40,12,3,4,[1,1],"clamps down on"],
+    ["giant toad","t",107,18,4,4,1,[1,2],"lashes"],
+  ],
+  "DESERT":[
+    ["jackal","j",179,12,4,7,1,[2,4],"bites"],
+    ["camel","c",180,28,3,4,0,[1,3],"spits at"],
+    ["giant scorpion","S",130,20,10,5,3,[1,2],"stings"],
+    ["cobra","s",106,8,9,7,3,[1,1],"bites"],
+    ["vulture","v",137,10,3,6,0,[1,3],"pecks"],
+  ],
+  "TUNDRA":[
+    ["arctic fox","f",255,8,3,8,0,[1,2],"bites"],
+    ["reindeer","D",180,22,4,5,0,[2,6],"gores"],
+    ["grey wolf","w",246,18,6,6,2,[2,5],"bites"],
+    ["polar bear","B",231,44,12,3,4,[1,1],"mauls"],
+  ],
+  "GLACIER":[
+    ["polar bear","B",231,44,12,3,4,[1,1],"mauls"],
+    ["walrus","W",145,34,5,2,1,[1,3],"tusks"],
+    ["snow leopard","L",252,30,10,7,3,[1,1],"mauls"],
+  ],
+  "MOUNTAINS":[
+    ["mountain goat","G",252,16,3,7,0,[1,4],"butts"],
+    ["giant eagle","E",208,24,8,8,3,[1,1],"rakes"],
+    ["cave bear","B",94,46,13,3,4,[1,1],"mauls"],
+    ["troll","T",65,50,14,2,4,[1,2],"clubs"],
+    ["giant bat","B",129,10,4,9,1,[2,5],"bites"],
+  ],
+  "HILLS":[
+    ["rabbit","r",223,4,1,9,0,[1,3],"nips"],
+    ["boar","b",137,22,6,4,2,[1,2],"gores"],
+    ["grey wolf","w",246,18,6,6,2,[2,5],"bites"],
+    ["cougar","L",180,30,10,7,3,[1,1],"mauls"],
+    ["sheep","q",255,12,1,4,0,[2,6],"butts"],
+  ],
+  "OCEAN":[
+    ["carp","F",45,10,3,6,1,[1,4],"bites"],
+    ["shark","F",250,34,12,6,4,[1,2],"bites"],
+  ],
+  "LAKE":[
+    ["carp","F",45,10,3,6,1,[1,4],"bites"],
+    ["otter","o",137,10,3,7,0,[1,3],"bites"],
+  ],
+};
+const COMMONER_JOBS = ["farmer", "weaver", "potter", "baker", "child", "herder", "carpenter", "tanner", "fisher", "miller", "trader"];
+
+/* ====================================================================
+ * 3.  Languages.
+ *
+ * A Language is a deterministic function from an English word to a
+ * native one, built from the language's own phonology and cached, so
+ * the same root shows up in every name across the whole world.
+ * ==================================================================== */
+const NOUNS = new Map(NOUNS_T), ADJECTIVES = new Map(ADJECTIVES_T),
+      PAST = new Map(PAST_T), VERBS = new Map(VERBS_T);
+const POOLS = { NOUNS: NOUNS_T, ADJECTIVES: ADJECTIVES_T, VERBS: VERBS_T };
+const _poolCache = new Map();
+
+/** Every word in a pool tagged with this symbol, in the pool's own order. */
+function wordsWith(symbol, poolName){
+  const key = symbol + "|" + poolName;
+  let got = _poolCache.get(key);
+  if (got === undefined){
+    got = POOLS[poolName].filter(p => p[1].split(" ").indexOf(symbol) >= 0).map(p => p[0]);
+    _poolCache.set(key, got);
+  }
+  return got;
+}
+const ALL_NOUNS = NOUNS_T.map(p => p[0]);
+const ALL_ADJECTIVES = ADJECTIVES_T.map(p => p[0]);
+
+function wordSeed(langId, word){ return bytesBig(blake2b(langId + "|" + word, 8)); }
+const isAlpha = c => /[A-Za-z]/.test(c);
+
+class Language {
+  constructor(key, worldSeedText, phonKey){
+    this.key = key;
+    this.phon = PHONOLOGIES[phonKey || key];
+    this.name = this.phon.name;
+    this._id = worldSeedText + ":" + key;
+    this._cache = new Map();
+    this._given = null;
+  }
+  word(english){
+    const hit = this._cache.get(english);
+    if (hit !== undefined) return hit;
+    let s = wordSeed(this._id, english);
+    const p = this.phon;
+    const total = p.syl_weights.reduce((a, b) => a + b, 0);
+    let pick = Number(s % BigInt(total));
+    let count = p.syllables[p.syllables.length - 1];
+    for (let i = 0; i < p.syllables.length; i++){
+      if (pick < p.syl_weights[i]){ count = p.syllables[i]; break; }
+      pick -= p.syl_weights[i];
+    }
+    s /= BigInt(total);
+    const out = [];
+    const nO = BigInt(p.onsets.length), nN = BigInt(p.nuclei.length),
+          nC = BigInt(p.codas.length);
+    for (let i = 0; i < count; i++){
+      const o = Number(s % nO); s /= nO;
+      const nu = Number(s % nN); s /= nN;
+      const co = Number(s % nC); s /= nC;
+      let syl = p.onsets[o] + p.nuclei[nu];
+      /* Only the final syllable reliably takes a coda; interior codas are
+       * what make a language sound clotted, so use them sparingly. */
+      if (i === count - 1 || co % 4 === 0) syl += p.codas[co];
+      if (i > 0 && !p.onsets[o] && out.length &&
+          !isAlpha(out[out.length-1].slice(-1))) syl = "l" + syl;
+      out.push(syl);
+      if (s < 64n) s = wordSeed(this._id, english + String(i));
+    }
+    let native = out.join("");
+    if (native.length < 2) native += p.codas.length > 1 ? p.codas[1] : "k";
+    native = native[0].toUpperCase() + native.slice(1);
+    this._cache.set(english, native);
+    return native;
+  }
+  /* A closed pool of personal names: a culture needs its Urists. */
+  givenNames(count = 140){
+    if (this._given) return this._given;
+    const seen = new Set(), uniq = [];
+    for (let i = 0; i < count; i++){
+      const w = this.word("#given" + i);
+      if (!seen.has(w)){ seen.add(w); uniq.push(w); }
+    }
+    this._given = uniq;
+    return uniq;
+  }
+}
+
+/* ====================================================================
+ * 4.  Generating a hanb world one board at a time.
+ *
+ * Nothing is generated until it is looked at.  A board is a pure
+ * function of the world seed and the path taken to reach it, and
+ * continuity comes from refinement rather than from a global field.
+ * ==================================================================== */
+const SEA_LEVEL = 100, MOUNTAIN_LEVEL = 300, PEAK_LEVEL = 370;
+const LEVELS = ["R", "Q", "P", "O", "N", "M", "L"];
+const MAX_DEPTH = LEVELS.length - 1;              /* the L board */
+const levelAt = depth => LEVELS[Math.min(depth, MAX_DEPTH)];
+const cellLevel = depth => below(levelAt(depth));
+
+let WORLD_SEED_TEXT = "0";                        /* the seed as Python prints it */
+const pathKey = (path, salt) =>
+  WORLD_SEED_TEXT + "|" + path.join(",") + "|" + salt;
+const pathSeed = (path, salt) => bytesBig(blake2b(pathKey(path, salt), 8));
+const rngFor = (path, salt) => new PyRandom(pathSeed(path, salt || ""));
+
+/** A stable value in -1..1 for one cell of one board. */
+function noiseAt(path, index, salt){
+  const d = blake2b(pathKey(path, "") + "#" + index + "#" + salt, 4);
+  return bytesNum(d) / 2147483647.5 - 1.0;
+}
+
+const DIR_XY = DIRS.map(([name, dq, dr]) => [name].concat(axialToXY(dq, dr)));
+const CHILD_SPAN = DIAGONAL;                      /* a child board spans its parent cell */
+
+class Fields {
+  constructor(e, m, t){ this.elevation = e; this.moisture = m; this.temperature = t; }
+  clamped(){
+    this.elevation = Math.min(400.0, Math.max(0.0, this.elevation));
+    this.moisture = Math.min(100.0, Math.max(0.0, this.moisture));
+    this.temperature = Math.min(100.0, Math.max(0.0, this.temperature));
+    return this;
+  }
+}
+
+/* How much new detail each level down is allowed to invent.  Large
+ * structure has to be settled high up or zooming in would keep rewriting
+ * the world underneath you. */
+function amplitudes(depth){
+  const falloff = Math.pow(0.60, depth);
+  return [105.0 * falloff, 34.0 * falloff, 16.0 * falloff];
+}
+
+/** The R board: a whole region, laid out from scratch. */
+function rootFields(){
+  const out = [];
+  const rng = rngFor([], "lobes");
+  const lobes = [];
+  const n = rng.randint(3, 6);
+  for (let i = 0; i < n; i++)
+    lobes.push([rng.uniform(-5.0, 5.0), rng.uniform(-4.5, 4.5),
+                rng.uniform(1.6, 3.8), rng.uniform(-90.0, 300.0)]);
+  for (let index = 0; index < BOARD_SIZE; index++){
+    const [q, r] = COORDS[index];
+    const [x, y] = axialToXY(q, r);
+    /* Start below sea level: land is what the lobes push up, which keeps
+     * an R board mostly ocean, as a region of a planet is. */
+    let elev = 48.0;
+    for (const [lx, ly, radius, strength] of lobes){
+      const d = hypot(x - lx, y - ly);
+      if (d < radius){
+        const falloff = sq(Math.cos(d / radius * Math.PI * 0.5));
+        elev += strength * falloff;
+      }
+    }
+    elev += noiseAt([], index, "e") * 70.0;
+    const lat = Math.abs(r) / RADIUS;             /* the poles are the cold ends */
+    let temp = 92.0 - Math.pow(lat, 1.3) * 86.0;
+    temp += noiseAt([], index, "t") * 9.0;
+    const moist = 50.0 + noiseAt([], index, "m") * 38.0;
+    out.push(new Fields(elev, moist, temp).clamped());
+  }
+  return out;
+}
+
+/** Refine one cell of a board into the 61 cells of the board below. */
+function childFields(parentCells, parentIndex, path, depth){
+  const [pq, pr] = COORDS[parentIndex];
+  const centre = parentCells[parentIndex];
+  /* The parent's neighbours, falling back to the parent itself at the
+   * board edge so the boundary does not pull toward nothing. */
+  const around = {};
+  for (const [name, dq, dr] of DIRS){
+    const nq = pq + dq, nr = pr + dr;
+    around[name] = inBoard(nq, nr) ? parentCells[idx(nq, nr)] : centre;
+  }
+  const [ampE, ampM, ampT] = amplitudes(depth);
+  const out = [];
+  for (let index = 0; index < BOARD_SIZE; index++){
+    const [cq, cr] = COORDS[index];
+    const [cx, cy] = axialToXY(cq, cr);
+    const ux = cx / CHILD_SPAN, uy = cy / CHILD_SPAN;
+    const weight = sq(Math.max(0.0, 1.0 - hypot(ux, uy)));
+    let total = weight;
+    let elev = centre.elevation * weight,
+        moist = centre.moisture * weight,
+        temp = centre.temperature * weight;
+    for (const [name, dx, dy] of DIR_XY){
+      const d = hypot(ux - dx, uy - dy);
+      const w = sq(Math.max(0.0, 1.0 - d));
+      if (w <= 0.0) continue;
+      const nb = around[name];
+      total += w;
+      elev += nb.elevation * w; moist += nb.moisture * w; temp += nb.temperature * w;
+    }
+    if (total <= 0.0){
+      elev = centre.elevation; moist = centre.moisture; temp = centre.temperature;
+    } else { elev /= total; moist /= total; temp /= total; }
+    elev += noiseAt(path, index, "e") * ampE;
+    moist += noiseAt(path, index, "m") * ampM;
+    temp += noiseAt(path, index, "t") * ampT;
+    /* Height cools; low ground near the sea stays damp. */
+    if (elev > SEA_LEVEL) temp -= (elev - SEA_LEVEL) * 0.012 * Math.pow(0.4, depth);
+    out.push(new Fields(elev, moist, temp).clamped());
+  }
+  return out;
+}
+
+/* --- terrain -------------------------------------------------------- */
+const T = {};
+for (const [key, name, glyph, fg, bg, prom, passable, water, trees] of TERRAIN_T)
+  T[key] = { key, name, glyph, fg, bg, prominence: prom, passable, water, trees };
+
+/** Biome from the three fields.  The same rules at every scale. */
+function classify(f){
+  const e = f.elevation, m = f.moisture, t = f.temperature;
+  if (e < SEA_LEVEL){
+    if (t < 16) return T.ice;
+    if (e < SEA_LEVEL - 45) return T.deep;
+    return e < SEA_LEVEL - 12 ? T.sea : T.shore;
+  }
+  if (e >= PEAK_LEVEL) return T.peak;
+  if (e >= MOUNTAIN_LEVEL) return T.mountain;
+  if (t < 14) return e > 220 ? T.glacier : T.tundra;
+  if (t < 30) return m > 40 ? T.taiga : T.steppe;
+  if (e >= 230) return T.hills;
+  if (m < 14) return t > 55 ? T.desert : T.badland;
+  if (m < 30) return t > 62 ? T.savanna : T.steppe;
+  if (m < 48) return t < 70 ? T.scrub : T.savanna;
+  if (m < 70) return T.grass;
+  if (m < 86) return t > 74 ? T.jungle : T.forest;
+  return e < 150 ? T.swamp : (t > 74 ? T.jungle : T.forest);
+}
+
+/** Accumulate downhill flow across one board: every board drains itself. */
+function flow(cells){
+  const order = Array.from({length: BOARD_SIZE}, (_, i) => i);
+  const keys = order.map(i => -cells[i].elevation);
+  order.sort((a, b) => keys[a] - keys[b]);       /* stable, like Python's */
+  const acc = [], receiver = [];
+  for (let i = 0; i < BOARD_SIZE; i++) acc.push(1.0 + cells[i].moisture / 60.0);
+  for (let i = 0; i < BOARD_SIZE; i++){
+    const [q, r] = COORDS[i];
+    let best = cells[i].elevation, bj = -1;
+    for (const [, j] of neighbours(q, r))
+      if (cells[j].elevation < best){ best = cells[j].elevation; bj = j; }
+    receiver.push(bj);
+  }
+  for (const i of order){ const j = receiver[i]; if (j >= 0) acc[j] += acc[i]; }
+  return acc;
+}
+
+/** Which cells of a board carry a watercourse. */
+function riverMask(cells, wetter){
+  const acc = flow(cells);
+  const land = [];
+  for (let i = 0; i < BOARD_SIZE; i++) if (cells[i].elevation >= SEA_LEVEL) land.push(i);
+  if (!land.length) return new Array(BOARD_SIZE).fill(false);
+  let peak = -Infinity;
+  for (const i of land) if (acc[i] > peak) peak = acc[i];
+  /* A parent cell that already carries water gets a lower bar, so the
+   * channel continues into the board below instead of drying up. */
+  let cut = peak * (wetter ? 0.16 : 0.34);
+  cut = Math.max(cut, wetter ? 4.0 : 9.0);
+  const out = [];
+  for (let i = 0; i < BOARD_SIZE; i++)
+    out.push(cells[i].elevation >= SEA_LEVEL && acc[i] >= cut);
+  return out;
+}
+
+/* --- what sits in a cell, once the cells are small enough ----------- */
+const DET = {};
+for (const [id_, name, glyph, fg, drop, passable, cover] of DETAIL_T)
+  DET[id_] = { id: id_, name, glyph, fg, size_drop: drop, passable, cover };
+const DETAILS = new Map(DETAILS_T.map(([k, tab]) =>
+  [k, tab.map(([w, d]) => [w, DET[d]])]));
+
+/** Pick what stands in one small cell, from a 0..1 roll. */
+function detailFor(terrain, roll){
+  const table = DETAILS.get(terrain.key) || DETAILS.get("grass");
+  let total = 0;
+  for (const [w] of table) total += w;
+  let r = roll * total;
+  for (const [w, d] of table){ r -= w; if (r <= 0) return d; }
+  return table[table.length - 1][1];
+}
+
+/** The hanb value a cell shows: the size of what is in it. */
+function hanbChar(depth, terrain, bonus = 0){
+  const p = Math.min(3, terrain.prominence + (bonus || 0));
+  if (p <= 0) return "a";
+  return below(levelAt(depth), 4 - p);
+}
+function detailChar(depth, detail){
+  if (detail.size_drop >= 4) return "a";
+  return below(levelAt(depth), detail.size_drop);
+}
+
+/* ====================================================================
+ * 5.  A hanb world: seven nested boards, built only where you look.
+ *
+ * The address of anything is seven cell indices -- one choice on the R
+ * board, then Q, P, O, N, M, and finally the cell of the L board a
+ * person stands in.  Moving is odometer arithmetic on that address.
+ * ==================================================================== */
+const DEPTHS = MAX_DEPTH;               /* 6: the L board */
+const ADDRESS_LEN = DEPTHS + 1;         /* seven characters */
+
+function pyMod(a, b){ const r = a % b; return r < 0 ? r + b : r; }
+
+class BoardData {
+  constructor(path, depth, fields, parentRiver){
+    this.path = path; this.depth = depth; this.level = levelAt(depth);
+    this.fields = fields;
+    this.river = riverMask(fields, !!parentRiver);
+    this.terrain = [];
+    for (let i = 0; i < BOARD_SIZE; i++){
+      let t = classify(fields[i]);
+      if (this.river[i] && t.water === 0) t = T.river;
+      this.terrain.push(t);
+    }
+    this.chars = this.terrain.map(t => hanbChar(depth, t));
+    this.details = null;
+    this.settlement = null;
+  }
+}
+
+class Settlement {
+  constructor(path, name, native, race, kind, population, founded){
+    this.path = path; this.name = name; this.native = native; this.race = race;
+    this.kind = kind; this.population = population; this.founded = founded;
+    this.cells = [];
+  }
+}
+
+class HanbWorld {
+  constructor(seedText){
+    this.seedText = seedText;             /* the seed exactly as Python prints it */
+    WORLD_SEED_TEXT = seedText;
+    this._boards = new Map();
+    this._order = [];
+    this._names = new Map();
+    this._settlements = new Map();
+    this.languages = {};
+    for (const k of PHON_KEYS) this.languages[k] = new Language(k, seedText);
+  }
+
+  /* --- boards ------------------------------------------------------ */
+  board(path){
+    const key = path.join(",");
+    const got = this._boards.get(key);
+    if (got !== undefined) return got;
+    const depth = path.length;
+    let data;
+    if (depth === 0) data = new BoardData([], 0, rootFields(), false);
+    else {
+      const parent = this.board(path.slice(0, -1));
+      const cell = path[depth - 1];
+      data = new BoardData(path, depth,
+        childFields(parent.fields, cell, path, depth), parent.river[cell]);
+    }
+    this._boards.set(key, data);
+    this._order.push(key);
+    /* Regenerating a board is a couple of milliseconds; holding the whole
+     * planet is impossible.  Five hundred is plenty for walking. */
+    while (this._order.length > 512) this._boards.delete(this._order.shift());
+    return data;
+  }
+
+  /** What stands in each cell of a board small enough to hold objects. */
+  details(path){
+    const data = this.board(path);
+    if (data.details === null){
+      const out = [];
+      for (let i = 0; i < BOARD_SIZE; i++)
+        out.push(detailFor(data.terrain[i], (noiseAt(path, i, "d") + 1.0) * 0.5));
+      data.details = out;
+      /* Once a board's cells hold single objects, a cell's hanb value is
+       * the size of that object rather than a summary of the landscape. */
+      data.chars = out.map(d => detailChar(data.depth, d));
+      this._buildSettlementCells(data);
+    }
+    return data.details;
+  }
+
+  /* --- addresses --------------------------------------------------- */
+  static formatAddress(address){ return address.map(i => charAt(i)).join(""); }
+  static parseAddress(text){
+    const out = [];
+    for (const c of text) if (ALPHABET.indexOf(c) >= 0) out.push(ALPHABET.indexOf(c));
+    return out;
+  }
+
+  /** Pick somewhere to start: dry land, and preferably habitable. */
+  randomAddress(rng){
+    const root = this.board([]);
+    let candidates = [];
+    for (let i = 0; i < BOARD_SIZE; i++)
+      if (root.fields[i].elevation >= SEA_LEVEL) candidates.push(i);
+    if (!candidates.length) candidates = Array.from({length: BOARD_SIZE}, (_, i) => i);
+    const address = [rng.choice(candidates)];
+    for (let depth = 1; depth < ADDRESS_LEN; depth++){
+      const data = this.board(address.slice());
+      let options = [];
+      for (let i = 0; i < BOARD_SIZE; i++)
+        if (data.fields[i].elevation >= SEA_LEVEL) options.push(i);
+      if (!options.length) options = Array.from({length: BOARD_SIZE}, (_, i) => i);
+      if (depth === DEPTHS){
+        const dets = this.details(address.slice());
+        const walkable = options.filter(i => dets[i].passable);
+        if (walkable.length) options = walkable;
+      }
+      address.push(rng.choice(options));
+    }
+    return address;
+  }
+
+  /** The address of a point, in K-cell units from the R board's centre. */
+  addressAt(x, y){
+    const out = [];
+    for (let depth = 0; depth < ADDRESS_LEN; depth++){
+      const scale = Math.pow(DIAGONAL, DEPTHS - depth);
+      const i = nearestCell(x / scale, y / scale);
+      const [cx, cy] = axialToXY(COORDS[i][0], COORDS[i][1]);
+      if (depth === 0 && hypot(x / scale - cx, y / scale - cy) > 0.45)
+        return null;                     /* past the rim of the R board */
+      out.push(i);
+      x -= cx * scale; y -= cy * scale;
+    }
+    return out;
+  }
+
+  /** How far one cell of movement at this scale moves you, in metres. */
+  static offset(direction, depth){
+    const [dq, dr] = DIR_BY_NAME[direction];
+    const [dx, dy] = axialToXY(dq, dr);
+    const scale = Math.pow(DIAGONAL, DEPTHS - depth);
+    return [dx * scale, dy * scale];
+  }
+  stepXY(x, y, direction, depth){
+    const [dx, dy] = HanbWorld.offset(direction, depth);
+    return [x + dx, y + dy];
+  }
+  step(address, direction, depth){
+    const [x, y] = this.position(address);
+    const [nx, ny] = this.stepXY(x, y, direction, depth);
+    return this.addressAt(nx, ny);
+  }
+
+  /* --- where things are, in metres --------------------------------- */
+  position(address){
+    let x = 0.0, y = 0.0;
+    const n = Math.min(address.length, ADDRESS_LEN);
+    for (let depth = 0; depth < n; depth++){
+      const [q, r] = COORDS[address[depth]];
+      const [ax, ay] = axialToXY(q, r);
+      /* Nine cells to the parent, not the nominal ten: it keeps distance
+       * consistent with movement, so no step jumps at a board edge. */
+      const scale = Math.pow(DIAGONAL, DEPTHS - depth);
+      x += ax * scale; y += ay * scale;
+    }
+    return [x, y];
+  }
+  separation(a, b){
+    const [ax, ay] = this.position(a), [bx, by] = this.position(b);
+    return hypot(bx - ax, by - ay);
+  }
+  bearing(a, b){
+    const [ax, ay] = this.position(a), [bx, by] = this.position(b);
+    const dx = bx - ax, dy = by - ay;
+    if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) return "here";
+    /* Screen rows run north to south, so a positive dy is southward. */
+    const angle = pyMod(Math.atan2(-dy, dx) * 180 / Math.PI, 360.0);
+    const points = ["east","northeast","north","northwest",
+                    "west","southwest","south","southeast"];
+    return points[Math.floor(pyMod(angle + 22.5, 360.0) / 45.0)];
+  }
+
+  /** Every settlement within a district or two, nearest first. */
+  nearbySettlements(address, spread = 1){
+    const seen = new Set();
+    const bases = [address.slice(0, DEPTHS - 2)];
+    if (spread){
+      for (const [name] of DIRS){
+        const moved = this.step(address, name, DEPTHS - 3);
+        if (moved !== null) bases.push(moved.slice(0, DEPTHS - 2));
+      }
+    }
+    const out = [];
+    for (const base of bases){
+      const bk = base.join(",");
+      if (seen.has(bk)) continue;
+      seen.add(bk);
+      for (let cell = 0; cell < BOARD_SIZE; cell++){
+        const path = base.concat([cell]);
+        const site = this.settlement(path);
+        if (!site) continue;
+        const where = path.concat([CENTRE]);   /* a settlement sits in the middle */
+        out.push({site, path, dist: this.separation(address, where),
+                  brg: this.bearing(address, where)});
+      }
+    }
+    out.sort((a, b) => a.dist - b.dist);
+    return out;
+  }
+
+  /** Somewhere to begin: a settlement, preferably of your own people. */
+  findStart(rng, race, tries = 30){
+    let fallback = null;
+    for (let attempt = 0; attempt < tries; attempt++){
+      const address = this.randomAddress(rng);
+      for (const {site, path} of this.nearbySettlements(address)){
+        const where = this.doorstep(path, rng);
+        if (race === null || site.race === race) return [where, site];
+        if (fallback === null) fallback = [where, site];
+      }
+      if (fallback !== null && attempt > Math.floor(tries / 2)) break;
+    }
+    if (fallback !== null) return fallback;
+    return [this.randomAddress(rng), null];
+  }
+
+  /** A full address standing somewhere inside a settlement. */
+  doorstep(sitePath, rng){
+    const site = this.settlement(sitePath);
+    this.details(sitePath);                     /* lays out the lots */
+    const cells = (site && site.cells.length) ? site.cells : [CENTRE];
+    const lot = rng.choice(cells);
+    const lotPath = sitePath.concat([lot]);
+    const details = this.details(lotPath);
+    const walkable = [];
+    for (let i = 0; i < BOARD_SIZE; i++) if (details[i].passable) walkable.push(i);
+    return lotPath.concat([walkable.length ? rng.choice(walkable) : CENTRE]);
+  }
+
+  /* --- naming ------------------------------------------------------ */
+  /** Which tongue names things here.  One per Q-sized land. */
+  languageFor(path){
+    const rng = rngFor(path.slice(0, 1), "tongue");
+    return this.languages[rng.choice(PHON_KEYS)];
+  }
+
+  /** The name of the cell that `path` points at, made once and kept. */
+  nameOf(path){
+    const key = path.join(",");
+    const got = this._names.get(key);
+    if (got !== undefined) return got;
+    const depth = path.length;
+    /* A cell of the L board is a metre across.  It holds a shrub or a
+     * person, not a named country. */
+    if (depth > DEPTHS) return "";
+    if (depth === 0){
+      const rng = rngFor([], "world");
+      const lang = this.languages.DWARF;
+      const noun = rng.choice(wordsWith("EARTH", "NOUNS"));
+      const adj = rng.choice(wordsWith("NATURE", "ADJECTIVES"));
+      const name = lang.word(noun) + lang.word(adj).toLowerCase();
+      this._names.set(key, name);
+      return name;
+    }
+    const parent = this.board(path.slice(0, -1));
+    const terrain = parent.terrain[path[depth - 1]];
+    const rng = rngFor(path, "name");
+    /* Big places are named for their landscape, small ones for what they
+     * are; mixing the pools by depth keeps a district and the hamlet
+     * inside it from landing on the same words. */
+    const terrainNouns = TERRAIN_NOUNS[terrain.key] || ["Land"];
+    const placeNouns = PLACE_NOUNS[depth] || ["Land"];
+    let pool;
+    if (depth <= 2) pool = terrainNouns.concat(terrainNouns, terrainNouns, placeNouns);
+    else if (depth <= 3) pool = terrainNouns.concat(terrainNouns, placeNouns, placeNouns);
+    else pool = terrainNouns.concat(placeNouns, placeNouns, placeNouns);
+    const noun = rng.choice(pool);
+    const sym = TERRAIN_SYMBOL[terrain.key] || "NATURE";
+    /* Draw from the whole vocabulary some of the time, or every tundra in
+     * the world ends up ancient. */
+    const adjectives = rng.random() < 0.45 ? ALL_ADJECTIVES
+      : (wordsWith(sym, "ADJECTIVES").length ? wordsWith(sym, "ADJECTIVES") : ALL_ADJECTIVES);
+    const nouns = rng.random() < 0.45 ? ALL_NOUNS
+      : (wordsWith(sym, "NOUNS").length ? wordsWith(sym, "NOUNS") : ALL_NOUNS);
+    const roll = rng.random();
+    let name;
+    if (roll < 0.42) name = "The " + cap(rng.choice(adjectives)) + " " + noun;
+    else if (roll < 0.84) name = "The " + noun + " of " + cap(rng.choice(nouns));
+    else name = cap(rng.choice(nouns)) + noun.toLowerCase();
+    this._names.set(key, name);
+    return name;
+  }
+
+  /** The same place in the tongue spoken there. */
+  nativeName(path){
+    const rng = rngFor(path, "name");
+    const lang = this.languageFor(path);
+    let parentTerrain = "grass";
+    if (path.length){
+      const parent = this.board(path.slice(0, -1));
+      parentTerrain = parent.terrain[path[path.length - 1]].key;
+    }
+    const sym = TERRAIN_SYMBOL[parentTerrain] || "NATURE";
+    const a = rng.choice(wordsWith(sym, "NOUNS").length ? wordsWith(sym, "NOUNS") : ["stone"]);
+    const b = rng.choice(wordsWith(sym, "ADJECTIVES").length ? wordsWith(sym, "ADJECTIVES") : ["wild"]);
+    return lang.word(a) + lang.word(b).toLowerCase();
+  }
+
+  /* --- settlements -------------------------------------------------- */
+  /** Is there a hamlet in this M-sized cell?  Decided from the land itself. */
+  settlement(path){
+    if (path.length !== DEPTHS - 1) return null;
+    const key = path.join(",");
+    if (this._settlements.has(key)) return this._settlements.get(key);
+    const parent = this.board(path.slice(0, -1));
+    const cell = path[path.length - 1];
+    const terrain = parent.terrain[cell], fields = parent.fields[cell];
+    let result = null;
+    if (terrain.water < 2 &&
+        ["ice","glacier","deep","sea"].indexOf(terrain.key) < 0){
+      const rng = rngFor(path, "settle");
+      let bestRace = null, bestScore = 0.0;
+      for (const [race, taste] of RACE_TASTE){
+        let score = 0.0;
+        for (const [k, v] of taste) if (k === terrain.key){ score = v; break; }
+        if (!score) continue;
+        score *= 0.6 + rng.random() * 0.8;
+        if (score > bestScore){ bestScore = score; bestRace = race; }
+      }
+      /* Water and mild weather help; nobody settles every hollow. */
+      let chance = bestScore / 46.0;
+      if (parent.river[cell]) chance *= 2.1;
+      if (fields.temperature >= 30 && fields.temperature <= 82) chance *= 1.4;
+      if (bestRace && rng.random() < Math.min(0.5, chance)){
+        const kind = rng.choice(SETTLEMENT_KINDS[bestRace]);
+        const lang = this.languages[bestRace];
+        const sym = {DWARF:"EARTH", ELF:"PLANT", HUMAN:"CRAFT",
+                     GOBLIN:"EVIL", KOBOLD:"DARK"}[bestRace];
+        const pool = wordsWith(sym, "NOUNS").length ? wordsWith(sym, "NOUNS")
+                                                    : ["stone", "hall"];
+        const a = rng.choice(pool);
+        let b = rng.choice(pool);
+        for (let i = 0; i < 8; i++){        /* "Hammerhammer" is not a name */
+          if (b !== a) break;
+          b = rng.choice(pool);
+        }
+        const english = cap(a + b);
+        const native = lang.word(a) + lang.word(b).toLowerCase();
+        const pop = SITE_POP[kind] || [25, 160];
+        result = new Settlement(path, english, native, bestRace, kind,
+                                rng.randint(pop[0], pop[1]), rng.randint(1, 900));
+      }
+    }
+    this._settlements.set(key, result);
+    return result;
+  }
+
+  /** Lay a settlement's streets and buildings across the boards below. */
+  _buildSettlementCells(data){
+    const depth = data.depth;
+    let site;
+    if (depth === DEPTHS - 1) site = this.settlement(data.path);
+    else if (depth === DEPTHS) site = this.settlement(data.path.slice(0, -1));
+    else return;
+    if (!site) return;
+    data.settlement = site;
+    const rng = rngFor(data.path, "town");
+
+    if (depth === DEPTHS - 1){
+      /* The M board: which of its L cells the settlement occupies. */
+      const count = Math.max(3, Math.min(30, Math.floor(site.population / 24)));
+      const order = Array.from({length: BOARD_SIZE}, (_, i) => i);
+      const keys = order.map(i => [hexDistance(COORDS[i], COORDS[CENTRE]), rng.random()]);
+      order.sort((a, b) => (keys[a][0] - keys[b][0]) || (keys[a][1] - keys[b][1]));
+      const keep = order.filter(i => data.terrain[i].water < 2).slice(0, count);
+      site.cells = keep;
+      for (const i of keep){
+        data.details[i] = DET._BUILDING;
+        data.chars[i] = detailChar(depth, DET._BUILDING);
+      }
+      return;
+    }
+    /* The L board: streets and walls, if this L cell is part of the town. */
+    this.details(data.path.slice(0, -1));
+    if (site.cells.indexOf(data.path[data.path.length - 1]) < 0) return;
+    for (let i = 0; i < BOARD_SIZE; i++){
+      const [q, r] = COORDS[i];
+      if (data.terrain[i].water >= 2) continue;
+      const ring = hexDistance([q, r], [0, 0]);
+      if (ring === 0 || (ring === 2 && pyMod(q + r, 2) === 0)) data.details[i] = DET._FLOOR;
+      else if (ring === 3 && rng.random() < 0.7) data.details[i] = DET._WALL;
+      else if (ring === 4 && rng.random() < 0.3) data.details[i] = DET._ROAD;
+      data.chars[i] = detailChar(data.depth, data.details[i]);
+    }
+  }
+}
+
+/* ====================================================================
+ * 6.  Everything that moves: wildlife, townspeople, and you.
+ *
+ * The same combat system as the grid game's adventure mode: bump to
+ * attack, wounds by body part, bleeding, and animals that break off and
+ * run when they are badly hurt.
+ * ==================================================================== */
+class Wound {
+  constructor(part, severity, bleeding){
+    this.part = part; this.severity = severity; this.bleeding = bleeding || 0;
+  }
+  describe(){
+    return ({1:"a bruised", 2:"a cut", 3:"a broken", 4:"a severed"})[this.severity] +
+           " " + this.part;
+  }
+}
+
+class Being {
+  constructor(name, kind, glyph, fg, hp, attack, dodge, danger, verb, animal){
+    this.name = name; this.kind = kind; this.glyph = glyph; this.fg = fg;
+    this.x = 0;
+    this.hp = this.max_hp = hp;
+    this.attack = attack; this.dodge = dodge; this.danger = danger || 0;
+    this.verb = verb || "strikes";
+    this.hostile = false;
+    this.animal = animal !== false;
+    this.race = null; this.profession = null; this.weapon = "fists";
+    this.wounds = []; this.dead = false; this.player = false;
+    this.state = "wander"; this.speed = 1.0; this.title = null;
+    this.inventory = []; this.talked = false; this.bleed = 0;
+    /* Things with names of their own take no article. */
+    this.proper = !this.animal;
+    this.home = null;
+  }
+  get alive(){ return !this.dead; }
+  label(){
+    if (this.kind === "beast" && this.title) return this.name + " the " + this.title;
+    if (this.title) return this.name + ", " + this.title;
+    return this.name;
+  }
+  aName(){
+    if (!this.animal) return this.name;
+    return ("aeiou".indexOf(this.name[0].toLowerCase()) >= 0 ? "an " : "a ") + this.name;
+  }
+  theName(){
+    if (this.proper) return this.kind === "beast" ? this.label() : this.name;
+    return "the " + this.name;
+  }
+  parts(){ return this.animal ? ANIMAL_PARTS : BODY_PARTS; }
+  healthWord(){
+    const f = this.hp / this.max_hp;
+    if (f >= 0.99) return "unhurt";
+    if (f >= 0.75) return "scratched";
+    if (f >= 0.50) return "wounded";
+    if (f >= 0.25) return "badly hurt";
+    return "near death";
+  }
+  woundPenalty(){ return this.wounds.reduce((a, w) => a + w.severity, 0); }
+}
+
+function makeCreature(entry, rng){
+  const [name, glyph, fg, hp, atk, dodge, danger, , verb] = entry;
+  const b = new Being(name, "animal", glyph, fg, hp, atk, dodge, danger, verb, true);
+  /* Individuals vary; two wolves are not identical. */
+  /* Python floors toward minus infinity: (-hp)//6, not -(hp//6). */
+  b.max_hp = Math.max(2, hp + rng.randint(Math.floor(-hp / 6), Math.floor(hp / 6)));
+  b.hp = b.max_hp;
+  b.speed = 1.0 + (danger >= 3 ? 0.25 : 0.0);
+  return b;
+}
+
+function severityOf(damage, target){
+  const frac = damage / Math.max(1, target.max_hp);
+  if (frac >= 0.35) return 4;
+  if (frac >= 0.22) return 3;
+  if (frac >= 0.10) return 2;
+  return 1;
+}
+
+/** One blow.  Returns the lines to print. */
+function attackBeing(attacker, defender, rng){
+  const out = [];
+  let [dmgBase, verbYou, verbThey] = WEAPONS[attacker.weapon] ||
+      [attacker.attack, "strike", attacker.verb];
+  if (attacker.animal){ verbYou = verbThey = attacker.verb; }
+
+  const skill = attacker.attack - attacker.woundPenalty();
+  const roll = rng.randint(1, 20) + Math.floor(skill / 3);
+  const evade = defender.dodge + rng.randint(0, 4) -
+                Math.floor(defender.woundPenalty() / 2);
+  const subject = attacker.player ? "You" : cap(attacker.theName());
+  const obj = defender.player ? "you" : defender.theName();
+  const verb = attacker.player ? verbYou : verbThey;
+
+  if (roll <= evade){
+    out.push(subject + " " + verb + " " + obj + ", but " +
+      (defender.player ? "you" : (defender.animal ? "it" : "they")) + " " +
+      (defender.player ? "dodge" : "dodges") + " away.");
+    return out;
+  }
+  const part = rng.choice(defender.parts());
+  let damage = Math.max(1, rng.randint(Math.floor(dmgBase / 2), dmgBase) +
+                        Math.floor(attacker.attack / 4) - rng.randint(0, 2));
+  const crit = roll >= evade + 12;
+  if (crit) damage = Math.trunc(damage * 1.6);
+
+  defender.hp -= damage;
+  const sev = severityOf(damage, defender);
+  const wound = new Wound(part, sev, sev >= 2 ? 1 : 0);
+  defender.wounds.push(wound);
+  if (wound.bleeding) defender.bleed += sev - 1;
+
+  const effect = ({1:"bruising it", 2:"tearing the flesh",
+                   3:"shattering the bone", 4:"severing it"})[sev];
+  out.push(subject + " " + verb + " " + obj + " in the " + part + ", " + effect +
+           "!" + (crit ? "  A critical hit!" : ""));
+
+  if (defender.hp <= 0){
+    defender.dead = true;
+    out.push(defender.player ? "You have been slain."
+                             : cap(defender.theName()) + " is dead!");
+  } else if (!defender.hostile && !defender.player){
+    /* Being hit makes enemies of the previously indifferent. */
+    defender.hostile = true;
+    if (defender.animal && defender.danger === 0 && rng.random() < 0.7)
+      defender.state = "flee";
+  }
+  return out;
+}
+
+function stepBleeding(being, rng){
+  if (being.bleed <= 0 || being.dead) return [];
+  if (rng.random() < 0.22){
+    being.hp -= 1;
+    if (being.hp <= 0){
+      being.dead = true;
+      return [being.player ? "You bleed to death."
+                           : cap(being.theName()) + " bleeds to death."];
+    }
+    if (being.player && rng.random() < 0.3) return ["You are bleeding."];
+  }
+  return [];
+}
+
+/* Which wildlife table suits which hanb terrain. */
+const WILDLIFE_FOR = {
+  forest:"FOREST", taiga:"FOREST", jungle:"FOREST", dry_forest:"FOREST",
+  grass:"GRASSLAND", savanna:"GRASSLAND", steppe:"GRASSLAND", scrub:"GRASSLAND",
+  desert:"DESERT", badland:"DESERT", hills:"HILLS", mountain:"MOUNTAINS",
+  peak:"MOUNTAINS", tundra:"TUNDRA", glacier:"GLACIER", ice:"GLACIER",
+  marsh:"SWAMP", swamp:"SWAMP", river:"LAKE", lake:"LAKE", shore:"LAKE",
+};
+
+/* ====================================================================
+ * 7.  The game: one 61-cell board at a time, and the ladder of scales
+ *     it hangs from.
+ * ==================================================================== */
+const LEVEL_TITLE = {R:"region", Q:"kingdom", P:"province", O:"borough",
+                     N:"district", M:"hamlet", L:"lot", K:"person"};
+const RACE_HP = {DWARF:74, ELF:62, HUMAN:68, GOBLIN:66, KOBOLD:52};
+
+function distanceLabel(m){
+  return m >= 1000 ? (m / 1000).toFixed(1) + " km" : pyRound(m) + " m";
+}
+
+class Game {
+  constructor(world, address, seedBig, player, home){
+    this.w = world;
+    this.rng = new PyRandom(seedBig);
+    this.address = address;
+    this.home = home || null;
+    this.seconds = 0.0;
+    /* Position on the ground is the real state; the address is a reading
+     * of it.  That makes walking exact and exactly reversible. */
+    const p = world.position(address);
+    this.x = p[0]; this.y = p[1];
+    this.view = DEPTHS;
+    this.raw = false;
+    this.log = [];
+    this.creatures = new Map();
+    this.player = player;
+    this.kills = [];
+    this.steps = 0;
+    this.settle();
+    this.say("You stand in " + this.w.nameOf(this.address.slice(0, 1)) + ".");
+    this.arrive();
+  }
+
+  /* --- helpers ------------------------------------------------------ */
+  path(depth){ return this.address.slice(0, depth === undefined ? this.view : depth); }
+  data(depth){ return this.w.board(this.path(depth)); }
+  cell(depth){ return this.address[depth === undefined ? this.view : depth]; }
+  /** Walking at about a metre a second, which is what makes a K a K. */
+  spend(secs){ this.seconds += secs; }
+  elapsed(){ return this.seconds ? timeLabel(this.seconds) : "no time"; }
+  say(text){
+    if (!text) return;
+    this.log.push(text);
+    if (this.log.length > 200) this.log.splice(0, 50);
+  }
+  warp(address){
+    this.address = address.slice();
+    const p = this.w.position(this.address);
+    this.x = p[0]; this.y = p[1];
+  }
+  /** Make sure the person-sized cell we occupy can be stood in. */
+  settle(){
+    const path = this.address.slice(0, DEPTHS);
+    const details = this.w.details(path);
+    const here = this.address[DEPTHS];
+    if (details[here].passable) return;
+    const order = Array.from({length: BOARD_SIZE}, (_, i) => i);
+    const keys = order.map(i => hexDistance(COORDS[i], COORDS[here]));
+    order.sort((a, b) => keys[a] - keys[b]);
+    for (const i of order)
+      if (details[i].passable){ this.warp(path.concat([i])); return; }
+  }
+
+  /* --- creatures ---------------------------------------------------- */
+  /** Whatever lives on this L board, made once and remembered. */
+  denizens(path){
+    path = path || this.address.slice(0, DEPTHS);
+    const key = path.join(",");
+    const got = this.creatures.get(key);
+    if (got !== undefined) return got;
+    const data = this.w.board(path);
+    const details = this.w.details(path);
+    const rng = rngFor(path, "life");
+    const out = [];
+
+    const site = this.w.settlement(path.slice(0, -1));
+    if (site && data.settlement){
+      const race = RACES[site.race];
+      const lang = this.w.languages[site.race];
+      const n = rng.randint(0, 4);
+      for (let i = 0; i < n; i++){
+        const spot = this._free(details, out, rng);
+        if (spot === null) break;
+        const b = new Being(rng.choice(lang.givenNames()), "person",
+          race ? race.glyph : "h", race ? race.color : 250,
+          rng.randint(26, 44), 6, 5, 0, "strikes", false);
+        b.race = site.race;
+        b.profession = rng.choice(["farmer","smith","herder","trader","guard","child"]);
+        b.hostile = site.race === "GOBLIN";
+        b.x = spot;
+        out.push(b);
+      }
+    }
+    const terrain = data.terrain[CENTRE];
+    const table = WILDLIFE[WILDLIFE_FOR[terrain.key]];
+    if (table){
+      const n = rng.randint(0, 3);
+      for (let i = 0; i < n; i++){
+        const entry = rng.choice(table);
+        const m = rng.randint(entry[7][0], entry[7][1]);
+        for (let k = 0; k < m; k++){
+          const spot = this._free(details, out, rng);
+          if (spot === null) break;
+          const beast = makeCreature(entry, rng);
+          beast.hostile = beast.danger >= 3 ||
+                          (beast.danger === 2 && rng.random() < 0.4);
+          beast.x = spot;
+          out.push(beast);
+        }
+      }
+    }
+    this.creatures.set(key, out);
+    return out;
+  }
+  _free(details, taken, rng){
+    const used = new Set(taken.map(b => b.x));
+    const options = [];
+    for (let i = 0; i < BOARD_SIZE; i++)
+      if (details[i].passable && !used.has(i) && i !== this.address[DEPTHS])
+        options.push(i);
+    return options.length ? rng.choice(options) : null;
+  }
+  beingAt(index){
+    for (const b of this.denizens()) if (b.alive && b.x === index) return b;
+    return null;
+  }
+  arrive(){
+    const data = this.w.board(this.path(DEPTHS));
+    const site = this.w.settlement(this.path(DEPTHS - 1));
+    if (site && data.settlement){
+      const race = RACES[site.race];
+      this.say("This is " + site.name + ", " + site.kind.toLowerCase() +
+               " of the " + (race ? race.plural : "folk") + ".");
+    }
+    const hostile = this.denizens().filter(b => b.alive && b.hostile);
+    if (hostile.length) this.say(cap(hostile[0].theName()) + " is here.");
+  }
+
+  /* --- moving, fighting, resting ------------------------------------ */
+  move(direction){
+    const depth = this.view;
+    const [nx, ny] = this.w.stepXY(this.x, this.y, direction, depth);
+    const nxt = this.w.addressAt(nx, ny);
+    if (nxt === null){ this.say("That is the edge of the region."); return; }
+
+    if (depth === DEPTHS){
+      const details = this.w.details(nxt.slice(0, DEPTHS));
+      const target = nxt[DEPTHS];
+      const sameBoard = nxt.slice(0, DEPTHS).join(",") ===
+                        this.address.slice(0, DEPTHS).join(",");
+      if (sameBoard){
+        const other = this.beingAt(target);
+        if (other){ this.strike(other); return; }
+      }
+      if (!details[target].passable){
+        this.say(cap(details[target].name) + " is in the way."); return;
+      }
+      this.address = nxt; this.x = nx; this.y = ny;
+      this.steps += 1;
+      this.spend(metres(cellLevel(DEPTHS)) * 1.0);
+      if (!sameBoard) this.arrive();
+      this.creatureTurns();
+    } else {
+      /* Crossing a whole cell at this scale takes as long as walking it. */
+      this.spend(Math.pow(DIAGONAL, DEPTHS - depth));
+      this.address = nxt; this.x = nx; this.y = ny;
+      this.settle();
+      this.say("You are in " +
+        this.w.nameOf(this.path(depth).concat([this.address[depth]])) + ".");
+    }
+  }
+  strike(other){
+    for (const line of attackBeing(this.player, other, this.rng)) this.say(line);
+    if (other.dead){
+      this.kills.push(other);
+      this.say("You have killed " + this.kills.length + " thing" +
+               (this.kills.length === 1 ? "" : "s") + ".");
+    }
+    this.spend(2);
+    this.creatureTurns();
+  }
+  /** Sit still and mend, if nothing is hunting you. */
+  rest(hours){
+    hours = hours || 1;
+    const here = this.address[DEPTHS];
+    const threats = this.denizens().filter(b => b.alive && b.hostile &&
+      hexDistance(COORDS[b.x], COORDS[here]) <= 4);
+    if (threats.length){
+      this.say("You cannot rest with " + threats[0].theName() + " so close.");
+      return;
+    }
+    const p = this.player;
+    for (let i = 0; i < hours * 4; i++){
+      this.creatureTurns();
+      if (p.dead) return;
+    }
+    const healed = Math.min(p.max_hp - p.hp, 3 + hours * 4);
+    p.hp += healed;
+    if (p.wounds.length && this.rng.random() < 0.5) p.wounds.shift();
+    p.bleed = Math.max(0, p.bleed - 1);
+    this.spend(hours * 3600);
+    this.say("You rest for " + hours + " hour" + (hours === 1 ? "" : "s") + ". " +
+             (healed ? "You feel better." : "Nothing mends."));
+  }
+  /** Whoever is standing beside you, if they will talk. */
+  talkTarget(){
+    const here = this.address[DEPTHS];
+    for (const b of this.denizens()){
+      if (!b.alive || b.animal) continue;
+      if (hexDistance(COORDS[b.x], COORDS[here]) > 1) continue;
+      if (b.hostile){
+        this.say(b.name + " has no interest in talking.");
+        return null;
+      }
+      return b;
+    }
+    this.say("There is nobody beside you to talk to.");
+    return null;
+  }
+  creatureTurns(){
+    const here = this.address[DEPTHS];
+    const details = this.w.details(this.path(DEPTHS));
+    for (const line of stepBleeding(this.player, this.rng)) this.say(line);
+    if (this.player.dead) return;
+    for (const b of this.denizens()){
+      if (!b.alive) continue;
+      const d = hexDistance(COORDS[b.x], COORDS[here]);
+      for (const line of stepBleeding(b, this.rng)) this.say(line);
+      if (!b.alive) continue;
+      /* A wounded animal wants out, not a fight to the death. */
+      if (b.animal && b.hostile && b.hp < b.max_hp * 0.35) b.state = "flee";
+      if (b.state === "flee"){ this._creatureStep(b, here, details, false); continue; }
+      if (b.hostile && d <= 1){
+        for (const line of attackBeing(b, this.player, this.rng)) this.say(line);
+        if (this.player.dead){ this.say("You have died."); return; }
+        continue;
+      }
+      if (b.hostile && d <= 4) this._creatureStep(b, here, details, true);
+      else if (this.rng.random() < 0.35) this._creatureStep(b, here, details, false);
+    }
+  }
+  _creatureStep(b, here, details, toward){
+    const [q, r] = COORDS[b.x];
+    const options = [];
+    for (const [, j] of neighbours(q, r)){
+      if (!details[j].passable || j === here) continue;
+      if (this.beingAt(j)) continue;
+      options.push(j);
+    }
+    if (!options.length) return;
+    const target = COORDS[here];
+    if (toward){
+      const keys = options.map(j => hexDistance(COORDS[j], target));
+      const ord = options.map((_, i) => i).sort((a, c) => keys[a] - keys[c]);
+      b.x = options[ord[0]];
+    } else if (b.state === "flee"){
+      const keys = options.map(j => -hexDistance(COORDS[j], target));
+      const ord = options.map((_, i) => i).sort((a, c) => keys[a] - keys[c]);
+      b.x = options[ord[0]];
+    } else b.x = this.rng.choice(options);
+  }
+  zoom(delta){
+    const nv = this.view + delta;
+    if (nv < 0){ this.say("The R board is the whole of this region."); return; }
+    if (nv > DEPTHS){
+      this.say("An L board is as small as this world goes; its cells are people.");
+      return;
+    }
+    this.view = nv;
+    const level = levelAt(nv);
+    this.say("Looking at the " + level + " board — " + sizeLabel(level) +
+             " across, cells of " + sizeLabel(below(level)) + ".");
+    if (nv === DEPTHS) this.settle();
+  }
+
+  /* --- what people will tell you ------------------------------------ */
+  npcRng(npc){ return rngFor(this.path(DEPTHS), "npc:" + npc.name); }
+
+  /** A hanb world has no chronicle behind it, so nobody recites history.
+   *  What they know is where they are -- and in a world of nested boards
+   *  that is the map. */
+  topicsFor(npc){
+    const w = this.w, rng = this.npcRng(npc);
+    const site = w.settlement(this.path(DEPTHS - 1));
+    const out = [];
+    const race = RACES[npc.race];
+
+    let lines = ['"I am ' + npc.name + '. I am a ' + npc.profession + '."'];
+    const age = rng.randint(14, npc.race !== "ELF" ? 70 : 300);
+    lines.push('"I have seen ' + age + ' winters."');
+    if (site){
+      lines.push(rng.random() < 0.5
+        ? '"I was born in ' + site.name + ' and I have not left it."'
+        : '"I came to ' + site.name + ' when I was young."');
+    }
+    rng.choice(npc.name.split(""));
+    const kin = rng.choice(w.languages[npc.race || "HUMAN"].givenNames());
+    lines.push('"' + kin + ' is my ' +
+      rng.choice(["mother","father","sister","brother","child","cousin"]) + '."');
+    lines.push('"' + rng.choice([
+      "There is little to tell. The seasons come round.",
+      "I work, and then I sleep. That is the whole of it.",
+      "Ask me about the land. That I do know.",
+      "You are the first stranger here in a long while."]) + '"');
+    out.push(["Yourself", lines]);
+
+    lines = [];
+    if (site){
+      lines.push('"This is ' + site.name + '. In our own tongue, ' + site.native + '."');
+      lines.push('"A ' + site.kind.toLowerCase() + ' of the ' +
+                 (race ? race.plural : "folk") + '. ' + site.population +
+                 ' of us live here."');
+      lines.push('"It was founded in the year ' + site.founded + '."');
+    }
+    lines.push('"The ground you stand on is ' + w.nameOf(this.path(DEPTHS)) + '."');
+    lines.push('"It is one of sixty-one lots in ' + w.nameOf(this.path(DEPTHS - 1)) + '."');
+    lines.push('"This is ' + this.data(DEPTHS).terrain[this.address[DEPTHS]].name +
+               ' country. It is what it is."');
+    out.push(["This place", lines]);
+
+    lines = ['"Everything sits inside something larger. Listen:"'];
+    for (let depth = DEPTHS - 1; depth >= 0; depth--){
+      const level = cellLevel(depth);
+      const name = w.nameOf(this.path(depth).concat([this.address[depth]]));
+      lines.push('"' + name + ' — ' + sizeLabel(level) +
+        ' across, and sixty-one of them make ' +
+        (depth ? w.nameOf(this.path(depth)) : "the whole region") + '."');
+    }
+    lines.push('"Your address is ' + HanbWorld.formatAddress(this.address) +
+               '. Seven marks, one for each."');
+    lines.push('"Say it to anyone and they will know the very metre you were standing on."');
+    out.push(["The land", lines]);
+
+    lines = [];
+    const hereKey = this.address.slice(0, DEPTHS - 1).join(",");
+    for (const {site: other, path, dist, brg} of w.nearbySettlements(this.address).slice(0, 6)){
+      if (path.join(",") === hereKey) continue;
+      lines.push('"' + other.name + ', a ' + other.kind.toLowerCase() + ' of the ' +
+        (RACES[other.race] ? RACES[other.race].plural : "folk") + ', lies ' + brg +
+        ' — ' + distanceLabel(dist) + ' away, ' + timeLabel(dist) + ' of walking."');
+    }
+    if (!lines.length) lines.push('"Nothing within a day\'s walk. We are alone here."');
+    else lines.push('"Beyond that I could not say. I have not been."');
+    out.push(["Directions", lines]);
+
+    lines = [];
+    const seen = new Set();
+    for (const b of this.denizens()){
+      if (!(b.alive && b.animal && b.danger >= 2)) continue;
+      if (seen.has(b.name)) continue;
+      seen.add(b.name);
+      lines.push('"There is ' + b.aName() + ' about, close by. Mind yourself."');
+      if (seen.size >= 3) break;
+    }
+    const hazard = {
+      peak:"The high ground kills men who go up it unprepared.",
+      mountain:"The mountainside is loose. It moves under you.",
+      glacier:"The ice is thin in places and the cold is patient.",
+      ice:"The ice is thin in places and the cold is patient.",
+      swamp:"The mire will take a horse whole. Keep to the reeds.",
+      marsh:"The mire will take a horse whole. Keep to the reeds.",
+      desert:"Carry water. There is none out there.",
+      badland:"Carry water. There is none out there.",
+      jungle:"Everything in the green wants something from you.",
+    }[this.data(DEPTHS).terrain[CENTRE].key];
+    if (hazard) lines.push('"' + hazard + '"');
+    if (!lines.length) lines.push('"Quiet enough, lately. That never lasts."');
+    out.push(["Dangers", lines]);
+    return out;
+  }
+}
+
+/* ====================================================================
+ * 8.  Who walks the boards, and where they start.
+ * ==================================================================== */
+function seedFromText(text){
+  text = (text || "").trim();
+  if (!text){
+    const a = new Uint32Array(2);
+    if (typeof crypto !== "undefined" && crypto.getRandomValues) crypto.getRandomValues(a);
+    else { a[0] = (Math.random() * 4294967296) >>> 0; a[1] = (Math.random() * 65536) >>> 0; }
+    return (BigInt(a[0]) << 16n) | BigInt(a[1] & 0xffff);   /* 48 bits, as Python does */
+  }
+  if (/^[+-]?\d+$/.test(text)) return BigInt(text);
+  return bytesBig(blake2b(text, 6));
+}
+const nameSeed = name => bytesBig(blake2b(name, 8));
+
+/** The character-creation screen's own state, rolled from the world seed. */
+class CharacterMaker {
+  constructor(world, seedBig){
+    this.w = world;
+    this.seed = seedBig;
+    this.rng = new PyRandom(seedBig);
+    this.races = Object.keys(RACES);
+    this.raceI = 0; this.profI = 0;
+    this.name = "";
+    this.reroll();
+  }
+  raceKey(){ return this.races[this.raceI]; }
+  profession(){
+    const list = PROFESSIONS[this.raceKey()];
+    return list[this.profI % list.length];
+  }
+  reroll(){
+    const lang = this.w.languages[this.raceKey()];
+    const given = this.rng.choice(lang.givenNames());
+    const a = this.rng.choice(ALL_NOUNS);
+    const b = this.rng.choice(ALL_ADJECTIVES);
+    let surname = lang.word(a) + lang.word(b).toLowerCase();
+    if (surname.length > 15) surname = lang.word(a);
+    this.name = given + " " + surname;
+  }
+  adjustRace(delta){
+    this.raceI = pyMod(this.raceI + delta, this.races.length);
+    this.profI = 0;
+    this.reroll();
+  }
+  adjustProfession(delta){
+    this.profI = pyMod(this.profI + delta, PROFESSIONS[this.raceKey()].length);
+  }
+  begin(){
+    const race = this.raceKey();
+    const rng = new PyRandom(this.seed ^ nameSeed(this.name));
+    const [address, site] = this.w.findStart(rng, race);
+    const player = new Being(this.name, "player", "@", 231,
+      RACE_HP[race] || 68, 11, 7, 0, "strike", false);
+    player.player = true;
+    player.race = race;
+    player.profession = this.profession();
+    player.weapon = PROFESSION_WEAPON[player.profession] || "short sword";
+    player.inventory = [player.weapon, "a pack", "three days' rations", "a waterskin"];
+    return new Game(this.w, address, this.seed, player, site);
+  }
+}
+/* ==ENGINE-END== */
+
+/* ====================================================================
+ * 9.  The interface.
+ *
+ * The terminal game draws the board in the reference project's own
+ * edgeboard rotation -- rows of characters, indented to interlock.  The
+ * same 61 cells are laid out here as real hexagons on the same axial
+ * coordinates, so what you are looking at is still a hanb board; press
+ * v and it is drawn with the hanb values themselves.
+ * ==================================================================== */
+const XTERM_BASE = ["#000000","#800000","#008000","#808000","#000080","#800080",
+  "#008080","#c0c0c0","#808080","#ff0000","#00ff00","#ffff00","#0000ff",
+  "#ff00ff","#00ffff","#ffffff"];
+const CUBE = [0, 95, 135, 175, 215, 255];
+const _xtermCache = new Map();
+function xterm(n){
+  let hit = _xtermCache.get(n);
+  if (hit) return hit;
+  let out;
+  if (n < 16) out = XTERM_BASE[n];
+  else if (n < 232){
+    const c = n - 16;
+    const f = v => v.toString(16).padStart(2, "0");
+    out = "#" + f(CUBE[Math.floor(c / 36)]) + f(CUBE[Math.floor(c / 6) % 6]) + f(CUBE[c % 6]);
+  } else {
+    const v = 8 + (n - 232) * 10;
+    out = "#" + v.toString(16).padStart(2, "0").repeat(3);
+  }
+  _xtermCache.set(n, out);
+  return out;
+}
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"})[c]);
+
+let WORLD = null, GAME = null, MAKER = null, SEED = 0n, MODAL = null;
+
+/* --------------------------------------------------------------- setup */
+const SETUP_FIELDS = ["seed", "race", "profession", "name"];
+const SETUP_LABELS = {seed:"Seed", race:"People", profession:"Trade", name:"Name"};
+const SETUP_HELP = {
+  seed: "A number or a phrase.  The same seed rebuilds the same world — and the same world the terminal game builds.",
+  race: "You will start in a settlement of your own people.",
+  profession: "Decides your weapon and what you are good at.",
+  name: "Made in your people's own tongue.  Type over it if you like.",
+};
+let setupSel = 1, seedText = "";
+
+function drawSetup(){
+  const box = $("fields");
+  box.innerHTML = "";
+  SETUP_FIELDS.forEach((f, i) => {
+    const row = document.createElement("div");
+    row.className = "field" + (i === setupSel ? " sel" : "");
+    let value;
+    if (f === "seed") value = seedText;
+    else if (f === "race") value = cap(RACES[MAKER.raceKey()].name);
+    else if (f === "profession") value = MAKER.profession();
+    else value = MAKER.name;
+    const editable = (f === "seed" || f === "name");
+    row.innerHTML =
+      '<div class="lab">' + SETUP_LABELS[f] + '</div><div class="val">' +
+      (f === "race" || f === "profession" ? '<button class="arrow" data-adj="-1">&lt;</button>' : '') +
+      (editable
+        ? '<input data-field="' + f + '" value="' + esc(value) + '"' +
+          (f === "seed" ? ' placeholder="leave blank for a random world"' : '') + '>'
+        : '<span class="v">' + esc(value) + '</span>') +
+      (f === "race" || f === "profession" ? '<button class="arrow" data-adj="1">&gt;</button>' : '') +
+      '</div>';
+    row.addEventListener("mousedown", e => {
+      if (e.target.dataset.adj){
+        e.preventDefault();
+        adjustSetup(f, Number(e.target.dataset.adj));
+      } else setupSel = i;
+      drawSetup();
+    });
+    const input = row.querySelector("input");
+    if (input){
+      input.addEventListener("input", () => {
+        if (f === "seed") seedText = input.value;
+        else MAKER.name = input.value;
+      });
+      input.addEventListener("focus", () => { setupSel = i; });
+    }
+    box.appendChild(row);
+  });
+  $("worldname").innerHTML = "This world is called <b style=\"color:var(--head)\">" +
+    esc(WORLD.nameOf([])) + "</b>.  Seed " + esc(SEED.toString()) + ".";
+  $("setuphelp").textContent = SETUP_HELP[SETUP_FIELDS[setupSel]];
+}
+
+function adjustSetup(field, delta){
+  if (field === "race") MAKER.adjustRace(delta);
+  else if (field === "profession") MAKER.adjustProfession(delta);
+  else if (field === "name") MAKER.reroll();
+}
+
+function newMaker(){
+  /* The seed decides the world, so changing it rebuilds everything --
+   * but not the choices already made on this screen. */
+  const keep = MAKER ? [MAKER.raceI, MAKER.profI] : null;
+  SEED = seedFromText(seedText);
+  WORLD = new HanbWorld(SEED.toString());
+  MAKER = new CharacterMaker(WORLD, SEED);
+  if (keep){
+    MAKER.raceI = keep[0]; MAKER.profI = keep[1];
+    /* Only re-roll if the kept people are not the ones the maker starts
+     * with: the name has to be in their tongue, and rolling it again
+     * would consume a draw the terminal game never makes, so the same
+     * seed would stop offering the same character. */
+    if (keep[0] !== 0) MAKER.reroll();
+  }
+}
+
+function setout(){
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+  const wasBlank = !seedText.trim();
+  const name = MAKER.name.trim() || "A wanderer";
+  MAKER.name = name;
+  $("go").textContent = "Finding a settlement…";
+  $("go").disabled = true;
+  /* Let the button repaint before the world is walked. */
+  setTimeout(() => {
+    try {
+      GAME = MAKER.begin();
+    } catch (err){
+      $("go").textContent = "Set out"; $("go").disabled = false;
+      $("setuphelp").textContent = "Something went wrong: " + err;
+      throw err;
+    }
+    if (wasBlank) seedText = SEED.toString();
+    $("setup").hidden = true;
+    $("game").hidden = false;
+    buildBoard();
+    redraw();
+  }, 30);
+}
+
+/* --------------------------------------------------------------- board */
+let cellNodes = [];
+function buildBoard(){
+  const board = $("board");
+  board.innerHTML = "";
+  cellNodes = [];
+  for (let i = 0; i < BOARD_SIZE; i++){
+    const [q, r] = COORDS[i];
+    const [x, y] = axialToXY(q, r);
+    const d = document.createElement("div");
+    d.className = "cell";
+    d.style.left = "calc(var(--u) * " + (x + 4) + ")";
+    d.style.top = "calc(var(--u) * " + (y + 3.4641016) + ")";
+    d.addEventListener("click", () => clickCell(i));
+    board.appendChild(d);
+    cellNodes.push(d);
+  }
+  sizeBoard();
+}
+function sizeBoard(){
+  const wrap = $("boardwrap");
+  const w = wrap.clientWidth - 16, h = wrap.clientHeight - 16;
+  const u = Math.max(14, Math.min(w / 9.0, h / 8.09));
+  document.documentElement.style.setProperty("--u", u + "px");
+  const board = $("board");
+  board.style.width = (u * 9.0) + "px";
+  board.style.height = (u * 8.083) + "px";
+}
+window.addEventListener("resize", () => { if (GAME){ sizeBoard(); } });
+
+function clickCell(i){
+  if (!GAME || MODAL) return;
+  const here = GAME.cell();
+  const [hq, hr] = COORDS[here], [cq, cr] = COORDS[i];
+  if (hexDistance([hq, hr], [cq, cr]) === 1){
+    for (const [name, dq, dr] of DIRS)
+      if (hq + dq === cq && hr + dr === cr){ GAME.move(name); redraw(); return; }
+  }
+  openDialog(lookDialog(i));
+}
+
+/* -------------------------------------------------------------- drawing */
+function redraw(){
+  const g = GAME, w = g.w, data = g.data(), level = data.level;
+  $("who").textContent = g.player.name + " · " + w.nameOf(g.path(g.view));
+  $("scale").textContent = level + "  " + (LEVEL_TITLE[level] || "") + "  " + sizeLabel(level);
+
+  const details = data.depth >= DEPTHS - 1 ? w.details(g.path()) : null;
+  const here = g.cell();
+  const occupied = new Map();
+  if (g.view === DEPTHS) for (const b of g.denizens()) if (b.alive) occupied.set(b.x, b);
+
+  for (let i = 0; i < BOARD_SIZE; i++){
+    const node = cellNodes[i], terrain = data.terrain[i];
+    let glyph, fg;
+    if (g.raw){ glyph = data.chars[i]; fg = terrain.fg; }
+    else if (details){ glyph = details[i].glyph; fg = details[i].fg; }
+    else { glyph = terrain.glyph; fg = terrain.fg; }
+    let cls = "cell";
+    const being = occupied.get(i);
+    if (being){
+      glyph = g.raw ? data.chars[i] : being.glyph;
+      fg = being.fg;
+      if (being.hostile) cls += " hostile";
+    }
+    if (i === here){ glyph = g.raw ? data.chars[i] : "@"; cls += " here"; }
+    node.className = cls;
+    node.textContent = glyph;
+    node.style.color = xterm(fg);
+    node.style.background = xterm(terrain.bg);
+    node.title = terrain.name + (details ? " · " + details[i].name : "") +
+                 "  [" + data.chars[i] + " = " + describeChar(data.chars[i]) + "]";
+  }
+  $("boardnote").textContent = g.raw
+    ? "hanb values — the board as hanb writes it"
+    : (LEVEL_TITLE[level] || "") + " board · " + BOARD_SIZE + " cells of " + sizeLabel(below(level));
+
+  drawPanel(data, here, details);
+  drawLadder();
+  drawLog();
+  const p = g.player;
+  $("statusbar").innerHTML =
+    "address <b>" + esc(HanbWorld.formatAddress(g.address)) + "</b>" +
+    "<span>cells are " + esc(describeChar(below(level))) + "</span>" +
+    "<span>afoot " + esc(g.elapsed()) + " — hanb <b>" +
+      esc(timeChar(Math.max(1.0, g.seconds))) + "</b></span>" +
+    "<span>" + g.steps + " metres walked</span>" +
+    "<span>seed " + esc(SEED.toString()) + "</span>" +
+    (p.dead ? '<span style="color:var(--bad)">you are dead — press q</span>' : "");
+}
+
+function drawPanel(data, here, details){
+  const g = GAME, w = g.w, terrain = data.terrain[here];
+  const out = [];
+  const title = g.view === DEPTHS ? w.nameOf(g.path(DEPTHS))
+                                  : w.nameOf(g.path(g.view).concat([here]));
+  out.push('<h2>' + esc(title) + '</h2>');
+  out.push('<div class="terr" style="color:' + xterm(terrain.fg) + '">' +
+           esc(terrain.name) + '</div>');
+
+  const site = g.view >= DEPTHS - 1 ? w.settlement(g.path(DEPTHS - 1)) : null;
+  if (site){
+    const race = RACES[site.race];
+    out.push('<div class="grp"><div class="site">' + esc(site.name) + '</div>' +
+      '<div class="row"><span>' + esc(site.kind) + ' · ' + esc(site.native) + '</span>' +
+      '<span>' + site.population + ' souls</span></div>' +
+      '<div class="row"><span>' + esc(race ? race.plural : "folk") + '</span>' +
+      '<span>founded ' + site.founded + '</span></div></div>');
+  }
+
+  if (g.view === DEPTHS){
+    const p = g.player, frac = Math.max(0, p.hp / p.max_hp);
+    const col = frac >= 0.75 ? "var(--good)" : frac >= 0.4 ? "var(--warn)" : "var(--bad)";
+    const hurt = [];
+    if (p.wounds.length){
+      const worst = p.wounds.slice().sort((a, b) => b.severity - a.severity)[0];
+      hurt.push(worst.describe());
+    }
+    if (p.bleed) hurt.push("bleeding");
+    out.push('<div class="grp">' +
+      '<div class="row"><b>' + esc(p.healthWord()) + '</b><span>' +
+        Math.max(0, p.hp) + "/" + p.max_hp + '</span></div>' +
+      '<div class="hpbar"><i style="width:' + (frac * 100) + '%;background:' + col + '"></i></div>' +
+      '<div class="row" style="color:' + (hurt.length ? "var(--bad)" : "var(--dim)") + '">' +
+        esc(hurt.length ? hurt.join(", ") : (p.profession || "wanderer") + ", " + p.weapon) +
+      '</div></div>');
+    out.push('<div class="grp"><div class="row"><span>here</span><b>' +
+             esc(details[here].name) + '</b></div></div>');
+    const near = g.denizens().filter(b => b.alive);
+    if (near.length){
+      out.push('<div class="grp"><h2>On this lot</h2><ul class="beings">');
+      for (const b of near.slice(0, 6))
+        out.push('<li><span style="color:' + xterm(b.fg) + '">' + esc(b.glyph) + '</span>' +
+          '<span>' + esc(b.name) + '</span>' +
+          (b.hostile ? '<span style="color:var(--bad)">!</span>' : '') +
+          '<span style="margin-left:auto;color:var(--faint)">' + esc(b.healthWord()) + '</span></li>');
+      out.push('</ul></div>');
+    }
+  } else {
+    const f = data.fields[here];
+    out.push('<div class="grp">' +
+      '<div class="row"><span>elevation</span><b>' + Math.floor(f.elevation) + '</b></div>' +
+      '<div class="row"><span>moisture</span><b>' + Math.floor(f.moisture) + '</b></div>' +
+      '<div class="row"><span>warmth</span><b>' + Math.floor(f.temperature) + '</b></div>' +
+      (data.river[here] ? '<div class="row" style="color:' + xterm(45) +
+        '"><span>water runs through it</span></div>' : '') +
+      '</div>');
+    out.push('<div class="grp"><div class="row"><span>hanb value</span><b>' +
+      esc(data.chars[here]) + '</b></div><div class="row"><span>' +
+      esc(describeChar(data.chars[here])) + '</span></div></div>');
+  }
+  $("panel").innerHTML = out.join("");
+}
+
+function drawLadder(){
+  const g = GAME, w = g.w, out = [];
+  for (let depth = 0; depth < ADDRESS_LEN; depth++){
+    const level = cellLevel(depth);
+    const on = depth === g.view;
+    let text;
+    if (depth === DEPTHS)
+      text = "you, standing on " + w.details(g.path(DEPTHS))[g.address[depth]].name;
+    else
+      text = w.nameOf(g.path(depth).concat([g.address[depth]]));
+    out.push('<div class="rung' + (on ? " on" : "") + '" data-depth="' + depth + '">' +
+      '<span>' + (on ? "›" : "") + '</span>' +
+      '<span class="lv">' + level + '</span>' +
+      '<span class="ti">' + (LEVEL_TITLE[level] || "") + '</span>' +
+      '<span class="sz">' + sizeLabel(level) + '</span>' +
+      '<span class="ch">' + esc(charAt(g.address[depth])) + '</span>' +
+      '<span class="nm">' + esc(text) + '</span></div>');
+  }
+  const box = $("ladder");
+  box.innerHTML = out.join("");
+  for (const node of box.children)
+    node.addEventListener("click", () => {
+      GAME.zoom(Number(node.dataset.depth) - GAME.view);
+      redraw();
+    });
+}
+
+function drawLog(){
+  const box = $("log");
+  box.innerHTML = GAME.log.slice(-6).map(t => "<p>" + esc(t) + "</p>").join("");
+  box.scrollTop = box.scrollHeight;
+}
+
+/* -------------------------------------------------------------- dialogs */
+function openDialog(d){
+  MODAL = d;
+  const box = $("modal");
+  box.hidden = false;
+  box.innerHTML = '<div class="dialog" style="width:' + (d.width || "680px") + '">' +
+    '<h2>' + esc(d.title) + '</h2>' + d.html +
+    '<footer><span>' + (d.foot || "") + '</span><span>Esc to close</span></footer></div>';
+  box.onmousedown = e => { if (e.target === box) closeDialog(); };
+  if (d.after) d.after();
+}
+function closeDialog(){
+  MODAL = null;
+  $("modal").hidden = true;
+  $("modal").innerHTML = "";
+  if (GAME) redraw();
+}
+const L = (text, cls) => '<div' + (cls ? ' class="' + cls + '"' : '') + '>' +
+  (text === "" ? "&nbsp;" : esc(text)) + '</div>';
+
+/** Describe one cell of the board on screen, and the whole address. */
+function lookDialog(index){
+  const g = GAME, w = g.w, data = g.data();
+  const here = index === undefined ? g.cell() : index;
+  const terrain = data.terrain[here], f = data.fields[here];
+  const cellPath = g.path(g.view).concat([here]);
+  const out = [];
+  out.push(L(w.nameOf(cellPath) || w.nameOf(g.path(g.view)), "h"));
+  out.push(L(terrain.name + " · " + w.nativeName(cellPath), "d"));
+  out.push(L(""));
+  out.push(L("This is one cell of the " + data.level + " board, so it is " +
+             sizeLabel(below(data.level)) + " across."));
+  out.push(L("Its hanb value is '" + data.chars[here] + "' — " +
+             describeChar(data.chars[here]) + "."));
+  out.push(L(""));
+  out.push(L("elevation " + padL(Math.floor(f.elevation), 4) +
+             "    moisture " + padL(Math.floor(f.moisture), 4) +
+             "    warmth " + padL(Math.floor(f.temperature), 4), "d"));
+  if (data.river[here]) out.push(L("Water runs through it.", "k"));
+  const site = g.view >= DEPTHS - 1 ? w.settlement(g.path(DEPTHS - 1)) : null;
+  if (site){
+    const race = RACES[site.race];
+    out.push(L(""));
+    out.push(L(site.name, "a"));
+    out.push(L(site.kind.toLowerCase() + " of the " + (race ? race.plural : "folk") +
+               ", " + site.population + " souls, founded in the year " + site.founded, "d"));
+  }
+  out.push(L(""));
+  out.push(L("Address", "h"));
+  for (let depth = 0; depth < ADDRESS_LEN; depth++){
+    const level = cellLevel(depth);
+    const name = w.nameOf(g.path(depth).concat([g.address[depth]]));
+    out.push(L("  " + level + "  " + pad(LEVEL_TITLE[level] || "", 9) + " " +
+               pad(sizeLabel(level), 8) + " " + charAt(g.address[depth]) + "  " +
+               (name || "you"), "d"));
+  }
+  out.push(L("  full address: " + HanbWorld.formatAddress(g.address), "k"));
+  out.push(L(""));
+  out.push(L("The same board, written the way hanb writes it", "h"));
+  out.push('<pre>' + esc(renderBoard(data.chars)) + '</pre>');
+  return {title: "Where you are", html: '<div class="body">' + out.join("") + '</div>'};
+}
+
+function sheetDialog(){
+  const g = GAME, p = g.player, race = RACES[p.race], out = [];
+  out.push(L(p.name, "h"));
+  out.push(L((race ? race.name + " " : "") + (p.profession || "wanderer") +
+             (g.home ? " of " + g.home.name : ""), "d"));
+  out.push(L(""));
+  out.push(L("health   " + Math.max(0, p.hp) + " of " + p.max_hp + "  (" + p.healthWord() + ")"));
+  out.push(L("weapon   " + p.weapon));
+  out.push(L("attack   " + p.attack + "       dodge " + p.dodge));
+  out.push(L(""));
+  out.push(L("Wounds", "h"));
+  if (p.wounds.length) for (const wnd of p.wounds.slice(0, 8)) out.push(L("  " + wnd.describe(), "b"));
+  else out.push(L("  none", "d"));
+  out.push(L(""));
+  out.push(L("Carried", "h"));
+  for (const item of (p.inventory.length ? p.inventory : ["nothing"])) out.push(L("  " + item, "d"));
+  out.push(L(""));
+  out.push(L("Deeds", "h"));
+  if (g.kills.length){
+    const counts = new Map();
+    for (const k of g.kills) counts.set(k.name, (counts.get(k.name) || 0) + 1);
+    const rows = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]).slice(0, 8);
+    for (const [name, n] of rows) out.push(L("  " + n + " × " + name, "a"));
+  } else out.push(L("  You have killed nothing.", "d"));
+  out.push(L(""));
+  out.push(L("You have been afoot " + g.elapsed() + " — hanb '" +
+             timeChar(Math.max(1.0, g.seconds)) + "' — and walked " + g.steps + " metres.", "d"));
+  out.push(L("You are standing at " + HanbWorld.formatAddress(g.address) + ".", "k"));
+  return {title: "Character", html: '<div class="body">' + out.join("") + '</div>', width: "560px"};
+}
+
+function logDialog(){
+  const lines = GAME.log.length ? GAME.log : ["Nothing has happened yet."];
+  return {title: "What has happened",
+          html: '<div class="body" id="logbody">' + lines.map(t => L(t)).join("") + '</div>',
+          after(){ const b = $("logbody"); b.scrollTop = b.scrollHeight; }};
+}
+
+function helpDialog(){
+  const out = [];
+  const H = t => out.push(L(t, "h")), P = t => out.push(L(t));
+  H("What you are looking at");
+  P("  A hanb board: 61 hexagonal cells, laid out in rows of");
+  P("  5 6 7 8 9 8 7 6 5, exactly as the hanb project counts them.");
+  P("");
+  P("  Seven boards nest inside each other.  R is the region; each of");
+  P("  its cells opens into a Q board, and so on down through P O N M");
+  P("  to L, a ten-metre lot whose cells are one metre — the size of you.");
+  P("");
+  H("Moving");
+  P("  y u        northwest, northeast        7 9 also work");
+  P("  h   l      west, east                  4 6");
+  P("  b n        southwest, southeast        1 3");
+  P("  Walk off the edge of a board and the address carries into the");
+  P("  cell next door, one level up.  Click a neighbouring cell to step.");
+  P("");
+  P("  Walk into a creature to attack it.");
+  P("");
+  H("Doing things");
+  P("  t          talk to whoever is beside you");
+  P("  r  R       rest an hour, or eight");
+  P("  c          your character and wounds");
+  P("  m          everything that has happened");
+  P("  <  >       look at a larger or smaller board");
+  P("             above L one keypress moves a whole cell at that scale");
+  P("  v          show raw hanb values instead of the ground");
+  P("  Enter      describe this cell and the whole address");
+  P("  g          type a seven-character address and go there");
+  P("  q          leave, and make somebody else");
+  P("");
+  P("Ask people about the land: they will read you the whole ladder of");
+  P("names from your lot up to the continent.");
+  return {title: "hanb", html: '<div class="body">' + out.join("") + '</div>'};
+}
+
+function gotoDialog(){
+  let text = "", error = "";
+  const render = () => {
+    $("gotoin").value = text;
+    $("gotoerr").textContent = error;
+  };
+  const d = {
+    title: "Go to an address",
+    width: "480px",
+    foot: "Enter to travel",
+    html: '<div class="body goto">' +
+      L("Seven hanb characters, one per level: R Q P O N M L", "d") +
+      '<input id="gotoin" maxlength="7" spellcheck="false" autocomplete="off">' +
+      L("alphabet:  a-z  A-Z  0-9  -  .", "d") +
+      '<div class="err" id="gotoerr"></div></div>',
+    after(){
+      const input = $("gotoin");
+      input.focus();
+      input.addEventListener("input", () => {
+        text = Array.from(input.value).filter(c => ALPHABET.indexOf(c) >= 0).join("").slice(0, 7);
+        error = "";
+        render();
+      });
+    },
+    onKey(e){
+      if (e.key === "Enter"){
+        const addr = HanbWorld.parseAddress(text);
+        if (addr.length !== ADDRESS_LEN){ error = "Need exactly 7 characters."; render(); return; }
+        if (addr.some(i => i >= BOARD_SIZE)){ error = "A board has only 61 cells (a to 8)."; render(); return; }
+        GAME.warp(addr);
+        GAME.view = DEPTHS;
+        GAME.settle();
+        GAME.say("You travel to " + HanbWorld.formatAddress(GAME.address) + ".");
+        GAME.arrive();
+        closeDialog();
+      }
+    },
+    swallowKeys: true,
+  };
+  return d;
+}
+
+function talkDialog(npc){
+  const topics = GAME.topicsFor(npc);
+  let sel = 0;
+  const paint = () => {
+    const list = $("topiclist"), said = $("said");
+    list.innerHTML = topics.map(([t], i) =>
+      '<button class="' + (i === sel ? "on" : "") + '" data-i="' + i + '">' + esc(t) + '</button>').join("");
+    for (const b of list.children)
+      b.addEventListener("click", () => { sel = Number(b.dataset.i); paint(); });
+    said.innerHTML = topics[sel][1].map(l => "<p>" + esc(l) + "</p>").join("");
+    said.scrollTop = 0;
+  };
+  const sub = [npc.profession, npc.race ? RACES[npc.race].name : null]
+    .filter(Boolean).join(" · ");
+  return {
+    title: npc.label() + (sub ? "  —  " + sub : ""),
+    width: "720px",
+    foot: "↑↓ topic",
+    html: '<div class="body talk" style="padding:0;height:min(60vh,420px)">' +
+      '<div class="topics" id="topiclist"></div><div class="said" id="said"></div></div>',
+    after: paint,
+    onKey(e){
+      if (e.key === "ArrowUp" || e.key === "k"){ sel = pyMod(sel - 1, topics.length); paint(); }
+      else if (e.key === "ArrowDown" || e.key === "j"){ sel = pyMod(sel + 1, topics.length); paint(); }
+      else if (e.key === "Enter" || e.key === "q") closeDialog();
+    },
+  };
+}
+
+function deathDialog(){
+  return {
+    title: "You have died",
+    width: "460px",
+    foot: "",
+    html: '<div class="body">' + L("Your walk ends at " +
+      HanbWorld.formatAddress(GAME.address) + ".", "b") +
+      L("") + L("The world is still there.  It always was: it is a" ) +
+      L("function of the seed, and nothing you did wrote to it.") + L("") +
+      '<div style="text-align:center"><button class="btn primary" id="again">' +
+      'Make somebody else</button></div></div>',
+    after(){ $("again").addEventListener("click", restart); },
+  };
+}
+
+function restart(){
+  MODAL = null;
+  $("modal").hidden = true; $("modal").innerHTML = "";
+  $("game").hidden = true;
+  $("setup").hidden = false;
+  GAME = null;
+  $("go").textContent = "Set out"; $("go").disabled = false;
+  newMaker();
+  drawSetup();
+}
+
+/* ---------------------------------------------------------------- input */
+const MOVES = {
+  y:"NW", u:"NE", h:"W", l:"E", b:"SW", n:"SE",
+  "7":"NW", "9":"NE", "4":"W", "6":"E", "1":"SW", "3":"SE",
+  ArrowLeft:"W", ArrowRight:"E", ArrowUp:"NW", ArrowDown:"SE",
+};
+
+function gameKey(e){
+  const g = GAME, k = e.key;
+  if (g.player.dead){
+    if (k === "q" || k === "Escape" || k === "Enter") openDialog(deathDialog());
+    else if (k === "m") openDialog(logDialog());
+    return;
+  }
+  if (MOVES[k] !== undefined) return act(() => g.move(MOVES[k]));
+  switch (k){
+    case "t": { const who = g.talkTarget();
+                if (who) openDialog(talkDialog(who)); else redraw(); break; }
+    case "r": return act(() => g.rest(1));
+    case "R": return act(() => g.rest(8));
+    case "c": openDialog(sheetDialog()); break;
+    case "m": openDialog(logDialog()); break;
+    case "<": case ",": g.zoom(-1); redraw(); break;
+    case ">": case ".": g.zoom(1); redraw(); break;
+    case "v": g.raw = !g.raw;
+              g.say("Showing " + (g.raw ? "hanb values" : "the ground") + ".");
+              redraw(); break;
+    case "Enter": openDialog(lookDialog()); break;
+    case "g": openDialog(gotoDialog()); break;
+    case "?": openDialog(helpDialog()); break;
+    case "q": case "Escape": openDialog(confirmLeave()); break;
+  }
+}
+
+/** Anything that takes a turn: do it, redraw, and notice if it killed you. */
+function act(fn){
+  fn();
+  redraw();
+  if (GAME.player.dead && !MODAL) openDialog(deathDialog());
+}
+
+function confirmLeave(){
+  return {
+    title: "Leave?",
+    width: "420px",
+    html: '<div class="body">' + L("Stop walking and make somebody else?") + L("") +
+      '<div style="display:flex;gap:10px;justify-content:center">' +
+      '<button class="btn" id="stay">Keep walking</button>' +
+      '<button class="btn primary" id="leave">Leave</button></div></div>',
+    after(){
+      $("stay").addEventListener("click", closeDialog);
+      $("leave").addEventListener("click", restart);
+    },
+  };
+}
+
+document.addEventListener("keydown", e => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const typing = e.target && (e.target.tagName === "INPUT");
+  if (MODAL){
+    if (e.key === "Escape"){ e.preventDefault(); closeDialog(); return; }
+    if (MODAL.onKey){
+      const before = MODAL;
+      MODAL.onKey(e);
+      if (before === MODAL && (e.key === "ArrowUp" || e.key === "ArrowDown")) e.preventDefault();
+      return;
+    }
+    if (!typing && (e.key === "q" || e.key === "Enter")){ e.preventDefault(); closeDialog(); }
+    return;
+  }
+  if (!$("setup").hidden){
+    setupKey(e, typing);
+    return;
+  }
+  if (GAME && !typing){
+    if (e.key.length === 1 || e.key.startsWith("Arrow") || e.key === "Enter" || e.key === "Escape")
+      e.preventDefault();
+    gameKey(e);
+  }
+});
+
+function setupKey(e, typing){
+  const field = SETUP_FIELDS[setupSel];
+  if (e.key === "Enter"){ e.preventDefault(); setout(); return; }
+  if (typing){
+    if (e.key === "ArrowUp" || e.key === "ArrowDown"){
+      e.preventDefault();
+      setupSel = pyMod(setupSel + (e.key === "ArrowDown" ? 1 : -1), SETUP_FIELDS.length);
+      drawSetup();
+      focusField();
+    }
+    if (field === "seed" && (e.key === "ArrowUp" || e.key === "ArrowDown")) newMakerSoon();
+    return;
+  }
+  if (e.key === "ArrowUp" || e.key === "ArrowDown"){
+    e.preventDefault();
+    setupSel = pyMod(setupSel + (e.key === "ArrowDown" ? 1 : -1), SETUP_FIELDS.length);
+    drawSetup(); focusField();
+  } else if (e.key === "ArrowLeft" || e.key === "ArrowRight"){
+    e.preventDefault();
+    adjustSetup(field, e.key === "ArrowRight" ? 1 : -1);
+    drawSetup();
+  } else if (e.key === "r"){ MAKER.reroll(); drawSetup(); }
+}
+function focusField(){
+  const input = $("fields").children[setupSel].querySelector("input");
+  if (input){ input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
+  else if (document.activeElement) document.activeElement.blur();
+}
+let seedTimer = null;
+function newMakerSoon(){
+  clearTimeout(seedTimer);
+  seedTimer = setTimeout(() => { newMaker(); drawSetup(); }, 250);
+}
+
+/* The seed decides the world, so a change to it has to rebuild both. */
+document.addEventListener("input", e => {
+  if (e.target.dataset && e.target.dataset.field === "seed"){
+    seedText = e.target.value;
+    newMakerSoon();
+  }
+});
+
+$("go").addEventListener("click", setout);
+$("reroll").addEventListener("click", () => { MAKER.reroll(); drawSetup(); });
+$("pad").addEventListener("click", e => {
+  const t = e.target.closest("button");
+  if (!t || !GAME || MODAL) return;
+  if (t.dataset.dir){ GAME.move(t.dataset.dir); redraw(); }
+  else if (t.dataset.key) gameKey({key: t.dataset.key});
+});
+
+/* ------------------------------------------------------------------ boot */
+if (!referenceOK())
+  console.warn("hanb: the board renderer no longer matches the reference output");
+newMaker();
+drawSetup();
+</script>
+</body>
+</html>
