@@ -2479,11 +2479,15 @@ function setout(){
     $("game").hidden = false;
     buildBoard();
     redraw();
+    sizeBoard();                 /* now that the chrome has its content */
+    watchBoardSize();
+    if (typeof requestAnimationFrame === "function")
+      requestAnimationFrame(() => requestAnimationFrame(sizeBoard));
   }, 30);
 }
 
 /* --------------------------------------------------------------- board */
-let cellNodes = [];
+let cellNodes = [], lastU = 0, boardObserver = null;
 function buildBoard(){
   const board = $("board");
   board.innerHTML = "";
@@ -2499,18 +2503,35 @@ function buildBoard(){
     board.appendChild(d);
     cellNodes.push(d);
   }
-  sizeBoard();
+  lastU = 0;              /* whatever the last game measured is stale now */
 }
+
+/* The board is measured, never guessed: one hex-spacing unit is whatever
+ * makes nine of them across and eight down fit the space left over.  It
+ * has to be measured *after* the first draw, though -- the ladder, log
+ * and status bar take up no room until they have something in them, so
+ * measuring first would hand the board the whole window. */
 function sizeBoard(){
   const wrap = $("boardwrap");
   const w = wrap.clientWidth - 16, h = wrap.clientHeight - 16;
+  if (w <= 0 || h <= 0) return;             /* not laid out yet */
   const u = Math.max(14, Math.min(w / 9.0, h / 8.09));
+  if (Math.abs(u - lastU) < 0.5) return;
+  lastU = u;
   document.documentElement.style.setProperty("--u", u + "px");
   const board = $("board");
   board.style.width = (u * 9.0) + "px";
   board.style.height = (u * 8.083) + "px";
 }
-window.addEventListener("resize", () => { if (GAME){ sizeBoard(); } });
+
+/** Re-measure whenever the space around the board changes, whatever the
+ *  reason: the window resized, the status bar wrapped, a phone turned. */
+function watchBoardSize(){
+  if (boardObserver || typeof ResizeObserver === "undefined") return;
+  boardObserver = new ResizeObserver(() => sizeBoard());
+  boardObserver.observe($("boardwrap"));
+}
+window.addEventListener("resize", () => { if (GAME) sizeBoard(); });
 
 function clickCell(i){
   if (!GAME || MODAL) return;
