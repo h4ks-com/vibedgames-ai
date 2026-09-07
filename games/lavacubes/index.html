@@ -44,6 +44,10 @@
     background:linear-gradient(#ffb15c,#ff6a2b); border:0; border-bottom:3px solid #a83a12;
   }
   button:hover{filter:brightness(1.08)}
+  .btns{display:flex; gap:12px; justify-content:center; flex-wrap:wrap}
+  button.alt{background:linear-gradient(#9be7a8,#3fbf6e); border-bottom-color:#1d7a44}
+  .modeline{margin-top:14px; color:#6d635c; font-size:12px; line-height:1.6}
+  .you{color:#7ae7ff}
   .foot{color:#6d635c; font-size:12px; letter-spacing:.06em}
   .win h2{color:#8ff0b0} .lose h2{color:#ff6a55}
 </style>
@@ -54,7 +58,7 @@
   <canvas id="game"></canvas>
   <div id="overlay"><div class="panel" id="panel"></div></div>
 </div>
-<div class="foot">Red cubes are lava. Touch one and you die. Kill the dragon to win.</div>
+<div class="foot">Red cubes are lava &mdash; touch one and you die. You are the white fighter marked <span style="color:#7ae7ff">&#9660; YOU</span>. Kill the dragon to win.</div>
 <script>
 (() => {
 "use strict";
@@ -104,7 +108,7 @@ function genMap(){
     for(let y=r;y<r+h;y++) for(let x=c;x<c+w;x++)
       if(x>1&&y>1&&x<COLS-2&&y<ROWS-2) grid[y][x]=WALL;
   }
-  for(let i=0;i<24;i++){                       // lava cube clusters
+  for(let i=0;i<D.lavaClusters;i++){           // lava cube clusters
     const c=2+rndi(COLS-4), r=2+rndi(ROWS-4), n=1+rndi(4);
     for(let k=0;k<n;k++){
       const x=clamp(c+rndi(3)-1,1,COLS-2), y=clamp(r+rndi(3)-1,1,ROWS-2);
@@ -143,9 +147,32 @@ const WEAPONS = {
 const GUN_IDS = Object.keys(WEAPONS);
 const BUYABLE = GUN_IDS.filter(g=>g!=='pistol');
 
+/* -------------------------------------------------------------- difficulty */
+const DIFFS = {
+  easy: {
+    label:'EASY', tag:'#8ff0b0',
+    bots:3, botSpeed:132, botFireCd:1.9, botSpread:2.4, botJitter:.10, botTurn:3.0,
+    botThink:[.95,.6], botDmg:.45, botRange:.70, botFireArc:.14, botBombCd:[26,14],
+    botHunt:.9, respawn:9,
+    playerHp:160, playerSpeed:212, playerBombs:3, startAmmo:120,
+    lavaClusters:13, healthOdds:.34, liveOdds:.08,
+    dragonHp:850, dragonDmg:.45, dragonSlow:1.9, rain:[4,5], swoopOdds:.14, itemGap:[4.5,2.5]
+  },
+  normal: {
+    label:'NORMAL', tag:'#ffd166',
+    bots:7, botSpeed:168, botFireCd:1, botSpread:1, botJitter:0, botTurn:7,
+    botThink:[.7,.35], botDmg:1, botRange:1, botFireArc:.30, botBombCd:[11,5],
+    botHunt:.55, respawn:5,
+    playerHp:100, playerSpeed:196, playerBombs:2, startAmmo:60,
+    lavaClusters:24, healthOdds:.16, liveOdds:.16,
+    dragonHp:1500, dragonDmg:1, dragonSlow:1, rain:[6,9], swoopOdds:.22, itemGap:[6,3]
+  }
+};
+let D = DIFFS.normal;
+
 /* ------------------------------------------------------------------ state */
 let fighters, bullets, bombs, items, parts, warns, feedLines, dragon;
-let player, state, shakeAmt, timeAlive, spawnTimer, itemTimer, muted=false;
+let player, state, shakeAmt, timeAlive, itemTimer, hurtFlash=0, muted=false;
 
 const BOTS = [
   {name:'RAZE',  color:'#5ad6ff'}, {name:'KILO',  color:'#b48cff'},
@@ -156,11 +183,12 @@ const BOTS = [
 
 function makeFighter(o){
   const f = {
-    x:o.x, y:o.y, r:11, vx:0, vy:0, hp:100, maxhp:100, alive:true,
+    x:o.x, y:o.y, r:o.isBot?11:12.5, vx:0, vy:0,
+    hp:o.isBot?100:D.playerHp, maxhp:o.isBot?100:D.playerHp, alive:true,
     angle:0, name:o.name, color:o.color, isBot:!!o.isBot,
-    weapon:'pistol', ammo:{}, bombs:o.isBot?1:2, cd:0, kills:0, deaths:0,
-    flash:0, thinkT:0, target:null, strafe:1, panic:0, bombCd:rnd(6,2),
-    reSpawn:0, walk:0, speed:o.isBot?168:196
+    weapon:'pistol', ammo:{}, bombs:o.isBot?1:D.playerBombs, cd:0, kills:0, deaths:0,
+    flash:0, thinkT:0, target:null, strafe:1, panic:0, bombCd:rnd(D.botBombCd[0],D.botBombCd[1]),
+    reSpawn:0, walk:0, speed:o.isBot?D.botSpeed:D.playerSpeed
   };
   for(const g of GUN_IDS) f.ammo[g] = 0;
   if(o.isBot && Math.random()<.8){
@@ -178,23 +206,24 @@ function feed(text, color){
 function reset(){
   genMap();
   bullets=[]; bombs=[]; items=[]; parts=[]; warns=[]; feedLines=[];
-  shakeAmt=0; timeAlive=0; itemTimer=1.5;
+  shakeAmt=0; timeAlive=0; itemTimer=1.5; hurtFlash=0;
   const spots=[];
   const p0=freeSpot([],0); spots.push(p0);
   player = makeFighter({x:p0.x, y:p0.y, name:'YOU', color:'#ffffff'});
-  player.ammo.smg = 60;
+  player.ammo.smg = D.startAmmo;
   fighters=[player];
-  for(const b of BOTS){
+  for(const b of BOTS.slice(0, D.bots)){
     const p=freeSpot(spots,150); spots.push(p);
     fighters.push(makeFighter({x:p.x, y:p.y, name:b.name, color:b.color, isBot:true}));
   }
   dragon = {
-    x:W/2, y:90, vx:0, vy:0, r:44, hp:1500, maxhp:1500, alive:true,
-    t:0, atk:3.2, mode:'hover', flap:0, hurt:0, dashT:0, tx:W/2, ty:120
+    x:W/2, y:90, vx:0, vy:0, r:44, hp:D.dragonHp, maxhp:D.dragonHp, alive:true,
+    t:0, atk:3.2*D.dragonSlow, mode:'hover', flap:0, hurt:0, dashT:0, tx:W/2, ty:120
   };
   for(let i=0;i<6;i++) spawnItem();
   state='play';
-  feed('The dragon wakes.', '#ff9a6a');
+  feed(D.label+' MODE — the dragon wakes.', D.tag);
+  feed('You are the white fighter under the ▼ YOU marker.', '#7ae7ff');
 }
 
 /* ------------------------------------------------------------------ sound */
@@ -262,10 +291,13 @@ function puff(x,y,n,color,spd,life){
 
 function damage(f, amt, src, cause){
   if(!f.alive || state!=='play') return;
+  if(f===player && cause!=='lava'){                 // difficulty softens hits on the human
+    amt *= (src==='dragon') ? D.dragonDmg : (src && src.isBot) ? D.botDmg : 1;
+  }
   f.hp -= amt; f.flash=.14;
-  if(f===player) shake(Math.min(6, amt*.12));
+  if(f===player){ shake(Math.min(6, amt*.12)); hurtFlash=Math.min(.9, hurtFlash+amt/70); }
   if(f.hp>0){ if(f===player && amt>4) beep('hurt'); return; }
-  f.alive=false; f.hp=0; f.deaths++; f.reSpawn=5;
+  f.alive=false; f.hp=0; f.deaths++; f.reSpawn=D.respawn;
   puff(f.x,f.y,26,'#ff5a3c',210,.7);
   puff(f.x,f.y,14,f.color,150,.6);
   beep('boom');
@@ -325,8 +357,13 @@ function explode(x,y,radius,dmg,src,scorch){
 /* ------------------------------------------------------------------ items */
 function spawnItem(kind){
   const p = freeSpot(fighters, 90);
-  const roll = Math.random();
-  kind = kind || (roll<.34 ? 'tnt' : roll<.5 ? 'health' : roll<.66 ? 'live' : pick(BUYABLE));
+  if(!kind){
+    const roll = Math.random();
+    kind = roll < D.healthOdds                 ? 'health'
+         : roll < D.healthOdds+D.liveOdds      ? 'live'
+         : roll < D.healthOdds+D.liveOdds+.30  ? 'tnt'
+         : pick(BUYABLE);
+  }
   if(kind==='live'){
     bombs.push({x:p.x, y:p.y, vx:0, vy:0, fuse:Infinity, owner:null, live:true, blink:0});
   } else {
@@ -403,10 +440,11 @@ function fire(f){
     if(f===player) feed('Out of ammo — pistol', '#8b8079');
     return;
   }
-  f.cd = wp.cd;
+  f.cd = wp.cd * (f.isBot ? D.botFireCd : 1);
   if(!wp.infinite) f.ammo[f.weapon]--;
+  const spread = f.isBot ? wp.spread*D.botSpread + D.botJitter : wp.spread;
   for(let i=0;i<wp.count;i++){
-    const a = f.angle + (Math.random()-.5)*wp.spread;
+    const a = f.angle + (Math.random()-.5)*spread;
     bullets.push({
       x:f.x+Math.cos(a)*15, y:f.y+Math.sin(a)*15,
       vx:Math.cos(a)*wp.speed*rnd(1.06,.94), vy:Math.sin(a)*wp.speed*rnd(1.06,.94),
@@ -490,13 +528,13 @@ function botThink(b, dt){
   b.thinkT -= dt; b.bombCd -= dt;
 
   if(b.thinkT<=0){
-    b.thinkT = .35+rnd(.35);
+    b.thinkT = rnd(D.botThink[0], D.botThink[1]);
     b.strafe = Math.random()<.5 ? -1 : 1;
     let best=null, bd=1e9;
     for(const f of fighters){
       if(f===b || !f.alive) continue;
       let d = dist(b,f);
-      if(!f.isBot) d *= .55;                 // bots prefer hunting the human
+      if(!f.isBot) d *= D.botHunt;           // bots prefer hunting the human
       if(!lineClear(b,f)) d *= 1.7;
       if(d<bd){ bd=d; best=f; }
     }
@@ -551,13 +589,13 @@ function botThink(b, dt){
     const aimx = t.x + (t.vx||0)*lead, aimy = t.y + (t.vy||0)*lead;
     const want = Math.atan2(aimy-b.y, aimx-b.x);
     let diff = ((want-b.angle+Math.PI*3)%TAU)-Math.PI;
-    b.angle += clamp(diff, -7*dt, 7*dt);
+    b.angle += clamp(diff, -D.botTurn*dt, D.botTurn*dt);
     const d = dist(b,t);
-    const range = b.weapon==='flamer'?120 : b.weapon==='shotgun'?230 : 430;
-    if(d<range && lineClear(b,t) && Math.abs(diff)<.3) fire(b);
+    const range = (b.weapon==='flamer'?120 : b.weapon==='shotgun'?230 : 430) * D.botRange;
+    if(d<range && lineClear(b,t) && Math.abs(diff)<D.botFireArc) fire(b);
     // lob TNT at anything that is not itself
     if(b.bombs>0 && b.bombCd<=0 && d>70 && d<250 && lineClear(b,t) && Math.abs(diff)<.35){
-      b.angle = want; throwBomb(b); b.bombCd = rnd(11,5);
+      b.angle = want; throwBomb(b); b.bombCd = rnd(D.botBombCd[0], D.botBombCd[1]);
     }
   }
 }
@@ -592,7 +630,7 @@ function updateDragon(dt){
         f.vx+=Math.cos(aa)*320; f.vy+=Math.sin(aa)*320;
       }
     }
-    if(d.dashT<=0 || dist(d,{x:d.tx,y:d.ty})<40){ d.mode='hover'; d.atk=rnd(2.6,1.5); }
+    if(d.dashT<=0 || dist(d,{x:d.tx,y:d.ty})<40){ d.mode='hover'; d.atk=rnd(2.6,1.5)*D.dragonSlow; }
   } else {
     const a = Math.atan2(d.y-t.y, d.x-t.x);
     const gx = t.x + Math.cos(a+Math.sin(d.t*.5)*.7)*230;
@@ -606,18 +644,18 @@ function updateDragon(dt){
       if(roll < .45){                                   // fireball fan
         const base = Math.atan2(t.y-d.y, t.x-d.x);
         const n = rage?5:3;
-        for(let i=0;i<n;i++) dragonFire(base + (i-(n-1)/2)*.17, 300, 24);
+        for(let i=0;i<n;i++) dragonFire(base + (i-(n-1)/2)*.17, D.dragonSlow>1?245:300, 24);
         beep('roar');
-        d.atk = rage?1.5:2.3;
-      } else if(roll < .78){                            // lava rain (telegraphed)
-        for(let i=0;i<(rage?9:6);i++){
+        d.atk = (rage?1.5:2.3) * D.dragonSlow;
+      } else if(roll < 1-D.swoopOdds){                  // lava rain (telegraphed)
+        for(let i=0;i<(rage?D.rain[1]:D.rain[0]);i++){
           warns.push({ x: clamp(t.x+rnd(150,-150), TILE, W-TILE),
                        y: clamp(t.y+rnd(120,-120), TILE, H-TILE), t:1.0 });
         }
         beep('hiss');
-        d.atk = rage?1.9:2.8;
+        d.atk = (rage?1.9:2.8) * D.dragonSlow;
       } else {                                          // dive attack
-        d.mode='swoop'; d.tx=t.x; d.ty=t.y; d.dashT=1.6;
+        d.mode='swoop'; d.tx=t.x; d.ty=t.y; d.dashT=1.6/D.dragonSlow;
         beep('roar'); shake(4);
       }
     }
@@ -639,6 +677,7 @@ function updateDragon(dt){
 function update(dt){
   timeAlive += dt;
   shakeAmt *= Math.pow(.02, dt);
+  hurtFlash = Math.max(0, hurtFlash - dt*2.2);
   for(let i=feedLines.length-1;i>=0;i--){
     feedLines[i].t-=dt; if(feedLines[i].t<=0) feedLines.splice(i,1);
   }
@@ -662,8 +701,8 @@ function update(dt){
         f.reSpawn -= dt;
         if(f.reSpawn<=0){
           const p = freeSpot([player].concat(fighters.filter(o=>o.alive)), 190);
-          Object.assign(f, {x:p.x, y:p.y, hp:100, alive:true, vx:0, vy:0,
-                            weapon:'pistol', bombs:1, bombCd:rnd(7,3)});
+          Object.assign(f, {x:p.x, y:p.y, hp:100, alive:true, vx:0, vy:0, weapon:'pistol',
+                            bombs:1, bombCd:rnd(D.botBombCd[0], D.botBombCd[1])});
           if(Math.random()<.75){ const g=pick(BUYABLE); f.weapon=g; f.ammo[g]=Math.round(WEAPONS[g].max*.6); }
         }
       }
@@ -684,7 +723,7 @@ function update(dt){
     }
   }
   itemTimer -= dt;
-  if(itemTimer<=0){ itemTimer = rnd(6,3); if(items.length+bombs.length < 14) spawnItem(); }
+  if(itemTimer<=0){ itemTimer = rnd(D.itemGap[0], D.itemGap[1]); if(items.length+bombs.length < 14) spawnItem(); }
 
   for(let i=parts.length-1;i>=0;i--){
     const p=parts[i]; p.life-=dt;
@@ -734,24 +773,66 @@ function drawMap(){
 
 function drawFighter(f){
   if(!f.alive) return;
+  const me = f===player;
+
+  if(me){
+    // ground spotlight — findable at a glance in a crowded fight
+    const g = ctx.createRadialGradient(f.x, f.y, 4, f.x, f.y, 62);
+    g.addColorStop(0,   'rgba(110,230,255,.26)');
+    g.addColorStop(.55, 'rgba(110,230,255,.09)');
+    g.addColorStop(1,   'rgba(110,230,255,0)');
+    ctx.fillStyle=g; ctx.fillRect(f.x-62, f.y-62, 124, 124);
+    // spinning dashed selection ring
+    ctx.save(); ctx.translate(f.x, f.y); ctx.rotate(now);
+    ctx.strokeStyle='rgba(140,238,255,.95)'; ctx.lineWidth=2.2;
+    const rr = 22 + Math.sin(now*3)*1.6;
+    for(let i=0;i<6;i++){ ctx.beginPath(); ctx.arc(0,0,rr, i*TAU/6, i*TAU/6+.52); ctx.stroke(); }
+    ctx.restore();
+    // faint tether to the crosshair
+    ctx.save(); ctx.setLineDash([4,8]);
+    ctx.strokeStyle='rgba(160,240,255,.20)'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(f.x,f.y); ctx.lineTo(mouse.x,mouse.y); ctx.stroke();
+    ctx.restore();
+  }
+
   ctx.save(); ctx.translate(f.x, f.y);
   ctx.fillStyle='rgba(0,0,0,.35)'; ctx.beginPath(); ctx.ellipse(2,4,f.r,f.r*.7,0,0,TAU); ctx.fill();
   ctx.rotate(f.angle);
   ctx.fillStyle='#2b2630'; ctx.fillRect(6,-3.2, 16, 6.4);              // gun
   ctx.fillStyle= f.flash>0 ? '#ffffff' : f.color;
   ctx.beginPath(); ctx.arc(0,0,f.r,0,TAU); ctx.fill();
+  if(me){                                                              // bright rim, yours alone
+    ctx.strokeStyle='#7ae7ff'; ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.arc(0,0,f.r+1.6,0,TAU); ctx.stroke();
+  }
   ctx.fillStyle='rgba(0,0,0,.35)'; ctx.beginPath(); ctx.arc(0,0,f.r*.55,0,TAU); ctx.fill();
-  ctx.fillStyle= f===player ? '#ffffff' : '#1a1620';
+  ctx.fillStyle= me ? '#7ae7ff' : '#1a1620';
   ctx.beginPath(); ctx.arc(f.r*.45,0,3,0,TAU); ctx.fill();
   ctx.restore();
 
-  const w=30, hp=f.hp/f.maxhp;
-  ctx.fillStyle='rgba(0,0,0,.6)'; ctx.fillRect(f.x-w/2, f.y-f.r-11, w, 4);
+  const w = me?44:30, hp=f.hp/f.maxhp, hy=f.y-f.r-11;
+  ctx.fillStyle='rgba(0,0,0,.65)'; ctx.fillRect(f.x-w/2, hy, w, me?5:4);
   ctx.fillStyle= hp>.55?'#6fe08a' : hp>.25?'#ffd166' : '#ff5a4a';
-  ctx.fillRect(f.x-w/2, f.y-f.r-11, w*hp, 4);
-  ctx.font='9px ui-monospace, monospace'; ctx.textAlign='center';
-  ctx.fillStyle = f===player ? '#ffffff' : 'rgba(220,210,200,.75)';
-  ctx.fillText(f.name, f.x, f.y-f.r-15);
+  ctx.fillRect(f.x-w/2, hy, w*hp, me?5:4);
+  if(me){
+    ctx.strokeStyle='rgba(140,238,255,.85)'; ctx.lineWidth=1;
+    ctx.strokeRect(f.x-w/2-.5, hy-.5, w+1, 6);
+  }
+
+  ctx.textAlign='center';
+  if(me){
+    const ty = f.y - f.r - 30 + Math.sin(now*4)*2.5;
+    ctx.fillStyle='rgba(8,22,28,.88)'; ctx.fillRect(f.x-19, ty-10, 38, 14);
+    ctx.strokeStyle='#7ae7ff'; ctx.lineWidth=1; ctx.strokeRect(f.x-19.5, ty-10.5, 39, 15);
+    ctx.fillStyle='#d8f7ff'; ctx.font='bold 10px ui-monospace, monospace';
+    ctx.fillText('YOU', f.x, ty+.5);
+    ctx.fillStyle='#7ae7ff';                                           // chevron aimed at you
+    ctx.beginPath(); ctx.moveTo(f.x-6,ty+6); ctx.lineTo(f.x+6,ty+6); ctx.lineTo(f.x,ty+13); ctx.fill();
+  } else {
+    ctx.font='9px ui-monospace, monospace';
+    ctx.fillStyle='rgba(255,168,150,.72)';
+    ctx.fillText(f.name, f.x, f.y-f.r-15);
+  }
   if(f.bombs>0){
     ctx.fillStyle='#ff8a4a'; ctx.font='8px ui-monospace, monospace';
     ctx.fillText('◆'.repeat(f.bombs), f.x, f.y+f.r+11);
@@ -825,24 +906,36 @@ function drawHUD(){
   const board=[...fighters].sort((a,b)=>b.kills-a.kills).slice(0,5);
   ctx.fillStyle='rgba(220,210,200,.5)'; ctx.fillText('KILLS', 12, 46);
   board.forEach((f,i)=>{
-    ctx.fillStyle = f.alive ? f.color : 'rgba(140,130,125,.55)';
-    ctx.fillText((f===player?'▸ ':'  ')+f.name.padEnd(6)+f.kills, 12, 60+i*13);
+    const y = 60+i*13;
+    if(f===player){
+      ctx.fillStyle='rgba(122,231,255,.16)'; ctx.fillRect(8, y-9, 116, 12);
+      ctx.fillStyle='#7ae7ff'; ctx.fillText('▸ YOU'.padEnd(8)+f.kills, 12, y);
+    } else {
+      ctx.fillStyle = f.alive ? f.color : 'rgba(140,130,125,.55)';
+      ctx.fillText('  '+f.name.padEnd(6)+f.kills, 12, y);
+    }
   });
+  ctx.fillStyle=D.tag;
+  ctx.fillText('MODE  '+D.label, 12, 66+board.length*13);
 
   // bottom bar
   const by=H-42;
   ctx.fillStyle='rgba(10,8,12,.86)'; ctx.fillRect(0,by,W,42);
   ctx.fillStyle='rgba(255,120,60,.35)'; ctx.fillRect(0,by,W,1);
   // health
-  ctx.font='10px ui-monospace, monospace'; ctx.fillStyle='#9b9086';
-  ctx.fillText('HP', 14, by+16);
-  ctx.fillStyle='#2a2028'; ctx.fillRect(34, by+8, 160, 10);
+  ctx.font='10px ui-monospace, monospace'; ctx.textAlign='left';
+  ctx.fillStyle='#ffffff';                                   // your token, mirrored from the arena
+  ctx.beginPath(); ctx.arc(20, by+21, 6, 0, TAU); ctx.fill();
+  ctx.strokeStyle='#7ae7ff'; ctx.lineWidth=1.5;
+  ctx.beginPath(); ctx.arc(20, by+21, 8.5, 0, TAU); ctx.stroke();
+  ctx.fillStyle='#7ae7ff'; ctx.fillText('YOU', 34, by+16);
+  ctx.fillStyle='#2a2028'; ctx.fillRect(62, by+8, 132, 10);
   const hp=Math.max(0,player.hp)/player.maxhp;
   ctx.fillStyle = hp>.55?'#6fe08a' : hp>.25?'#ffd166' : '#ff5a4a';
-  ctx.fillRect(34, by+8, 160*hp, 10);
-  ctx.fillStyle='#e8ded4'; ctx.fillText(Math.ceil(Math.max(0,player.hp)), 200, by+17);
+  ctx.fillRect(62, by+8, 132*hp, 10);
+  ctx.fillStyle='#e8ded4'; ctx.fillText(Math.ceil(Math.max(0,player.hp))+' / '+player.maxhp, 200, by+17);
   // weapons
-  let x=246;
+  let x=268;
   for(const id of GUN_IDS){
     const wp=WEAPONS[id], sel=player.weapon===id;
     const has = wp.infinite || player.ammo[id]>0;
@@ -931,8 +1024,9 @@ function render(){
     }
   }
 
-  for(const f of fighters) drawFighter(f);
+  for(const f of fighters) if(f!==player) drawFighter(f);
   drawDragon();
+  drawFighter(player);            // the human always renders on top
 
   // particles
   for(const p of parts){
@@ -952,6 +1046,22 @@ function render(){
   vg.addColorStop(0,'rgba(0,0,0,0)'); vg.addColorStop(1,'rgba(0,0,0,.55)');
   ctx.fillStyle=vg; ctx.fillRect(0,0,W,H);
 
+  if(hurtFlash>.01){                                   // you got hit — edges flare red
+    const hv=ctx.createRadialGradient(W/2,H/2,H*.18,W/2,H/2,H*.82);
+    hv.addColorStop(0,'rgba(255,20,10,0)');
+    hv.addColorStop(1,'rgba(255,34,14,'+(hurtFlash*.6).toFixed(3)+')');
+    ctx.fillStyle=hv; ctx.fillRect(0,0,W,H);
+  }
+  if(player.alive && state==='play'){                  // your crosshair
+    ctx.strokeStyle='rgba(140,235,255,.8)'; ctx.lineWidth=1.5;
+    ctx.beginPath();
+    ctx.moveTo(mouse.x-10,mouse.y); ctx.lineTo(mouse.x-3,mouse.y);
+    ctx.moveTo(mouse.x+3,mouse.y);  ctx.lineTo(mouse.x+10,mouse.y);
+    ctx.moveTo(mouse.x,mouse.y-10); ctx.lineTo(mouse.x,mouse.y-3);
+    ctx.moveTo(mouse.x,mouse.y+3);  ctx.lineTo(mouse.x,mouse.y+10);
+    ctx.stroke();
+  }
+
   drawHUD();
   ctx.restore();
 }
@@ -962,6 +1072,7 @@ const panel   = document.getElementById('panel');
 
 const HELP = `
   <div class="keys">
+    <b>You</b><span class="you">the white fighter with the cyan ring and &#9660; YOU tag</span>
     <b>WASD</b><span>move &mdash; never onto a red cube</span>
     <b>Mouse</b><span>aim</span>
     <b>Left click</b><span>fire</span>
@@ -974,14 +1085,23 @@ function showTitle(){
   panel.className='panel';
   panel.innerHTML = `
     <h2>Lava Cubes: Dragonfall</h2>
-    <p>Seven AI fighters and one ancient dragon share this pit with you.
-       The red cubes are lava &mdash; one step kills. Crates of TNT are lying around;
-       some of them are already armed.</p>
-    <p>Grab weapons, survive the free-for-all, and put the dragon down.</p>
+    <p>AI fighters and one ancient dragon share this pit with you. The red cubes are lava
+       &mdash; one step kills. Crates of TNT lie around, and some are already armed.</p>
+    <p><span class="you">You are the white fighter</span> &mdash; the only one standing in a
+       glowing cyan ring with a <span class="you">&#9660; YOU</span> tag over their head.</p>
     ${HELP}
-    <button id="go">Enter the pit</button>`;
+    <div class="btns">
+      <button id="goEasy" class="alt">Easy mode</button>
+      <button id="goNormal">Normal mode</button>
+    </div>
+    <div class="modeline">
+      <b class="you">Easy</b> &mdash; 3 opponents, they aim badly and hit for less than half,
+      160 HP for you, 3 TNT, fewer lava cubes, and an 850 HP dragon that attacks at half pace.<br>
+      <b>Normal</b> &mdash; 7 sharp opponents, full damage, 100 HP, a 1500 HP dragon.
+    </div>`;
   overlay.classList.remove('hide');
-  document.getElementById('go').onclick = start;
+  document.getElementById('goEasy').onclick   = ()=>start('easy');
+  document.getElementById('goNormal').onclick = ()=>start('normal');
 }
 
 function showEnd(){
@@ -996,12 +1116,19 @@ function showEnd(){
     <p style="color:#8b8079">Survived ${timeAlive.toFixed(1)}s &middot; ${player.kills} kills &middot;
        dragon at ${Math.round(dragon.hp/dragon.maxhp*100)}% health</p>
     <p style="font-size:12px;line-height:1.7">${rank}</p>
-    <button id="go">Fight again</button>`;
+    <div class="btns">
+      <button id="goEasy" class="alt">Play easy</button>
+      <button id="goNormal">Play normal</button>
+    </div>
+    <div class="modeline">Last run was <b style="color:${D.tag}">${D.label}</b> mode
+      &mdash; <kbd>R</kbd> replays it.</div>`;
   overlay.classList.remove('hide');
-  document.getElementById('go').onclick = start;
+  document.getElementById('goEasy').onclick   = ()=>start('easy');
+  document.getElementById('goNormal').onclick = ()=>start('normal');
 }
 
-function start(){
+function start(name){
+  if(name && DIFFS[name]) D = DIFFS[name];
   reset();
   overlay.classList.add('hide');
   beep('pick');
