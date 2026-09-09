@@ -1912,7 +1912,14 @@ function planDot(cx, cy, r, v){
 }
 function planLine(x0, y0, x1, y1, t, v){
   const dx = x1 - x0, dy = y1 - y0;
-  const n = Math.floor((Math.abs(dx) + Math.abs(dy)) * 2) + 1;
+  /* The C truncates the length and *then* doubles it -- `(int)(|dx|+|dy|)
+   * * 2 + 1` -- so doubling first and flooring after puts one more dot
+   * on every segment whose length has a fraction of a half or more.  It
+   * moves every sample along the line, and one street pixel in a town
+   * lands in a different cell, and that cell is a street in one world
+   * and a building plot in the other.  Two rasters out of five thousand
+   * pixels; one house in one town in eight districts. */
+  const n = Math.floor(Math.abs(dx) + Math.abs(dy)) * 2 + 1;
   for (let i = 0; i <= n; i++) planDot(x0 + dx * i / n, y0 + dy * i / n, t * 0.5, v);
 }
 function planRect(x0, y0, x1, y1, v){
@@ -2052,6 +2059,202 @@ function growStreets(data, reach){
   for (const s of seg) planLine(s[0], s[1], s[2], s[3], PLAN_S * 0.55, PL_STREET);
 }
 
+/* ── what the land is good for ───────────────────────────────
+ * Sixty-four resources in eight families of eight.  A continent has one,
+ * read off its face; every rung below it draws from the same family, so
+ * a continent of iron has provinces of metals and not of saffron; and a
+ * town makes the refined thing.  Nothing is stored.  They are the
+ * components a spell would want, too, which is why there are sixty-four
+ * of them and not a dozen.
+ * ---------------------------------------------------------- */
+const RESOURCES = [
+  ["copper","copper kettles"],["tin","pewter cups"],["iron","iron nails"],
+  ["lead","lead seals"],["silver","silver rings"],["gold","gold leaf"],
+  ["quicksilver","looking-glasses"],["steel","steel swords"],
+  ["granite","millstones"],["marble","carved panels"],["slate","roof slates"],
+  ["obsidian","knapped blades"],["flint","firesteels"],["chalk","whiting"],
+  ["basalt","querns"],["alabaster","lamps"],
+  ["salt","cured fish"],["sulfur","matches"],["saltpetre","powder"],
+  ["alum","fast dyes"],["natron","glass"],["gypsum","plaster"],
+  ["potash","soap"],["borax","solder"],
+  ["oak","roof beams"],["pine","pitch"],["cedar","chests"],["ash","axe shafts"],
+  ["yew","longbows"],["willow","baskets"],["birch","barrel hoops"],
+  ["ebony","inlay"],
+  ["flax","linen"],["hemp","rope"],["wool","cloaks"],["cotton","calico"],
+  ["silk","brocade"],["jute","sacking"],["nettle","cord"],["horsehair","brushes"],
+  ["hides","leather"],["tallow","candles"],["horn","horn cups"],
+  ["ivory","combs"],["bone","dice"],["sinew","bowstrings"],
+  ["feathers","quills"],["beeswax","wax tablets"],
+  ["grain","bread"],["barley","beer"],["olives","oil"],["grapes","wine"],
+  ["honey","mead"],["hops","ale"],["saffron","dye"],["pepper","spice"],
+  ["amber","charms"],["jet","black beads"],["lodestone","compasses"],
+  ["moonstone","amulets"],["nightshade","poisons"],["mandrake","philtres"],
+  ["bloodstone","inks"],["witch-hazel","salves"]
+];
+const RESOURCE_N = 64;
+const FAMILY_NAME = ["metal","stone","mineral","wood","fibre","beast",
+                     "field","rare"];
+/** What the cell named by the first n characters of a path is good for. */
+function resourceAt(path, n){
+  if (n < 1) n = 1;
+  if (n === 1) return rngFor(path.slice(0, 1), "res")._randbelow(RESOURCE_N);
+  const up = resourceAt(path, n - 1);
+  return Math.floor(up / 8) * 8 + rngFor(path.slice(0, n), "res")._randbelow(8);
+}
+
+/* ── what a building is for ──────────────────────────────────
+ * Read off its lot, like everything else.  The building nearest the
+ * heart of a town is its hall; the rest are homes and whatever trades a
+ * people of that kind would keep, so a dwarf town is full of workshops
+ * and a goblin one of watch-houses.  Nothing is stored: ask again in a
+ * hundred years and the same lot is the same smithy.
+ * ---------------------------------------------------------- */
+const USE_HALL = 0, USE_HOME = 1, USE_WORK = 2, USE_STORE = 3,
+      USE_WATCH = 4, USE_SHRINE = 5;
+const USE_NAME = ["hall", "home", "workshop", "store", "watch-house", "shrine"];
+const RACE_ORDER = ["DWARF", "ELF", "HUMAN", "GOBLIN", "KOBOLD"];
+const DIR_NAME = ["east", "west", "north-east", "north-west",
+                  "south-east", "south-west"];
+/* Which wall the door is in: the one the street lies through, so a house
+   can always be walked into from the road.  One function, so the message
+   that tells you where the door is and the grammar that cuts it cannot
+   fall out of step. */
+function buildingDoor(world, path, when){
+  const up = world.layers(path.slice(0, -1), when);
+  const lot = path[path.length - 1];
+  for (let k = 0; k < 6; k++){
+    const j = cellAt(COORDS[lot][0] + DIRS[k][1], COORDS[lot][1] + DIRS[k][2]);
+    if (j >= 0 && ((up.road && up.road[j]) ||
+                   (up.ground && up.ground[j] === THING_BY_KEY.road))) return k;
+  }
+  return 0;
+}
+const USE_MIX = [
+  [58, 22,  9,  6,  5],        /* dwarves keep workshops */
+  [64, 12,  8,  4, 12],        /* elves keep shrines */
+  [62, 14, 14,  7,  3],        /* humans keep stores */
+  [52,  9,  8, 28,  3],        /* goblins keep watch */
+  [60, 13, 15, 10,  2]         /* kobolds hoard */
+];
+const USE_FURN = [
+  ["table", "bench", "bench", "chest"],        /* hall */
+  ["bed", "table", "stool", "chest"],          /* home */
+  ["anvil", "bench", "barrel", "shelf"],       /* workshop */
+  ["barrel", "barrel", "chest", "shelf"],      /* store */
+  ["bed", "bed", "spear_rack", "table"],       /* watch-house */
+  ["altar", "bench", "bench"]                  /* shrine */
+];
+function buildingUse(path, race, rank){
+  if (rank === 0) return USE_HALL;             /* the one in the middle */
+  const r = Math.max(0, RACE_ORDER.indexOf(race));
+  const rng = rngFor(path, "use");
+  let total = 0;
+  for (let i = 0; i < 5; i++) total += USE_MIX[r][i];
+  let n = rng._randbelow(total), pick = 0;
+  for (let i = 0; i < 5; i++){ n -= USE_MIX[r][i]; if (n < 0){ pick = i; break; } }
+  return USE_HOME + pick;
+}
+
+/* ── a building is a stack of boards ───────────────────────
+ * The lot's own board is the ground floor.  Over it stand its storeys
+ * and under it its cellar, and under a few cellars the stair does not
+ * stop: it goes eight, twenty, sixty-four boards down into rock that
+ * nobody cut, which is where the things that do not care for daylight
+ * are.  How tall and how deep are read off a hash of the lot rather than
+ * drawn from the world's stream, so that a building having a cellar
+ * changes nothing whatever about the world outside it. */
+const UNDER_MAX = 64;
+function stackUp(path){
+  const r = Number(pathSeed(path, "storeys") % 100n);
+  return r < 50 ? 0 : r < 85 ? 1 : r < 97 ? 2 : 3;
+}
+function stackDown(path){
+  const h = pathSeed(path, "under"), r = Number(h % 100n);
+  if (r < 62) return 0;
+  if (r < 94) return 1 + Number((h / 100n) % 2n);
+  return 8 + Number((h / 100n) % BigInt(UNDER_MAX - 7));
+}
+/* Where the stair between level lv and level lv+1 stands.  It is the
+ * same cell on both of them -- that is what makes them one building --
+ * so it is chosen from the lot and the level alone and the boards are
+ * then cut to fit it.  Only the inner rings are eligible: a stair
+ * against the rim would be a stair in the wall.  Even-numbered joins
+ * take the first half of those cells and odd-numbered ones the second
+ * half, so the two stairs of any one board can never come out in the
+ * same cell and no board has to know what its neighbours decided. */
+const INNER_CELLS = (() => {
+  const out = [];
+  for (let i = 0; i < BOARD_SIZE; i++){
+    const q = COORDS[i][0], r = COORDS[i][1];
+    if ((Math.abs(q) + Math.abs(q + r) + Math.abs(r)) / 2 <= RADIUS - 2) out.push(i);
+  }
+  return out;
+})();
+function stairSpot(path, lv){
+  const n = INNER_CELLS.length, half = n >> 1, odd = ((lv % 2) + 2) % 2;
+  const h = pathSeed(path, "stair" + lv);
+  return odd ? INNER_CELLS[half + Number(h % BigInt(n - half))]
+             : INNER_CELLS[Number(h % BigInt(half))];
+}
+const stairUpSpot   = (path, lv) => stairSpot(path, lv);
+const stairDownSpot = (path, lv) => stairSpot(path, lv - 1);
+/* A stair nobody can walk to is no stair.  Flood the floor outwards from
+ * the way in; if the stair did not come out in that, cut a way to it --
+ * the shortest line, and only ever through partition wall, since both
+ * ends are well inside the outer one. */
+function reachStair(data, from, target){
+  if (from < 0 || target < 0 || from === target) return;
+  const seen = new Array(BOARD_SIZE).fill(false), stack = [from];
+  seen[from] = true;
+  const walkable = i => {
+    for (const lay of [data.ground, data.plant, data.item])
+      if (lay[i] && !lay[i].passable) return false;
+    return true;
+  };
+  while (stack.length){
+    const c = stack.pop();
+    for (let k = 0; k < 6; k++){
+      const j = cellAt(COORDS[c][0] + LV_DQ[k], COORDS[c][1] + LV_DR[k]);
+      if (j < 0 || seen[j] || !walkable(j)) continue;
+      seen[j] = true; stack.push(j);
+    }
+  }
+  if (seen[target]) return;
+  let cur = from;
+  for (let guard = 0; guard < 32 && cur !== target; guard++){
+    let best = -1, bd = 99;
+    for (let k = 0; k < 6; k++){
+      const j = cellAt(COORDS[cur][0] + LV_DQ[k], COORDS[cur][1] + LV_DR[k]);
+      if (j < 0) continue;
+      const d = hexDistance(COORDS[j], COORDS[target]);
+      if (d < bd){ bd = d; best = j; }
+    }
+    if (best < 0) break;
+    cur = best;
+    if (cur === target) break;
+    if (data.item[cur] && !data.item[cur].passable) data.item[cur] = null;
+    data.ground[cur] = THING_BY_KEY.floor; data.plant[cur] = null;
+  }
+}
+/* The ground floor is the world's own board, so its stairs are put in
+ * where it is made -- by hash, touching nothing the stream decides. */
+function placeStairs(data, path, doorCell){
+  let up = -1, dn = -1;
+  if (stackUp(path) > 0){
+    up = stairUpSpot(path, 0);
+    data.ground[up] = THING_BY_KEY.floor; data.plant[up] = null;
+    data.item[up] = THING_BY_KEY.stair_up;
+  }
+  const down = stackDown(path);
+  if (down > 0){
+    dn = stairDownSpot(path, 0);
+    data.ground[dn] = THING_BY_KEY.floor; data.plant[dn] = null;
+    data.item[dn] = down >= 8 ? THING_BY_KEY.shaft : THING_BY_KEY.stair_down;
+  }
+  reachStair(data, doorCell, up);
+  reachStair(data, doorCell, dn);
+}
+
 /* ── a house: a split grammar ────────────────────────────────
  * Not an L-system, and it wants none of the turtle.  A building is a
  * bounded piece of ground cut up: a rectangle split in two, and the
@@ -2084,10 +2287,14 @@ function splitSpace(rooms, rng, x0, y0, x1, y1, depth, least, bias, along){
     splitSpace(rooms, rng, x0, m, x1, y1, depth + 1, least, bias, along);
   }
 }
+/* Where the furniture stands, in the flat.  It is placed in the rooms and
+   only afterwards asked which cell it falls in, the same way the walls
+   are -- a table is a metre across and a cell is a metre. */
+let FURN = [];
 /** One house across one lot, its door on whichever side the way out is. */
-function layHouse(path, doorK, left){
+function layHouse(path, doorK, left, use, salt){
   const span = PLAN_N * 0.40, cx = PLAN_N * 0.5, cy = PLAN_N * 0.5;
-  const rng = rngFor(path, "house");
+  const rng = rngFor(path, salt || "house");
   /* A room has to come out a couple of metres across or the board it is
    * sampled onto reads as nothing but partition wall: the grammar has to
    * know how coarse the cells under it are. */
@@ -2120,7 +2327,39 @@ function layHouse(path, doorK, left){
     planDot((rooms[best][0] + rooms[best][2]) * 0.5,
             (rooms[best][1] + rooms[best][3]) * 0.5, PLAN_S * 0.4, PL_HEARTH);
   const [ux, uy] = dirUnit(doorK);
-  planDot(cx + ux * span, cy + uy * span, PLAN_S * 0.55, PL_DOOR);
+  planDot(cx + ux * span, cy + uy * span, PLAN_S * 0.85, PL_DOOR);
+
+  /* Now furnish it.  The rooms are taken biggest first, so the hearth
+     room gets the table and the small back room the chest. */
+  FURN = [];
+  if (use === undefined || use < 0 || left < 0.75) return;
+  const order = rooms.map((r, i) => i).sort((a, b) => rooms[b][4] - rooms[a][4]);
+  const list = USE_FURN[use];
+  for (let k = 0; k < list.length && FURN.length < 12; k++){
+    if (!rooms.length) break;
+    const rm = rooms[order[k % rooms.length]];
+    const w = rm[2] - rm[0], h = rm[3] - rm[1];
+    if (w < PLAN_S * 1.4 || h < PLAN_S * 1.4) continue;   /* no room for it */
+    /* against a wall, not in the middle of the floor */
+    const fx = rm[0] + PLAN_S * 0.7 + rng.random() * (w - PLAN_S * 1.4);
+    const fy = rm[1] + PLAN_S * 0.7 + rng.random() * (h - PLAN_S * 1.4);
+    FURN.push([fx, fy, THING_BY_KEY[list[k]]]);
+  }
+}
+/** Put what was placed in the flat onto the cells it falls in. */
+function stampFurniture(data){
+  for (const [fx, fy, thing] of FURN){
+    let best = -1, bd = 1e18;
+    for (let i = 0; i < BOARD_SIZE; i++){
+      if (data.item[i] || data.terrain[i].water >= 2) continue;
+      if (data.ground[i] !== THING_BY_KEY.floor) continue;   /* indoors only */
+      const x = PLAN_N * 0.5 + (COORDS[i][0] + COORDS[i][1] * 0.5) * PLAN_S;
+      const y = PLAN_N * 0.5 + COORDS[i][1] * PLAN_S * 0.8660254;
+      const dx = x - fx, dy = y - fy, d = dx * dx + dy * dy;
+      if (d < bd){ bd = d; best = i; }
+    }
+    if (best >= 0){ data.item[best] = thing; data.plant[best] = null; }
+  }
 }
 
 /* A town keeps its place for a very long time and does not keep its
@@ -2231,6 +2470,27 @@ class HanbWorld {
           (noiseAt(path, i, "road") + 1.0) * 127.5 >= data.wear[i]) continue;
       data.ground[i] = THING_BY_KEY.road;
       data.plant[i] = null;
+    }
+    /* Where ways meet, somebody has put up a post.  Three roads out of a
+       cell is a crossroads, and a crossroads is where a sign is worth the
+       trouble of cutting. */
+    {
+      const mid = CENTRE;
+      if (data.depth === DEPTHS - 1){
+        let ways = 0;
+        for (let k = 0; k < 6; k++) if (rmask & (1 << k)) ways++;
+        /* a post goes up even if something was dropped here: the loose
+           thing can lie beside it */
+        if (ways >= 3 && data.ground[mid] === THING_BY_KEY.road &&
+            (!data.item[mid] || data.item[mid].portable))
+          data.item[mid] = THING_BY_KEY.signpost;
+      } else if (data.depth === DEPTHS){
+        const post = this.layers(path.slice(0, -1), when);
+        if (post.item[path[path.length - 1]] === THING_BY_KEY.signpost &&
+            data.ground[mid] === THING_BY_KEY.road &&
+            (!data.item[mid] || data.item[mid].portable))
+          data.item[mid] = THING_BY_KEY.signpost;
+      }
     }
     data.stamp = stamp;
     this._buildSettlementCells(data, when, ei);
@@ -2848,27 +3108,21 @@ class HanbWorld {
       return;
     }
     /* The L board: a house, if this L cell is part of the town. */
-    const up = this.layers(data.path.slice(0, -1), when);
+    this.layers(data.path.slice(0, -1), when);
     const lot = data.path[data.path.length - 1];
-    if (site.cells.indexOf(lot) < 0) return;
-    /* Which way out of this lot the street lies: the door goes in that
-       wall, so a house can always be walked into from the road. */
-    let door = 0;
-    for (let k = 0; k < 6; k++){
-      const j = cellAt(COORDS[lot][0] + DIRS[k][1], COORDS[lot][1] + DIRS[k][2]);
-      if (j >= 0 && ((up.road && up.road[j]) ||
-                     (up.ground && up.ground[j] === THING_BY_KEY.road))){
-        door = k; break;
-      }
-    }
+    const rank = site.cells.indexOf(lot);
+    if (rank < 0) return;
+    const door = buildingDoor(this, data.path, when);
     /* A house is a bounded piece of ground cut up, so it is cut up in the
        flat and the lot's sixty-one square metres are then asked what room
        they are standing in. */
     planClear();
-    layHouse(data.path, door, 1.0);
+    layHouse(data.path, door, 1.0, buildingUse(data.path, site.race, rank), "house");
+    let doorCell = -1;
     for (let i = 0; i < BOARD_SIZE; i++){
       if (data.terrain[i].water >= 2) continue;
       const what = planAt(i);
+      if (what === PL_DOOR && doorCell < 0) doorCell = i;
       if (what === PL_FLOOR || what === PL_DOOR){
         data.ground[i] = THING_BY_KEY.floor; data.plant[i] = null;
       } else if (what === PL_HEARTH){
@@ -2880,6 +3134,8 @@ class HanbWorld {
         data.item[i] = THING_BY_KEY.wall; data.plant[i] = null;
       }
     }
+    stampFurniture(data);
+    placeStairs(data, data.path, doorCell);
   }
 
   /** What a town leaves behind: broken walls, and what was dropped.
@@ -2906,19 +3162,12 @@ class HanbWorld {
     /* The L board: what is left of one lot of it -- the same house it
        always was, with that many of its rooms still standing, so a ruin
        is the plan of the house and not a different broken building. */
-    const up = this.layers(data.path.slice(0, -1), when);
+    this.layers(data.path.slice(0, -1), when);
     const lot = data.path[data.path.length - 1];
     if (site.cells.indexOf(lot) < 0) return;
-    let door = 0;
-    for (let k = 0; k < 6; k++){
-      const j = cellAt(COORDS[lot][0] + DIRS[k][1], COORDS[lot][1] + DIRS[k][2]);
-      if (j >= 0 && ((up.road && up.road[j]) ||
-                     (up.ground && up.ground[j] === THING_BY_KEY.road))){
-        door = k; break;
-      }
-    }
+    const door = buildingDoor(this, data.path, when);
     planClear();
-    layHouse(data.path, door, left);
+    layHouse(data.path, door, left, -1);      /* a ruin keeps nothing */
     for (let i = 0; i < BOARD_SIZE; i++){
       if (data.terrain[i].water >= 2) continue;
       const what = planAt(i);
@@ -3016,6 +3265,36 @@ const THINGS = [
   /* And the one thing a room is built round.  Person-sized, so it shows
      on the board you stand in the room on, and not on the one above. */
   {key:"hearth", name:"a hearth", glyph:"≡", fg:202, size:"K", layer:"item", passable:false, cover:0, portable:false},
+  /* What people put in the rooms they build.  All person-sized, so they
+     show on the board you stand in the room on; mostly you walk round
+     them rather than over them. */
+  {key:"bed", name:"a bed", glyph:"▄", fg:138, size:"K", layer:"item", passable:false, cover:1, portable:false},
+  {key:"table", name:"a table", glyph:"═", fg:179, size:"K", layer:"item", passable:false, cover:1, portable:false},
+  {key:"bench", name:"a bench", glyph:"─", fg:137, size:"K", layer:"item", passable:true, cover:1, portable:false},
+  {key:"stool", name:"a stool", glyph:"•", fg:137, size:"K", layer:"item", passable:true, cover:0, portable:false},
+  {key:"chest", name:"a chest", glyph:"■", fg:130, size:"K", layer:"item", passable:false, cover:1, portable:false},
+  {key:"barrel", name:"a barrel", glyph:"●", fg:94, size:"K", layer:"item", passable:false, cover:1, portable:false},
+  {key:"anvil", name:"an anvil", glyph:"▬", fg:245, size:"K", layer:"item", passable:false, cover:1, portable:false},
+  {key:"loom", name:"a loom", glyph:"▓", fg:180, size:"K", layer:"item", passable:false, cover:1, portable:false},
+  {key:"spear_rack", name:"a rack of spears", glyph:"‖", fg:246, size:"K", layer:"item", passable:false, cover:1, portable:false},
+  {key:"altar", name:"an altar", glyph:"▲", fg:231, size:"K", layer:"item", passable:false, cover:1, portable:false},
+  {key:"shelf", name:"a shelf", glyph:"▄", fg:137, size:"K", layer:"item", passable:false, cover:1, portable:false},
+  /* Where ways meet, somebody has put up a post.  You walk under it, not
+     round it, and reading it is what it is for. */
+  {key:"signpost", name:"a signpost", glyph:"†", fg:180, size:"K", layer:"item", passable:true, cover:0, portable:false},
+  /* Containers.  A thing of size K unfolds into sixty-one cells of size
+     J, exactly the way a K cell of the world unfolds into a board of J
+     cells -- which is the whole of the idea. */
+  {key:"pack", name:"a traveller's pack", glyph:"△", fg:130, size:"K", layer:"item", passable:true, cover:0, portable:true},
+  {key:"satchel", name:"a satchel", glyph:"△", fg:137, size:"J", layer:"item", passable:true, cover:0, portable:true},
+  {key:"purse", name:"a purse", glyph:"○", fg:214, size:"I", layer:"item", passable:true, cover:0, portable:true},
+  /* What a building is more than one board of.  Air is what there is
+     where a storey has no floor -- it stops you the way a wall does, and
+     for the same reason.  The three stairs are walked over, not round. */
+  {key:"air", name:"the open air", glyph:" ", fg:239, size:"L", layer:"item", passable:false, cover:0, portable:false},
+  {key:"stair_up", name:"stairs up", glyph:"<", fg:223, size:"K", layer:"item", passable:true, cover:0, portable:false},
+  {key:"stair_down", name:"stairs down", glyph:">", fg:223, size:"K", layer:"item", passable:true, cover:0, portable:false},
+  {key:"shaft", name:"a black shaft", glyph:"V", fg:166, size:"K", layer:"item", passable:true, cover:0, portable:false},
 ];
 const LIFE_OFFSET = {ground:20, plant:17, item:17, animal:14, water:13};
 const VISIBLE_DEPTH = 3;
@@ -3151,7 +3430,7 @@ function calendar(secs){
   let day = Math.floor(t / SECONDS_PER_DAY);
   const rest = t - day * SECONDS_PER_DAY;
   const weekday = WEEKDAYS[pyMod(day, 7)];
-  const year = Math.floor(day / DAYS_PER_YEAR) + 1;
+  const year = Math.floor(day / DAYS_PER_YEAR);   /* counted from nought */
   let doy = pyMod(day, DAYS_PER_YEAR);
   let month = 0;
   while (doy >= MONTHS[month][1]){ doy -= MONTHS[month][1]; month++; }
@@ -3164,14 +3443,14 @@ function calendar(secs){
 const two = n => (n < 10 ? "0" : "") + n;
 function dateLong(secs){
   const c = calendar(secs);
-  return c.weekday + " " + c.day + " " + MONTHS[c.month][0] +
-         ", Year " + c.year;
+  return c.weekday.slice(0, 3) + " " + c.day + " " + MONTHS[c.month][0] +
+         " " + c.year;
 }
 /** As much of the date as a phone's bar can spare. */
 function dateShort(secs){
   const c = calendar(secs);
   return c.weekday.slice(0, 3) + " " + c.day + " " +
-         MONTHS[c.month][0].slice(0, 3) + " y" + c.year;
+         MONTHS[c.month][0].slice(0, 3) + " " + c.year;
 }
 /* Seconds included: a step is one, so without them the clock would sit
  * still through most of what you do. */
@@ -4026,6 +4305,147 @@ class CharacterMaker {
     return new Game(this.w, address, this.seed, player, site);
   }
 }
+
+/* ── the levels of a building, and the deep under it ────────
+ * A level other than the ground is not in the world's cache, because it
+ * is not part of the world's ladder: it hangs off one lot.  It is built
+ * the moment you set foot on it out of the lot's address and the number
+ * of the level, and forgotten the moment you leave -- which is the same
+ * bargain the rest of hanb makes, one rung further in.
+ * ---------------------------------------------------------- */
+const LV_DQ = [1, 0, -1, -1, 0, 1], LV_DR = [0, 1, 1, 0, -1, -1];
+
+/* What lives in the dark.  Deeper is worse; the last of them are the
+ * reason nobody goes to the bottom of a shaft twice. */
+const UNDEAD = [
+  {name:"a rat swarm",    glyph:"r", fg:137, hp:10, atk:3,  dodge:7, danger:2, lo:1, hi:3, verb:"bites"},
+  {name:"a skeleton",     glyph:"s", fg:255, hp:16, atk:6,  dodge:5, danger:3, lo:1, hi:4, verb:"strikes"},
+  {name:"a ghoul",        glyph:"g", fg:108, hp:24, atk:9,  dodge:6, danger:3, lo:1, hi:3, verb:"claws"},
+  {name:"a barrow wight", glyph:"W", fg:117, hp:34, atk:12, dodge:5, danger:4, lo:1, hi:2, verb:"chills"},
+  {name:"a shade",        glyph:"S", fg:103, hp:28, atk:14, dodge:8, danger:4, lo:1, hi:2, verb:"withers"},
+  {name:"a bone drake",   glyph:"D", fg:223, hp:52, atk:18, dodge:4, danger:5, lo:1, hi:1, verb:"rends"},
+  {name:"a lich",         glyph:"L", fg:129, hp:60, atk:22, dodge:6, danger:5, lo:1, hi:1, verb:"unmakes"},
+  {name:"a deep thing",   glyph:"T", fg:89,  hp:80, atk:26, dodge:5, danger:5, lo:1, hi:1, verb:"engulfs"},
+];
+
+/* One board of the deep: living rock, and what has been cut out of it.
+ * A walk from the stair you came down by to the stair going on down,
+ * widened as it goes -- shallow cellars come out as passages and the
+ * bottom of a long shaft as caverns. */
+function digDeep(data, path, lv, up, dn){
+  for (let i = 0; i < BOARD_SIZE; i++){
+    data.terrain[i] = T.mountain;
+    data.ground[i] = THING_BY_KEY.stone;
+    data.plant[i] = null;
+    data.item[i] = THING_BY_KEY.wall;          /* rock, until it is cut */
+    if (data.road) data.road[i] = 0;
+    if (data.wear) data.wear[i] = 0;
+  }
+  const rng = rngFor(path, "deep" + (-lv));
+  const deep = -lv, wide = deep > 24 ? 2 : deep > 8 ? 1 : 0;
+  let cur = up;
+  data.item[cur] = null;
+  const target = dn >= 0 ? dn : up;
+  for (let guard = 0; guard < 64 && cur !== target; guard++){
+    let best = -1, bd = 99;
+    for (let k = 0; k < 6; k++){
+      const j = cellAt(COORDS[cur][0] + LV_DQ[k], COORDS[cur][1] + LV_DR[k]);
+      if (j < 0) continue;
+      const d = hexDistance(COORDS[j], COORDS[target]);
+      if (d < bd){ bd = d; best = j; }
+    }
+    if (best < 0) break;
+    cur = best; data.item[cur] = null;
+  }
+  let steps = 26 + deep + rng._randbelow(20);
+  if (steps > 90) steps = 90;
+  cur = up;
+  for (let s = 0; s < steps; s++){
+    const k = rng._randbelow(6);
+    const j = cellAt(COORDS[cur][0] + LV_DQ[k], COORDS[cur][1] + LV_DR[k]);
+    if (j < 0) continue;
+    const q = COORDS[j][0], r = COORDS[j][1];
+    if ((Math.abs(q) + Math.abs(q + r) + Math.abs(r)) / 2 >= RADIUS) continue;
+    cur = j; data.item[cur] = null;
+    for (let w = 0; w < wide; w++){
+      const m = cellAt(COORDS[cur][0] + LV_DQ[(k + 2) % 6],
+                       COORDS[cur][1] + LV_DR[(k + 2) % 6]);
+      if (m >= 0 && (Math.abs(COORDS[m][0]) + Math.abs(COORDS[m][0] + COORDS[m][1])
+                     + Math.abs(COORDS[m][1])) / 2 < RADIUS)
+        data.item[m] = null;
+    }
+  }
+  /* what has been left down here */
+  for (let i = 0; i < BOARD_SIZE; i++){
+    if (data.item[i] || i === up || i === dn) continue;
+    const r = rng.random();
+    if (r < 0.03) data.item[i] = THING_BY_KEY.chest;
+    else if (r < 0.05) data.item[i] = THING_BY_KEY.bone;
+    else if (r < 0.06) data.item[i] = THING_BY_KEY.altar;
+  }
+}
+
+/* One storey over the ground: the same footprint cut into rooms a
+ * different way, and open air where the building is not. */
+function layStorey(world, data, path, when, lv){
+  const site = world.settlement(path.slice(0, -1), when);
+  let rank = 0;
+  if (site) rank = Math.max(0, site.cells.indexOf(path[path.length - 1]));
+  const use = site ? buildingUse(path, site.race, rank) : USE_HOME;
+  const door = buildingDoor(world, path, when);
+  /* A storey stands on what is under it, so its outline is the ground
+   * floor's outline and only the rooms inside are its own. */
+  planClear();
+  layHouse(path, door, 1.0, use, "house");
+  const solid = [];
+  for (let i = 0; i < BOARD_SIZE; i++){
+    const w = planAt(i);
+    solid.push(w === PL_FLOOR || w === PL_DOOR || w === PL_WALL || w === PL_HEARTH);
+  }
+  planClear();
+  layHouse(path, door, 1.0, use, "house" + lv);
+  for (let i = 0; i < BOARD_SIZE; i++){
+    data.plant[i] = null; data.item[i] = null;
+    if (data.road) data.road[i] = 0;
+    if (data.wear) data.wear[i] = 0;
+    if (!solid[i]){ data.ground[i] = null; data.item[i] = THING_BY_KEY.air; continue; }
+    data.ground[i] = THING_BY_KEY.floor;
+    const w = planAt(i);
+    if (w === PL_HEARTH) data.item[i] = THING_BY_KEY.hearth;
+    else if (w === PL_WALL) data.item[i] = THING_BY_KEY.wall;
+  }
+  stampFurniture(data);
+}
+
+let LVL_CACHE = null, LVL_KEY = "";
+function levelBoard(world, path, when, lv){
+  const key = path.join(",") + "@" + lv;
+  if (LVL_CACHE && LVL_KEY === key) return LVL_CACHE;
+  const g = world.layers(path, when);
+  const data = Object.assign(Object.create(Object.getPrototypeOf(g)), g);
+  data.terrain = g.terrain.slice();
+  data.ground = new Array(BOARD_SIZE).fill(null);
+  data.plant = new Array(BOARD_SIZE).fill(null);
+  data.item = new Array(BOARD_SIZE).fill(null);
+  data.road = g.road ? g.road.slice() : null;
+  data.wear = g.wear ? g.wear.slice() : null;
+  const up = stairUpSpot(path, lv), dn = stairDownSpot(path, lv);
+  const hasUp = lv < stackUp(path), hasDn = lv > -stackDown(path);
+  if (lv > 0) layStorey(world, data, path, when, lv);
+  else digDeep(data, path, lv, hasUp ? up : dn, hasDn ? dn : -1);
+  const under = lv < 0 ? THING_BY_KEY.stone : THING_BY_KEY.floor;
+  if (hasUp){ data.ground[up] = under; data.plant[up] = null;
+              data.item[up] = THING_BY_KEY.stair_up; }
+  if (hasDn){ data.ground[dn] = under; data.plant[dn] = null;
+              data.item[dn] = THING_BY_KEY.stair_down; }
+  /* upstairs you come in by the way down, so it is from there that the
+     way on up has to be walkable */
+  if (lv > 0 && hasUp && hasDn) reachStair(data, dn, up);
+  LVL_CACHE = data; LVL_KEY = key;
+  return data;
+}
+function levelForget(){ LVL_CACHE = null; LVL_KEY = ""; }
+
 /* ==ENGINE-END== */
 
 /* ====================================================================
@@ -4192,6 +4612,467 @@ function grownSource(path, thing){ grownPath = path; grownThing = thing; }
  * pixel rows; the hexagon is a row of tw/2 pixels above and below a body
  * of full rows, which is exactly the area of the rectangle it replaces
  * and interlocks with its neighbours' points. */
+
+/* ── beasts, grown ──────────────────────────────────────────
+ * The animals get what the plants got.  A beast used to reach the screen
+ * as one letter in one colour -- a `w` for a wolf, a `B` for a bear --
+ * and now it is grown into the eight-by-three pixels its cell has got,
+ * out of the same kind of grammar the plants use and a different kind of
+ * grammar from the plants' one.
+ *
+ * A plant is indeterminate: `A -> F[+B][-B]A` has an A on the right, so
+ * how many branches it has is how long it grew.  An animal is not.  A
+ * wolf has four legs the day it is whelped and four the day it dies, so
+ * nothing here recurses and the rewriting stops:
+ *
+ *   X -> H n..n B U     head, neck, body, after-body
+ *   B -> [W] C  or  C   wings, or not
+ *   C -> the body plan for this many legs, girdles and all
+ *   G -> [P]            a girdle carries a pair
+ *   P -> [>L][<L]       near side and far side
+ *   L -> JJF            two joints and a foot
+ *   U -> s..s Y         tail segments, then the tip
+ *
+ * What a plant spends on branching this spends on segments along one
+ * axis with paired limbs at named stations of them.  animals.c is where
+ * it was worked out and prints it at a size you can see.
+ *
+ * The genome is a pure function of the *species* and the world's seed,
+ * not of the cell -- so every grey wolf in a world is the same grey wolf
+ * and a wolf is not a bear, which is the opposite of what the plants
+ * want and is what an animal wants.  Every number here is the C's,
+ * thirty-two bits all the way through so that both get the same beast.
+ * ---------------------------------------------------------- */
+const BUILDS = {
+  "alligator":[75,4,0], "arctic fox":[74,4,0], "black bear":[75,4,0],
+  "boar":[75,4,0], "camel":[75,4,0], "carp":[74,0,0],
+  "cave bear":[75,4,0], "cobra":[74,0,0], "cougar":[75,4,0],
+  "deer":[75,4,0], "dingo":[75,4,0], "elk":[75,4,0], "fox":[74,4,0],
+  "frog":[74,4,0], "gazelle":[75,4,0], "giant bat":[74,2,1],
+  "giant eagle":[75,2,1], "giant leech":[74,0,0], "giant scorpion":[74,8,0],
+  "giant spider":[74,8,0], "giant toad":[74,4,0], "grey wolf":[75,4,0],
+  "horse":[75,4,0], "hyena":[75,4,0], "jackal":[75,4,0], "lion":[75,4,0],
+  "mountain goat":[75,4,0], "otter":[74,4,0], "polar bear":[75,4,0],
+  "rabbit":[74,4,0], "reindeer":[75,4,0], "shark":[75,0,0],
+  "sheep":[75,4,0], "snow leopard":[75,4,0], "troll":[75,2,0],
+  "vulture":[74,2,1], "walrus":[75,0,0], "water moccasin":[74,0,0],
+  "a rat swarm":[74,4,0], "a skeleton":[75,2,0], "a ghoul":[75,2,0],
+  "a barrow wight":[75,2,0], "a shade":[75,2,0], "a bone drake":[76,4,1],
+  "a lich":[75,2,0], "a deep thing":[76,0,0],
+};
+/* A hash over a name rather than a path, so a species is a species
+   wherever it is standing.  imul and >>> 0 are how C's unsigned
+   arithmetic is spelled here. */
+function bstFnv(s, h){
+  for (let i = 0; i < s.length; i++)
+    h = Math.imul(h ^ (s.charCodeAt(i) & 0xFF), 16777619) >>> 0;
+  return h >>> 0;
+}
+function bstDraw(name, tag, i){
+  let h = 2166136261 >>> 0;
+  h = bstFnv(WORLD_SEED_TEXT, h);
+  h = bstFnv(name, h);
+  h = bstFnv(tag, h);
+  h = Math.imul(h ^ (i >>> 0), 16777619) >>> 0;
+  h = (h + 0x9E3779B9) >>> 0;                     /* splitmix32 */
+  let z = h;
+  z = Math.imul(z ^ (z >>> 16), 0x21f0aaad) >>> 0;
+  z = Math.imul(z ^ (z >>> 15), 0x735a2d97) >>> 0;
+  z = (z ^ (z >>> 15)) >>> 0;
+  return z / 4294967296.0;
+}
+const bstRange = (n, t, lo, hi) => lo + (hi - lo) * bstDraw(n, t, 0);
+const bstPick = (n, t, k) => Math.floor(bstDraw(n, t, 0) * k);
+
+/* The bands the size letter sets, exactly as animals.c has them. */
+const BST_BAND = {
+  73: [0.80, 1.60, 0.30, 0.52, 1.0],   /* I */
+  74: [0.70, 1.50, 0.22, 0.40, 2.0],   /* J */
+  75: [1.00, 2.40, 0.20, 0.38, 3.0],   /* K */
+  76: [1.20, 2.60, 0.22, 0.40, 5.0],   /* L */
+  77: [0.60, 1.80, 0.13, 0.30, 6.0],   /* M */
+};
+function bstDarker(c){
+  if (c < 16 || c > 231) return c < 16 ? 16 : 240;
+  const n = c - 16;
+  let r = Math.floor(n / 36), g = Math.floor(n / 6) % 6, b = n % 6;
+  if (r) r--; if (g) g--; if (b) b--;
+  return 16 + 36 * r + 6 * g + b;
+}
+function bstLighter(c){
+  if (c < 16 || c > 231) return c;
+  const n = c - 16;
+  let r = Math.floor(n / 36), g = Math.floor(n / 6) % 6, b = n % 6;
+  if (r < 5) r++; if (g < 5) g++; if (b < 5) b++;
+  return 16 + 36 * r + 6 * g + b;
+}
+function beastGenome(name, fg){
+  const k = BUILDS[name] || [75, 4, 0];
+  const b = {legs: k[1], winged: k[2]};
+  const z = BST_BAND[k[0]] || BST_BAND[75];
+  b.neck_n = Math.floor(bstDraw(name, "neck", 0) * z[4]);
+  b.gap    = b.legs >= 6 ? 1 : 2 + bstPick(name, "gap", 4);
+  b.lead   = b.legs >= 6 ? 0 : bstPick(name, "lead", 2);
+  b.trail  = b.legs >= 6 ? 0 : bstPick(name, "trail", 2);
+  b.tail   = bstDraw(name, "tail", 0) < 0.72 ? 1 + bstPick(name, "tk", 3) : 0;
+  b.tail_n = b.tail === 0 ? 0
+           : b.tail === 2 ? 3 + bstPick(name, "tn", 4)
+           : b.tail === 3 ? 2 : 1 + bstPick(name, "tn2", 2);
+  if (!b.legs && !b.tail){ b.tail = 2; b.tail_n = 4; }
+  { const pairs = Math.floor(b.legs / 2), odd = b.legs & 1;
+    if (!b.legs) b.body_n = 5 + bstPick(name, "trunk", 8);
+    else {
+      b.body_n = b.lead + b.trail;
+      for (let p = 0; p < pairs; p++)
+        if (p + 1 < pairs || odd) b.body_n += b.gap;
+    }
+    if (b.body_n < 1) b.body_n = 1;
+    const most = b.legs ? Math.floor(b.body_n * 1.4) : b.body_n * 3;
+    if (b.tail_n > most) b.tail_n = most; }
+  b.head  = bstPick(name, "head", 4);
+  b.crown = bstDraw(name, "crown", 0) < 0.30
+            ? (b.legs >= 6 ? 3 : 1 + bstPick(name, "ck", 2)) : 0;
+  b.foot  = !b.legs ? 3 : b.legs >= 6 ? 2 : bstPick(name, "foot", 3);
+  b.seg   = bstRange(name, "seg", 3.0, 6.0);
+  b.girth = b.seg * b.body_n * bstRange(name, "girth", z[2], z[3]);
+  if (b.girth > b.seg * 2.6) b.girth = b.seg * 2.6;
+  b.profile = bstRange(name, "prof", 0.34, 0.62);
+  b.arch    = bstRange(name, "arch", -0.30, 0.34);
+  b.carry   = b.legs === 2 ? bstRange(name, "carry", 0.45, 1.15) : 0.0;
+  b.neck_rise = bstRange(name, "nrise", 0.10, 0.62);
+  b.neck_thin = bstRange(name, "nthin", 0.28, 0.52);
+  b.leg_len = b.seg * bstRange(name, "leg", z[0], z[1]);
+  b.splay   = bstRange(name, "splay", -0.16, 0.20);
+  b.knee    = bstRange(name, "knee", 0.14, 0.44) * (b.legs >= 6 ? 2.0 : 1.0);
+  b.foot_r  = b.seg * bstRange(name, "footr", 0.10, 0.26);
+  b.head_deep = b.girth * bstRange(name, "hdeep", 0.58, 0.98);
+  b.head_len  = b.head_deep * bstRange(name, "hlen", 0.9, 2.0);
+  b.muzzle    = bstRange(name, "muz", 0.30, 0.95);
+  b.eye_r     = b.head_deep * bstRange(name, "eye", 0.10, 0.20);
+  b.crown_len = b.head_deep * bstRange(name, "crn", 0.45, 1.5);
+  b.wing_len  = b.seg * bstRange(name, "wl", 1.6, 4.2);
+  b.wing_deep = b.wing_len * bstRange(name, "wd", 0.30, 0.70);
+  b.tail_taper = bstRange(name, "ttap", 0.68, 0.94);
+  b.tail_lift  = bstRange(name, "tlift", -0.5, 0.5);
+  b.hide_c = fg;
+  b.dark_c = bstDarker(fg);
+  b.pale_c = bstLighter(bstLighter(fg));
+  b.eye_c  = 16;
+  b.horn_c = 187;
+  return b;
+}
+function beastChest(b){
+  let out = "";
+  const pairs = Math.floor(b.legs / 2), odd = b.legs & 1;
+  if (!b.legs) return "S".repeat(b.body_n);
+  out += "S".repeat(b.lead);
+  for (let p = 0; p < pairs; p++){
+    out += "G";
+    if (p + 1 < pairs || odd) out += "S".repeat(b.gap);
+  }
+  if (odd) out += "g";
+  out += "S".repeat(b.trail);
+  return out;
+}
+/* Nothing on a right-hand side is the symbol on its left, so seven
+   rewrites finish it and an eighth would change nothing. */
+function beastString(b){
+  let s = "X";
+  for (let step = 0; step < 7; step++){
+    let out = "";
+    for (const c of s){
+      let rep = null;
+      switch (c){
+      case 'X': rep = "H" + "n".repeat(b.neck_n) + "BU"; break;
+      case 'B': rep = b.winged ? "[W]C" : "C"; break;
+      case 'C': rep = beastChest(b); break;
+      case 'U': rep = "s".repeat(b.tail_n) + (b.tail ? "Y" : ""); break;
+      case 'G': rep = "[P]"; break;
+      case 'g': rep = "[Q]"; break;
+      case 'P': rep = "[>L][<L]"; break;
+      case 'Q': rep = "[>L]"; break;
+      case 'L': rep = "JJF"; break;
+      case 'W': rep = "[>V][<V]"; break;
+      default: break;
+      }
+      out += rep === null ? c : rep;
+      if (out.length > 4000) break;
+    }
+    s = out;
+  }
+  return s;
+}
+
+/* ── the turtle, into a little grid ─────────────────────────
+ * Far limbs, then the body, then the head, then near limbs -- and every
+ * dark edge of a layer before any of its fill, or each part's outline
+ * cuts a seam into the part before and the animal comes out as a string
+ * of sausages.  Seven passes over one string; it is the whole cost. */
+const BST_MAXW = 48, BST_MAXH = 20;
+const bstPx = [];
+for (let y = 0; y < BST_MAXH; y++) bstPx.push(new Uint8Array(BST_MAXW));
+let bstW = 0, bstH = 0, bstMeasuring = false, bstPass = 0, bstLayer = 1, bstSub = 1;
+let bstSc = 1, bstOx = 0, bstOy = 0, bbx0 = 0, bby0 = 0, bbx1 = 0, bby1 = 0;
+let bstStation = 0, bstNeckI = 0, bstTrunkN = 1, bstGirdle = 0, bstNear = 1;
+const BL_FAR = 0, BL_BODY = 1, BL_HEAD = 2, BL_NEAR = 3;
+const BST_PL = [BL_FAR, BL_FAR, BL_BODY, BL_BODY, BL_HEAD, BL_NEAR, BL_NEAR];
+const BST_PS = [0, 1, 0, 1, -1, 0, 1];
+
+function bstDot(cx, cy, r, c){
+  if (bstMeasuring){
+    if (cx - r < bbx0) bbx0 = cx - r;
+    if (cx + r > bbx1) bbx1 = cx + r;
+    if (cy - r < bby0) bby0 = cy - r;
+    if (cy + r > bby1) bby1 = cy + r;
+    return;
+  }
+  if (bstLayer !== BST_PL[bstPass]) return;
+  if (BST_PS[bstPass] >= 0 && bstSub !== BST_PS[bstPass]) return;
+  cx = bstOx + cx * bstSc; cy = bstOy + cy * bstSc; r *= bstSc;
+  if (r < 0.42) r = 0.42;
+  const x0 = Math.floor(cx - r), x1 = Math.ceil(cx + r);
+  const y0 = Math.floor(cy - r), y1 = Math.ceil(cy + r);
+  for (let y = y0; y <= y1; y++)
+    for (let x = x0; x <= x1; x++){
+      if (x < 0 || x >= bstW || y < 0 || y >= bstH) continue;
+      const dx = x + 0.5 - cx, dy = y + 0.5 - cy;
+      if (dx * dx + dy * dy <= r * r) bstPx[y][x] = c;
+    }
+}
+function bstLine(x0, y0, x1, y1, t0, t1, c){
+  const dx = x1 - x0, dy = y1 - y0;
+  const n = Math.trunc((Math.abs(dx) + Math.abs(dy)) *
+                       (bstMeasuring ? 1.0 : bstSc)) * 2 + 1;
+  for (let i = 0; i <= n; i++){
+    const f = i / n;
+    bstDot(x0 + dx * f, y0 + dy * f, (t0 + (t1 - t0) * f) * 0.5, c);
+  }
+}
+const bstEdge = () => bstMeasuring ? 0.8 : 1.4 / bstSc;
+function bstWidth(b, f){
+  const p = b.profile;
+  const t = f < p ? (f / (p > 1e-6 ? p : 1e-6)) * 0.5
+                  : 0.5 + (f - p) / ((1.0 - p) > 1e-6 ? (1.0 - p) : 1e-6) * 0.5;
+  const w = b.girth * (0.34 + 0.66 * Math.pow(Math.sin(Math.PI * t), 0.75));
+  return w < b.girth * 0.30 ? b.girth * 0.30 : w;
+}
+function bstHead(b, x, y, a){
+  const PI = Math.PI;
+  const fx = -Math.cos(a), fy = -Math.sin(a), ux = -fy, uy = fx;
+  let L = b.head_len, D = b.head_deep;
+  if (b.head === 1){ L *= 1.5; D *= 0.72; }
+  if (b.head === 3){ L *= 0.8; D *= 1.35; }
+  const cx = x + fx * L * 0.35, cy = y + fy * L * 0.35;
+  bstSub = 0;
+  bstLine(cx - fx * L * 0.22, cy - fy * L * 0.22, cx + fx * L * 0.20,
+          cy + fy * L * 0.20, D + bstEdge() * 2.0,
+          D * 0.86 + bstEdge() * 2.0, b.dark_c);
+  bstSub = 1;
+  bstLine(cx - fx * L * 0.22, cy - fy * L * 0.22, cx + fx * L * 0.20,
+          cy + fy * L * 0.20, D, D * 0.86, b.hide_c);
+  const mx = cx + fx * L * b.muzzle, my = cy + fy * L * b.muzzle;
+  if (b.head === 2){
+    bstSub = 0; bstLine(cx, cy, mx, my, D * 0.55 + bstEdge(),
+                        0.8 + bstEdge(), bstDarker(b.horn_c));
+    bstSub = 1; bstLine(cx, cy, mx, my, D * 0.55, 0.8, b.horn_c);
+  } else {
+    bstSub = 0; bstLine(cx, cy, mx, my, D * 0.8 + bstEdge(),
+                        D * 0.40 + bstEdge(), b.dark_c);
+    bstSub = 1; bstLine(cx, cy, mx, my, D * 0.8, D * 0.40, b.hide_c);
+  }
+  bstSub = 1;
+  bstDot(cx + fx * D * 0.30 - ux * D * 0.22, cy + fy * D * 0.30 - uy * D * 0.22,
+         b.eye_r + bstEdge(), b.pale_c);
+  bstDot(cx + fx * D * 0.30 - ux * D * 0.22, cy + fy * D * 0.30 - uy * D * 0.22,
+         b.eye_r, b.eye_c);
+  if (!b.crown) return;
+  const hx = cx - ux * D * 0.42, hy = cy - uy * D * 0.42;
+  for (let k = -1; k <= 1; k += 2){
+    let aa = a + PI + k * 0.34 - PI / 2.0;
+    const len = b.crown_len;
+    let px_ = hx, py = hy;
+    for (let i = 0; i < 7; i++){
+      aa += (b.crown === 2 ? 0.16 : 0.10) * k;
+      const nx = px_ + Math.cos(aa) * len / 7.0, ny = py + Math.sin(aa) * len / 7.0;
+      const t = b.crown === 1 ? len * 0.20 * Math.sin(PI * (i + 0.5) / 7.0) + 0.6
+              : b.crown === 2 ? len * 0.24 * (1.0 - i / 7.0) + 0.6 : 1.0;
+      bstLine(px_, py, nx, ny, t, t, b.crown === 1 ? b.hide_c : b.horn_c);
+      px_ = nx; py = ny;
+    }
+  }
+}
+function bstFoot(b, x, y, a){
+  const PI = Math.PI, r = b.foot_r;
+  const fx = Math.cos(a - PI / 2.0), fy = Math.sin(a - PI / 2.0);
+  const c = bstLayer === BL_FAR ? b.dark_c : b.hide_c;
+  const h = bstLayer === BL_FAR ? bstDarker(b.horn_c) : b.horn_c;
+  bstSub = 1;
+  switch (b.foot){
+  case 1: bstDot(x, y, r * 1.1, h); break;
+  case 2: for (let k = -1; k <= 1; k++)
+            bstLine(x, y, x + Math.cos(a + k * 0.5) * r * 1.8,
+                    y + Math.sin(a + k * 0.5) * r * 1.8, 1.2, 0.6, h);
+          break;
+  case 3: bstLine(x - fx * r, y - fy * r, x + fx * r * 2.2, y + fy * r * 2.2,
+                  r * 1.4, r * 0.7, c); break;
+  default: bstDot(x + fx * r * 0.4, y + fy * r * 0.4, r, c);
+  }
+}
+function bstWing(b, x, y){
+  const PI = Math.PI;
+  const c = bstLayer === BL_FAR ? b.dark_c : b.hide_c;
+  const len = b.wing_len, dep = b.wing_deep;
+  const a = -PI / 2.0 - 0.55 + (bstLayer === BL_FAR ? 0.12 : 0.0);
+  const tx = x + Math.cos(a) * len, ty = y + Math.sin(a) * len;
+  bstSub = 1;
+  for (let e = 0; e < 2; e++)
+    for (let i = 0; i <= 18; i++){
+      const f = i / 18.0;
+      const w = dep * 0.5 * Math.sin(PI * Math.pow(f, 0.8)) + (e ? 0.0 : bstEdge());
+      bstDot(x + (tx - x) * f, y + (ty - y) * f, w < 0.4 ? 0.4 : w,
+             e ? c : bstDarker(c));
+    }
+}
+function beastWalk(b, s){
+  const PI = Math.PI;
+  const st = [];
+  let limb_j = 0;
+  bstStation = 0; bstNeckI = 0; bstGirdle = 0; bstNear = 1;
+  bstLayer = BL_BODY; bstSub = 1;
+  let tx0 = 0.0, ty0 = 0.0;
+  let ta = PI - (b.neck_n ? b.neck_rise : 0.0) - b.carry;
+  for (let ci = 0; ci < s.length; ci++){
+    const c = s[ci];
+    let len, w0, w1, f0, f1;
+    switch (c){
+    case 'H':
+      bstLayer = BL_HEAD;
+      bstHead(b, tx0, ty0, ta);
+      { const fx = -Math.cos(ta), fy = -Math.sin(ta);
+        tx0 -= fx * b.head_deep * 0.30; ty0 -= fy * b.head_deep * 0.30; }
+      break;
+    case 'n':
+      bstLayer = BL_BODY;
+      len = b.seg * 0.8;
+      w0 = b.girth * b.neck_thin *
+           (0.8 + 0.4 * (bstNeckI + 1) / (b.neck_n ? b.neck_n : 1));
+      { const nx = tx0 + Math.cos(ta) * len, ny = ty0 + Math.sin(ta) * len;
+        bstSub = 0; bstLine(tx0, ty0, nx, ny, w0 + bstEdge(), w0 + bstEdge(), b.dark_c);
+        bstSub = 1; bstLine(tx0, ty0, nx, ny, w0, w0, b.hide_c);
+        tx0 = nx; ty0 = ny; }
+      ta += b.neck_rise / (b.neck_n ? b.neck_n : 1);
+      bstNeckI++;
+      break;
+    case 'S':
+      bstLayer = BL_BODY;
+      len = b.seg;
+      f0 = bstTrunkN ? bstStation / bstTrunkN : 0.0;
+      f1 = bstTrunkN ? (bstStation + 1) / bstTrunkN : 1.0;
+      w0 = bstWidth(b, f0); w1 = bstWidth(b, f1);
+      { const nx = tx0 + Math.cos(ta) * len, ny = ty0 + Math.sin(ta) * len;
+        bstSub = 0; bstLine(tx0, ty0, nx, ny, w0 + bstEdge(), w1 + bstEdge(), b.dark_c);
+        bstSub = 1; bstLine(tx0, ty0, nx, ny, w0, w1, b.hide_c);
+        bstLine(tx0, ty0 + w0 * 0.30, nx, ny + w1 * 0.30,
+                w0 * 0.34, w1 * 0.34, b.pale_c);
+        tx0 = nx; ty0 = ny; }
+      ta += b.arch / (bstTrunkN ? bstTrunkN : 1);
+      bstStation++;
+      break;
+    case 's':
+      bstLayer = BL_BODY;
+      len = b.seg * 0.7;
+      w0 = b.girth * 0.26 * Math.pow(b.tail_taper, bstStation - bstTrunkN);
+      w1 = w0 * b.tail_taper;
+      if (w0 < 0.9) w0 = 0.9;
+      if (w1 < 0.7) w1 = 0.7;
+      ta += b.tail_lift * 0.18;
+      { const nx = tx0 + Math.cos(ta) * len, ny = ty0 + Math.sin(ta) * len;
+        bstSub = 0; bstLine(tx0, ty0, nx, ny, w0 + bstEdge(), w1 + bstEdge(), b.dark_c);
+        bstSub = 1; bstLine(tx0, ty0, nx, ny, w0, w1, b.hide_c);
+        tx0 = nx; ty0 = ny; }
+      bstStation++;
+      break;
+    case 'Y':
+      bstLayer = BL_BODY; bstSub = 1;
+      if (b.tail === 3)
+        for (let k = -1; k <= 1; k += 2)
+          for (let i = 0; i <= 10; i++){
+            const f = i / 10.0, a = ta + k * 0.8;
+            bstDot(tx0 + Math.cos(a) * b.girth * 1.1 * f,
+                   ty0 + Math.sin(a) * b.girth * 1.1 * f,
+                   b.girth * 0.26 * Math.sin(PI * f) + 0.4, b.hide_c);
+          }
+      else if (b.tail === 1)
+        bstDot(tx0, ty0, b.girth * 0.22 + 0.5, b.hide_c);
+      break;
+    case '>': bstLayer = BL_NEAR; bstNear = 1;
+              ta = PI / 2.0 + b.splay * ((bstGirdle & 1) ? -1.0 : 1.0);
+              limb_j = 0; break;
+    case '<': bstLayer = BL_FAR; bstNear = 0;
+              tx0 += b.seg * 0.30; ty0 -= b.girth * 0.10;
+              ta = PI / 2.0 + b.splay * ((bstGirdle & 1) ? -1.0 : 1.0) + 0.10;
+              limb_j = 0; break;
+    case 'J':
+      len = b.leg_len * (limb_j ? 0.46 : 0.56);
+      w0 = b.girth * (limb_j ? 0.20 : 0.34);
+      if (w0 < 1.4) w0 = 1.4;
+      { const nx = tx0 + Math.cos(ta) * len, ny = ty0 + Math.sin(ta) * len;
+        const col = bstNear ? b.hide_c : b.dark_c;
+        bstSub = 0; bstLine(tx0, ty0, nx, ny, w0 + bstEdge(),
+                            w0 * 0.72 + bstEdge(), bstDarker(col));
+        bstSub = 1; bstLine(tx0, ty0, nx, ny, w0, w0 * 0.86, col);
+        tx0 = nx; ty0 = ny; }
+      ta += limb_j ? -b.knee * 0.62 : b.knee;
+      limb_j++;
+      break;
+    case 'F': bstFoot(b, tx0, ty0, ta); break;
+    case 'V': bstWing(b, tx0, ty0); break;
+    case '[': if (st.length < 48) st.push([tx0, ty0, ta]); break;
+    case ']': if (st.length){ const p = st.pop(); tx0 = p[0]; ty0 = p[1]; ta = p[2]; }
+              bstLayer = BL_BODY;
+              break;
+    default: break;
+    }
+    if (c === ']' && (ci + 1 >= s.length || s[ci + 1] !== '[')) bstGirdle++;
+  }
+}
+/* Grown beasts are kept the way grown plants are: a small cache keyed on
+   the species, its colour and the size asked for. */
+const beastKeep = new Map();
+function beastPixels(name, fg, w, h){
+  if (!name || w > BST_MAXW || h > BST_MAXH || w < 2 || h < 2) return false;
+  const key = name + "|" + fg + "|" + w + "x" + h;
+  const hit = beastKeep.get(key);
+  if (hit){ for (let y = 0; y < BST_MAXH; y++) bstPx[y].set(hit[y]); return true; }
+  const b = beastGenome(name, fg);
+  const s = beastString(b);
+  bstTrunkN = 0;
+  for (const c of s) if (c === 'S') bstTrunkN++;
+  if (!bstTrunkN) bstTrunkN = 1;
+  bstW = w; bstH = h;
+  for (let y = 0; y < BST_MAXH; y++) bstPx[y].fill(0);
+  bstMeasuring = true;
+  bbx0 = bby0 = 1e9; bbx1 = bby1 = -1e9;
+  bstSc = 1.0; bstOx = bstOy = 0.0;
+  beastWalk(b, s);
+  bstMeasuring = false;
+  let bw = bbx1 - bbx0, bh = bby1 - bby0;
+  if (!(bw > 1e-6)) bw = 1.0;
+  if (!(bh > 1e-6)) bh = 1.0;
+  const sx = w * 0.94 / bw, sy = (h - 0.2) * 0.92 / bh;
+  bstSc = sx < sy ? sx : sy;
+  bstOx = w * 0.5 - (bbx0 + bbx1) * 0.5 * bstSc;
+  bstOy = h - 0.4 - bby1 * bstSc;
+  for (bstPass = 0; bstPass < BST_PL.length; bstPass++) beastWalk(b, s);
+  if (beastKeep.size > 64) beastKeep.clear();
+  beastKeep.set(key, bstPx.map(r => Uint8Array.from(r)));
+  return true;
+}
+/* Which beast the cell about to be drawn has standing in it, set the
+   same way grownSource sets what is growing there. */
+let beastHere = null, beastHereFg = 0;
+function beastSource(name, fg){ beastHere = name; beastHereFg = fg; }
+
 function drawTileN(tx, ty, tw, th, terr, accent, tex, cell, mark, letter){
   const heavy = accent >= 0 && (accent & 0x100);
   let base = madeBase >= 0 ? madeBase : terr.bg;
@@ -4204,6 +5085,9 @@ function drawTileN(tx, ty, tw, th, terr, accent, tex, cell, mark, letter){
   const y0 = ty * 2 + (hexed ? 1 : 0);
   const growing = tileGrain === GRAIN_GROWN && grownPath && grownThing &&
                   growTile(grownPath, 0, cell, grownThing, gw, gh);
+  /* and what is standing in it, over the ground and over what grows */
+  const beasting = tileGrain === GRAIN_GROWN && beastHere &&
+                   beastPixels(beastHere, beastHereFg, gw, gh);
   for (let gy = 0; gy < gh; gy++){
     let lo = 0, hi = gw;
     if (hexed && (gy === 0 || gy === gh - 1)){ lo = tip; hi = tip + tipw; }
@@ -4226,6 +5110,7 @@ function drawTileN(tx, ty, tw, th, terr, accent, tex, cell, mark, letter){
       let c = ((h & 0xFF) < sp) ? a : b;
       /* and what is growing here, over the ground it grows out of */
       if (growing && growPx[gy][gx]) c = growPx[gy][gx];
+      if (beasting && bstPx[gy][gx]) c = bstPx[gy][gx];
       if (mark === 1 && gx === (gw >> 1) && gy === (gh >> 2)) c = 226;
       if (mark === 1 && gx === (gw >> 1) && gy === (gh >> 2) + 1) c = 201;
       if (mark === 2 && gx === (gw >> 1) && gy === (gh >> 1)) c = 208;
@@ -4259,7 +5144,8 @@ function turnedTileAt(slot){
 }
 function drawBoardArea(g){
   const w = g.w, view = g.view;
-  const data = view >= DEPTHS - 1 ? w.layers(g.address.slice(0, view), g.when)
+  const data = (view === DEPTHS && g.level) ? footBoard(g)
+             : view >= DEPTHS - 1 ? w.layers(g.address.slice(0, view), g.when)
                                   : w.board(g.address.slice(0, view));
   if (view === ROAD_DEPTH) w.roadsFor(data, g.when);
   /* the same thirty-two bits the C truncates its path seed to */
@@ -4284,6 +5170,14 @@ function drawBoardArea(g){
     } else tileSource(null, 0, 0);
     madeSource(-1);
     grownSource(null, null);
+    beastSource(null, 0);
+    /* What is standing in the cell, grown into it the way a plant is.
+       Only on the board you are actually on: a wolf is a metre and a K
+       cell is a metre, so this is the one rung it shows at. */
+    if (view === DEPTHS && tileGrain === GRAIN_GROWN){
+      const bb = beingAt(i);
+      if (bb) beastSource(bb.name, bb.fg);
+    }
     if (view >= DEPTHS - 1){
       if (data.ground[i] && data.ground[i].key === "road")  madeSource(94);
       if (data.ground[i] && data.ground[i].key === "floor") madeSource(58);
@@ -4320,7 +5214,10 @@ function drawBoardArea(g){
     if (turned) [tx, ty] = turnedTileAt(i);
     else { tx = BOARD_X + 16 + 4 * COORDS[i][0] + 2 * COORDS[i][1];
            ty = BOARD_Y + 8 + 2 * COORDS[i][1]; }
-    text(tx + 1, ty, b.glyph, b.fg, data.terrain[i].bg);
+    /* Under the grown grain the beast is drawn into the cell itself, so
+       the letter would only be standing on top of it. */
+    if (tileGrain !== GRAIN_GROWN)
+      text(tx + 1, ty, b.glyph, b.fg, data.terrain[i].bg);
   }
 }
 
@@ -4343,7 +5240,7 @@ function drawLadder(g, x, y){
   for (let depth = 0; depth < ADDRESS_LEN; depth++){
     let what;
     if (depth === DEPTHS){
-      const b = w.layers(g.address.slice(0, DEPTHS), g.when);
+      const b = footBoard(g);
       const gr = b.ground[g.address[DEPTHS]];
       what = "you, on " + (gr ? gr.name : "nothing");
     } else {
@@ -4367,18 +5264,36 @@ function drawScreen(g){
   let place = "";
   try { place = g.view === 0 ? w.worldName() : w.nameOf(g.address.slice(0, g.view)); }
   catch (e) { place = ""; }
-  let bar = " " + place + "   " + RUNGS[g.view] + " " +
+  /* and what this piece of country is good for */
+  const good = RESOURCES[resourceAt(g.address, Math.max(1, g.view))][0];
+  let bar = " " + place + " · " + good + "   " + RUNGS[g.view] + " " +
             BOARD_NAME_T[g.view] + ", cells of " + SIZE_NAME_T[g.view + 1] + " ";
+  /* The clock sits at the right-hand end of the bar and is never cut, and
+     the date stands to its left and is never cut either: what gives way
+     is the name of the place, trimmed to whatever room is left of them. */
+  const clock = clockOf(g.when);
+  const cx = SCREEN_W - clock.length - 1;
+  let when = dateLong(g.when);
+  let dx = cx - when.length - 2;
+  if (dx < 2){ when = dateShort(g.when); dx = cx - when.length - 2; }
+  if (bar.length > dx - 1 && dx >= 2) bar = bar.slice(0, dx - 1);
   for (let x = 0; x < SCREEN_W; x++)
     text(x, 0, x < bar.length ? bar[x] : " ", 232, 180);
-  /* the date sits at the right-hand end of the bar */
-  let when = dateLong(g.when);
-  let dx = SCREEN_W - when.length - 1;
-  if (dx < bar.length + 2){ when = dateShort(g.when); dx = SCREEN_W - when.length - 1; }
-  if (dx > bar.length) text(dx, 0, when, 232, 180);
-  drawBoardArea(g);
+  text(cx, 0, clock, 232, 180);
+  if (dx >= 0) text(dx, 0, when, 232, 180);
+  /* the lots outside are the backdrop; the rooms go over them */
+  const use = g.view === DEPTHS ? insideUse(g) : -1;
+  if (use >= 0){
+    const keep = g.view;
+    g.view = DEPTHS - 1;
+    drawBoardArea(g);
+    g.view = keep;
+    drawInside(g, use);
+  } else drawBoardArea(g);
   if (g.showBag) drawBag(g);
-  if (!showTasks && !showKeys)
+  if (g.showBody) drawBody(g);
+  if (showBeasts) drawBeasts(g);
+  if (!showTasks && !showKeys && !showSpells)
     drawGlobe(g, PANEL_X + 1, 1, SCREEN_W - PANEL_X - 2, 10, viewFrame(g),
               g.address[0]);
   if (routeOn && !showTasks){
@@ -4389,8 +5304,9 @@ function drawScreen(g){
     text(PANEL_X + 2, 11, rl.slice(0, SCREEN_W - PANEL_X - 3),
          routeStuck ? 174 : 215, 0);
   }
-  if (!showTasks && !showKeys) drawLadder(g, PANEL_X + 2, 12);
+  if (!showTasks && !showKeys && !showSpells) drawLadder(g, PANEL_X + 2, 12);
   if (showTasks) drawTasks(g);
+  if (showSpells) drawSpells(g);
   if (showKeys) drawKeys();
 
   /* what you are standing on */
@@ -4403,14 +5319,15 @@ function drawScreen(g){
     const gone = here ? null : w.ruin(g.address.slice(0, DEPTHS - 1), g.when);
     if (here) town = "  ·  " + here.name + " · " + here.kind + " · " +
                      here.population + " souls · " + here.standingAt(g.when) +
-                     ", " + here.ageAt(g.when) + " years old";
+                     " · makes " + RESOURCES[resourceAt(g.address, DEPTHS - 1)][1];
     else if (gone) town = "  ·  the ruins of " + gone.name + ", empty " +
                           gone.emptiedAt(g.when) + " years";
   }
-  text(1, SCREEN_H - 5, " " + (terr ? terr.name : "the planet") +
+  text(1, SCREEN_H - 5, " " + (g.view === DEPTHS && g.level < 0 ? "rock"
+                               : terr ? terr.name : "the planet") +
        " - hanb '" + ch + "'" + (ch === "a" ? " — nothing there" : "") + town,
        252, 0);
-  const lb = w.layers(g.address.slice(0, DEPTHS), g.when);
+  const lb = footBoard(g);
   const seen = w.occupants(lb, g.address[DEPTHS]);
   const f = data ? data.fields[g.address[g.view]] : null;
   text(1, SCREEN_H - 4, " here: " + seen.map(t => t.name).join(", ") +
@@ -4419,22 +5336,30 @@ function drawScreen(g){
             "  warmth " + Math.trunc(f.temperature) : ""), 245, 0);
   const alive = g.view === DEPTHS ? beings.filter(b => b.alive).length : 0;
   text(1, SCREEN_H - 3, " " + g.address.map(i => ALPHABET[i & 63]).join("") +
-       " - " + g.hp + "/" + g.maxHp + " hp - carrying " + g.carried.length +
+       " - " + KINDRED[g.who].name +
+       " - " + g.hp + "/" + g.maxHp + " hp - carrying " + carriedTotal(g) +
        " - " + alive + " alive" +
-       " - " + (g.stance < 0 ? "afoot" : "travelling, " +
-                SIZE_NAME_T[g.stance + 1] + " a step") +
+       " - " + (g.stance < 0
+                ? (g.level > 0 ? "storey " + g.level
+                 : g.level < 0 ? (-g.level) + " down" : "afoot")
+                : "travelling, " + SIZE_NAME_T[g.stance + 1] + " a step") +
        " - " + TERM_SPEED[g.speed] + " - seed " + WORLD_SEED_TEXT, 240, 0);
   text(1, SCREEN_H - 2, typing
        ? "go to: " + typing.text + "_" : (g.message || ""), 223, 0);
   text(1, SCREEN_H - 1,
-       "weadzx move S out s wait <> scale , take i bag n tasks f travel ? keys q quit",
+       (g.stance < 0
+        ? "weadzx move S out s spells . wait <> scale , take n tasks f way ? keys q quit"
+        : "weadzx go S halt s spells . wait <> stride , take n tasks f way ? keys q quit"),
        245, 0);
 }
 
 /* ── the walker, and starting somewhere ──────────────────────
  * The same start the terminal picks: a continent with dry land on it,
  * and then down, choosing a cell above the waterline at every rung. */
-function startGame(seedText){
+function startGame(seedText, whoName){
+  let who = 0;
+  for (let k = 0; k < KINDRED.length; k++)
+    if (KINDRED[k].name === whoName) who = k;
   WORLD_SEED_TEXT = /^[0-9]+$/.test(seedText) ? seedText
                   : String(seedFromText(seedText));
   const w = new HanbWorld(WORLD_SEED_TEXT);
@@ -4460,11 +5385,30 @@ function startGame(seedText){
     }
     address.push(opts[rng._randbelow(opts.length)]);
   }
-  return {w: w, address: address, view: DEPTHS, facing: 0, stance: -1,
+  const g0 = {w: w, address: address, view: DEPTHS, facing: 0, stance: -1,
           seconds: 0, when: EPOCH_START, raw: false, showBag: false,
-          speed: 0, heldSpeed: 3,
-          hp: 74, maxHp: 74, skill: 0, guard: 0, carried: [],
+          speed: 0, heldSpeed: 3, wasInside: -2,
+          spells: [1, 1, 1, 1, 1],   /* five to start with, for the trying */
+          strideLeft: 0, unbarLeft: 0, who: who,
+          /* what your kind gives you: wind to spend, a heavier blow, a
+             readier guard.  Everything else a trait does where it is used. */
+          hp: 52 + KINDRED[who].con + Math.trunc(KINDRED[who].str / 2),
+          maxHp: 52 + KINDRED[who].con + Math.trunc(KINDRED[who].str / 2),
+          skill: Math.trunc((KINDRED[who].str - 10) / 2),
+          guard: Math.trunc((KINDRED[who].dex - 10) / 2),
+          /* What you set out with: a pack on your back, a satchel and a
+             purse in it, and a knife. */
+          bags: new Array(BAGS).fill(null), packBag: -1,
+          worn: new Array(BOARD_SIZE).fill(null), bodyCell: cellAt(2, -4),
+          invBag: -1, invCell: cellAt(0, 0), invUp: [], invDepth: 0,
+          showBody: false, level: 0,
           message: "Nothing is here until you look at it.  Walk."};
+  g0.packBag = newBag(g0, THING_BY_KEY.pack);
+  stow(g0, THING_BY_KEY.satchel);
+  stow(g0, THING_BY_KEY.purse);
+  stow(g0, thingNamed("a knife"));
+  invOpen(g0);
+  return g0;
 }
 
 /* ── a check, because a misspelt field is silent ─────────────
@@ -4551,6 +5495,12 @@ function drawGlobe(g, x0, y0, w, rows, F, here){
  * step brings the view back to it.  And what a stride costs is what it
  * costs on good going: rough ground costs more of it, a road least. */
 const KEY_DIR = {w: "NW", e: "NE", a: "W", d: "E", z: "SW", x: "SE"};
+/* The board your feet are actually on: the world's own, unless you have
+   gone up or down inside a building. */
+function footBoard(g){
+  return g.level ? levelBoard(g.w, g.address.slice(0, DEPTHS), gWhen(g), g.level)
+                 : g.w.layers(g.address.slice(0, DEPTHS), gWhen(g));
+}
 const walkDepth = g => (g.stance < 0 ? DEPTHS : g.stance);
 const gWhen = g => { g.w.now = EPOCH_START + g.seconds; return g.w.now; };
 const strideAt = depth => Math.pow(LADDER, DEPTHS - depth);
@@ -4562,8 +5512,12 @@ function moveDir(g, key){
   const next = g.w.step(g.address.slice(0, depth).concat(
                           g.address.slice(depth)), dir, depth);
   if (!next){ g.message = "That is the edge of the planet."; return; }
-  const board = depth === DEPTHS ? g.w.layers(next.slice(0, DEPTHS), gWhen(g))
-                                 : g.w.board(next.slice(0, depth));
+  /* Indoors you are on one lot's board and no other: the rim of it is
+     wall or rock, so a step off it never arises. */
+  const board = depth === DEPTHS
+    ? (g.level ? levelBoard(g.w, next.slice(0, DEPTHS), gWhen(g), g.level)
+               : g.w.layers(next.slice(0, DEPTHS), gWhen(g)))
+    : g.w.board(next.slice(0, depth));
   if (depth === DEPTHS){
     const same = next.slice(0, DEPTHS).join(",") ===
                  g.address.slice(0, DEPTHS).join(",");
@@ -4573,10 +5527,16 @@ function moveDir(g, key){
       if (other){ strike(g, other); creatureTurns(g); g.seconds += 2.0; return; }
     }
     if (!g.w.passable(board, next[DEPTHS])){
-      const b = g.w.blocker(board, next[DEPTHS]);
-      g.message = (b ? b.name : "Something") + " is in the way.";
-      g.message = g.message[0].toUpperCase() + g.message.slice(1);
-      return;
+      if (g.unbarLeft > 0){
+        g.unbarLeft--;
+        g.message = g.unbarLeft ? "You walk through it."
+                                : "You walk through it.  The last of it fades.";
+      } else {
+        const b = g.w.blocker(board, next[DEPTHS]);
+        g.message = (b ? b.name : "Something") + " is in the way.";
+        g.message = g.message[0].toUpperCase() + g.message.slice(1);
+        return;
+      }
     }
   } else if (!board.terrain[next[depth]].passable){
     g.message = board.terrain[next[depth]].name +
@@ -4585,18 +5545,53 @@ function moveDir(g, key){
     return;
   }
   if (depth === ROAD_DEPTH) g.w.roadsFor(board, gWhen(g));
-  g.seconds += strideAt(depth) * Math.max(0.2, goingAt(board, next[depth]));
+  let go = Math.max(0.2, goingAt(board, next[depth]));
+  if (g.strideLeft > 0){ go *= 0.6; g.strideLeft--; }
+  g.seconds += strideAt(depth) * go;
   g.address = next;
   g.message = "";
   if (depth === DEPTHS){ ensureBeings(g); creatureTurns(g); }
   else settleHere(g);
   questCheck(g);
+  /* A post at a crossroads is there to be read. */
+  if (depth === DEPTHS && !g.level){
+    const lb = g.w.layers(g.address.slice(0, DEPTHS), gWhen(g));
+    if (lb.item[g.address[DEPTHS]] === THING_BY_KEY.signpost)
+      g.message = signText(g, g.address.slice(0, DEPTHS - 1));
+  }
+  /* Going in and coming out are worth being told about.  Neither is a
+     special kind of move: the lot you stepped into either carries a
+     building or it does not. */
+  const nowIn = insideUse(g);
+  if (nowIn !== g.wasInside){
+    const s = g.w.settlement(g.address.slice(0, DEPTHS - 1), gWhen(g));
+    if (nowIn >= 0)
+      g.message = "You step inside the " + USE_NAME[nowIn] +
+                  (s ? " of " + s.name : "") + ".";
+    else if (g.wasInside >= 0) g.message = "You step outside again.";
+    g.wasInside = nowIn;
+  }
+  /* On the lot but not in the house: say which way round the door is,
+     because hunting a one-metre gap in a wall is nobody's idea of a
+     game. */
+  if (nowIn < 0 && depth === DEPTHS){
+    const up = g.w.layers(g.address.slice(0, DEPTHS - 1), gWhen(g));
+    if (up.item[g.address[DEPTHS - 1]] === THING_BY_KEY.building){
+      const s = g.w.settlement(g.address.slice(0, DEPTHS - 1), gWhen(g));
+      const rank = s && s.cells ? s.cells.indexOf(g.address[DEPTHS - 1]) : 0;
+      const use = s ? buildingUse(g.address.slice(0, DEPTHS), s.race,
+                                  rank < 0 ? 0 : rank) : USE_HOME;
+      g.message = "A " + USE_NAME[use] + " stands here.  Its door is on the " +
+                  DIR_NAME[buildingDoor(g.w, g.address.slice(0, DEPTHS), gWhen(g))] +
+                  " side.";
+    }
+  }
 }
 /* The position is the truth and the address is a reading of it: after a
    long stride, step across to a cell you can stand on rather than
    jumping to its address. */
 function settleHere(g){
-  const b = g.w.layers(g.address.slice(0, DEPTHS), gWhen(g));
+  const b = footBoard(g);
   if (g.w.passable(b, g.address[DEPTHS])) return;
   let best = -1, bd = 99;
   for (let i = 0; i < BOARD_SIZE; i++){
@@ -4607,9 +5602,49 @@ function settleHere(g){
   if (best >= 0) g.address[DEPTHS] = best;
   else g.message = "Nothing to stand on here.  You are at sea.";
 }
+/* Anything that takes you off this board takes you out of the building
+   as well: the levels hang off one lot and nowhere else. */
+function leaveLevels(g){
+  if (!g.level) return;
+  g.level = 0; levelForget(); beingsPath = null;
+  settleHere(g);
+}
+/* Up and down the stairs.  A level is not part of the address -- it hangs
+   off the lot the way the lot hangs off the world -- so going up is only
+   a matter of which board your feet are on.  The stair stands in the same
+   cell on both boards, so there is nowhere to arrive: you are already
+   standing where you come out. */
+function goLevel(g, d){
+  if (g.stance >= 0){ g.message = "Stop walking first."; return; }
+  if (g.view !== DEPTHS){
+    g.message = "Only from the board you are standing on."; return;
+  }
+  const it = footBoard(g).item[g.address[DEPTHS]];
+  if (d > 0 && it !== THING_BY_KEY.stair_up){
+    g.message = "There are no stairs up here."; return;
+  }
+  if (d < 0 && it !== THING_BY_KEY.stair_down && it !== THING_BY_KEY.shaft){
+    g.message = "There is no way down here."; return;
+  }
+  g.level += d;
+  levelForget();                 /* the board you are going to, not the one you left */
+  beingsPath = null;
+  g.seconds += strideAt(DEPTHS) * 4.0;
+  if (g.level === 0) g.message = "You come out on the ground floor.";
+  else if (g.level > 0)
+    g.message = "You climb to the " + ["first", "second", "third"][g.level - 1] +
+                " storey.";
+  else {
+    const deep = -g.level;
+    g.message = (deep === 1 ? "The cellar." : "Stone, and the smell of it.") +
+                "  " + deep + (deep === 1 ? " board" : " boards") + " down.";
+  }
+  settleHere(g);
+}
+
 /* what is underfoot, into the bag */
 function takeHere(g){
-  const b = g.w.layers(g.address.slice(0, DEPTHS), gWhen(g));
+  const b = footBoard(g);
   const i = g.address[DEPTHS], t = b.item[i];
   if (!t){ g.message = "There is nothing here to pick up."; return; }
   if (!t.portable){
@@ -4617,8 +5652,7 @@ function takeHere(g){
     g.message = g.message[0].toUpperCase() + g.message.slice(1);
     return;
   }
-  if (g.carried.length >= 8){ g.message = "You cannot carry any more."; return; }
-  g.carried.push(t);
+  if (!stow(g, t)){ g.message = "You cannot carry any more."; return; }
   g.w.takeItem(g.address.slice(0, ADDRESS_LEN), gWhen(g));
   g.seconds += 2.0;
   g.message = "You pick up " + t.name + ". (item, size " + t.size + ")";
@@ -4632,9 +5666,27 @@ function gameKey(g, k){
         typing.text.length < ADDRESS_LEN) typing.text += k;
     return true;
   }
+  /* While a board of your own is open -- the pack, the body -- the six
+     walking keys walk its cells instead of the world's. */
+  if (g.showBag || g.showBody){
+    const a = k === "d" ? 0 : k === "x" ? 1 : k === "z" ? 2
+            : k === "a" ? 3 : k === "w" ? 4 : k === "e" ? 5 : -1;
+    if (a >= 0){ if (g.showBag) invMove(g, a); else bodyMove(g, a); return true; }
+    if (g.showBag && k === ">"){ invEnter(g); return true; }
+    if (g.showBag && k === "<"){ invLeave(g); return true; }
+    if (g.showBody && k === ">"){ bodyEquip(g); return true; }
+    if (g.showBody && k === "<"){ bodyUnequip(g); return true; }
+  }
   if (KEY_DIR[k]) { moveDir(g, k); return true; }
-  if (k === "s"){ g.seconds += strideAt(DEPTHS); g.message = "You wait."; return true; }
+  if (k === "u"){ goLevel(g, 1); return true; }
+  if (k === "b"){ goLevel(g, -1); return true; }
+  if (k === "s"){ showSpells = !showSpells; return true; }
+  if (k === "c"){ showBeasts = !showBeasts;
+                  if (showBeasts && g.view === DEPTHS) ensureBeings(g);
+                  return true; }
+  if (k === "."){ g.seconds += strideAt(DEPTHS); g.message = "You wait."; return true; }
   if (k === "S"){
+    leaveLevels(g);
     if (g.stance < 0){
       g.stance = DEPTHS - 2; g.view = g.stance;
       g.message = "You set out.  A step is " + SIZE_NAME_T[g.stance + 1] +
@@ -4642,10 +5694,19 @@ function gameKey(g, k){
     } else { g.stance = -1; g.view = DEPTHS; g.message = "You stop."; }
     return true;
   }
-  if (k === "<"){ if (g.stance < 0) g.view = Math.max(0, g.view - 1);
-                  else { g.stance = Math.max(1, g.stance - 1); g.view = g.stance; }
-                  return true; }
-  if (k === ">"){ if (g.stance < 0) g.view = Math.min(DEPTHS, g.view + 1);
+  if (k === "<"){
+    leaveLevels(g);
+    if (g.stance < 0){
+      if (g.view > 0){ g.view--; g.message = ""; }
+      else g.message = "The planet is the whole of it.";
+    } else if (g.stance > 1){ g.stance--; g.view = g.stance;
+      g.message = "You set out.  A step is " + SIZE_NAME_T[g.stance + 1] +
+                  " of country."; }
+    else g.message = "A continent at a step is as far as walking goes.  " +
+                     "S stops you; then < goes on out to the planet.";
+    return true; }
+  if (k === ">"){ leaveLevels(g);
+                  if (g.stance < 0) g.view = Math.min(DEPTHS, g.view + 1);
                   else { g.stance = Math.min(DEPTHS - 1, g.stance + 1); g.view = g.stance; }
                   return true; }
   if (k === "t"){ tileShape = (tileShape + 1) % 3;
@@ -4654,11 +5715,14 @@ function gameKey(g, k){
                   g.message = "Grain: " + GRAIN_NAME[tileGrain] + "."; return true; }
   if (k === "v"){ g.raw = !g.raw; return true; }
   if (k === ","){ takeHere(g); return true; }
-  if (k === "i"){ g.showBag = !g.showBag; return true; }
+  if (k === "i"){ g.showBag = !g.showBag; g.showBody = false;
+                  if (g.showBag) invOpen(g); return true; }
+  if (k === "E"){ g.showBody = !g.showBody; g.showBag = false; return true; }
   if (k === "n"){ showTasks = !showTasks; if (showTasks) townOffer(g, gWhen(g));
                   return true; }
   if (k === "y"){ takeOffer(g); return true; }
   if (k === "f"){
+    leaveLevels(g);
     /* follow it: it stops when you arrive, when the way runs out, or when
        something hostile is close */
     for (let i = 0; i < 200; i++){
@@ -4675,6 +5739,9 @@ function gameKey(g, k){
   }
   if (k >= "1" && k <= "6"){
     const i = k.charCodeAt(0) - 49;
+    /* while the spells are open the numbers call them up; the rest of
+       the time they set the way to a task */
+    if (showSpells){ castSpell(g, i); return true; }
     if (quests[i] && quests[i].stage !== 2){ activeQuest = i; routeToQuest(g, i);
       g.message = "The way is set to " + routeName + "."; }
     else g.message = "There is no such task.";
@@ -4682,7 +5749,8 @@ function gameKey(g, k){
   }
   if (k === "0"){ activeQuest = -1; clearRoute(); g.message = "No way set."; return true; }
   if (k === "?"){ showKeys = !showKeys; return true; }
-  if (k === "g" || k === "F"){ typing = {text: "", walk: k === "F"}; return true; }
+  if (k === "g" || k === "F"){ leaveLevels(g); typing = {text: "", walk: k === "F"};
+                               return true; }
   if (k === "D"){ dropHere(g); return true; }
   if (k === "["){ g.speed = Math.max(0, g.speed - 1);
                   g.message = "The world runs " + TERM_SPEED[g.speed] + "."; return true; }
@@ -4887,13 +5955,45 @@ function growTile(path, level, cell, thing, w, h){
  * layer and not the engine's denizens().  The tables are the same ones,
  * in the same order, so a wolf is the same wolf. */
 const MAX_BEINGS = 24;
-let beings = [], beingsPath = null, beingsEpoch = null;
+let beings = [], beingsPath = null, beingsEpoch = null, beingsLevel = 0;
 
 function spawnBeings(g){
   const path = g.address.slice(0, DEPTHS);
-  const data = g.w.layers(path, gWhen(g));
+  const data = footBoard(g);
   const ep = layerEpoch("animal", cellLevel(DEPTHS), gWhen(g));
   beings = []; beingsPath = path.join(","); beingsEpoch = ep;
+  beingsLevel = g.level;
+  /* Under the ground it is not wildlife that is about.  The deeper the
+     board, the worse the company and the more of it. */
+  if (g.level < 0){
+    const rng = rngFor(path, "haunt" + (-g.level) + "L" + ep);
+    const deep = -g.level;
+    let worst = Math.trunc(deep / 9);
+    if (worst > 7) worst = 7;
+    const groups = 1 + rng._randbelow(2 + Math.trunc(deep / 16));
+    for (let gi = 0; gi < groups; gi++){
+      const lo = worst > 2 ? worst - 2 : 0;
+      const k = UNDEAD[lo + rng._randbelow(worst - lo + 1)];
+      const many = rng.randint(k.lo, k.hi);
+      for (let m = 0; m < many; m++){
+        const opts = [];
+        for (let i = 0; i < BOARD_SIZE; i++){
+          if (!g.w.passable(data, i) || i === g.address[DEPTHS]) continue;
+          if (beings.some(b => b.x === i)) continue;
+          opts.push(i);
+        }
+        if (!opts.length || beings.length >= MAX_BEINGS) return;
+        const spot = opts[rng._randbelow(opts.length)];
+        const b = makeCreature([k.name, k.glyph, k.fg, k.hp, k.atk, k.dodge,
+                                k.danger, [k.lo, k.hi], k.verb], rng);
+        b.hostile = true;              /* none of them want talking to */
+        b.x = spot; b.dead = false; b.fleeing = false;
+        beings.push(b);
+      }
+    }
+    return;
+  }
+  if (g.level > 0) return;             /* nothing lives upstairs */
   const table = WILDLIFE[WILDLIFE_FOR[data.terrain[CENTRE].key]];
   if (!table) return;
   const rng = rngFor(path, "L" + ep);
@@ -4912,7 +6012,13 @@ function spawnBeings(g){
       if (!opts.length || beings.length >= MAX_BEINGS) return;
       const spot = opts[rng._randbelow(opts.length)];
       const b = makeCreature(k, rng);
-      b.hostile = b.danger >= 3 || (b.danger === 2 && rng.random() < 0.4);
+      /* The draw is taken either way.  `||` and `&&` short-circuit and
+         the C's do not: written as one expression this skips rng.random()
+         for every beast that is already dangerous, the stream falls a
+         word behind the C's, and from the second animal on the two
+         worlds hold different wildlife. */
+      const keen = rng.random();
+      b.hostile = b.danger >= 3 || (b.danger === 2 && keen < 0.4);
       b.x = spot; b.dead = false; b.fleeing = false;
       beings.push(b);
     }
@@ -4920,8 +6026,8 @@ function spawnBeings(g){
 }
 function ensureBeings(g){
   const ep = layerEpoch("animal", cellLevel(DEPTHS), gWhen(g));
-  if (beingsPath === g.address.slice(0, DEPTHS).join(",") && beingsEpoch === ep)
-    return;
+  if (beingsPath === g.address.slice(0, DEPTHS).join(",") && beingsEpoch === ep &&
+      beingsLevel === g.level) return;
   spawnBeings(g);
 }
 const beingAt = i => beings.find(b => b.alive && b.x === i) || null;
@@ -4944,9 +6050,9 @@ const WEAPON_HURT = {"a sword":13, "an axe":14, "a dagger":7, "a knife":6,
                  "a rock":5, "a bone":4};
 function weaponDamage(g){
   let best = 3, name = "your fists";               /* fists */
-  for (const t of g.carried){
-    const d = WEAPON_HURT[t.name] || 0;
-    if (d > best){ best = d; name = t.name; }
+  for (const nm of Object.keys(WEAPON_HURT)){
+    const t = thingNamed(nm), d = WEAPON_HURT[nm];
+    if (d > best && (carrying(g, t) || wearing(g, t))){ best = d; name = nm; }
   }
   return [best, name];
 }
@@ -5014,26 +6120,317 @@ function creatureTurns(g){
   }
 }
 
-/* What you are carrying, over the board. */
-function drawBag(g){
-  const x = 4, y = 3, w = 30;
-  for (let r = y; r < y + 12; r++)
-    for (let c = x; c < x + w; c++) text(c, r, " ", 250, 234);
-  text(x + 2, y + 1, "WHAT YOU ARE CARRYING", 223, 234);
-  if (g.skill || g.guard)
-    text(x + 2, y + 9, "your arm +" + g.skill + ", your guard +" + g.guard,
-         215, 234);
-  if (!g.carried.length){
-    text(x + 2, y + 3, "Nothing yet.  Things lie", 245, 234);
-    text(x + 2, y + 4, "about: a rock, a bone, now", 245, 234);
-    text(x + 2, y + 5, "and then a coin or a blade.", 245, 234);
-    text(x + 2, y + 7, ", picks up what is underfoot", 215, 234);
-  } else {
-    for (let i = 0; i < g.carried.length && i < 8; i++)
-      text(x + 2, y + 3 + i,
-           pad(g.carried[i].name, 22) + " " + g.carried[i].size, 252, 234);
-  }
+/* ── what you carry, and what you have on ───────────────────
+ * The same idea as everything else here: a container of size K unfolds
+ * into sixty-one cells of size J, exactly the way a K cell of the world
+ * unfolds into a board of J cells.  The body is a board too -- head at
+ * the top point, hands at the two ends of the widest row.
+ * ---------------------------------------------------------- */
+const BAGS = 24;
+const alphaAt = c => ALPHABET.indexOf(c);
+/* the size of a cell of a container of this size: one below it, but
+   never smaller than I */
+function cellSizeOf(container){
+  const p = alphaAt(container);
+  if (p <= 0) return "I";
+  const c = ALPHABET[p - 1];
+  return alphaAt(c) < alphaAt("I") ? "I" : c;
 }
+const fitsIn = (container, thing) =>
+  alphaAt(thing.size) <= alphaAt(cellSizeOf(container.size));
+const isContainer = t => !!t && (t === THING_BY_KEY.pack ||
+  t === THING_BY_KEY.satchel || t === THING_BY_KEY.purse);
+function newBag(g, thing){
+  for (let i = 0; i < BAGS; i++){
+    if (g.bags[i] && g.bags[i].used) continue;
+    g.bags[i] = {used: true, thing: thing,
+                 item: new Array(BOARD_SIZE).fill(null),
+                 inner: new Array(BOARD_SIZE).fill(-1)};
+    return i;
+  }
+  return -1;
+}
+function bagCount(g, b){
+  if (b < 0 || !g.bags[b]) return 0;
+  let n = 0;
+  for (let i = 0; i < BOARD_SIZE; i++) if (g.bags[b].item[i]) n++;
+  return n;
+}
+/* Put a thing away in the smallest container that will have it, looking
+   inside the containers you are already carrying. */
+function stowIn(g, b, thing, depth){
+  if (b < 0 || !g.bags[b] || depth > 3 || !fitsIn(g.bags[b].thing, thing))
+    return false;
+  for (let i = 0; i < BOARD_SIZE; i++)
+    if (g.bags[b].inner[i] >= 0 && stowIn(g, g.bags[b].inner[i], thing, depth + 1))
+      return true;
+  for (let i = 0; i < BOARD_SIZE; i++)
+    if (!g.bags[b].item[i]){
+      g.bags[b].item[i] = thing;
+      if (isContainer(thing)) g.bags[b].inner[i] = newBag(g, thing);
+      return true;
+    }
+  return false;
+}
+const stow = (g, thing) => stowIn(g, g.packBag, thing, 0);
+function carrying(g, thing){
+  for (let b = 0; b < BAGS; b++){
+    if (!g.bags[b] || !g.bags[b].used) continue;
+    for (let i = 0; i < BOARD_SIZE; i++) if (g.bags[b].item[i] === thing) return true;
+  }
+  return false;
+}
+function dropOne(g, thing){
+  for (let b = BAGS - 1; b >= 0; b--){
+    if (!g.bags[b] || !g.bags[b].used) continue;
+    for (let i = 0; i < BOARD_SIZE; i++)
+      if (g.bags[b].item[i] === thing){
+        g.bags[b].item[i] = null;
+        if (g.bags[b].inner[i] >= 0){
+          g.bags[g.bags[b].inner[i]].used = false;
+          g.bags[b].inner[i] = -1;
+        }
+        return true;
+      }
+  }
+  return false;
+}
+function carriedTotal(g){
+  let n = 0;
+  for (let b = 0; b < BAGS; b++) if (g.bags[b] && g.bags[b].used) n += bagCount(g, b);
+  return n;
+}
+function wearing(g, thing){
+  for (let i = 0; i < BOARD_SIZE; i++) if (g.worn[i] === thing) return true;
+  return false;
+}
+const LV_ANGLE_DQ = [1, 0, -1, -1, 0, 1], LV_ANGLE_DR = [0, 1, 1, 0, -1, -1];
+
+function invOpen(g){
+  g.invBag = g.packBag; g.invCell = cellAt(0, 0);
+  g.invUp = []; g.invDepth = 0;
+}
+function invEnter(g){
+  if (g.invBag < 0) return;
+  const b = g.bags[g.invBag].inner[g.invCell];
+  if (b < 0){ g.message = "There is nothing there to open."; return; }
+  if (g.invDepth < 8){ g.invUp[g.invDepth++] = g.invBag; }
+  g.invBag = b; g.invCell = cellAt(0, 0);
+}
+function invLeave(g){
+  if (g.invDepth > 0){ g.invBag = g.invUp[--g.invDepth]; g.invCell = cellAt(0, 0); }
+  else g.message = "That is the outside of the pack.";
+}
+function invMove(g, angle){
+  const j = cellAt(COORDS[g.invCell][0] + LV_ANGLE_DQ[angle],
+                   COORDS[g.invCell][1] + LV_ANGLE_DR[angle]);
+  if (j >= 0) g.invCell = j;
+}
+/* The framebuffer holds one byte to a column, so a panel that lines its
+ * cells up in pairs of columns can only put letters in them. */
+const PLAIN_GLYPH = {"°":"o", "·":".", "•":".", "‡":"+", "⌂":"H", "█":"#",
+  "▒":"%", "♠":"A", "♣":"T", "─":"-", "═":"=", "≡":"=", "▄":"_", "■":"#",
+  "▬":"=", "●":"O", "△":"^", "○":"0", "▓":"%", "‖":"|", "▲":"^", "†":"+"};
+const plainGlyph = gl => gl.charCodeAt(0) < 128 ? gl : (PLAIN_GLYPH[gl] || "?");
+
+/* the pack, as the board it is */
+function drawBag(g){
+  const x = 1, y = 2, w = 36, h = 17;
+  for (let r = y; r < y + h; r++)
+    for (let c = x; c < x + w; c++) text(c, r, " ", 250, 235);
+  for (let c = x; c < x + w; c++){
+    text(c, y, " ", 250, 240); text(c, y + h - 1, " ", 250, 240);
+  }
+  for (let r = y; r < y + h; r++){
+    text(x, r, " ", 250, 240); text(x + w - 1, r, " ", 250, 240);
+  }
+  if (g.invBag < 0 || !g.bags[g.invBag] || !g.bags[g.invBag].used) invOpen(g);
+  if (g.invBag < 0){ text(x + 2, y + 2, "You carry nothing at all.", 245, 235); return; }
+  const bag = g.bags[g.invBag];
+  text(x + 2, y, " " + bag.thing.name + " -- " + bagCount(g, g.invBag) +
+       " of " + BOARD_SIZE + " ", 232, 240);
+  const X0 = x + 17, Y0 = y + 6;
+  for (let slot = 0; slot < BOARD_SIZE; slot++){
+    const tx = X0 + 2 * COORDS[slot][0] + COORDS[slot][1];
+    const ty = Y0 + COORDS[slot][1];
+    const t = bag.item[slot], on = slot === g.invCell, bg = on ? 238 : 235;
+    text(tx, ty, t ? plainGlyph(t.glyph) : ".", t ? t.fg : 240, bg);
+    text(tx + 1, ty, bag.inner[slot] >= 0 ? ">" : " ", 215, bg);
+  }
+  const t = bag.item[g.invCell];
+  let line;
+  if (!t) line = "an empty cell, for a thing of size " + cellSizeOf(bag.thing.size);
+  else if (bag.inner[g.invCell] >= 0)
+    line = t.name + ", " + bagCount(g, bag.inner[g.invCell]) + " in it   > opens it";
+  else line = t.name + ", size " + t.size;
+  text(x + 2, y + h - 3, line, 252, 235);
+  text(x + 2, y + h - 2,
+       g.invDepth ? "weadzx moves   > opens   < back out   i closes"
+                  : "weadzx moves   > opens a container   i closes", 245, 235);
+}
+
+/* ── what is on you ─────────────────────────────────────────
+ * The same sixty-one cells again, read as a person this time: the crown
+ * of the head at the top point, the hands at the two far ends of the
+ * widest row, the boots at the bottom point.  Cells with no name are
+ * simply you; the named ones hold what you wear and what you hold. */
+const WEAR = [
+  [ 2, -4, "A", "helm"],
+  [ 1, -2, "R", "amulet"],
+  [ 0,  0, "A", "breastplate"],
+  [-1,  2, "A", "belt"],
+  [-2,  4, "A", "boots"],
+  [ 1, -3, "R", "circlet"],
+  [ 0, -1, "A", "tunic"],
+  [-1,  1, "C", "belt pouch"],
+  [-2,  3, "A", "left greave"],
+  [ 2, -3, "R", "earring"],
+  [ 1, -1, "C", "pack"],
+  [ 0,  1, "C", "purse"],
+  [-1,  3, "A", "right greave"],
+  [-2, -2, "A", "cloak"],
+  [ 4, -2, "A", "quiver"],
+  [-4,  0, "H", "left hand"],
+  [-3,  0, "R", "left ring"],
+  [-2,  0, "A", "left bracer"],
+  [-1,  0, "A", "left glove"],
+  [ 1,  0, "A", "right glove"],
+  [ 2,  0, "A", "right bracer"],
+  [ 3,  0, "R", "right ring"],
+  [ 4,  0, "W", "right hand"],
+];
+function bodySlot(i){
+  for (let s = 0; s < WEAR.length; s++)
+    if (cellAt(WEAR[s][0], WEAR[s][1]) === i) return s;
+  return -1;
+}
+const isWeapon = t => !!t && WEAPON_HURT[t.name] !== undefined;
+function bodyTakes(s, thing){
+  if (!thing) return false;
+  const cat = WEAR[s][2];
+  if (cat === "C") return isContainer(thing);
+  if (isContainer(thing)) return false;
+  if (cat === "W") return isWeapon(thing);
+  if (cat === "H") return alphaAt(thing.size) <= alphaAt("K");
+  if (cat === "R") return thing.size === "I";
+  return !isWeapon(thing) && alphaAt(thing.size) <= alphaAt("K");
+}
+function bodyMove(g, angle){
+  const j = cellAt(COORDS[g.bodyCell][0] + LV_ANGLE_DQ[angle],
+                   COORDS[g.bodyCell][1] + LV_ANGLE_DR[angle]);
+  if (j >= 0) g.bodyCell = j;
+}
+/* > walks through the things that would sit here: nothing, then each one
+ * you are carrying that fits, then nothing again. */
+function bodyEquip(g){
+  const s = bodySlot(g.bodyCell);
+  if (s < 0){ g.message = "Nothing hangs there.  It is only you."; return; }
+  const cur = g.worn[g.bodyCell];
+  const start = cur ? THINGS.indexOf(cur) + 1 : 0;
+  let chosen = null;
+  for (let t = start; t < THINGS.length; t++)
+    if (bodyTakes(s, THINGS[t]) && carrying(g, THINGS[t])){ chosen = THINGS[t]; break; }
+  if (!chosen && !cur)
+    for (let t = 0; t < THINGS.length; t++)
+      if (bodyTakes(s, THINGS[t]) && carrying(g, THINGS[t])){ chosen = THINGS[t]; break; }
+  if (cur){
+    if (!stow(g, cur)){ g.message = "There is no room to put that away."; return; }
+    g.worn[g.bodyCell] = null;
+  }
+  if (chosen && dropOne(g, chosen)){
+    g.worn[g.bodyCell] = chosen;
+    g.message = WEAR[s][3] + ": " + chosen.name + ".";
+  } else if (cur) g.message = "You take off " + cur.name + ".";
+  else g.message = "You have nothing that would sit there.";
+}
+function bodyUnequip(g){
+  const t = g.worn[g.bodyCell];
+  if (!t){ g.message = "There is nothing there to take off."; return; }
+  if (!stow(g, t)){ g.message = "There is no room to put that away."; return; }
+  g.worn[g.bodyCell] = null;
+  g.message = "You put " + t.name + " away.";
+}
+function drawBody(g){
+  const x = 1, y = 2, w = 48, h = 17;
+  for (let r = y; r < y + h; r++)
+    for (let c = x; c < x + w; c++) text(c, r, " ", 250, 235);
+  for (let c = x; c < x + w; c++){
+    text(c, y, " ", 250, 240); text(c, y + h - 1, " ", 250, 240);
+  }
+  for (let r = y; r < y + h; r++){
+    text(x, r, " ", 250, 240); text(x + w - 1, r, " ", 250, 240);
+  }
+  let onN = 0;
+  for (let i = 0; i < BOARD_SIZE; i++) if (g.worn[i]) onN++;
+  text(x + 2, y, " what you have on -- " + onN + " of " + WEAR.length + " ", 232, 240);
+  const X0 = x + 17, Y0 = y + 6;
+  for (let slot = 0; slot < BOARD_SIZE; slot++){
+    const tx = X0 + 2 * COORDS[slot][0] + COORDS[slot][1];
+    const ty = Y0 + COORDS[slot][1];
+    const t = g.worn[slot], s = bodySlot(slot);
+    const here = slot === g.bodyCell, bg = here ? 238 : 235;
+    text(tx, ty, t ? plainGlyph(t.glyph) : s >= 0 ? "." : " ", t ? t.fg : 240, bg);
+    text(tx + 1, ty, " ", 245, bg);
+  }
+  /* who you are, beside the picture of you */
+  text(x + 30, y + 1, KINDRED[g.who].name, 223, 235);
+  for (let i = 0; i < 6; i++)
+    text(x + 30, y + 3 + i, pad(TRAIT_NAME[i], 13) + " " +
+         padL(traitOf(KINDRED[g.who], i), 2),
+         TRAIT_NAME[i] === KINDRED[g.who].trait ? 223 : 245, 235);
+  text(x + 30, y + 10, g.hp + "/" + g.maxHp + " hp", 245, 235);
+  const s = bodySlot(g.bodyCell), t = g.worn[g.bodyCell];
+  text(x + 2, y + h - 3,
+       s < 0 ? "just you" : !t ? WEAR[s][3] + " -- empty"
+                               : WEAR[s][3] + ": " + t.name, 252, 235);
+  text(x + 2, y + h - 2, "weadzx moves   > wears   < takes off   E closes",
+       245, 235);
+}
+
+/* ── what is out there ──────────────────────────────────────
+ * Eight by three pixels is a cell, and a cell is what a beast gets on
+ * the board.  That is enough for a silhouette and not enough for an
+ * animal, so here is the same genome drawn at forty by eight, which is
+ * where the legs and the neck and the horns start to mean something.
+ * Nothing new is generated: it is the picture the cell is a thumbnail
+ * of. */
+let showBeasts = false;
+function drawBeasts(g){
+  const x = 1, y = 2, w = 52, h = 19;
+  for (let r = y; r < y + h; r++)
+    for (let c = x; c < x + w; c++) text(c, r, " ", 250, 235);
+  for (let c = x; c < x + w; c++){
+    text(c, y, " ", 250, 240); text(c, y + h - 1, " ", 250, 240);
+  }
+  for (let r = y; r < y + h; r++){
+    text(x, r, " ", 250, 240); text(x + w - 1, r, " ", 250, 240);
+  }
+  const live = beings.filter(b => b.alive);
+  text(x + 2, y, " what is out there -- " + live.length + " ", 232, 240);
+  if (!live.length){
+    text(x + 2, y + 2, "Nothing is moving on this lot.", 245, 235);
+    text(x + 2, y + 4, "c closes", 245, 235);
+    return;
+  }
+  for (let row = 0; row < live.length && row < 4; row++){
+    const bb = live[row];
+    const bx = x + 1, by = y + 2 + row * 4;
+    const W = 20, H = 4;                          /* characters */
+    if (beastPixels(bb.name, bb.fg, W * 2, H * 2))
+      for (let gy = 0; gy < H * 2; gy++)
+        for (let gx = 0; gx < W * 2; gx++)
+          if (bstPx[gy][gx]) pxq(bx * 2 + gx, by * 2 + gy, bstPx[gy][gx]);
+    const k = BUILDS[bb.name] || [75, 4, 0];
+    const nm = bb.name.slice(0, 16);
+    text(x + 23, by + 1, nm[0].toUpperCase() + nm.slice(1), bb.fg, 235);
+    text(x + 23, by + 2, bb.hp + "/" + bb.max_hp + " hp   " + k[1] +
+         (k[1] === 1 ? " leg" : " legs") + "   " +
+         (bb.hostile ? "hostile" : "wary"), 245, 235);
+  }
+  text(x + 2, y + h - 2,
+       "the same beast the board draws, at forty pixels   c closes", 245, 235);
+}
+
 /* A kill may be the point of somebody's errand. */
 function questKilled(g){
   for (const q of quests){
@@ -5087,10 +6484,16 @@ const TERM_SPEED = ["turn-based", "real time", "a minute a second",
                     "1095x - three years a day", "10950x", "109500x"];
 /* what you carry, back onto the ground */
 function dropHere(g){
-  if (!g.carried.length){
-    g.message = "You are carrying nothing you could put down."; return;
+  /* the last thing you put in that is not itself a container */
+  let t = null;
+  for (let b = BAGS - 1; b >= 0 && !t; b--){
+    if (!g.bags[b] || !g.bags[b].used) continue;
+    for (let i = BOARD_SIZE - 1; i >= 0; i--)
+      if (g.bags[b].item[i] && !isContainer(g.bags[b].item[i]))
+        { t = g.bags[b].item[i]; break; }
   }
-  const t = g.carried.pop();
+  if (!t){ g.message = "You are carrying nothing you could put down."; return; }
+  dropOne(g, t);
   g.w.dropItem(g.address.slice(0, ADDRESS_LEN), t, gWhen(g));
   g.seconds += 2.0;
   g.message = "You put down " + t.name + ". It will be here when you come back.";
@@ -5101,10 +6504,14 @@ let showKeys = false, typing = null;
 const KEYS_HELP = [
   "w e a d z x   move, six ways",
   "S             set out, or stop: a step becomes a whole coarse cell",
-  "s             wait where you are",
+  "s             what you can call up: the five spells, 1-5 to cast",
+  ".             wait where you are",
   "< >           the scale you look at, or the length of your stride",
   ", D           pick up what is here, put down what you carry",
   "i n           what you carry, what you have to do",
+  "E             what you have on: > wears, < takes off",
+  "u b           up the stairs, and down them",
+  "c             what is out there, drawn large",
   "y             take on what the town here wants",
   "f             follow the way that is planned",
   "F g           walk to an address, or go there at once",
@@ -5113,7 +6520,8 @@ const KEYS_HELP = [
   "t T           the shape of a tile, and what fills it",
   "v             the hanb character of every cell",
   "[ ] p         slower, faster, hold the world still",
-  "? q           this, and out"
+  "? q           this, and out",
+  "?who=<kind>   fighter mage thief cleric bard ascetic"
 ];
 function drawKeys(){
   const n = KEYS_HELP.length, x = 0, y = 2, w = SCREEN_W, h = n + 4;
@@ -5217,6 +6625,8 @@ function townOffer(g, when){
   else if (rr < 0.70){ q.reward = R_HEART; q.rewardN = rng.randint(3, 8); }
   else if (rr < 0.88){ q.reward = R_SKILL; q.rewardN = 1; }
   else               { q.reward = R_GUARD; q.rewardN = 1; }
+  /* a well-liked traveller is paid better for the same errand */
+  if (q.reward !== R_ITEM) q.rewardN += Math.trunc((KINDRED[g.who].cha - 10) / 3);
   offer = q; offerEpoch = ep;
   return q;
 }
@@ -5352,7 +6762,7 @@ function routeToQuest(g, i){
   setRoute(g, t, q.townName);
 }
 function questPay(g, q){
-  if (q.reward === R_ITEM){ if (g.carried.length < 8) g.carried.push(q.rewardThing); }
+  if (q.reward === R_ITEM){ stow(g, q.rewardThing); }
   else if (q.reward === R_HEART){ g.maxHp += q.rewardN; g.hp = g.maxHp; }
   else if (q.reward === R_SKILL) g.skill += q.rewardN;
   else g.guard += q.rewardN;
@@ -5366,7 +6776,7 @@ function questCheck(g){
     if (!q || q.stage === 2) continue;
     if (q.stage === 0){
       let done = false;
-      if (q.kind === Q_FETCH) done = g.carried.indexOf(q.thing) >= 0;
+      if (q.kind === Q_FETCH) done = carrying(g, q.thing);
       else if (q.kind === Q_SLAY) done = q.got >= q.need;
       else done = at(g.address, q.goal, GOAL_N);
       if (!done) continue;
@@ -5377,9 +6787,7 @@ function questCheck(g){
     }
     if (q.stage === 1 && at(g.address, q.townPath, SITE_N)){
       if (q.kind === Q_FETCH){
-        const k = g.carried.indexOf(q.thing);
-        if (k < 0){ q.stage = 0; continue; }
-        g.carried.splice(k, 1);
+        if (!dropOne(g, q.thing)){ q.stage = 0; continue; }
       }
       questPay(g, q);
       g.message = q.townName + " thanks you, and gives you " + rewardText(q) + ".";
@@ -5414,10 +6822,224 @@ function takeOffer(g){
               rewardText(o) + ".  f follows the way.";
 }
 
+/* ── indoors ─────────────────────────────────────────────────
+ * Whether you are inside is not a state that is kept.  The lot you are
+ * standing in either has a building on it or it has not, and if it has
+ * then the board under your feet is that building's rooms -- so going in
+ * is an ordinary step, and being in is a thing the world already knows. */
+function insideUse(g){
+  if (g.level < 0) return -1;        /* the deep is not anybody's room */
+  const up = g.w.layers(g.address.slice(0, DEPTHS - 1), gWhen(g));
+  if (up.item[g.address[DEPTHS - 1]] !== THING_BY_KEY.building) return -1;
+  /* Standing on the lot is not standing in the house -- there is a yard
+     and a verge outside the walls.  The floor is what makes it inside. */
+  const inn = footBoard(g);
+  if (inn.ground[g.address[DEPTHS]] !== THING_BY_KEY.floor) return -1;
+  const s = g.w.settlement(g.address.slice(0, DEPTHS - 1), gWhen(g));
+  if (!s || !s.cells) return -1;
+  const rank = s.cells.indexOf(g.address[DEPTHS - 1]);
+  return buildingUse(g.address.slice(0, DEPTHS), s.race, rank < 0 ? 0 : rank);
+}
+/* The inside of a building, drawn over the town it stands in: the board
+   you are actually on, at half a tile, in a frame.  The lots outside go
+   on being drawn round it, so you can see where in the town you are
+   while you are indoors. */
+function drawInside(g, use){
+  /* The backdrop is drawn at the rung above, so nothing else asks what
+     lives on this lot while you are indoors -- ask here. */
+  ensureBeings(g);
+  const s = g.w.settlement(g.address.slice(0, DEPTHS - 1), gWhen(g));
+  const X0 = BOARD_X + 14, Y0 = BOARD_Y + 9;
+  const x0 = Math.max(0, X0 - 13), y0 = Y0 - 6, w = 27, h = 12;
+  for (let r = y0; r < y0 + h; r++)
+    for (let c = x0; c < x0 + w; c++) text(c, r, " ", 250, 235);
+  for (let c = x0; c < x0 + w; c++){
+    text(c, y0, " ", 250, 240); text(c, y0 + h - 1, " ", 250, 240);
+  }
+  for (let r = y0; r < y0 + h; r++){
+    text(x0, r, " ", 250, 240); text(x0 + w - 1, r, " ", 250, 240);
+  }
+  text(x0 + 2, y0, g.level > 0
+       ? " the " + ["first", "second", "third"][g.level - 1] + " storey of a " +
+         USE_NAME[use] + (s ? " in " + s.name.slice(0, 14) : "") + " "
+       : " a " + USE_NAME[use] + (s ? " in " + s.name.slice(0, 16) : "") + " ",
+       232, 240);
+  const b = footBoard(g);
+  const tex = Number(pathSeed(g.address.slice(0, DEPTHS), "tex") & 0xFFFFFFFFn) >>> 0;
+  const save = tileShape;
+  tileShape = SHAPE_BRICK;         /* half a tile has no room for points */
+  const turn = boardTurnAt(DEPTHS, g.facing);
+  for (let slot = 0; slot < BOARD_SIZE; slot++){
+    const i = turnCell(slot, turn);
+    const tx = X0 + 2 * COORDS[slot][0] + COORDS[slot][1];
+    const ty = Y0 + COORDS[slot][1];
+    if (tx < x0 + 1 || tx + 1 >= x0 + w - 1) continue;
+    if (ty < y0 + 1 || ty >= y0 + h - 1) continue;
+    let accent = -1;
+    const seen = g.w.occupants(b, i);
+    if (seen.length) accent = seen[0].fg;
+    madeSource(-1);
+    if (b.ground[i] === THING_BY_KEY.floor) madeSource(58);
+    if (b.item[i] === THING_BY_KEY.wall) madeSource(145);
+    grownSource(null, null);
+    beastSource(null, 0);
+    drawTileN(tx, ty, 2, 2, b.terrain[i], accent, tex, i,
+              i === g.address[DEPTHS] ? 1 : 0, 0);
+  }
+  tileShape = save;
+  madeSource(-1);
+}
+
+/* ── what a signpost says ────────────────────────────────────
+ * The towns of this country board, nearest first, with how far off they
+ * are.  A board is seven hundred metres across and this world is settled
+ * thickly, so the distances are the hundreds of metres they really are
+ * and not the tens of kilometres a lonelier world would give -- a sign
+ * cannot name a town that nothing on this board has heard of without
+ * settling every site for miles, which is the one thing the roads are
+ * built to avoid. */
+const farText = m => m < 1000 ? m + " m" : (m / 1000).toFixed(1) + " km";
+function signText(g, path){
+  const here = path[ROAD_DEPTH], t = [];
+  const span = Math.pow(DIAGONAL, DEPTHS - ROAD_DEPTH);
+  for (let i = 0; i < BOARD_SIZE && t.length < 8; i++){
+    const sp = path.slice(0, ROAD_DEPTH).concat([i]);
+    const s = g.w.settlement(sp, gWhen(g));
+    if (!s) continue;
+    t.push({d: hexDistance(COORDS[i], COORDS[here]) * span, name: s.name});
+  }
+  t.sort((a, b) => a.d - b.d);                 /* nearest first */
+  if (!t.length)
+    return "The post is bare.  This is " +
+           g.w.nameOf(path.slice(0, GOAL_N)) + ".";
+  let out = "The post reads:";
+  for (let i = 0, said = 0; i < t.length && said < 3; i++, said++)
+    out += (said ? "," : "") + " " + t[i].name + " " +
+           (t[i].d === 0 ? "here" : farText(t[i].d));
+  return out + ".";
+}
+
+/* ── the five spells ─────────────────────────────────────────
+ * Magic here is not a system bolted on the side: every spell is a thing
+ * the world can already do, asked for on purpose.  Farsight settles more
+ * sites than walking ever would; Wayfare is the way-finder; Stridewind is
+ * the going; Unbar is passability; Mend is the wind the quest-givers pay
+ * you in.  What a spell costs is breath and time, which are the two
+ * things this world already counts. */
+const SPELLS = [
+  {name:"Farsight",   what:"towns within a few miles, and how far off",   wind:2, secs:30},
+  {name:"Wayfare",    what:"the way sets itself to the nearest town",     wind:2, secs:20},
+  {name:"Stridewind", what:"the ground goes easier, a hundred steps",     wind:4, secs:10},
+  {name:"Unbar",      what:"wall and stone let you through, eight steps", wind:5, secs:10},
+  {name:"Mend",       what:"your wind comes back, at the cost of an hour",wind:0, secs:3600}
+];
+const SP_FARSIGHT = 0, SP_WAYFARE = 1, SP_STRIDE = 2, SP_UNBAR = 3, SP_MEND = 4;
+let showSpells = false;
+
+/** How far off something is, in metres, from where you stand. */
+function metresTo(g, there){
+  const [ax, ay] = g.w.position(g.address), [bx, by] = g.w.position(there);
+  const dq = bx - ax, dr = by - ay;
+  return Math.round(hypot(dq + dr * 0.5, dr * 0.8660254));
+}
+/* Every site of every country board of this district: sixty-one boards
+   and three thousand seven hundred sites, which is far more than walking
+   would ever settle -- and exactly why it is a spell and not a signpost. */
+function farsightList(g){
+  const out = [];
+  const cb = g.address.slice(0, ROAD_DEPTH - 1);
+  for (let d = 0; d < BOARD_SIZE; d++){
+    const board = cb.concat([d]);
+    for (let i = 0; i < BOARD_SIZE; i++){
+      const sp = board.concat([i]);
+      const s = g.w.settlement(sp, gWhen(g));
+      if (!s) continue;
+      const full = sp.slice();
+      while (full.length < ADDRESS_LEN) full.push(CENTRE);
+      out.push({d: metresTo(g, full), name: s.name, path: full});
+    }
+  }
+  out.sort((a, b) => a.d - b.d);
+  return out;
+}
+function castSpell(g, i){
+  const sp = SPELLS[i];
+  if (!sp || !g.spells[i]){ g.message = "You do not know that one."; return; }
+  /* a quick wit spends less breath on the same words */
+  const cost = Math.max(0, sp.wind - Math.trunc((KINDRED[g.who].wit - 10) / 3));
+  if (g.hp <= cost){ g.message = "You have not the wind for it."; return; }
+  g.hp -= cost;
+  g.seconds += sp.secs;
+  showSpells = false;
+  if (i === SP_FARSIGHT){
+    const t = farsightList(g);
+    if (!t.length){ g.message = "You look far off, and find no town at all."; return; }
+    /* wisdom is how much of what you saw you can hold at once */
+    const hold = 2 + Math.trunc(KINDRED[g.who].wis / 5);
+    let out = "Far off you feel:";
+    for (let k = 0; k < t.length && k < hold; k++)
+      out += (k ? "," : "") + " " + t[k].name + " " + farText(t[k].d);
+    g.message = out + ".";
+  } else if (i === SP_WAYFARE){
+    const t = farsightList(g);
+    if (!t.length){ g.message = "You cast about for a town, and there is none."; return; }
+    setRoute(g, t[0].path, t[0].name);
+    g.message = "The way lies to " + t[0].name + ", " + farText(t[0].d) +
+                " off.  f follows it.";
+  } else if (i === SP_STRIDE){
+    g.strideLeft = 100;
+    g.message = "The ground goes easier under you.";
+  } else if (i === SP_UNBAR){
+    g.unbarLeft = 8;
+    g.message = "Wall and stone thin to smoke.  Eight steps of it.";
+  } else {
+    const back = Math.trunc(g.maxHp / 3) + 4;
+    g.hp = Math.min(g.maxHp, g.hp + back);
+    g.message = "You sit an hour, and " + back + " of your wind comes back.";
+  }
+}
+/** What you can call up. */
+function drawSpells(g){
+  const x = 0, y = 3, w = SCREEN_W, h = SPELLS.length + 6;
+  for (let r = y; r < y + h; r++)
+    for (let c = x; c < x + w; c++) text(c, r, " ", 250, 234);
+  text(x + 2, y + 1, "WHAT YOU CAN CALL UP", 223, 234);
+  for (let i = 0; i < SPELLS.length; i++){
+    const cost = SPELLS[i].secs >= 60
+      ? SPELLS[i].wind + " wind, " + Math.round(SPELLS[i].secs / 60) + " min"
+      : SPELLS[i].wind + " wind, " + SPELLS[i].secs + " s";
+    text(x + 2, y + 3 + i,
+         (i + 1) + " " + pad(SPELLS[i].name, 11) + " " + pad(cost, 14) + " " +
+         SPELLS[i].what.slice(0, 46), g.spells[i] ? 252 : 240, 234);
+  }
+  text(x + 2, y + h - 1, "1-" + SPELLS.length + " calls one up    s closes" +
+       (g.strideLeft ? "    the ground is still easy" : "") +
+       (g.unbarLeft ? "    stone still lets you through" : ""), 245, 234);
+}
+
+/* ── who you are ─────────────────────────────────────────────
+ * Six kinds, and six traits, and each kind is the one who has most of
+ * one trait.  Every trait does a thing this world already counts:
+ * strength is what your blows carry, dexterity what you turn aside,
+ * constitution how much wind you have, intelligence what a spell costs
+ * you, wisdom how far Farsight reaches, and charisma what a town thinks
+ * a favour is worth. */
+const KINDRED = [
+  {name:"fighter", trait:"strength",     str:15, wit: 9, dex:12, wis:10, cha:10, con:13},
+  {name:"mage",    trait:"intelligence", str: 8, wit:15, dex:11, wis:12, cha:10, con: 9},
+  {name:"thief",   trait:"dexterity",    str:11, wit:12, dex:15, wis: 9, cha:12, con:10},
+  {name:"cleric",  trait:"wisdom",       str:11, wit:11, dex: 9, wis:15, cha:12, con:11},
+  {name:"bard",    trait:"charisma",     str:10, wit:12, dex:12, wis:10, cha:15, con:10},
+  {name:"ascetic", trait:"constitution", str:12, wit:11, dex:11, wis:13, cha: 9, con:15}
+];
+const TRAIT_NAME = ["strength","intelligence","dexterity","wisdom",
+                    "charisma","constitution"];
+const traitOf = (k, i) => [k.str, k.wit, k.dex, k.wis, k.cha, k.con][i];
+
 
 /* ── boot ─────────────────────────────────────────────────── */
 const params = new URLSearchParams(location.search);
-const GAME = startGame(params.get("seed") || "12345");
+const GAME = startGame(params.get("seed") || "12345", params.get("who"));
 const canvas = document.getElementById("screen");
 const ctx = canvas.getContext("2d", {alpha: false});
 let CW = 12, CH = 24;
