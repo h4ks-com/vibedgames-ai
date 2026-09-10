@@ -2293,8 +2293,20 @@ function splitSpace(rooms, rng, x0, y0, x1, y1, depth, least, bias, along){
 let FURN = [];
 /** One house across one lot, its door on whichever side the way out is. */
 function layHouse(path, doorK, left, use, salt){
-  const span = PLAN_N * 0.40, cx = PLAN_N * 0.5, cy = PLAN_N * 0.5;
+  const cx = PLAN_N * 0.5, cy = PLAN_N * 0.5;
   const rng = rngFor(path, salt || "house");
+  /* ── the house stands in its lot, not on it ─────────────
+   * A lot is a hexagon and a house is a rectangle, and the rectangle's
+   * corners used to reach past the hexagon's shoulders: the outer wall
+   * came out *on the rim* of the lot's sixty-one cells, so walking at the
+   * lot from the north or the east ran into a wall before you had even
+   * arrived, and there was no way round it.  Every building lot in the
+   * world was blocked on some side.
+   *
+   * So the house is small enough to sit inside the rim with ground all
+   * round it.  You can always step onto the lot from any side; the house
+   * is further in, and you walk round it to the door. */
+  const span = PLAN_N * (0.185 + rng.random() * 0.045);
   /* A room has to come out a couple of metres across or the board it is
    * sampled onto reads as nothing but partition wall: the grammar has to
    * know how coarse the cells under it are. */
@@ -2304,12 +2316,10 @@ function layHouse(path, doorK, left, use, salt){
   /* A wall has to come out about a cell thick to register as one, which
    * is also about how thick a wall really is at a metre a cell. */
   const wall  = PLAN_S * (0.40 + rng.random() * 0.18);
-  const yard  = rng.random() < 0.5 ? 0.10 + rng.random() * 0.22 : 0.0;
-  let x0 = cx - span, y0 = cy - span, x1 = cx + span, y1 = cy + span;
-  if (yard > 0.0){
-    planRect(x0, y0, x1, y1, PL_YARD);
-    x0 += span * yard; y0 += span * yard; x1 -= span * yard; y1 -= span * yard;
-  }
+  /* swept ground round the house, out towards the rim but never over it */
+  const yard  = span * (1.30 + rng.random() * 0.55);
+  planRect(cx - yard, cy - yard, cx + yard, cy + yard, PL_YARD);
+  const x0 = cx - span, y0 = cy - span, x1 = cx + span, y1 = cy + span;
   const rooms = [];
   splitSpace(rooms, rng, x0, y0, x1, y1, 0, least, bias, along);
   for (const rm of rooms){
@@ -2366,6 +2376,7 @@ function stampFurniture(data){
  * shape.  Both are read off the clock in ages of a couple of hundred
  * years -- slow enough that it is the same town whenever you come back,
  * and long enough that one life is not enough to see a whole change. */
+const VILLAGE_CHANCE = 0.60;   /* how much of a district's luck it needs */
 const TOWN_AGE = 256 * YEAR;
 const townEra = when => Math.floor(when / TOWN_AGE);
 
@@ -2907,6 +2918,52 @@ class HanbWorld {
 
   /* --- settlements -------------------------------------------------- */
   /** Is there a hamlet in this M-sized cell?  Decided from the land itself. */
+  /* ── one village to a district ──────────────────────────────
+   * A settlement used to be decided cell by cell: every hundred-metre
+   * cell rolled its own dice, a good one came up about one time in
+   * eight, and towns of two hundred souls ended up three hundred metres
+   * apart.  That is a suburb and not a countryside, and it made a road
+   * between two towns a thing you could spit across.
+   *
+   * So the district decides instead.  It looks over its sixty-one
+   * hundred-metre cells, takes the one the people of the place would
+   * actually have chosen -- the sheltered one, the one on the river --
+   * and then asks whether anybody settled this district at all.  Most
+   * have nobody.  What comes out is one village every three kilometres
+   * or so, spaced rather than scattered, which is how villages sit. */
+  villageCell(dpath){
+    const key = dpath.join(",");
+    if (this._villages === undefined) this._villages = new Map();
+    if (this._villages.has(key)) return this._villages.get(key);
+    const b = this.board(dpath);
+    const rng = rngFor(dpath, "village");
+    let bestCell = -1, bestScore = 0.0;
+    for (let i = 0; i < BOARD_SIZE; i++){
+      const terrain = b.terrain[i];
+      if (terrain.water >= 2 ||
+          ["ice","glacier","deep","sea","void"].indexOf(terrain.key) >= 0) continue;
+      /* how well the land would suit whoever likes it best; which race
+         actually builds is a question for the site, with its own draw */
+      let score = 0.0;
+      for (const [race, taste] of RACE_TASTE)
+        for (const [k, v] of taste) if (k === terrain.key){
+          if (v > score) score = v;
+          break;
+        }
+      if (!score) continue;
+      score *= 0.6 + rng.random() * 0.8;
+      if (b.river[i]) score *= 2.1;
+      const f = b.fields[i];
+      if (f.temperature >= 30 && f.temperature <= 82) score *= 1.4;
+      if (score > bestScore){ bestScore = score; bestCell = i; }
+    }
+    if (bestCell >= 0){
+      const chance = Math.min(0.5, bestScore / 46.0 * VILLAGE_CHANCE);
+      if (!(rng.random() < chance)) bestCell = -1;
+    }
+    this._villages.set(key, bestCell);
+    return bestCell;
+  }
   settlement(path, when = 0.0){
     if (path.length !== DEPTHS - 1) return null;
     const key = path.join(",");
@@ -2927,11 +2984,10 @@ class HanbWorld {
         score *= 0.6 + rng.random() * 0.8;
         if (score > bestScore){ bestScore = score; bestRace = race; }
       }
-      /* Water and mild weather help; nobody settles every hollow. */
-      let chance = bestScore / 46.0;
-      if (parent.river[cell]) chance *= 2.1;
-      if (fields.temperature >= 30 && fields.temperature <= 82) chance *= 1.4;
-      if (bestRace && rng.random() < Math.min(0.5, chance)){
+      /* Whether anybody settled here at all is the district's question
+         now, and it has one answer for all sixty-one of its cells: this
+         one, or none. */
+      if (bestRace && cell === this.villageCell(path.slice(0, -1))){
         const kind = rng.choice(SETTLEMENT_KINDS[bestRace]);
         const lang = this.languages[bestRace];
         const sym = {DWARF:"EARTH", ELF:"PLANT", HUMAN:"CRAFT",
@@ -4591,10 +4647,57 @@ const SHAPE_BRICK = 0, SHAPE_HEX = 1, SHAPE_FINE = 2;
 const GRAIN_SPRINKLE = 0, GRAIN_DEEP = 1, GRAIN_LETTERS = 2, GRAIN_GROWN = 3;
 const SHAPE_NAME = ["brick", "hex", "fine"];
 const GRAIN_NAME = ["sprinkle", "deep", "letters", "grown"];
+/* What each skin actually is, said the way the C says it. */
+const SHAPE_BLURB = [
+  "Brick tiles: four characters by two, all of it painted.",
+  "Hex tiles: the same sixteen pixels, cut to a hexagon.",
+  "Fine tiles: quarter blocks, so a pixel is half a character wide."];
+const GRAIN_BLURB = [
+  "Grain: the ground with its accent sprinkled over it.",
+  "Deep: every pixel is the board inside this cell.",
+  "Letters: flat ground with the hanb character on it.",
+  "Grown: what is growing in the cell, grown from its own seed."];
+/* How long a stride of each size takes on foot. */
+const STRIDE_TIME = ["", "12 days", "1.2 days", "2.8 hours", "17 minutes",
+                     "1.7 minutes", "10 seconds", "1.0 seconds"];
 let tileShape = SHAPE_FINE, tileGrain = GRAIN_GROWN;
 
 const TILE_W = 4, TILE_H = 2, PIX_H = TILE_H * 2;
 const BOARD_X = 0, BOARD_Y = 1;
+
+/* What you look like: three bands down the figure, face, shirt and
+   trousers.  Variables, not constants -- what a character wears is a
+   thing a character ought to be able to change. */
+let youFace = 208, youShirt = 149, youLegs = 94;
+
+/* Which of the three bands a pixel of your cell falls in, or -1 for the
+   ground round you: a head, then shoulders, then legs. */
+function youPx(gx, gy, gw, gh) {
+  if (gx < 0 || gy < 0 || gx >= gw || gy >= gh) return -1;
+  /* A character holds two colours and two pixel rows: a band that ends
+     halfway down one is a third colour in it and one gets dropped, which
+     is what took bites out of the head and the shoulders.  The head gets
+     a character row to itself -- so it can be as narrow as it likes,
+     half a character at a time -- and the shirt and the legs share the
+     row below.  On a hexed cell the top point is left as ground. */
+  const hexed = tileShape !== SHAPE_BRICK;
+  const top = (gh >= 4 && hexed) ? 1 : 0;
+  const hd = (gh - top >= 4) ? 2 : 1;
+  const rest = gh - top - hd;
+  const lg = rest >= 2 ? (rest / 2 | 0) : rest;
+  const sh = rest - lg;
+  if (gy < top) return -1;
+  const band = gy < top + hd ? 0 : gy < top + hd + sh ? 1 : 2;
+  /* The widths are in pixels, and on the fine skin a pixel is half a
+     character: the sides of the head and the ends of the shoulders fall
+     on half characters, which keeps them narrower than the cell. */
+  let w = band === 0 ? (gw * 3 / 8 | 0)
+        : band === 1 ? (gw * 3 / 4 | 0) : (gw / 2 | 0);
+  if (w < 1) w = 1;
+  const x = ((gw - w) / 2) | 0;
+  if (gx < x || gx >= x + w) return -1;
+  return band === 0 ? youFace : band === 1 ? youShirt : youLegs;
+}
 const TURN_STEP = 1;   /* a quarter turn, in sixths, as far as a lattice can */
 
 let grainBoard = null, grainTurn = 0, grainTurned = 0;
@@ -5068,6 +5171,28 @@ function beastPixels(name, fg, w, h){
   beastKeep.set(key, bstPx.map(r => Uint8Array.from(r)));
   return true;
 }
+/* ── what people built, drawn ───────────────────────────────
+ * A plant is grown into its cell and a beast is drawn into its, and a
+ * building was still being painted the way grass is: a base colour with
+ * its accent sprinkled over it.  So on the board where a plant is a drawn
+ * shrub a house came out a grey smudge, and on the board where a whole
+ * village ought to read at a glance the village did not read at all.
+ *
+ * It needs no grammar of its own.  The tile is already a hexagon -- a
+ * narrow row of tip pixels, a full body, a narrow row again -- and that
+ * is a wall with a roof on it if the top row is roofed and the bottom row
+ * has a doorway cut in it.  The shape was there all along; only the
+ * colours were missing. */
+const BUILT_NONE = 0, BUILT_WALL = 1, BUILT_FLOOR = 2,
+      BUILT_HOUSE = 3, BUILT_RUIN = 4, BUILT_VILLAGE = 5, BUILT_LEFT = 6;
+let builtHere = BUILT_NONE, builtDoor = -1;
+function builtSource(what){ builtHere = what; builtDoor = -1; }
+/* A house with the way in on a named side, so the tile itself says which
+   way to walk round to.  Without this the doorway was painted at the foot
+   of every house whichever side its door was really on, which is a sign
+   pointing the wrong way and worse than no sign. */
+function builtHouse(door){ builtHere = BUILT_HOUSE; builtDoor = door; }
+
 /* Which beast the cell about to be drawn has standing in it, set the
    same way grownSource sets what is growing there. */
 let beastHere = null, beastHereFg = 0;
@@ -5106,13 +5231,61 @@ function drawTileN(tx, ty, tw, th, terr, accent, tex, cell, mark, letter){
         if (S.key === "void"){ b = 16; a = 16; sp = 0; }
       }
       if (heavy && tileGrain !== GRAIN_LETTERS){ a = acc0; sp = sprinkle; }
+      /* the cell you stand in is drawn flat: a character holds two
+         colours, and the sprinkle would spend one of them */
+      if (mark === 1) sp = 0;
       const h = hash3u(tex >>> 0, cell >>> 0, (gy * 8 + gx) >>> 0);
       let c = ((h & 0xFF) < sp) ? a : b;
+      /* What somebody built stands where it is and does not scatter: a
+         wall is a wall all the way across its cell. */
+      if (builtHere && tileGrain !== GRAIN_LETTERS){
+        switch (builtHere){
+        case BUILT_WALL:  c = (gy === 0) ? 188 : 145; break;
+        case BUILT_FLOOR: c = ((gx ^ gy) & 1) ? 95 : 58; break;
+        case BUILT_HOUSE: {
+          c = (gy === 0) ? 131 : 145;
+          let dx = gw >> 1, dy = gh - 1;
+          if (builtDoor >= 0){
+            const [ux, uy] = dirUnit(builtDoor);
+            dx = Math.trunc(gw * 0.5 + ux * gw * 0.40);
+            dy = Math.trunc(gh * 0.5 + uy * gh * 0.55);
+            if (dy < 1) dy = 1;             /* never a hole in the roof */
+            if (dy > gh - 1) dy = gh - 1;
+            if (dx < 0) dx = 0;
+            if (dx > gw - 1) dx = gw - 1;
+          }
+          if (gy === dy && gx === dx) c = 52;        /* the doorway */
+          break;
+        }
+        case BUILT_RUIN:
+          c = ((h >> 8) & 3) ? 145 : base;
+          if (gy === 0) c = base;                 /* the roof is gone */
+          break;
+        /* A whole village is a hundred metres across, so it is one cell of
+           the district board -- and that is the rung you look at when you
+           are looking *for* one.  Nothing marked it there at all, so you
+           could stand in a village, zoom out one step to see where it was,
+           and watch it vanish. */
+        case BUILT_VILLAGE:
+          c = (gy === 0) ? 131 : ((gx & 1) ? 131 : 145);
+          break;
+        case BUILT_LEFT:                          /* a village, emptied */
+          c = (gy === 0) ? base : ((gx & 1) ? base : 145);
+          break;
+        default: break;
+        }
+      }
       /* and what is growing here, over the ground it grows out of */
       if (growing && growPx[gy][gx]) c = growPx[gy][gx];
       if (beasting && bstPx[gy][gx]) c = bstPx[gy][gx];
-      if (mark === 1 && gx === (gw >> 1) && gy === (gh >> 2)) c = 226;
-      if (mark === 1 && gx === (gw >> 1) && gy === (gh >> 2) + 1) c = 201;
+      /* You: as tall in the cell as anything else standing in it.  The
+         shirt is a shoulder wider than the rest where the cell is wide
+         enough to show it. */
+      /* and you, over all of it */
+      if (mark === 1) {
+        const me = youPx(gx, gy, gw, gh);
+        if (me >= 0) c = me;
+      }
       if (mark === 2 && gx === (gw >> 1) && gy === (gh >> 1)) c = 208;
       if (mark === 3 && gx >= (gw >> 1) - 1 && gx <= (gw >> 1) &&
           gy >= (gh >> 2) && gy <= (gh >> 2) + 1) c = 231;
@@ -5142,8 +5315,38 @@ function turnedTileAt(slot){
   return [BOARD_X + 2 + (4 - COORDS[slot][1]) * 3,
           BOARD_Y + 1 + 2 * COORDS[slot][0] + COORDS[slot][1] + 8];
 }
+/* Which latitude band each of the thirty-two faces sits in. */
+const BAND_OF = [0,1,1,1,1,1,2,2,2,2,2,3,3,3,3,3,4,4,4,4,4,5,5,5,5,5,6,6,6,6,6,7];
 function drawBoardArea(g){
   const w = g.w, view = g.view;
+  if (view === 0){
+    /* the whole planet, thirty-two faces in their latitude bands.  One
+       letter a face, always: up here the letter is the point -- R a
+       continent, Q a pentagon's five sixths, a open ocean. */
+    const sky = w.board([]);
+    for (let r = 0; r < 8; r++){
+      const band = [];
+      for (let f = 0; f < FACES; f++) if (BAND_OF[f] === r) band.push(f);
+      const ty = BOARD_Y + r * 2;
+      for (let i = 0; i < band.length; i++){
+        const f = band[i];
+        const tx = band.length === 1 ? 14 : 2 + (r & 1) * 3 + i * 6;
+        if (tileGrain === GRAIN_DEEP) tileSource(w.board([f]), 0, 0);
+        else tileSource(null, 0, 0);
+        madeSource(-1); grownSource(null, null);
+        beastSource(null, 0); builtSource(BUILT_NONE);
+        let mark = (f === g.address[0]) ? 1 : 0;
+        if (!mark && routeOn){
+          if (f === routeGoalCell(g, 0)) mark = 3;
+          else if (routeDepth === 0 && routeCells.indexOf(f) > 0) mark = 2;
+        }
+        drawTile(tx, ty, sky.terrain[f],
+                 sky.fields[f].elevation >= SEA_LEVEL ? sky.terrain[f].fg : -1,
+                 hash3u(0x9e37, f, 7), f, mark, sky.chars[f]);
+      }
+    }
+    return;
+  }
   const data = (view === DEPTHS && g.level) ? footBoard(g)
              : view >= DEPTHS - 1 ? w.layers(g.address.slice(0, view), g.when)
                                   : w.board(g.address.slice(0, view));
@@ -5171,6 +5374,28 @@ function drawBoardArea(g){
     madeSource(-1);
     grownSource(null, null);
     beastSource(null, 0);
+    builtSource(BUILT_NONE);
+    /* A wall and a floor are person-sized, so they are things you see on
+       the board you walk; a whole building is ten metres across and is one
+       cell of the board above it. */
+    if (view === DEPTHS){
+      if (data.item[i] && data.item[i].key === "wall") builtSource(BUILT_WALL);
+      else if (data.item[i] && data.item[i].key === "ruin") builtSource(BUILT_RUIN);
+      else if (data.ground[i] === THING_BY_KEY.floor) builtSource(BUILT_FLOOR);
+    } else if (view === DEPTHS - 2){
+      /* the rung a whole settlement is one cell of */
+      const sp = g.address.slice(0, DEPTHS - 2).concat([i]);
+      if (w.settlement(sp, g.when)) builtSource(BUILT_VILLAGE);
+      else if (w.ruin(sp, g.when)) builtSource(BUILT_LEFT);
+    } else if (view === DEPTHS - 1){
+      if (data.item[i] && data.item[i].key === "building"){
+        /* ask this lot -- not the one you are standing on -- which way its
+           own door faces */
+        const lp = g.address.slice(0, DEPTHS);
+        lp[DEPTHS - 1] = i;
+        builtHouse(buildingDoor(g.w, lp, gWhen(g)));
+      } else if (data.item[i] && data.item[i].key === "ruin") builtSource(BUILT_RUIN);
+    }
     /* What is standing in the cell, grown into it the way a plant is.
        Only on the board you are actually on: a wolf is a metre and a K
        cell is a metre, so this is the one rung it shows at. */
@@ -5235,6 +5460,16 @@ const PANEL_X = 38;
 /* A rung is named for the cell chosen at that depth, which is the place
    one level down.  > is the board on screen; * the rung a step crosses a
    whole cell of.  Afoot they are the same rung, the lowest one. */
+/* "Town" reads as a name at the head of a line and wants a small letter
+   in the middle of one. */
+const kindLower = k => k ? k[0].toLowerCase() + k.slice(1) : k;
+/* The town you are standing in, or the one whose stones are still here. */
+function townHere(g){
+  if (g.view < 0) return null;
+  const here = g.w.settlement(g.address.slice(0, DEPTHS - 1), gWhen(g));
+  if (here) return here;
+  return g.w.ruin(g.address.slice(0, DEPTHS - 1), gWhen(g));
+}
 function drawLadder(g, x, y){
   const w = g.w;
   for (let depth = 0; depth < ADDRESS_LEN; depth++){
@@ -5245,11 +5480,30 @@ function drawLadder(g, x, y){
       what = "you, on " + (gr ? gr.name : "nothing");
     } else {
       what = w.nameOf(g.address.slice(0, depth + 1));
+      /* And the rung a town stands on *is* the town.  It was being named
+         after the empty countryside underneath it, so the one line on the
+         screen that is always there and always says where you are never
+         once mentioned the town you were standing in. */
+      if (depth === DEPTHS - 2){
+        const here = w.settlement(g.address.slice(0, DEPTHS - 1), gWhen(g));
+        if (here) what = here.name + ", a " + kindLower(here.kind);
+        else {
+          const gone = w.ruin(g.address.slice(0, DEPTHS - 1), gWhen(g));
+          if (gone) what = gone.name + ", ruined";
+        }
+      }
     }
     const line = CELL_LEVEL[depth] + " " + pad(CELL_NAME[depth], 9) + " " +
                  padL(SIZE_NAME_T[depth + 1], 6) + " " +
                  ALPHABET[g.address[depth] & 63] + "  " + what;
-    const on = depth === g.view, walking = g.stance >= 0 && depth === g.stance;
+    /* Each rung names the *cell* you are in at that scale -- letter, size
+       and name all describe the same place.  The board on screen is not
+       that cell: it is the cell one rung out, opened up into its
+       sixty-one.  Looking at the board of one-metre cells is looking at
+       the inside of the ten-metre lot, so the mark belongs on the lot --
+       which is also what the top bar has always called it.  It used to sit
+       a rung below and disagree with the bar. */
+    const on = depth === g.view - 1, walking = g.stance >= 0 && depth === g.stance;
     text(x, y + depth, line.slice(0, Math.min(63, SCREEN_W - x - 1)),
          on ? 223 : 245, 0);
     if (walking) text(x - 2, y + depth, "*", 215, 0);
@@ -5262,12 +5516,27 @@ function drawScreen(g){
   g.when = gWhen(g);
   /* what you are looking at */
   let place = "";
-  try { place = g.view === 0 ? w.worldName() : w.nameOf(g.address.slice(0, g.view)); }
+  try { place = w.nameOf(g.address.slice(0, g.view)); }
   catch (e) { place = ""; }
-  /* and what this piece of country is good for */
-  const good = RESOURCES[resourceAt(g.address, Math.max(1, g.view))][0];
-  let bar = " " + place + " · " + good + "   " + RUNGS[g.view] + " " +
-            BOARD_NAME_T[g.view] + ", cells of " + SIZE_NAME_T[g.view + 1] + " ";
+  /* Standing in a town, the bar says the town.  The land under it has a
+     name too and the ladder still gives it; what the top of the screen is
+     for is the thing you would tell somebody first. */
+  if (g.view >= DEPTHS - 1){
+    const here = w.settlement(g.address.slice(0, DEPTHS - 1), g.when);
+    if (here) place = here.name + ", a " + kindLower(here.kind);
+    else {
+      const gone = w.ruin(g.address.slice(0, DEPTHS - 1), g.when);
+      if (gone) place = "the ruins of " + gone.name;
+    }
+  }
+  /* and what this piece of country is good for -- the resource and the
+     family it belongs to, as the C has always said it */
+  const goodIx = resourceAt(g.address, Math.max(1, g.view));
+  const good = RESOURCES[goodIx][0];
+  let bar = " " + place + " · " + good +
+            " (" + FAMILY_NAME[Math.floor(goodIx / 8)] + ")   " +
+            RUNGS[g.view] + " " + BOARD_NAME_T[g.view] +
+            ", cells of " + SIZE_NAME_T[g.view + 1] + " ";
   /* The clock sits at the right-hand end of the bar and is never cut, and
      the date stands to its left and is never cut either: what gives way
      is the name of the place, trimmed to whatever room is left of them. */
@@ -5292,11 +5561,13 @@ function drawScreen(g){
   } else drawBoardArea(g);
   if (g.showBag) drawBag(g);
   if (g.showBody) drawBody(g);
-  if (showBeasts) drawBeasts(g);
-  if (!showTasks && !showKeys && !showSpells)
+  if (showBeasts === 1) drawBeasts(g);
+  else if (showBeasts === 2) drawGrown(g);
+  else if (showBeasts === 3) drawMade(g);
+  if (!showTasks && !showKeys && !showSpells && !showBeasts)
     drawGlobe(g, PANEL_X + 1, 1, SCREEN_W - PANEL_X - 2, 10, viewFrame(g),
               g.address[0]);
-  if (routeOn && !showTasks){
+  if (routeOn && !showTasks && !showBeasts){
     const rl = routeCells.length > 1
       ? "> " + routeName.slice(0, 20) + "  " + (routeCells.length - 1) +
         " of " + SIZE_NAME_T[routeDepth + 1]
@@ -5304,36 +5575,54 @@ function drawScreen(g){
     text(PANEL_X + 2, 11, rl.slice(0, SCREEN_W - PANEL_X - 3),
          routeStuck ? 174 : 215, 0);
   }
-  if (!showTasks && !showKeys && !showSpells) drawLadder(g, PANEL_X + 2, 12);
+  if (!showTasks && !showKeys && !showSpells && !showBeasts)
+    drawLadder(g, PANEL_X + 2, 12);
   if (showTasks) drawTasks(g);
   if (showSpells) drawSpells(g);
   if (showKeys) drawKeys();
 
   /* what you are standing on */
-  const data = g.view === 0 ? null : w.board(g.address.slice(0, g.view));
-  const terr = data ? data.terrain[g.address[g.view]] : null;
-  const ch = data ? data.chars[g.address[g.view]] : "a";
+  /* At the planet the board above you is the planet itself, and it has
+     terrain, letters and fields like any other: it was being skipped, so
+     the two lines under the map described the metre you were standing on
+     a world away instead of the continent you were looking at. */
+  const data = w.board(g.address.slice(0, g.view));
+  const terr = data.terrain[g.address[g.view]];
+  const ch = data.chars[g.address[g.view]];
   let town = "";
   if (g.view >= DEPTHS - 1){
     const here = w.settlement(g.address.slice(0, DEPTHS - 1), g.when);
     const gone = here ? null : w.ruin(g.address.slice(0, DEPTHS - 1), g.when);
-    if (here) town = "  ·  " + here.name + " · " + here.kind + " · " +
-                     here.population + " souls · " + here.standingAt(g.when) +
+    /* The bar overhead has just said the town's name, so this says what
+       the bar has no room for.  It used to say the name again and run off
+       the end of an eighty-column line in the middle of `makes`. */
+    if (here) town = "  ·  a " + here.standingAt(g.when) + " " +
+                     kindLower(here.kind) + " of " + here.population +
                      " · makes " + RESOURCES[resourceAt(g.address, DEPTHS - 1)][1];
-    else if (gone) town = "  ·  the ruins of " + gone.name + ", empty " +
-                          gone.emptiedAt(g.when) + " years";
+    else if (gone) town = "  ·  empty these " + gone.emptiedAt(g.when) + " years";
   }
-  text(1, SCREEN_H - 5, " " + (g.view === DEPTHS && g.level < 0 ? "rock"
-                               : terr ? terr.name : "the planet") +
-       " - hanb '" + ch + "'" + (ch === "a" ? " — nothing there" : "") + town,
-       252, 0);
-  const lb = footBoard(g);
-  const seen = w.occupants(lb, g.address[DEPTHS]);
-  const f = data ? data.fields[g.address[g.view]] : null;
-  text(1, SCREEN_H - 4, " here: " + seen.map(t => t.name).join(", ") +
-       (f ? " - elevation " + Math.trunc(f.elevation) +
-            "  moisture " + Math.trunc(f.moisture) +
-            "  warmth " + Math.trunc(f.temperature) : ""), 245, 0);
+  let head = " " + (g.view === DEPTHS && g.level < 0 ? "rock" : terr.name) +
+             " - hanb '" + ch + "'" + (ch === "a" ? " — nothing there" : "");
+  /* If the two together will not fit, what gives way is the ground you are
+     standing on and not the town you are standing in. */
+  const room = Math.max(8, SCREEN_W - 2 - town.length);
+  if (head.length > room) head = head.slice(0, room);
+  text(1, SCREEN_H - 5, head + town, 252, 0);
+  if (g.view === 0){
+    const pent = PLANET[g.address[0]].pent;
+    text(1, SCREEN_H - 4,
+         " " + (pent ? "pentagon, a sixth missing" : "hexagon") +
+         " - " + (pent ? 5 : 6) + " neighbours - elevation " +
+         Math.trunc(data.fields[g.address[0]].elevation), 245, 0);
+  } else {
+    const lb = footBoard(g);
+    const seen = w.occupants(lb, g.address[DEPTHS]);
+    const f = data.fields[g.address[g.view]];
+    text(1, SCREEN_H - 4, " here: " + seen.map(t => t.name).join(", ") +
+         " - elevation " + Math.trunc(f.elevation) +
+         "  moisture " + Math.trunc(f.moisture) +
+         "  warmth " + Math.trunc(f.temperature), 245, 0);
+  }
   const alive = g.view === DEPTHS ? beings.filter(b => b.alive).length : 0;
   text(1, SCREEN_H - 3, " " + g.address.map(i => ALPHABET[i & 63]).join("") +
        " - " + KINDRED[g.who].name +
@@ -5402,7 +5691,7 @@ function startGame(seedText, whoName){
           worn: new Array(BOARD_SIZE).fill(null), bodyCell: cellAt(2, -4),
           invBag: -1, invCell: cellAt(0, 0), invUp: [], invDepth: 0,
           showBody: false, level: 0,
-          message: "Nothing is here until you look at it.  Walk."};
+          message: "Nothing is here until you look at it. Walk."};
   g0.packBag = newBag(g0, THING_BY_KEY.pack);
   stow(g0, THING_BY_KEY.satchel);
   stow(g0, THING_BY_KEY.purse);
@@ -5502,6 +5791,21 @@ function footBoard(g){
                  : g.w.layers(g.address.slice(0, DEPTHS), gWhen(g));
 }
 const walkDepth = g => (g.stance < 0 ? DEPTHS : g.stance);
+/* Set out at a stride, and stop.  Both say what has happened in the
+   words the C uses -- a stride is a length of country and a length of
+   walking, and stopping brings the country back down to a metre. */
+function setOut(g, depth){
+  if (depth < 1) depth = 1;
+  if (depth > DEPTHS - 1) depth = DEPTHS - 1;
+  g.stance = depth; g.view = depth;
+  g.message = "You set out.  A step is " + SIZE_NAME_T[depth + 1] +
+              " of country, " + STRIDE_TIME[depth] + " of walking.  " +
+              "< and > change your stride; S stops you.";
+}
+function halt(g){
+  g.stance = -1; g.view = DEPTHS; settleHere(g);
+  g.message = "You stop, and the country comes back down to a metre at a time.";
+}
 const gWhen = g => { g.w.now = EPOCH_START + g.seconds; return g.w.now; };
 const strideAt = depth => Math.pow(LADDER, DEPTHS - depth);
 
@@ -5511,7 +5815,22 @@ function moveDir(g, key){
   const dir = turnDir(KEY_DIR[key], g.facing);
   const next = g.w.step(g.address.slice(0, depth).concat(
                           g.address.slice(depth)), dir, depth);
-  if (!next){ g.message = "That is the edge of the planet."; return; }
+  if (!next){
+    /* Which refusal it is cannot be read off the direction walked: a long
+       enough stride crosses a seam first and runs into the gap on the
+       face beyond.  Ask the position, the way the C does. */
+    const [pq, pr] = g.w.position(g.address);
+    const [nq, nr] = g.w.stepAxial(pq, pr, dir, depth);
+    const m = g.w.onFaceTurned(g.address[0], nq, nr);
+    if (m === null)
+      g.message = "Nothing that way: this continent is a pentagon, and that sixth is missing.";
+    else {
+      const a = g.w.addressAt(m[0], m[1], m[2]);
+      if (a === null) g.message = "That is the edge of the planet.";
+      else g.message = "Nothing that way: that is the sixth this pentagon is missing.";
+    }
+    return;
+  }
   /* Indoors you are on one lot's board and no other: the rim of it is
      wall or rock, so a step off it never arises. */
   const board = depth === DEPTHS
@@ -5539,9 +5858,13 @@ function moveDir(g, key){
       }
     }
   } else if (!board.terrain[next[depth]].passable){
-    g.message = board.terrain[next[depth]].name +
-                " lies that way.  You would need a boat.";
-    g.message = g.message[0].toUpperCase() + g.message.slice(1);
+    if (board.terrain[next[depth]] === T.void)
+      g.message = "That is the sixth this continent is missing.";
+    else {
+      g.message = board.terrain[next[depth]].name +
+                  " lies that way. You would need a boat.";
+      g.message = g.message[0].toUpperCase() + g.message.slice(1);
+    }
     return;
   }
   if (depth === ROAD_DEPTH) g.w.roadsFor(board, gWhen(g));
@@ -5600,7 +5923,7 @@ function settleHere(g){
     if (d < bd){ bd = d; best = i; }
   }
   if (best >= 0) g.address[DEPTHS] = best;
-  else g.message = "Nothing to stand on here.  You are at sea.";
+  else g.message = "Nothing to stand on here. You are at sea.";
 }
 /* Anything that takes you off this board takes you out of the building
    as well: the levels hang off one lot and nowhere else. */
@@ -5652,7 +5975,7 @@ function takeHere(g){
     g.message = g.message[0].toUpperCase() + g.message.slice(1);
     return;
   }
-  if (!stow(g, t)){ g.message = "You cannot carry any more."; return; }
+  if (!stow(g, t)){ g.message = "You have nowhere left to put it."; return; }
   g.w.takeItem(g.address.slice(0, ADDRESS_LEN), gWhen(g));
   g.seconds += 2.0;
   g.message = "You pick up " + t.name + ". (item, size " + t.size + ")";
@@ -5681,17 +6004,15 @@ function gameKey(g, k){
   if (k === "u"){ goLevel(g, 1); return true; }
   if (k === "b"){ goLevel(g, -1); return true; }
   if (k === "s"){ showSpells = !showSpells; return true; }
-  if (k === "c"){ showBeasts = !showBeasts;
-                  if (showBeasts && g.view === DEPTHS) ensureBeings(g);
+  if (k === "c"){ /* one key, two pages and out again: what is alive here,
+                     then what grows here */
+                  showBeasts = (showBeasts + 1) % 4;
+                  if (showBeasts === 1 && g.view === DEPTHS) ensureBeings(g);
                   return true; }
   if (k === "."){ g.seconds += strideAt(DEPTHS); g.message = "You wait."; return true; }
   if (k === "S"){
     leaveLevels(g);
-    if (g.stance < 0){
-      g.stance = DEPTHS - 2; g.view = g.stance;
-      g.message = "You set out.  A step is " + SIZE_NAME_T[g.stance + 1] +
-                  " of country.  < and > change your stride; S stops you.";
-    } else { g.stance = -1; g.view = DEPTHS; g.message = "You stop."; }
+    if (g.stance < 0) setOut(g, DEPTHS - 2); else halt(g);
     return true;
   }
   if (k === "<"){
@@ -5699,20 +6020,22 @@ function gameKey(g, k){
     if (g.stance < 0){
       if (g.view > 0){ g.view--; g.message = ""; }
       else g.message = "The planet is the whole of it.";
-    } else if (g.stance > 1){ g.stance--; g.view = g.stance;
-      g.message = "You set out.  A step is " + SIZE_NAME_T[g.stance + 1] +
-                  " of country."; }
+    } else if (g.stance > 1){ setOut(g, g.stance - 1); }
     else g.message = "A continent at a step is as far as walking goes.  " +
                      "S stops you; then < goes on out to the planet.";
     return true; }
-  if (k === ">"){ leaveLevels(g);
-                  if (g.stance < 0) g.view = Math.min(DEPTHS, g.view + 1);
-                  else { g.stance = Math.min(DEPTHS - 1, g.stance + 1); g.view = g.stance; }
-                  return true; }
+  if (k === ">"){
+    leaveLevels(g);
+    if (g.stance >= 0){
+      if (g.stance < DEPTHS - 1) setOut(g, g.stance + 1); else halt(g);
+    } else if (g.view < DEPTHS){
+      g.view++; if (g.view === DEPTHS) settleHere(g); g.message = "";
+    } else g.message = "An L board is as small as this world goes.";
+    return true; }
   if (k === "t"){ tileShape = (tileShape + 1) % 3;
-                  g.message = "Tiles: " + SHAPE_NAME[tileShape] + "."; return true; }
+                  g.message = SHAPE_BLURB[tileShape]; return true; }
   if (k === "T"){ tileGrain = (tileGrain + 1) % 4;
-                  g.message = "Grain: " + GRAIN_NAME[tileGrain] + "."; return true; }
+                  g.message = GRAIN_BLURB[tileGrain]; return true; }
   if (k === "v"){ g.raw = !g.raw; return true; }
   if (k === ","){ takeHere(g); return true; }
   if (k === "i"){ g.showBag = !g.showBag; g.showBody = false;
@@ -5723,14 +6046,32 @@ function gameKey(g, k){
   if (k === "y"){ takeOffer(g); return true; }
   if (k === "f"){
     leaveLevels(g);
-    /* follow it: it stops when you arrive, when the way runs out, or when
-       something hostile is close */
+    if (!routeOn){
+      g.message = "No way is set.  n takes on a task, F walks to an address.";
+      return true;
+    }
+    /* follow it: it stops when you arrive, when the way runs out, when
+       something hostile is close, when the way turns back on itself, and
+       when you have simply walked far enough */
+    let back1 = null, back2 = null, walked = 0;
     for (let i = 0; i < 200; i++){
+      const hp0 = g.hp;
       if (!routeStep(g)) break;
+      walked++;
+      if (g.hp < hp0){ g.message = "Something has you.  You stop."; break; }
       questCheck(g);
       ensureBeings(g);
-      if (beings.some(b => b.alive && b.hostile &&
-          hexDistance(COORDS[b.x], COORDS[g.address[DEPTHS]]) <= 2)) break;
+      const near = beings.find(b => b.alive && b.hostile && !b.fleeing &&
+                   hexDistance(COORDS[b.x], COORDS[g.address[DEPTHS]]) <= 2);
+      if (near){ g.message = "A " + near.name + " is close.  You stop."; break; }
+      const here = g.address.join(",");
+      if (back2 !== null && here === back2){
+        g.message = "The way doubles back on itself here.  You stop."; break;
+      }
+      back2 = back1; back1 = here;
+      if (walked > 4000){
+        g.message = "You have walked a very long way.  You stop."; break;
+      }
       if (!routeOn) break;
     }
     if (routeOn && routeTarget.join(",") === g.address.join(","))
@@ -5747,7 +6088,9 @@ function gameKey(g, k){
     else g.message = "There is no such task.";
     return true;
   }
-  if (k === "0"){ activeQuest = -1; clearRoute(); g.message = "No way set."; return true; }
+  if (k === "0"){ if (routeOn){ clearRoute(); activeQuest = -1;
+                                g.message = "You are bound nowhere in particular."; }
+                  return true; }
   if (k === "?"){ showKeys = !showKeys; return true; }
   if (k === "g" || k === "F"){ leaveLevels(g); typing = {text: "", walk: k === "F"};
                                return true; }
@@ -5759,7 +6102,8 @@ function gameKey(g, k){
   if (k === "p"){ if (g.speed){ g.heldSpeed = g.speed; g.speed = 0; }
                   else g.speed = g.heldSpeed || 3;
                   g.message = "The world runs " + TERM_SPEED[g.speed] + "."; return true; }
-  if (k === "o"){ camTrack = true; return true; }
+  if (k === "o"){ camTrack = true;
+                  g.message = "The planet turns back to you."; return true; }
   if (k === "h"){ camTrack = false; camLon -= 0.3; return true; }
   if (k === "l"){ camTrack = false; camLon += 0.3; return true; }
   if (k === "j"){ camTrack = false; camLat -= 0.2; return true; }
@@ -5842,8 +6186,12 @@ function growString(g, age){
 /* The turtle draws into the cell's own little grid, twice: once to find
    out how big the plant came out, once at whatever scale stands it in the
    tile.  That is what lets one genome be a four-pixel tile and a plate. */
+/* Wide enough for a tile and tall enough for a portrait: the same turtle
+   draws the four pixels a cell can spare and the two hundred a panel can,
+   which is the whole point of measuring the plant before scaling it. */
+const GROW_MAXW = 24, GROW_MAXH = 16;
 const growPx = [];
-for (let y = 0; y < 8; y++) growPx.push(new Uint8Array(16));
+for (let y = 0; y < GROW_MAXH; y++) growPx.push(new Uint8Array(GROW_MAXW));
 let growW = 0, growH = 0, growMeasuring = false;
 let growSc = 1, growOx = 0, growOy = 0, gbx0 = 0, gby0 = 0, gbx1 = 0, gby1 = 0;
 
@@ -5861,7 +6209,7 @@ function growDot(cx, cy, r, c){
     for (let x = Math.floor(cx - r); x <= Math.ceil(cx + r); x++){
       const dx = x + 0.5 - cx, dy = y + 0.5 - cy;
       if (dx*dx + dy*dy <= r*r && x >= 0 && x < growW && y >= 0 && y < growH &&
-          y < 8 && x < 16)
+          y < GROW_MAXH && x < GROW_MAXW)
         growPx[y][x] = c;
     }
 }
@@ -5917,10 +6265,10 @@ function growWalk(g, s, path, cell){
 const grownKeep = new Map();
 function growTile(path, level, cell, thing, w, h){
   if (!thing || thing.layer !== "plant") return false;
-  if (w > 16 || h > 8) return false;
+  if (w > GROW_MAXW || h > GROW_MAXH) return false;
   const key = path.join(",") + "/" + cell + "/" + thing.key + "/" + w + "x" + h;
   const hit = grownKeep.get(key);
-  if (hit){ for (let y = 0; y < 8; y++) growPx[y].set(hit[y]); return true; }
+  if (hit){ for (let y = 0; y < GROW_MAXH; y++) growPx[y].set(hit[y]); return true; }
   const tIndex = THINGS.indexOf(thing);
   const g = growGenome(path, cell, thing, tIndex);
   /* how far along the alphabet the thing is above the smallest visible
@@ -5928,7 +6276,7 @@ function growTile(path, level, cell, thing, w, h){
   const age = 2 + (ALPHABET.indexOf(thing.size) % 3);
   const s = growString(g, age);
   growW = w; growH = h;
-  for (let y = 0; y < 8; y++) growPx[y].fill(0);
+  for (let y = 0; y < GROW_MAXH; y++) growPx[y].fill(0);
   growMeasuring = true;
   gbx0 = gby0 = 1e9; gbx1 = gby1 = -1e9;
   growSc = 1.0; growOx = growOy = 0.0;
@@ -5957,6 +6305,30 @@ function growTile(path, level, cell, thing, w, h){
 const MAX_BEINGS = 24;
 let beings = [], beingsPath = null, beingsEpoch = null, beingsLevel = 0;
 
+/* How much life a hectare of each kind of country carries -- the most
+   groups it will hold.  Until now every kind of country carried the same
+   amount and only the *sort* of animal changed, so a hectare of scree was
+   as busy as a hectare of jungle. */
+const WILDLIFE_RICH = {
+  deep:0, sea:0, shore:3, ice:1, glacier:0, tundra:2, taiga:5, forest:7,
+  jungle:9, dry_forest:4, marsh:5, swamp:5, grass:8, savanna:8, steppe:4,
+  scrub:3, desert:1, badland:1, hills:5, mountain:3, peak:1, river:4,
+  lake:2, void:0,
+};
+/* And a rabbit is met a great deal more often than a lion, though until
+   now they were drawn from the same hat with the same hand. */
+const wildlifeWeight = k =>
+  k[6] >= 4 ? 1 : k[6] >= 3 ? 2 : k[6] >= 2 ? 4 : 8;
+function wildlifePick(table, rng){
+  let total = 0;
+  for (const k of table) total += wildlifeWeight(k);
+  let r = rng._randbelow(total);
+  for (let i = 0; i < table.length; i++){
+    r -= wildlifeWeight(table[i]);
+    if (r < 0) return i;
+  }
+  return 0;
+}
 function spawnBeings(g){
   const path = g.address.slice(0, DEPTHS);
   const data = footBoard(g);
@@ -5994,23 +6366,37 @@ function spawnBeings(g){
     return;
   }
   if (g.level > 0) return;             /* nothing lives upstairs */
-  const table = WILDLIFE[WILDLIFE_FOR[data.terrain[CENTRE].key]];
+  /* ── a herd is bigger than the ground you are standing on ───
+   * The pack sizes in the tables are real -- dingoes go about in twos and
+   * fours -- but they were all being put down on one board of sixty-one
+   * square metres, which is four hundred animals to the hectare and two
+   * lions inside a ten-metre square.
+   *
+   * So the herd is settled a rung up, on the board of ten-metre lots that
+   * is a hectare of country, and every animal is given a lot as well as a
+   * cell.  You meet the ones whose lot is yours.  Both draws are taken
+   * whether or not the lot is yours, so what is out there does not depend
+   * on where you are standing -- and walking one lot over now finds the
+   * rest of the same pack rather than a fresh one conjured out of
+   * nothing. */
+  const up = g.address.slice(0, DEPTHS - 1);
+  const udata = g.w.layers(up, gWhen(g));          /* a hectare, in lots */
+  const table = WILDLIFE[WILDLIFE_FOR[udata.terrain[CENTRE].key]];
   if (!table) return;
-  const rng = rngFor(path, "L" + ep);
-  const groups = rng.randint(0, 3);
+  const rich = WILDLIFE_RICH[udata.terrain[CENTRE].key] || 0;
+  if (rich <= 0) return;
+  const hereLot = g.address[DEPTHS - 1];
+  const lots = [];
+  for (let i = 0; i < BOARD_SIZE; i++) if (g.w.passable(udata, i)) lots.push(i);
+  if (!lots.length) return;
+  const rng = rngFor(up, "L" + ep);
+  const groups = rng.randint(0, rich);
   for (let gi = 0; gi < groups; gi++){
-    const k = table[rng._randbelow(table.length)];
+    const k = table[wildlifePick(table, rng)];
     const many = rng.randint(k[7][0], k[7][1]);
     for (let m = 0; m < many; m++){
-      /* somewhere free to stand: not the player's cell, not taken */
-      const opts = [];
-      for (let i = 0; i < BOARD_SIZE; i++){
-        if (!g.w.passable(data, i) || i === g.address[DEPTHS]) continue;
-        if (beings.some(b => b.x === i)) continue;
-        opts.push(i);
-      }
-      if (!opts.length || beings.length >= MAX_BEINGS) return;
-      const spot = opts[rng._randbelow(opts.length)];
+      const lot = lots[rng._randbelow(lots.length)];
+      const cell = rng._randbelow(BOARD_SIZE);
       const b = makeCreature(k, rng);
       /* The draw is taken either way.  `||` and `&&` short-circuit and
          the C's do not: written as one expression this skips rng.random()
@@ -6018,6 +6404,17 @@ function spawnBeings(g){
          word behind the C's, and from the second animal on the two
          worlds hold different wildlife. */
       const keen = rng.random();
+      if (lot !== hereLot || beings.length >= MAX_BEINGS) continue;
+      /* On your lot: settle it onto ground it can stand on, which takes
+         no draw, so the stream does not care where you are. */
+      let spot = -1;
+      for (let t = 0; t < BOARD_SIZE; t++){
+        const i = (cell + t) % BOARD_SIZE;
+        if (!g.w.passable(data, i) || i === g.address[DEPTHS]) continue;
+        if (beings.some(bb => bb.x === i)) continue;
+        spot = i; break;
+      }
+      if (spot < 0) continue;
       b.hostile = b.danger >= 3 || (b.danger === 2 && keen < 0.4);
       b.x = spot; b.dead = false; b.fleeing = false;
       beings.push(b);
@@ -6394,7 +6791,127 @@ function drawBody(g){
  * where the legs and the neck and the horns start to mean something.
  * Nothing new is generated: it is the picture the cell is a thumbnail
  * of. */
-let showBeasts = false;
+let showBeasts = 0;              /* 0 shut, 1 what is alive, 2 what grows */
+
+/* The plants of this board, drawn the size they were always meant to be.
+   A plant is a tall thing and a beast is a wide one, so they get boxes of
+   different shapes -- but it is the same turtle and the same genome as
+   the four pixels in the cell, only measured against more room.  These
+   are *particular* plants out of particular cells, not one specimen of
+   each species: no two shrubs on a board are the same shrub, and that is
+   worth being able to see. */
+function drawGrown(g){
+  const x = 1, y = 2, w = 52, h = 19;
+  for (let r = y; r < y + h; r++)
+    for (let c = x; c < x + w; c++) text(c, r, " ", 250, 235);
+  for (let c = x; c < x + w; c++){
+    text(c, y, " ", 250, 240); text(c, y + h - 1, " ", 250, 240);
+  }
+  for (let r = y; r < y + h; r++){
+    text(x, r, " ", 250, 240); text(x + w - 1, r, " ", 250, 240);
+  }
+  const data = footBoard(g);
+  const cells = [];
+  let total = 0;
+  for (let i = 0; i < BOARD_SIZE; i++){
+    if (!data.plant[i]) continue;
+    total++;
+    if (cells.length < 4 && sizeVisible(data.level, data.plant[i].size)) cells.push(i);
+  }
+  text(x + 2, y, " what grows here -- " + total + " ", 232, 240);
+  if (!cells.length){
+    text(x + 2, y + 2, "Nothing is growing on this ground.", 245, 235);
+    text(x + 2, y + h - 2, "c closes", 245, 235);
+    return;
+  }
+  for (let k = 0; k < cells.length; k++){
+    const bx = x + 2 + k * 12, by = y + 2;
+    const W = 11, H = 7;                          /* characters */
+    const thing = data.plant[cells[k]];
+    if (growTile(g.address.slice(0, g.view), 0, cells[k], thing, W * 2, H * 2))
+      for (let gy = 0; gy < H * 2; gy++)
+        for (let gx = 0; gx < W * 2; gx++)
+          if (growPx[gy][gx]) pxq(bx * 2 + gx, by * 2 + gy, growPx[gy][gx]);
+    text(bx, by + H + 1, thing.name.slice(0, 11), thing.fg, 235);
+    text(bx, by + H + 2, "size " + thing.size, 245, 235);
+  }
+  text(x + 2, y + h - 2,
+       "the same plants the cells hold, at twenty pixels   c: what is made",
+       245, 235);
+}
+
+/* And the third page: what somebody made.  A wall and a chest have no
+   grammar to grow them the way a plant or a beast has, so there is no
+   bigger picture to draw -- what this page can honestly offer is the
+   cell's own tile beside the thing's name and what you may do with it.
+   That is the useful question anyway: the board is full of made things
+   and half of them stop you. */
+function madeUse(t){
+  if (t === THING_BY_KEY.signpost) return "stand under it to read it";
+  if (t === THING_BY_KEY.stair_up) return "u goes up";
+  if (t === THING_BY_KEY.stair_down || t === THING_BY_KEY.shaft) return "b goes down";
+  if (t === THING_BY_KEY.road)  return "walking is easier on it";
+  if (t === THING_BY_KEY.floor) return "you are indoors on it";
+  if (t.portable) return "you can pick it up (,)";
+  if (!t.passable) return "you walk round it";
+  return "you walk over it";
+}
+function drawMade(g){
+  const x = 1, y = 2, w = 52, h = 19;
+  for (let r = y; r < y + h; r++)
+    for (let c = x; c < x + w; c++) text(c, r, " ", 250, 235);
+  for (let c = x; c < x + w; c++){
+    text(c, y, " ", 250, 240); text(c, y + h - 1, " ", 250, 240);
+  }
+  for (let r = y; r < y + h; r++){
+    text(x, r, " ", 250, 240); text(x + w - 1, r, " ", 250, 240);
+  }
+  const data = footBoard(g);
+  const what = [], where = [], many = [];
+  let total = 0;
+  for (let i = 0; i < BOARD_SIZE; i++){
+    let t = null;
+    if (data.item[i]) t = data.item[i];
+    else if (data.ground[i] === THING_BY_KEY.road ||
+             data.ground[i] === THING_BY_KEY.floor) t = data.ground[i];
+    if (!t) continue;
+    total++;
+    const seen = what.indexOf(t);
+    if (seen >= 0){ many[seen]++; continue; }
+    if (what.length < 6){ what.push(t); where.push(i); many.push(1); }
+  }
+  text(x + 2, y, " what is made here -- " + total + " ", 232, 240);
+  if (!what.length){
+    text(x + 2, y + 2, "Nobody has made anything here.", 245, 235);
+    text(x + 2, y + h - 2, "c closes", 245, 235);
+    return;
+  }
+  const tex = Number(pathSeed(g.address.slice(0, g.view), "tex") & 0xFFFFFFFFn) >>> 0;
+  const save = tileShape;
+  tileShape = SHAPE_BRICK;              /* a swatch has no room for points */
+  for (let k = 0; k < what.length; k++){
+    const by = y + 2 + k * 3, i = where[k], t = what[k];
+    madeSource(-1); grownSource(null, null); beastSource(null, 0);
+    builtSource(BUILT_NONE);
+    if (t === THING_BY_KEY.wall) builtSource(BUILT_WALL);
+    else if (t === THING_BY_KEY.ruin) builtSource(BUILT_RUIN);
+    else if (t === THING_BY_KEY.building) builtSource(BUILT_HOUSE);
+    else if (t === THING_BY_KEY.floor) builtSource(BUILT_FLOOR);
+    else if (t === THING_BY_KEY.road) madeSource(94);
+    /* laid on thick: a swatch four characters wide has no room to scatter
+       a colour and still say what colour it was */
+    drawTileN(x + 2, by, 4, 2, data.terrain[i], t.fg | 0x100, tex, i, 0, 0);
+    /* the ground layer's things have no size of their own to give */
+    text(x + 8, by, pad(t.name.slice(0, 18), 18) +
+         (t.layer === "terrain" ? "" : " " + t.size), t.fg, 235);
+    text(x + 8, by + 1, many[k] + " here   " + madeUse(t).slice(0, 24), 245, 235);
+  }
+  tileShape = save;
+  madeSource(-1); builtSource(BUILT_NONE);
+  text(x + 2, y + h - 2,
+       "the cells' own tiles, beside what you may do   c closes", 245, 235);
+}
+
 function drawBeasts(g){
   const x = 1, y = 2, w = 52, h = 19;
   for (let r = y; r < y + h; r++)
@@ -6428,7 +6945,8 @@ function drawBeasts(g){
          (bb.hostile ? "hostile" : "wary"), 245, 235);
   }
   text(x + 2, y + h - 2,
-       "the same beast the board draws, at forty pixels   c closes", 245, 235);
+       "the same beast the board draws, at forty pixels   c: what grows",
+       245, 235);
 }
 
 /* A kill may be the point of somebody's errand. */
@@ -6511,7 +7029,7 @@ const KEYS_HELP = [
   "i n           what you carry, what you have to do",
   "E             what you have on: > wears, < takes off",
   "u b           up the stairs, and down them",
-  "c             what is out there, drawn large",
+  "c             a closer look: what is alive, grows, was made",
   "y             take on what the town here wants",
   "f             follow the way that is planned",
   "F g           walk to an address, or go there at once",
@@ -6534,24 +7052,28 @@ function drawKeys(){
 function typedAddress(g, walk){
   const s = typing.text;
   if (s.length !== ADDRESS_LEN){
-    g.message = "An address is " + ADDRESS_LEN + " hanb characters.";
+    g.message = "An address is eight characters.";
     return;
   }
   const out = [];
   for (const c of s){
     const i = ALPHABET.indexOf(c);
-    if (i < 0 || i >= (out.length ? BOARD_SIZE : FACES)){
-      g.message = "That is not an address.";
-      return;
-    }
+    if (i < 0){ g.message = "That is not an address."; return; }
     out.push(i);
+  }
+  /* the same three refusals the C gives, in the same order */
+  if (out[0] >= FACES){ g.message = "The planet has 32 faces: a to F."; return; }
+  for (let i = 1; i < ADDRESS_LEN; i++)
+    if (out[i] >= BOARD_SIZE){ g.message = "A board has 61 cells: a to 8."; return; }
+  if (g.w.board(out.slice(0, 1)).terrain[out[1]] === T.void){
+    g.message = "That is the sixth that pentagon is missing."; return;
   }
   if (walk){ setRoute(g, out, s); g.message = "The way is set to " + s + "."; }
   else {
     g.address = out;
     g.stance = -1; g.view = DEPTHS;
     settleHere(g);
-    g.message = "You are there.";
+    g.message = "You travel.";
     questCheck(g);
   }
 }
@@ -6879,8 +7401,9 @@ function drawInside(g, use){
     const seen = g.w.occupants(b, i);
     if (seen.length) accent = seen[0].fg;
     madeSource(-1);
-    if (b.ground[i] === THING_BY_KEY.floor) madeSource(58);
-    if (b.item[i] === THING_BY_KEY.wall) madeSource(145);
+    builtSource(BUILT_NONE);
+    if (b.item[i] === THING_BY_KEY.wall) builtSource(BUILT_WALL);
+    else if (b.ground[i] === THING_BY_KEY.floor) builtSource(BUILT_FLOOR);
     grownSource(null, null);
     beastSource(null, 0);
     drawTileN(tx, ty, 2, 2, b.terrain[i], accent, tex, i,
