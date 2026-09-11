@@ -1232,32 +1232,77 @@ function amplitudes(depth){
  * highs and lows, thresholded into land and sea -- except that here the
  * lobes are points on a sphere and the temperature band really is
  * latitude, so the ice sits on the poles because they are the poles. */
-function planetFields(){
+/* x^1.3, the temperature curve, as a quartic through the same two ends:
+   nought at the equator and one at the pole, never more than a degree
+   from the curve it replaces.  See the note in hanb.c -- no standard
+   requires pow, sin, cos or acos to be correctly rounded, and this world
+   is knife-edge sensitive to one ulp, so the climate uses none of them.
+   What is left is + - * / and sqrt, which IEEE 754 pins exactly. */
+function latCurve(x){
+  return x * (0.308580081 + x * (1.862184122 +
+         x * (-2.150054678 + x * 0.979290474)));
+}
+/* The same machinery makes any body: a tag of "" is the planet, and
+   anything else is another world of the same kind, drawn off the same
+   seed and as fixed as this one.  The moon is one of those. */
+function bodyFields(tag){
   const out = [];
-  const rng = rngFor([], "lobes");
+  const rng = rngFor([], "lobes" + tag);
   const lobes = [];
   const count = rng.randint(3, 6);
   for (let i = 0; i < count; i++){
-    const z = rng.uniform(-1.0, 1.0), th = rng.uniform(0.0, Math.PI * 2);
+    const z = rng.uniform(-1.0, 1.0);
+    /* A point on the circle without asking for a sine: draw in the square
+       until you land in the disc, then push it out to the rim. */
+    let ax, ay, sq2;
+    do { ax = rng.uniform(-1.0, 1.0); ay = rng.uniform(-1.0, 1.0);
+         sq2 = ax * ax + ay * ay; } while (sq2 > 1.0 || sq2 === 0.0);
+    const inv = 1.0 / Math.sqrt(sq2);
     const rxy = Math.sqrt(Math.max(0.0, 1.0 - z * z));
-    lobes.push([[rxy * Math.cos(th), rxy * Math.sin(th), z],
+    lobes.push([[rxy * ax * inv, rxy * ay * inv, z],
                 rng.uniform(0.7, 1.5), rng.uniform(-90.0, 300.0)]);
   }
   for (let i = 0; i < FACES; i++){
     const n = PLANET[i].n;
     let elev = 48.0;
     for (const [c, radius, strength] of lobes){
-      const d = Math.acos(Math.max(-1, Math.min(1, dot3(n, c))));  /* great circle */
-      if (d < radius) elev += strength * sq(Math.cos(d / radius * Math.PI * 0.5));
+      /* The chord across the sphere rather than the angle round it: one
+         rises with the other, so a cap measured either way is the same
+         cap, and the chord costs a square root instead of an arc cosine. */
+      const cc = Math.max(-1, Math.min(1, dot3(n, c)));
+      const chord = Math.sqrt(2.0 - 2.0 * cc);
+      if (chord < radius){
+        const u = chord / radius;
+        elev += strength * (1.0 - u * u * (3.0 - 2.0 * u));
+      }
     }
-    elev += noiseAt([], i, "e") * 70.0;
+    elev += noiseAt([], i, "e" + tag) * 70.0;
     const lat = Math.abs(n[2]);                   /* 0 at the equator, 1 at a pole */
-    let temp = 92.0 - Math.pow(lat, 1.3) * 86.0;
-    temp += noiseAt([], i, "t") * 9.0;
-    const moist = 50.0 + noiseAt([], i, "m") * 38.0;
+    let temp = 92.0 - latCurve(lat) * 86.0;
+    temp += noiseAt([], i, "t" + tag) * 9.0;
+    const moist = 50.0 + noiseAt([], i, "m" + tag) * 38.0;
     out.push(new Fields(elev, moist, temp).clamped());
   }
   return out;
+}
+const planetFields = () => bodyFields("");
+/* A moon: thirty-two faces like the planet's, a world away and smaller,
+   and it turns.  It is drawn and not walked -- for now. */
+let MOON_CACHE = null, MOON_KEY = null;
+function moonBody(){
+  if (MOON_CACHE && MOON_KEY === WORLD_SEED_TEXT) return MOON_CACHE;
+  const f = bodyFields("moon");
+  MOON_CACHE = {fields: f, terrain: f.map(x => classify(x))};
+  MOON_KEY = WORLD_SEED_TEXT;
+  return MOON_CACHE;
+}
+/* Which way the moon has turned: a face a day, off the world's own clock,
+   and the frame comes straight out of the solid.  No sine and no cosine,
+   so it is the same moon on any machine. */
+function moonFrame(when){
+  const day = Math.floor(when / 86400.0);
+  const face = ((day % 32) + 32) % 32;
+  return {n: PLANET[face].n, u: PLANET[face].u, v: PLANET[face].v};
 }
 
 /** Refine one cell of a board into the 61 cells of the board below. */
@@ -1375,12 +1420,32 @@ function flow(cells, wobble){
     receiver.push(bj);
   }
   for (const i of order){ const j = receiver[i]; if (j >= 0) acc[j] += acc[i]; }
-  return acc;
+  /* the receiver goes back too: the board below needs to know which way
+     the water leaves each cell, not only how much of it there is */
+  return [acc, receiver];
 }
 
 /** Which cells of a board carry a watercourse. */
-function riverMask(cells, wetter, wobble){
-  const acc = flow(cells, wobble);
+/* Where the water leaves a board and where it comes in.  A board drains
+   only into itself, so two boards side by side each grew a river and the
+   two did not meet.  The neighbour cannot be asked -- that would build
+   its board from inside the building of this one -- but the parent is
+   already in hand and knows where its own water goes.  See the long note
+   in hanb.c. */
+function riverSide(cell, other){
+  for (let k = 0; k < 6; k++)
+    if (cellAt(COORDS[cell][0] + DIRS[k][1],
+               COORDS[cell][1] + DIRS[k][2]) === other) return k;
+  return -1;
+}
+const riverGateCell = k => cellAt(4 * DIRS[k][1], 4 * DIRS[k][2]);
+const OPP_R = [1, 0, 5, 4, 3, 2];
+/* riverMask, and the flow it found: for each cell the side the water
+   leaves by and every side it comes in by -- the river's answer to
+   road[].  A road is decided on one rung and drawn by the rest; a river
+   is decided on every rung and drawn by the one below. */
+function riverMask(cells, wetter, wobble, sides, flowOut){
+  const [acc, recv] = flow(cells, wobble);
   const land = [];
   for (let i = 0; i < BOARD_SIZE; i++) if (cells[i].elevation >= SEA_LEVEL) land.push(i);
   if (!land.length) return new Array(BOARD_SIZE).fill(false);
@@ -1393,7 +1458,66 @@ function riverMask(cells, wetter, wobble){
   const out = [];
   for (let i = 0; i < BOARD_SIZE; i++)
     out.push(cells[i].elevation >= SEA_LEVEL && acc[i] >= cut);
+  if (flowOut){
+    for (let i = 0; i < BOARD_SIZE; i++) flowOut[i] = 0;
+    for (let i = 0; i < BOARD_SIZE; i++){
+      if (!out[i] || recv[i] < 0 || !out[recv[i]]) continue;
+      const k = riverSide(i, recv[i]);
+      if (k < 0) continue;
+      flowOut[i] |= 1 << k;
+      flowOut[recv[i]] |= 1 << OPP_R[k];
+    }
+  }
   return out;
+}
+/* The watercourse drawn across a board between the gates it inherits --
+   the mirror of roadSpokes, except that where a road takes the cheapest
+   going a river takes the lowest ground. */
+function riverWalk(fields, src){
+  const dist = new Array(BOARD_SIZE).fill(ROAD_FAR);
+  const prev = new Array(BOARD_SIZE).fill(-1);
+  const done = new Array(BOARD_SIZE).fill(false);
+  dist[src] = 0.0;
+  for (let turn = 0; turn < BOARD_SIZE; turn++){
+    let i = -1, best = ROAD_FAR;
+    for (let j = 0; j < BOARD_SIZE; j++)
+      if (!done[j] && dist[j] < best){ best = dist[j]; i = j; }
+    if (i < 0) break;
+    done[i] = true;
+    for (let k = 0; k < 6; k++){
+      const j = cellAt(COORDS[i][0] + DIRS[k][1], COORDS[i][1] + DIRS[k][2]);
+      if (j < 0 || done[j]) continue;
+      const lift = fields[j].elevation - fields[i].elevation;
+      const step = 1.0 + (lift > 0.0 ? lift * 0.5 : 0.0);
+      if (dist[i] + step < dist[j]){ dist[j] = dist[i] + step; prev[j] = i; }
+    }
+  }
+  return [dist, prev];
+}
+function riverSpokes(fields, river, mask){
+  if (!mask) return;
+  const mid = cellAt(0, 0);
+  const [dist, prev] = riverWalk(fields, mid);
+  if (fields[mid].elevation >= SEA_LEVEL) river[mid] = true;
+  for (let k = 0; k < 6; k++){
+    if (!(mask & (1 << k))) continue;
+    const end = cellAt(RADIUS * DIRS[k][1], RADIUS * DIRS[k][2]);
+    if (end < 0) continue;
+    if (dist[end] < ROAD_FAR){
+      let i = end;
+      for (let guard = 0; guard < BOARD_SIZE && i !== mid && prev[i] >= 0; guard++){
+        if (fields[i].elevation >= SEA_LEVEL) river[i] = true;
+        i = prev[i];
+      }
+    } else {
+      for (let t = 1; t <= RADIUS; t++){
+        const i = cellAt(t * DIRS[k][1], t * DIRS[k][2]);
+        if (i < 0) break;
+        if (fields[i].elevation >= SEA_LEVEL) river[i] = true;
+      }
+    }
+    if (fields[end].elevation >= SEA_LEVEL) river[end] = true;
+  }
 }
 
 /* --- what sits in a cell, once the cells are small enough ----------- */
@@ -1474,14 +1598,16 @@ const PLACE_AT_DEPTH = {
 };
 
 class BoardData {
-  constructor(path, depth, fields, parentRiver, waterEpoch){
+  constructor(path, depth, fields, parentRiver, waterEpoch, joinSides){
     this.path = path; this.depth = depth; this.level = levelAt(depth);
     this.fields = fields;
     this.waterEpoch = waterEpoch || 0;
     const wobble = [];
     for (let i = 0; i < BOARD_SIZE; i++)
       wobble.push(noiseAt(path, i, "w" + this.waterEpoch));
-    this.river = riverMask(fields, !!parentRiver, wobble);
+    this.rflow = new Array(BOARD_SIZE).fill(0);
+    this.river = riverMask(fields, !!parentRiver, wobble, 0, this.rflow);
+    riverSpokes(fields, this.river, joinSides || 0);
     this.terrain = [];
     for (let i = 0; i < BOARD_SIZE; i++){
       let t = classify(fields[i]);
@@ -1750,6 +1876,8 @@ function roadReach(data, hub, wear, dists, target, traffic){
  * rim of a district board the step across and the step back do not always
  * name each other.  About one crossing in fifty stops at the boundary
  * because of it -- rivers are no better joined, and for the same reason. */
+/* DIRS runs E W NE NW SE SW, so the way back is this and not k+3. */
+const OPP_DIR = [1, 0, 5, 4, 3, 2];
 function roadGate(world, mine, k){
   let cq = 0.0, cr = 0.0;
   for (let d = 1; d < ROAD_DEPTH; d++){
@@ -1761,6 +1889,24 @@ function roadGate(world, mine, k){
   const there = world.addressAt(mine[0], cq + DIRS[k][1] * span,
                                          cr + DIRS[k][2] * span);
   if (!there) return false;                    /* into the missing sixth */
+  /* And does it name us back?  A digit of an address is a cell of a
+     sixty-one-cell hexagon while a rung is nine by nine, and eighty-one
+     is not sixty-one -- so stepping off the rim of a board needs a digit
+     the hexagon has not got, and one district link in eight came back
+     naming somebody else.  Where the two sides do not name each other,
+     neither builds: a road that stops at a boundary is a lie about the
+     world, and a road that was never built is not. */
+  { let bq = 0.0, br = 0.0;
+    for (let d = 1; d < ROAD_DEPTH; d++){
+      const scale = Math.pow(DIAGONAL, DEPTHS - d);
+      bq += COORDS[there[d]][0] * scale;
+      br += COORDS[there[d]][1] * scale;
+    }
+    const j = OPP_DIR[k];
+    const home = world.addressAt(there[0], bq + DIRS[j][1] * span,
+                                           br + DIRS[j][2] * span);
+    if (!home) return false;
+    for (let d = 0; d < ROAD_DEPTH; d++) if (home[d] !== mine[d]) return false; }
   let mineFirst = false;
   for (let d = 0; d < ROAD_DEPTH; d++){
     if (mine[d] !== there[d]){ mineFirst = mine[d] < there[d]; break; }
@@ -2476,7 +2622,7 @@ class HanbWorld {
       const cell = path[depth - 1];
       data = new BoardData(path, depth,
         childFields(parent.fields, cell, path, depth), parent.river[cell],
-        this.waterEpochAt(depth));
+        this.waterEpochAt(depth), parent.rflow[cell]);
     }
     this._boards.set(key, data);
     this._order.push(key);
@@ -4623,6 +4769,10 @@ function cube5(c){
   return [(c & 1) ? 3 : 0, (c & 2) ? 3 : 0, (c & 4) ? 3 : 0];
 }
 function boardWord(world, path, when){
+  /* A board is asked at a time: the water wanders between lifetimes, and
+     board() reads the world's clock to know whether it has.  Setting it
+     here is what makes this answerable on its own. */
+  world.now = when;
   const data = path.length >= DEPTHS - 1 ? world.layers(path.slice(), when)
                                          : world.board(path.slice());
   let out = "", rs = 0, gs = 0, bs = 0;
@@ -5701,8 +5851,18 @@ function drawScreen(g){
   else if (showBeasts === 2) drawGrown(g);
   else if (showBeasts === 3) drawMade(g);
   if (!showTasks && !showKeys && !showSpells && !showBeasts)
-    drawGlobe(g, PANEL_X + 1, 1, SCREEN_W - PANEL_X - 2, 10, viewFrame(g),
-              g.address[0]);
+    /* The planet's left edge on the same column the ladder's lines start
+       at, and the moon's right edge on the last column of the screen. */
+    { const pr = 9.5, mr = 6.5;
+      const sky = g.w.board([]);
+      drawGlobe(g, PANEL_X + 2 + pr, 1, 10, pr, viewFrame(g), g.address[0],
+                {terrain: sky.terrain, fields: sky.fields}, false, null);
+      /* the sun goes round the locked moon once a month */
+      const mf = moonFrameT();
+      const [cx2, cy2] = turnPoint(gWhen(g) / 86400.0 / MOON_MONTH);
+      const ml = [0, 1, 2].map(k => mf.u[k] * cx2 + mf.n[k] * cy2);
+      drawGlobe(g, SCREEN_W - 0.5 - mr, 1, 10, mr, mf, -1,
+                moonBody(), moonGrey, ml); }
   if (routeOn && !showTasks && !showBeasts){
     const rl = routeCells.length > 1
       ? "> " + routeName.slice(0, 20) + "  " + (routeCells.length - 1) +
@@ -5819,6 +5979,10 @@ function startGame(seedText, whoName){
           speed: 0, heldSpeed: 3, wasInside: -2,
           spells: [1, 1, 1, 1, 1, 1],  /* six to start with, for the trying */
           planet: 0,
+          /* The position is the truth; the address is a reading of it.
+             Set from the address only here, at a warp, and on landing on
+             another world -- everywhere the C calls position_of. */
+          posQ: w.position(address)[0], posR: w.position(address)[1],
           strideLeft: 0, unbarLeft: 0, who: who,
           /* what your kind gives you: wind to spend, a heavier blow, a
              readier guard.  Everything else a trait does where it is used. */
@@ -5889,14 +6053,54 @@ function viewFrame(g){
   const v = gcross(u, n);                       /* south, so y runs down */
   return {n: n, u: u, v: v};
 }
-function drawGlobe(g, x0, y0, w, rows, F, here){
-  const sky = g.w.board([]);
+/* The moon is locked, as a moon is: the same face turned to you, never
+   spinning.  What moves is the light -- the sun goes round once a month
+   and the terminator walks across the face, which is what a phase is.
+   A point on the circle without a cosine: walk the square and push it
+   out to the rim.  See the note in hanb.c. */
+const MOON_MONTH = 32.0;
+function turnPoint(a){
+  a -= Math.floor(a);
+  const t = a * 4.0, quad = Math.trunc(t), f = t - quad;
+  let sx, sy;
+  if (quad === 0){ sx = 1.0; sy = -1.0 + 2.0 * f; }
+  else if (quad === 1){ sx = 1.0 - 2.0 * f; sy = 1.0; }
+  else if (quad === 2){ sx = -1.0; sy = 1.0 - 2.0 * f; }
+  else { sx = -1.0 + 2.0 * f; sy = -1.0; }
+  const d = Math.sqrt(sx * sx + sy * sy);
+  return [sx / d, sy / d];
+}
+function moonFrameT(){
+  /* the one face it keeps turned to you, fixed for the life of a world */
+  const face = Number(bytesBig(blake2b(WORLD_SEED_TEXT + "/moonface", 4)) % 32n);
+  const n = PLANET[face].n;
+  const up = Math.abs(n[2]) > 0.999 ? [1, 0, 0] : [0, 0, 1];
+  const u = norm3(gcross(up, n));
+  const v = gcross(u, n);
+  return {n: n, u: u, v: v};
+}
+/* A ball of one of these worlds, placed by its centre and its radius in
+   characters rather than by a box to sit in the middle of -- which is
+   what let the planet float with a wide gap either side of it. */
+/* A moon is a stone: its terrain says what is there and the grey says
+   only how much light it throws back.  A variable, because a world with
+   a green moon is a world somebody may want. */
+let moonGrey = true;
+function toGrey(c){
+  const [r, g2, b] = cube5(c);                  /* nought to five a channel */
+  const lum = r * 30 + g2 * 59 + b * 11;        /* nought to five hundred */
+  return 232 + Math.trunc(lum * 23 / 500);      /* the twenty-four greys */
+}
+function drawGlobe(g, cxc, y0, rows, Rc, F, here, body, grey, lit){
   const fine = tileShape === SHAPE_FINE, sx = fine ? 2 : 1;
-  const cx = (x0 + w / 2.0) * sx, cy = y0 * 2 + rows;
-  const R = Math.min(w / 2.0, rows) - 0.5;
-  const light = [0, 1, 2].map(k => F.n[k] * 0.78 - F.u[k] * 0.42 - F.v[k] * 0.46);
+  const cx = cxc * sx, cy = y0 * 2 + rows;
+  const R = Rc;
+  const light = lit ||
+    [0, 1, 2].map(k => F.n[k] * 0.78 - F.u[k] * 0.42 - F.v[k] * 0.46);
+  const xlo = Math.max(0, Math.trunc((cxc - Rc) * sx));
+  const xhi = Math.trunc((cxc + Rc) * sx) + 1;
   for (let y = y0 * 2; y < (y0 + rows) * 2; y++)
-    for (let x = x0 * sx; x < (x0 + w) * sx; x++){
+    for (let x = xlo; x < xhi; x++){
       const nx = (x - cx) / (R * sx), ny = (y - cy) / R;
       const d2 = nx * nx + ny * ny;
       if (d2 > 1.0) continue;
@@ -5909,9 +6113,11 @@ function drawGlobe(g, x0, y0, w, rows, F, here){
       }
       let lam = dot3(p, light);
       if (lam < 0.15) lam = 0.15;
-      const terr = sky.terrain[best];
+      const terr = body.terrain[best];
       let c = terr.bg;
-      if (sky.fields[best].elevation >= SEA_LEVEL) c = terr.fg;
+      if (body.fields[best].elevation >= SEA_LEVEL) c = terr.fg;
+      if (grey) c = toGrey(c);                  /* before the light, so the
+                                                   shading runs down the ramp */
       if (best === here){ c = shade(c, 1.0); lam = lam * 0.6 + 0.5; }
       const lit = shade(c, 0.45 + 0.55 * lam);
       if (fine) pxq(x, y, lit); else px(x, y, lit);
@@ -5954,22 +6160,22 @@ function moveDir(g, key){
   const depth = walkDepth(g);
   g.view = depth;
   const dir = turnDir(KEY_DIR[key], g.facing);
-  const next = g.w.step(g.address.slice(0, depth).concat(
-                          g.address.slice(depth)), dir, depth);
-  if (!next){
-    /* Which refusal it is cannot be read off the direction walked: a long
-       enough stride crosses a seam first and runs into the gap on the
-       face beyond.  Ask the position, the way the C does. */
-    const [pq, pr] = g.w.position(g.address);
-    const [nq, nr] = g.w.stepAxial(pq, pr, dir, depth);
-    const m = g.w.onFaceTurned(g.address[0], nq, nr);
-    if (m === null)
-      g.message = "Nothing that way: this continent is a pentagon, and that sixth is missing.";
-    else {
-      const a = g.w.addressAt(m[0], m[1], m[2]);
-      if (a === null) g.message = "That is the edge of the planet.";
-      else g.message = "Nothing that way: that is the sixth this pentagon is missing.";
-    }
+  /* The position is the truth and the address is a reading of it.  This
+     used to step from the address -- re-deriving where you were at every
+     key -- and the reading is lossy, so a step that did not change the
+     address threw the metre away instead of carrying it.  Four steps out
+     of a town the two versions of this game stood in different cells.
+     Step from the position, and read the address off where you land. */
+  const [nq0, nr0] = g.w.stepAxial(g.posQ, g.posR, dir, depth);
+  const m = g.w.onFaceTurned(g.address[0], nq0, nr0);
+  if (m === null){
+    g.message = "Nothing that way: this continent is a pentagon, and that sixth is missing.";
+    return;
+  }
+  const next = g.w.addressAt(m[0], m[1], m[2]);
+  if (next === null){ g.message = "That is the edge of the planet."; return; }
+  if (g.w.board([next[0]]).terrain[next[1]] === T.void){
+    g.message = "Nothing that way: that is the sixth this pentagon is missing.";
     return;
   }
   /* Indoors you are on one lot's board and no other: the rim of it is
@@ -6012,10 +6218,24 @@ function moveDir(g, key){
   let go = Math.max(0.2, goingAt(board, next[depth]));
   if (g.strideLeft > 0){ go *= 0.6; g.strideLeft--; }
   g.seconds += strideAt(depth) * go;
+  /* A seam turns you: the walker carries a frame, and stepping onto the
+     face next door brings the map round under it.  The C has always done
+     this and this had not, so after one crossing the two of them walked
+     different ways for every key after it. */
+  const crossed = next[0] !== g.address[0];
+  const turnedBy = m[3] || 0;
   g.address = next;
-  g.message = "";
+  g.posQ = m[1]; g.posR = m[2];
+  g.facing = ((g.facing + turnedBy) % 6 + 6) % 6;
   if (depth === DEPTHS){ ensureBeings(g); creatureTurns(g); }
   else settleHere(g);
+  /* What was said stays said while you walk a metre at a time; striding
+     over country clears it.  The C's rule, to the condition. */
+  if (crossed)
+    g.message = turnedBy
+      ? "You cross the seam onto the continent next door.  The map comes round under you."
+      : "You cross the seam onto the continent next door.";
+  else if (depth !== DEPTHS) g.message = "";
   questCheck(g);
   /* A post at a crossroads is there to be read. */
   if (depth === DEPTHS && !g.level){
@@ -6063,8 +6283,15 @@ function settleHere(g){
     const d = hexDistance(COORDS[i], COORDS[g.address[DEPTHS]]);
     if (d < bd){ bd = d; best = i; }
   }
-  if (best >= 0) g.address[DEPTHS] = best;
-  else g.message = "Nothing to stand on here. You are at sea.";
+  if (best >= 0){
+    /* Step across to that cell rather than jumping to its address: the
+       reading is lossy at the fringe of a board, so recomputing the
+       position from it can put you a whole parent cell from where you
+       actually are. */
+    g.posQ += COORDS[best][0] - COORDS[g.address[DEPTHS]][0];
+    g.posR += COORDS[best][1] - COORDS[g.address[DEPTHS]][1];
+    g.address[DEPTHS] = best;
+  } else g.message = "Nothing to stand on here. You are at sea.";
 }
 /* Anything that takes you off this board takes you out of the building
    as well: the levels hang off one lot and nowhere else. */
@@ -7281,7 +7508,10 @@ function typedAddress(g, walk){
   if (walk){ setRoute(g, out, s); g.message = "The way is set to " + s + "."; }
   else {
     g.address = out;
+    const [wq, wr] = g.w.position(out);
+    g.posQ = wq; g.posR = wr;
     g.stance = -1; g.view = DEPTHS;
+    g.facing = 0;                       /* facing the local map */
     settleHere(g);
     g.message = "You travel.";
     questCheck(g);
@@ -7777,6 +8007,8 @@ function goPlanet(g, n){
     address.push(opts[rng._randbelow(opts.length)]);
   }
   g.address = address;
+  const [lq, lr] = g.w.position(address);
+  g.posQ = lq; g.posR = lr;
   g.stance = -1; g.facing = 0; g.view = DEPTHS; g.level = 0;
   settleHere(g);
 }
