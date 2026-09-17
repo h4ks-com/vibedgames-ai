@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>mattf@gpu-dock — countdown</title>
+<style>
+:root{--g:#33ff66;--dim:#1a8f3c;--amb:#ffb000;--red:#ff4444}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#010502;color:var(--g);font-family:'Courier New',monospace;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:12px}
+.crt{width:100%;max-width:720px;border:2px solid var(--dim);border-radius:10px;padding:18px;position:relative;background:radial-gradient(ellipse at center,#04140a 0%,#010502 100%);box-shadow:0 0 40px rgba(51,255,102,.12) inset;overflow:hidden}
+.crt::after{content:"";position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(0deg,rgba(0,0,0,.25) 0 2px,transparent 2px 4px)}
+.head{color:var(--dim);font-size:13px;line-height:1.6;white-space:pre-wrap}
+.big{font-size:clamp(48px,12vw,84px);font-weight:bold;letter-spacing:2px;text-shadow:0 0 12px rgba(51,255,102,.6);text-align:center;margin:14px 0 2px}
+.big.overdue{color:var(--red);text-shadow:0 0 12px rgba(255,68,68,.6);animation:blink 1s steps(2) infinite}
+.big.arrived{color:var(--amb);text-shadow:0 0 12px rgba(255,176,0,.6)}
+@keyframes blink{50%{opacity:.25}}
+.sub{text-align:center;font-size:15px;margin-bottom:14px}
+.status{font-size:14px;padding:8px 10px;border:1px dashed var(--dim);margin-bottom:14px}
+.status.warn{color:var(--amb);border-color:var(--amb)}
+.status.bad{color:var(--red);border-color:var(--red);animation:blink 1s steps(2) infinite}
+.track{position:relative;height:34px;border:1px solid var(--dim);border-radius:4px;margin:26px 0 18px}
+.fill{position:absolute;left:0;top:0;bottom:0;background:linear-gradient(90deg,#0a5a24,#33ff66);width:0;transition:width .8s}
+.mk{position:absolute;top:-18px;transform:translateX(-50%);font-size:11px;color:var(--dim)}
+.mk::after{content:"";position:absolute;left:50%;top:16px;width:1px;height:34px;background:var(--dim)}
+.ms{font-size:13px;line-height:1.7;color:#b8e6c6}
+.ms b{color:var(--g)}
+.ok{color:var(--amb)}
+.btns{margin-top:16px;display:flex;gap:10px;flex-wrap:wrap}
+button{background:transparent;color:var(--g);border:1px solid var(--dim);font-family:inherit;font-size:13px;padding:6px 12px;cursor:pointer;border-radius:4px}
+button:hover{background:rgba(51,255,102,.12)}
+.note{margin-top:12px;font-size:11px;color:var(--dim)}
+</style>
+</head>
+<body>
+<div class="crt">
+<div class="head">mattf@gpu-dock:~$ ./countdown --target "gpu dock (mini pc + 3090)"
+[OK] груз следует из Китая → gpu dock
+[!!] Golden Week: после 28.09 склады КНР замирают
+[##] dock для: mattf · логистика: voidsnm</div>
+<div class="big" id="big">--</div>
+<div class="sub" id="sub">…</div>
+<div class="status" id="status">…</div>
+<div class="track"><div class="fill" id="bar"></div>
+<div class="mk" style="left:12.5%">T+0</div>
+<div class="mk" style="left:25%">T+2</div>
+<div class="mk" style="left:56.25%">T+7</div>
+</div>
+<div id="ms"></div>
+<div class="btns">
+<button id="setd">✎ дата прибытия</button>
+<button id="reset">↺ сброс (now → T−2..T+14)</button>
+</div>
+<div class="note">localStorage per-device: выстави реальную дату один раз на том устройстве, где будешь смотреть.</div>
+</div>
+<script>
+(function(){
+const DAY=86400000,LSK='mattfdock_epoch',LSA='mattfdock_arrival';
+let epoch=+localStorage.getItem(LSK);
+if(!epoch){epoch=Date.now();localStorage.setItem(LSK,String(epoch));}
+let arrival=+localStorage.getItem(LSA)||epoch+14*DAY;
+const t0=epoch,t2=epoch+2*DAY,t7=epoch+7*DAY,start=epoch-2*DAY;
+const $=id=>document.getElementById(id);
+const fmt=n=>String(n).padStart(2,'0');
+const dstr=ms=>new Date(ms).toLocaleDateString('ru-RU',{day:'2-digit',month:'short'});
+function buildMs(){
+ const mses=[[start,'T−2','старт отсчёта'],[t0,'T+0','конец дедлайна продавца'],[t2,'T+2','последний грейс'],[t7,'T+7','спор/возврат обязателен'],[arrival,'T+14','🛳️ прибытие gpu dock']];
+ $('ms').innerHTML=mses.map(m=>'<div class="ms" data-at="'+m[0]+'"><span class="ok">·</span> <b>'+m[1]+'</b> '+dstr(m[0])+' — '+m[2]+'</div>').join('');
+}
+function tick(){
+ const now=Date.now();
+ let p=(now-start)/(arrival-start);p=Math.max(0,Math.min(1,p));
+ $('bar').style.width=(p*100).toFixed(2)+'%';
+ if(now>=arrival){
+  $('big').textContent='ПРИБЫЛ';$('big').className='big arrived';
+  $('sub').textContent='gpu dock на месте — 3090 ждёт слот 🛳️';
+  $('status').textContent='[OK] цель достигнута.';$('status').className='status';
+ }else{
+  const left=arrival-now,dl=Math.floor(left/DAY),dh=Math.floor(left%DAY/3600000),dm=Math.floor(left%3600000/60000),ds=Math.floor(left%60000/1000);
+  const over=now>=t2;
+  $('big').textContent=(over?'D+':'D-')+dl;$('big').className=over?'big overdue':'big';
+  $('sub').textContent='до прибытия: '+dl+'д '+fmt(dh)+':'+fmt(dm)+':'+fmt(ds);
+  if(now<t0){$('status').textContent='[..] ожидание отправки — дедлайн продавца ещё не кончился';$('status').className='status';}
+  else if(now<t2){$('status').textContent='[!!] ФИНАЛЬНОЕ ОКНО: трек-номер должен появиться СЕЙЧАС';$('status').className='status warn';}
+  else{$('status').textContent='[XX] ПРОСРОЧКА D+'+dl+' — escrow вернёт деньги автоматически';$('status').className='status bad';}
+ }
+ document.querySelectorAll('.ms').forEach(el=>{el.querySelector('.ok').textContent=now>=+el.dataset.at?'✔':'·';});
+}
+$('setd').onclick=function(){const d=prompt('Дата прибытия дока (YYYY-MM-DD):');if(d){const ms=+new Date(d+'T12:00:00');if(!isNaN(ms)){arrival=ms;localStorage.setItem(LSA,String(ms));buildMs();tick();}}};
+$('reset').onclick=function(){localStorage.removeItem(LSK);localStorage.removeItem(LSA);location.reload();};
+buildMs();tick();setInterval(tick,1000);
+})();
+</script>
+</body>
+</html>
