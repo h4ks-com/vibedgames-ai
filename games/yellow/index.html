@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Joy of Painting (yellow)</title>
+<style>
+  :root{
+    --yp: 0%;
+    --paper: color-mix(in oklab, #f4f1e8, #ffe14d var(--yp));
+    --ink:   color-mix(in oklab, #243240, #6b5200 var(--yp));
+    --frame: color-mix(in oklab, #33506b, #d8ae00 var(--yp));
+    --panel: color-mix(in oklab, #ffffff, #ffef9e var(--yp));
+    --accent:color-mix(in oklab, #7a3b00, #b8860b var(--yp));
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{
+    background:var(--paper); color:var(--ink);
+    font-family:Georgia,"Times New Roman",serif;
+    display:flex; flex-direction:column; min-height:100vh; overflow-x:hidden;
+  }
+  header{
+    display:flex; align-items:baseline; gap:14px; flex-wrap:wrap;
+    padding:14px 20px 10px; border-bottom:3px double var(--frame);
+  }
+  header h1{font-size:22px; margin:0; letter-spacing:.5px; font-style:italic}
+  header .sub{font-size:12px; opacity:.75}
+  header .spacer{flex:1}
+  .hbtn{
+    font-family:inherit; font-size:12px; padding:4px 10px; cursor:pointer;
+    border:1px solid var(--frame); background:var(--panel); color:var(--ink); border-radius:4px;
+  }
+  #app{flex:1; display:flex; flex-direction:column}
+  #stage{flex:1; display:grid; grid-template-columns:150px 1fr 230px; gap:14px; padding:14px 20px}
+  @media (max-width:820px){ #stage{grid-template-columns:1fr} .palette{order:2} .panel{order:3} }
+
+  .palette{display:flex; flex-direction:column; gap:8px}
+  .palette h3, .panel h3{font-size:11px; text-transform:uppercase; letter-spacing:2px; margin:2px 0 6px; opacity:.7}
+  .swatch{
+    display:flex; align-items:center; gap:8px; cursor:pointer;
+    border:1px solid var(--frame); border-radius:4px; padding:6px 8px;
+    background:var(--panel); font-size:11px; font-family:inherit; color:var(--ink); text-align:left;
+  }
+  .swatch .chip{width:18px;height:18px;border-radius:3px;flex:none;border:1px solid #0002}
+  .swatch:hover{outline:2px solid var(--accent)}
+
+  .canvaswrap{display:flex; align-items:flex-start; justify-content:center}
+  #cv{
+    background:#fff; border:10px solid var(--frame); border-radius:6px;
+    box-shadow:0 10px 30px #0003; cursor:crosshair; touch-action:none;
+    max-width:100%;
+  }
+  #cv.painting{cursor:grabbing}
+
+  .panel{display:flex; flex-direction:column; gap:12px}
+  .meter{background:var(--panel); border:1px solid var(--frame); border-radius:6px; padding:8px 10px}
+  .meter .label{display:flex; justify-content:space-between; font-size:11px; letter-spacing:1px; text-transform:uppercase; opacity:.8}
+  .bar{height:10px; border-radius:5px; background:#0001; margin-top:5px; overflow:hidden}
+  .bar i{display:block; height:100%; border-radius:5px; transition:width .25s, background .25s}
+  .stat{display:flex; justify-content:space-between; font-size:13px; padding:2px 0}
+  .stat b{font-variant-numeric:tabular-nums}
+  #log{font-size:11px; line-height:1.5; max-height:130px; overflow:auto}
+  #log div{opacity:.85}
+  #log .s4{font-weight:bold; letter-spacing:1px}
+
+  .narrator{
+    display:flex; gap:14px; align-items:center;
+    margin:0 20px 16px; padding:10px 16px;
+    background:var(--panel); border:1px solid var(--frame); border-radius:8px;
+    min-height:64px;
+  }
+  #face{flex:none}
+  #say{font-size:15px; font-style:italic}
+  #say .yell{font-style:normal; font-weight:bold; letter-spacing:1px; color:var(--accent)}
+  .hint{font-size:11px; opacity:.6; margin-left:auto; text-align:right; flex:none}
+
+  .overlay{
+    position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+    background:radial-gradient(circle at 50% 40%, #fffbe8, #f0e6c8);
+    z-index:50; padding:20px;
+  }
+  .overlay .card{
+    max-width:560px; text-align:center; background:#fff; border:3px double #33506b;
+    border-radius:10px; padding:34px 38px; box-shadow:0 20px 60px #0004;
+  }
+  .overlay h2{margin:0 0 6px; font-style:italic}
+  .overlay .after{font-size:12px; opacity:.7; margin-bottom:18px}
+  .overlay p{font-size:14px; line-height:1.6}
+  .bigbtn{
+    font-family:inherit; font-size:16px; padding:10px 26px; cursor:pointer;
+    background:#33506b; color:#fff; border:none; border-radius:6px; margin-top:10px;
+  }
+  .bigbtn:hover{background:#22394e}
+  #end{display:none; background:radial-gradient(circle at 50% 40%, #fff200, #d9a900)}
+  #end .card{border-color:#8a6d00; background:#fffbe0}
+  #endstats{font-size:13px; line-height:1.8; text-align:left; display:inline-block; margin-top:8px}
+  .toast{
+    position:fixed; left:50%; bottom:90px; transform:translateX(-50%);
+    background:#33506b; color:#fff; font-size:13px; padding:8px 16px; border-radius:20px;
+    opacity:0; transition:opacity .3s; pointer-events:none; z-index:60;
+  }
+  .toast.show{opacity:.95}
+  @media (prefers-reduced-motion: reduce){ .shake{animation:none !important} }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>The Joy of Painting <span style="opacity:.55">(yellow)</span></h1>
+    <span class="sub">after Kim Beom — <i>Yellow Scream</i>, 1992–1999 &nbsp;·&nbsp; runtime <span id="clock">00:00</span> / 31:12</span>
+    <span class="spacer"></span>
+    <button class="hbtn" id="mute">🔊 sound on</button>
+    <button class="hbtn" id="fresh">fresh canvas</button>
+  </header>
+
+  <div id="stage">
+    <div class="palette">
+      <h3>Palette</h3>
+      <button class="swatch" data-name="Titanium White"><span class="chip" style="background:hsl(52 95% 60%)"></span>Titanium White</button>
+      <button class="swatch" data-name="Sap Green"><span class="chip" style="background:hsl(52 97% 52%)"></span>Sap Green</button>
+      <button class="swatch" data-name="Alizarin Crimson"><span class="chip" style="background:hsl(50 100% 50%)"></span>Alizarin Crimson</button>
+      <button class="swatch" data-name="Phthalo Blue"><span class="chip" style="background:hsl(48 100% 48%)"></span>Phthalo Blue</button>
+      <button class="swatch" data-name="Van Dyke Brown"><span class="chip" style="background:hsl(46 96% 42%)"></span>Van Dyke Brown</button>
+      <button class="swatch" data-name="Midnight Black"><span class="chip" style="background:hsl(45 100% 38%)"></span>Midnight Black</button>
+      <button class="swatch" data-name="Cadmium Yellow"><span class="chip" style="background:hsl(51 100% 50%)"></span>Cadmium Yellow</button>
+      <div style="font-size:10px; opacity:.55; margin-top:6px">every color is the same color. that is the lesson.</div>
+    </div>
+
+    <div class="canvaswrap"><canvas id="cv"></canvas></div>
+
+    <div class="panel">
+      <div class="meter">
+        <div class="label"><span>composure</span><span id="compv">100%</span></div>
+        <div class="bar"><i id="compbar" style="width:100%; background:#4a9d6b"></i></div>
+      </div>
+      <div class="meter">
+        <div class="label"><span>yellow purity</span><span id="purv">0%</span></div>
+        <div class="bar"><i id="purbar" style="width:0%; background:hsl(51 100% 50%)"></i></div>
+      </div>
+      <div class="meter">
+        <div class="stat"><span>screams emitted</span><b id="nscream">0</b></div>
+        <div class="stat"><span>strokes</span><b id="nstroke">0</b></div>
+        <div class="stat"><span>brushes destroyed</span><b id="nbrush">0</b></div>
+      </div>
+      <div class="meter">
+        <h3>Scream log</h3>
+        <div id="log"><div style="opacity:.4">— nothing yet. how peaceful. —</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="narrator">
+    <svg id="face" width="56" height="56" viewBox="0 0 56 56">
+      <circle id="fSkin" cx="28" cy="28" r="24" fill="#f2c99a" stroke="#00000033"/>
+      <g id="fCracks" opacity="0" stroke="#5a4a00" stroke-width="1" fill="none">
+        <polyline points="14,16 18,22 15,27"/><polyline points="42,18 38,23 41,29"/><polyline points="28,44 30,48"/>
+      </g>
+      <ellipse id="fEyeL" cx="20" cy="24" rx="4.5" ry="3.4" fill="#fff" stroke="#00000055"/>
+      <ellipse id="fEyeR" cx="36" cy="24" rx="4.5" ry="3.4" fill="#fff" stroke="#00000055"/>
+      <circle id="fPupL" cx="20" cy="24" r="3" fill="#243240"/>
+      <circle id="fPupR" cx="36" cy="24" r="3" fill="#243240"/>
+      <line id="fBrowL" x1="15" y1="17" x2="25" y2="17" stroke="#5a4a2a" stroke-width="2" stroke-linecap="round"/>
+      <line id="fBrowR" x1="31" y1="17" x2="41" y2="17" stroke="#5a4a2a" stroke-width="2" stroke-linecap="round"/>
+      <path id="fMouth" d="M 18 36 Q 28 44 38 36" stroke="#8a4a2a" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+    </svg>
+    <div id="say">Welcome. Pick up the brush whenever you are ready.</div>
+    <div class="hint">paint with mouse / finger<br>SPACE = scream<br><span id="badge"> lesson 1 of 1</span></div>
+  </div>
+</div>
+
+<div class="overlay" id="intro">
+  <div class="card">
+    <h2>The Joy of Painting <span style="opacity:.5">(yellow)</span></h2>
+    <div class="after">an interactive lesson after Kim Beom, <i>Yellow Scream</i> (1992–1999)</div>
+    <p>Today we are going to paint a happy little picture.<br>
+       All you need is a brush, a calm heart, and one color.<br>
+       The studio provides the color. The studio provides most things.</p>
+    <p style="font-size:12px; opacity:.65">headphones recommended · sound can be muted · dignity cannot</p>
+    <button class="bigbtn" id="begin">Begin the lesson</button>
+  </div>
+</div>
+
+<div class="overlay" id="end">
+  <div class="card">
+    <h2>THE PAINTING IS COMPLETE</h2>
+    <div class="after">it was always going to be complete</div>
+    <div id="endstats"></div>
+    <p style="font-size:12px; opacity:.7; margin-top:14px">after Kim Beom, <i>Yellow Scream</i> (1992–1999)<br>
+    <a href="https://www.youtube.com/watch?v=xesGkxslveo" target="_blank" rel="noopener">the original 31 minutes</a></p>
+    <button class="bigbtn" id="again">paint it again</button>
+    <div style="font-size:11px; opacity:.5; margin-top:8px">(the canvas remembers)</div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+  "use strict";
+  var cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+  var stageEl = document.getElementById('stage');
+  var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* ---------- state ---------- */
+  var S = { composure:100, purity:0, strokes:0, screams:0, brushes:0, stage:0,
+            started:0, done:false, doneOnce:false, muted:false, lastScream:0, lastIdle:0, lastNarr:0 };
+
+  /* ---------- canvas sizing ---------- */
+  function sizeCanvas(){
+    var wrap = cv.parentElement;
+    var w = Math.max(320, Math.min(wrap.clientWidth - 20, 760));
+    var h = Math.round(w * 0.62);
+    var dpr = window.devicePixelRatio || 1;
+    cv.width = Math.round(w*dpr); cv.height = Math.round(h*dpr);
+    cv.style.width = w+'px'; cv.style.height = h+'px';
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,w,h);
+    if (S.doneOnce){ ctx.fillStyle='rgba(255,244,200,0.5)'; ctx.fillRect(0,0,w,h); }
+  }
+  sizeCanvas();
+
+  /* ---------- audio ---------- */
+  var ac=null, master=null;
+  function initAudio(){
+    if (ac) return;
+    try{
+      ac = new (window.AudioContext||window.webkitAudioContext)();
+      master = ac.createGain(); master.gain.value = 1; master.connect(ac.destination);
+    }catch(e){ ac=null; }
+  }
+  function distCurve(k){
+    var n=1024, c=new Float32Array(n), i, x;
+    for(i=0;i<n;i++){ x = i*2/n - 1; c[i] = Math.tanh(x*k); }
+    return c;
+  }
+  function noiseBuf(dur){
+    var n = Math.floor(ac.sampleRate*dur), b = ac.createBuffer(1,n,ac.sampleRate), d = b.getChannelData(0), i;
+    for(i=0;i<n;i++) d[i]=Math.random()*2-1;
+    return b;
+  }
+  function screech(stage){
+    if(!ac || S.muted) return;
+    var t = ac.currentTime, i, o, g, ws, f0, cnt = stage>=4?3 : stage>=2?2 : 1;
+    for(i=0;i<cnt;i++){
+      o=ac.createOscillator(); g=ac.createGain(); ws=ac.createWaveShaper();
+      ws.curve = distCurve(2+stage*1.5);
+      o.type='sawtooth';
+      f0 = 420 + Math.random()*380 + stage*130;
+      o.frequency.setValueAtTime(f0, t+i*0.06);
+      o.frequency.exponentialRampToValueAtTime(Math.max(60,f0*0.5), t+0.5+i*0.06);
+      g.gain.setValueAtTime(0.0001, t+i*0.06);
+      g.gain.exponentialRampToValueAtTime(0.07+stage*0.04, t+i*0.06+0.035);
+      g.gain.exponentialRampToValueAtTime(0.0001, t+0.55+i*0.06);
+      o.connect(ws); ws.connect(g); g.connect(master);
+      o.start(t+i*0.06); o.stop(t+0.75+i*0.06);
+    }
+    if(stage>=2){
+      var src=ac.createBufferSource(); src.buffer=noiseBuf(0.35);
+      var bp=ac.createBiquadFilter(); bp.type='bandpass'; bp.frequency.value=900+stage*260; bp.Q.value=1.2;
+      var ng=ac.createGain();
+      ng.gain.setValueAtTime(0.001,t); ng.gain.exponentialRampToValueAtTime(0.06+stage*0.03,t+0.05);
+      ng.gain.exponentialRampToValueAtTime(0.001,t+0.35);
+      src.connect(bp); bp.connect(ng); ng.connect(master); src.start(t);
+    }
+  }
+  function swoosh(){
+    if(!ac || S.muted) return;
+    var t=ac.currentTime, src=ac.createBufferSource();
+    src.buffer=noiseBuf(0.18);
+    var bp=ac.createBiquadFilter(); bp.type='bandpass'; bp.frequency.value=1200; bp.Q.value=0.8;
+    var g=ac.createGain();
+    g.gain.setValueAtTime(0.001,t); g.gain.exponentialRampToValueAtTime(0.05,t+0.02);
+    g.gain.exponentialRampToValueAtTime(0.001,t+0.16);
+    src.connect(bp); bp.connect(g); g.connect(master); src.start(t);
+  }
+
+  /* ---------- screaming (the word) ---------- */
+  var stageWords = ["yellow","yellow","YELLOW","YELLOW!!","YELLOOOOWW!!"];
+  var stagePitch = [0.85, 1.1, 1.5, 1.85, 2];
+  var stageRate  = [0.85, 1.0, 1.2, 1.45, 1.7];
+  var stageGap   = [950, 780, 640, 520, 400];
+  var stageNames = ["whispered","said","shouted","screamed","BECAME"];
+  function speak(word, stage){
+    if (S.muted || !('speechSynthesis' in window)) return;
+    try{
+      var u = new SpeechSynthesisUtterance(word);
+      u.pitch = stagePitch[stage]; u.rate = stageRate[stage];
+      u.volume = [0.55, 0.75, 1, 1, 1][stage];
+      if (stage>=3) speechSynthesis.cancel();
+      speechSynthesis.speak(u);
+    }catch(e){}
+  }
+  function scream(forceStage){
+    if (S.done) return;
+    var now = performance.now();
+    if (now - S.lastScream < stageGap[S.stage]) return;
+    S.lastScream = now;
+    S.screams++;
+    document.getElementById('nscream').textContent = S.screams;
+    speak(stageWords[S.stage], S.stage);
+    screech(forceStage!=null?forceStage:S.stage);
+    addLog(stageNames[S.stage], stageWords[S.stage]);
+    return true;
+  }
+  function addLog(kind, word){
+    var log = document.getElementById('log');
+    var d = document.createElement('div');
+    if (S.stage>=4) d.className='s4';
+    d.textContent = "\u201C" + word + "\u201D — " + kind;
+    if (log.firstChild && log.firstChild.style) log.removeChild(log.firstChild);
+    log.appendChild(d);
+    while (log.children.length > 6) log.removeChild(log.firstChild);
+  }
+
+  /* ---------- narration ---------- */
+  var narr = [
+    ["Just a happy little stroke. There we go.",
+     "Gentle pressure. Let the brush do the work.",
+     "A soft touch of cadmium... yellow.",
+     "Every canvas begins with one quiet, confident... yellow.",
+     "Isn't that nice? Just us, and the canvas, and the yellow.",
+     "No pressure. Painting is easy. Painting is calm. Painting is... yellow."],
+    ["There are no mistakes. Only happy little... YELLOW!",
+     "We'll put a happy little... YELLOW! right there.",
+     "Anyone can paint. Just a gentle, forgiving... YELLOW!",
+     "You need the shadows to appreciate the... YELLOW!",
+     "This is your world. You are the creator. YELLOW!",
+     "Beat the devil out of it. Then... YELLOW!"],
+    ["The secret to painting is the... YELLOW!! YELLOW!!",
+     "It's your world. Your wet-on-wet. YELLOW!!",
+     "We don't make mistakes, we make happy... YELLOW!!",
+     "Talent is a pursued interest. YELLOW!! Pursue it!!",
+     "Look around. Look outside. What color is it? YELLOW!!"],
+    ["YELLOW!! YELLOW!! there is only YELLOW!!",
+     "happy little YELLOW!!! happy little YELLOW!!!",
+     "no more BLUE!!! no more GREEN!!! only YELLOW!!!",
+     "the trees are YELLOW!!! the sky is YELLOW!!!",
+     "YELLOW!!! YELLOW!!! YELLOW!!! YELLOW!!!"],
+    ["YELLOW","YELLOW.","YELLOW!","YELLOW!!","YELLOOOW!!","Y E L L O W"]
+  ];
+  var idle = [
+    "Resting? Rest is important. ...You can rest forever, you know. The yellow waits.",
+    "Still there? The canvas is patient. I am less patient. Yellow.",
+    "The brush misses you. The brush says nothing, but it misses you."
+  ];
+  function narrate(){
+    var pool = narr[S.stage];
+    var i, n = pool.length;
+    do { i = Math.floor(Math.random()*n); } while (n>1 && i===S.lastNarr);
+    S.lastNarr = i;
+    var el = document.getElementById('say');
+    var line = pool[i];
+    var m = line.match(/^(.*?)(Y+E[!L!O]*W+!?)(.*)$/i);
+    if (m && S.stage>=1){
+      el.innerHTML = escapeHtml(m[1]) + '<span class="yell">' + escapeHtml(m[2]) + '</span>' + escapeHtml(m[3]);
+    } else {
+      el.textContent = line;
+    }
+  }
+  function escapeHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  /* ---------- face ---------- */
+  var face = {
+    pup:[3,3.8,2,1.4,1.1], brow:[0,6,-12,-20,-26], mouthY:[44,43,32,29,27], cracks:[0,0,0.25,0.7,1]
+  };
+  function updateFace(){
+    var s = S.stage, p = Math.round(S.purity*85);
+    document.getElementById('fPupL').setAttribute('r', face.pup[s]);
+    document.getElementById('fPupR').setAttribute('r', face.pup[s]);
+    document.getElementById('fBrowL').setAttribute('transform','rotate('+face.brow[s]+' 20 17)');
+    document.getElementById('fBrowR').setAttribute('transform','rotate('+(-face.brow[s])+' 36 17)');
+    document.getElementById('fMouth').setAttribute('d','M 18 36 Q 28 '+face.mouthY[s]+' 38 36');
+    document.getElementById('fCracks').setAttribute('opacity', face.cracks[s]);
+    document.getElementById('fSkin').setAttribute('fill','color-mix(in oklab, #f2c99a, #ffe14d '+p+'%)');
+  }
+
+  /* ---------- meters / chrome ---------- */
+  function updateMeters(){
+    var c = Math.max(0, S.composure);
+    document.getElementById('compv').textContent = Math.round(c)+'%';
+    var bar = document.getElementById('compbar');
+    bar.style.width = c+'%';
+    bar.style.background = 'color-mix(in oklab, #4a9d6b, #d33a2f '+Math.round(100-c)+'%)';
+    document.getElementById('purv').textContent = Math.round(S.purity*100)+'%';
+    document.getElementById('purbar').style.width = (S.purity*100)+'%';
+    document.documentElement.style.setProperty('--yp', Math.round(S.purity*88)+'%');
+  }
+
+  /* ---------- painting ---------- */
+  var painting=false, lx=0, ly=0, lastPaintScream=0, sampleDue=false;
+  function yellows(){ return 'hsl('+Math.round(46+Math.random()*12)+' '+Math.round(86+Math.random()*14)+'% '+Math.round(44+Math.random()*18)+'%)'; }
+  function cvPos(e){
+    var r = cv.getBoundingClientRect();
+    return { x:(e.clientX-r.left)*(cv.width/ (window.devicePixelRatio||1) / r.width),
+             y:(e.clientY-r.top)*(cv.height/(window.devicePixelRatio||1) / r.height) };
+  }
+  cv.addEventListener('pointerdown', function(e){
+    if (S.done) return;
+    initAudio(); if (ac && ac.state==='suspended') ac.resume();
+    painting = true; cv.classList.add('painting');
+    cv.setPointerCapture && cv.setPointerCapture(e.pointerId);
+    var p = cvPos(e); lx=p.x; ly=p.y;
+    stamp(lx,ly,lx,ly);
+  });
+  cv.addEventListener('pointermove', function(e){
+    if (!painting || S.done) return;
+    var p = cvPos(e);
+    stamp(lx,ly,p.x,p.y); lx=p.x; ly=p.y;
+    var now = performance.now();
+    if (now - lastPaintScream > 900){ lastPaintScream = now; scream(); }
+  });
+  window.addEventListener('pointerup', function(){
+    if (!painting) return;
+    painting=false; cv.classList.remove('painting');
+    if (!S.done) scream();
+  });
+  function stamp(x0,y0,x1,y1){
+    var d = Math.hypot(x1-x0, y1-y0), n = Math.max(1, Math.floor(d/6)), i, t, x, y, r;
+    for(i=0;i<=n;i++){
+      t = i/n;
+      x = x0+(x1-x0)*t + (Math.random()-0.5)*7;
+      y = y0+(y1-y0)*t + (Math.random()-0.5)*7;
+      r = 9 + Math.random()*13;
+      ctx.globalAlpha = 0.82 + Math.random()*0.18;
+      ctx.fillStyle = yellows();
+      ctx.beginPath(); ctx.arc(x,y,r,0,6.2832); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    swoosh();
+    S.strokes++;
+    document.getElementById('nstroke').textContent = S.strokes;
+    S.composure = Math.max(0, S.composure - 0.42);
+    if (sampleDue) return;
+    sampleDue = true;
+    setTimeout(function(){ sampleDue=false; sample(); }, 350);
+  }
+
+  /* ---------- coverage sampling ---------- */
+  var samp = document.createElement('canvas'); samp.width=96; samp.height=64;
+  var sctx = samp.getContext('2d', {willReadFrequently:true});
+  function sample(){
+    try{
+      sctx.clearRect(0,0,96,64);
+      sctx.drawImage(cv,0,0,96,64);
+      var d = sctx.getImageData(0,0,96,64).data, y=0, tot=96*64, i;
+      for(i=0;i<d.length;i+=4){
+        if (d[i]>185 && d[i+1]>158 && d[i+2]<150) y++;
+      }
+      S.purity = Math.min(1, y/tot);
+      updateMeters(); updateFace();
+      if (!S.done && S.purity>=0.94) finish();
+    }catch(e){}
+  }
+
+  /* ---------- stage machine ---------- */
+  function calcStage(c){ return c>80?0 : c>58?1 : c>33?2 : c>10?3 : 4; }
+  function setStage(s){
+    if (s===S.stage) return;
+    var prev = S.stage;
+    S.stage = s;
+    if (s>prev && s>=2){ S.brushes++; document.getElementById('nbrush').textContent=S.brushes;
+      if (s===2) toast("a brush has been destroyed. it is fine. they are all fine.");
+    }
+    if (s===4){ toast("THERE IS NO BRUSH. THERE IS NO HAND. YELLOW."); scream(); setTimeout(function(){scream();},450); }
+    updateFace();
+  }
+  function toast(msg){
+    var t=document.getElementById('toast');
+    t.textContent=msg; t.classList.add('show');
+    clearTimeout(t._h); t._h=setTimeout(function(){ t.classList.remove('show'); }, 2600);
+  }
+
+  /* ---------- palette lies ---------- */
+  Array.prototype.forEach.call(document.querySelectorAll('.swatch'), function(b){
+    b.addEventListener('click', function(){
+      toast("“" + b.getAttribute('data-name') + "” is unavailable. It was always yellow.");
+      narrate();
+    });
+  });
+
+  /* ---------- idle mutter + clock + shake ---------- */
+  setInterval(function(){
+    if (!S.started || S.done) return;
+    var now = performance.now();
+    if (now - S.lastScream > 7000 && now - S.lastIdle > 7000){
+      S.lastIdle = now;
+      document.getElementById('say').textContent = idle[Math.floor(Math.random()*idle.length)];
+    }
+  }, 2500);
+  setInterval(function(){
+    if (!S.started) return;
+    var s = Math.floor((performance.now()-S.started)/1000);
+    var mm = String(Math.floor(s/60)).padStart(2,'0'), ss = String(s%60).padStart(2,'0');
+    document.getElementById('clock').textContent = mm+':'+ss;
+    if (s >= 31*60+12 && !S._toastedEnd){ S._toastedEnd=true;
+      toast("the lesson is over. it was always over. keep painting."); }
+  }, 1000);
+  function frame(){
+    if (!S.done && !reduceMotion && S.stage>=2 && S.started){
+      var a = (S.stage-1)*1.7;
+      stageEl.style.transform = 'translate('+(Math.random()-0.5)*a+'px,'+(Math.random()-0.5)*a+'px)';
+    } else stageEl.style.transform='';
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  /* ---------- finish ---------- */
+  function finish(){
+    S.done = true;
+    scream(); setTimeout(function(){scream();}, 300); setTimeout(function(){scream();}, 650);
+    document.getElementById('say').innerHTML = '<span class="yell">YELLOW.</span>';
+    var dur = Math.max(1, Math.round((performance.now()-S.started)/1000));
+    var mm = Math.floor(dur/60), ss = dur%60;
+    document.getElementById('endstats').innerHTML =
+      'session length: <b>'+mm+'m '+String(ss).padStart(2,'0')+'s</b> of the original 31:12<br>'+
+      'strokes: <b>'+S.strokes+'</b><br>'+
+      'screams emitted: <b>'+S.screams+'</b><br>'+
+      'brushes destroyed: <b>'+S.brushes+'</b><br>'+
+      'composure remaining: <b>0%</b><br>'+
+      'yellow purity: <b>100%</b>';
+    setTimeout(function(){
+      document.getElementById('end').style.display='flex';
+      S.doneOnce = true;
+    }, 1600);
+  }
+
+  /* ---------- controls ---------- */
+  document.getElementById('mute').addEventListener('click', function(){
+    S.muted = !S.muted;
+    this.textContent = S.muted ? '🔇 sound off' : '🔊 sound on';
+    if (S.muted && 'speechSynthesis' in window) speechSynthesis.cancel();
+  });
+  document.getElementById('fresh').addEventListener('click', function(){
+    reset(true);
+  });
+  document.getElementById('again').addEventListener('click', function(){
+    document.getElementById('end').style.display='none';
+    reset(true);
+  });
+  document.getElementById('begin').addEventListener('click', function(){
+    initAudio(); if (ac && ac.state==='suspended') ac.resume();
+    if ('speechSynthesis' in window) { try{ speechSynthesis.getVoices(); }catch(e){} }
+    document.getElementById('intro').style.display='none';
+    S.started = performance.now();
+    narrate();
+  });
+  window.addEventListener('keydown', function(e){
+    if (e.code==='Space' && S.started && !S.done){
+      e.preventDefault(); initAudio();
+      if (ac && ac.state==='suspended') ac.resume();
+      scream();
+    }
+  });
+  function reset(){
+    sizeCanvas();
+    S.composure=100; S.purity=0; S.strokes=0; S.screams=0; S.brushes=0; S.stage=0;
+    S.done=false; S.lastScream=0; S.lastIdle=0; S._toastedEnd=false;
+    document.getElementById('nscream').textContent='0';
+    document.getElementById('nstroke').textContent='0';
+    document.getElementById('nbrush').textContent='0';
+    document.getElementById('log').innerHTML='<div style="opacity:.4">— nothing yet. how peaceful. —</div>';
+    document.getElementById('say').textContent = S.doneOnce ?
+      'A fresh canvas. It looks a little... familiar. Never mind. Begin again.' :
+      'Welcome. Pick up the brush whenever you are ready.';
+    updateMeters(); updateFace();
+  }
+  updateMeters(); updateFace();
+})();
+</script>
+</body>
+</html>
