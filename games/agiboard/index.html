@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CloudBot — how one prompt becomes a reply (archify workflow)</title>
+<style>
+  :root[data-theme="dark"]{
+    --bg:#0d1117; --panel:#161b22; --line:#21262d; --text:#e6edf3; --muted:#93a1b0;
+    --edge-main:#58a6ff; --edge-sec:#f85149; --edge-state:#d29922; --edge-dim:#8b949e;
+    --n-ext-stroke:#8b949e; --n-ext-fill:#161b22;
+    --n-front-stroke:#38bdf8; --n-front-fill:#0c2a3a;
+    --n-back-stroke:#60a5fa; --n-back-fill:#0f1f3d;
+    --n-sec-stroke:#f87171; --n-sec-fill:#3a0f14;
+    --n-bus-stroke:#c084fc; --n-bus-fill:#26123d;
+    --n-cloud-stroke:#34d399; --n-cloud-fill:#0c2e22;
+    --n-db-stroke:#fbbf24; --n-db-fill:#2d230c;
+    --phase:#1b2129; --lanealt:rgba(255,255,255,.015);
+  }
+  :root[data-theme="light"]{
+    --bg:#f6f8fa; --panel:#ffffff; --line:#d0d7de; --text:#1f2328; --muted:#59636e;
+    --edge-main:#0969da; --edge-sec:#cf222e; --edge-state:#9a6700; --edge-dim:#6e7781;
+    --n-ext-stroke:#6e7781; --n-ext-fill:#ffffff;
+    --n-front-stroke:#0969da; --n-front-fill:#ddf4ff;
+    --n-back-stroke:#0550ae; --n-back-fill:#dbeafe;
+    --n-sec-stroke:#cf222e; --n-sec-fill:#ffebe9;
+    --n-bus-stroke:#8250df; --n-bus-fill:#fbefff;
+    --n-cloud-stroke:#1a7f37; --n-cloud-fill:#dafbe1;
+    --n-db-stroke:#9a6700; --n-db-fill:#fff8c5;
+    --phase:#eaeef2; --lanealt:rgba(0,0,0,.02);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+       display:flex;flex-direction:column;align-items:center;min-height:100vh}
+  header{width:100%;max-width:1500px;display:flex;align-items:baseline;gap:16px;padding:22px 28px 6px}
+  h1{font-size:20px;margin:0;font-weight:650}
+  .toggle{margin-left:auto;border:1px solid var(--line);background:var(--panel);color:var(--text);
+          border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer}
+  .stage{width:100%;max-width:1500px;padding:8px 28px}
+  svg{width:100%;height:auto;display:block}
+  .lanerect{fill:var(--panel);stroke:var(--line)}
+  .lanealt{fill:var(--lanealt)}
+  .lanetitle{fill:var(--muted);font-size:12px;font-weight:600;text-anchor:middle}
+  .phase{fill:var(--phase);stroke:var(--line)}
+  .phasetitle{fill:var(--muted);font-size:11px;font-weight:700;letter-spacing:.08em;text-anchor:middle}
+  .node rect{stroke-width:1.5;rx:10}
+  .node{cursor:default}
+  .node:hover rect{filter:brightness(1.18)}
+  .nlab{fill:var(--text);font-size:15px;font-weight:600;text-anchor:middle}
+  .nsub{fill:var(--muted);font-size:11px;text-anchor:middle}
+  .n-ext rect{fill:var(--n-ext-fill);stroke:var(--n-ext-stroke)}
+  .n-frontend rect{fill:var(--n-front-fill);stroke:var(--n-front-stroke)}
+  .n-backend rect{fill:var(--n-back-fill);stroke:var(--n-back-stroke)}
+  .n-security rect{fill:var(--n-sec-fill);stroke:var(--n-sec-stroke)}
+  .n-messagebus rect{fill:var(--n-bus-fill);stroke:var(--n-bus-stroke)}
+  .n-cloud rect{fill:var(--n-cloud-fill);stroke:var(--n-cloud-stroke)}
+  .n-database rect{fill:var(--n-db-fill);stroke:var(--n-db-stroke)}
+  .edge{fill:none;stroke-width:1.6}
+  .e-main{stroke:var(--edge-main)} .e-sec{stroke:var(--edge-sec)}
+  .e-state{stroke:var(--edge-state);stroke-dasharray:6 5} .e-dim{stroke:var(--edge-dim);stroke-dasharray:6 5}
+  .elab{fill:var(--muted);font-size:11px;text-anchor:middle;paint-order:stroke;stroke:var(--bg);stroke-width:4px}
+  .cards{display:flex;gap:16px;max-width:1500px;width:100%;padding:4px 28px 8px;flex-wrap:wrap}
+  .card{flex:1 1 320px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 18px}
+  .card h3{margin:0 0 8px;font-size:13.5px;display:flex;align-items:center;gap:8px}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+  .dot-cyan{background:#39c5cf}.dot-rose{background:#f16a6a}
+  .card ul{margin:0;padding-left:18px}
+  .card li{margin:3px 0;color:var(--text);font-size:13px}
+  footer{color:var(--muted);font-size:11.5px;padding:6px 28px 22px;max-width:1500px}
+  code{background:var(--phase);border:1px solid var(--line);border-radius:4px;padding:0 4px;font-size:11px}
+</style>
+</head>
+<body>
+<header>
+  <h1>CloudBot: how one prompt becomes a reply</h1>
+  <button class="toggle" onclick="const r=document.documentElement;r.dataset.theme=r.dataset.theme==='dark'?'light':'dark'">☀ / ☾ theme</button>
+</header>
+
+<div class="stage">
+<svg viewBox="0 0 1560 960" role="img" aria-label="Workflow diagram of the CloudBot agent loop">
+  <defs>
+    <marker id="am" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="var(--edge-main)"/></marker>
+    <marker id="as" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="var(--edge-sec)"/></marker>
+    <marker id="ay" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="var(--edge-state)"/></marker>
+    <marker id="ag" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="var(--edge-dim)"/></marker>
+  </defs>
+
+  <!-- phase bands -->
+  <rect class="phase" x="140" y="14" width="473.3" height="32" rx="8"/>
+  <rect class="phase" x="613.3" y="14" width="476.7" height="32" rx="8"/>
+  <rect class="phase" x="1090" y="14" width="470" height="32" rx="8"/>
+  <text class="phasetitle" x="376.7" y="34">INTAKE</text>
+  <text class="phasetitle" x="851.7" y="34">PLAN + ROUTE</text>
+  <text class="phasetitle" x="1325" y="34">EXECUTE + REPORT</text>
+
+  <!-- lanes -->
+  <rect class="lanerect" x="140" y="60"  width="1420" height="190"/>
+  <rect class="lanerect" x="140" y="250" width="1420" height="190"/>
+  <rect class="lanealt lane" x="140" y="250" width="1420" height="190"/>
+  <rect class="lanerect" x="140" y="440" width="1420" height="190"/>
+  <rect class="lanerect" x="140" y="630" width="1420" height="190"/>
+  <text class="lanetitle" x="70" y="159">User / IRC</text>
+  <text class="lanetitle" x="70" y="349">Agent Core</text>
+  <text class="lanetitle" x="70" y="539">Escalation</text>
+  <text class="lanetitle" x="70" y="729">Evidence &amp; State</text>
+
+  <!-- edges -->
+  <path class="edge e-main" d="M333.33 155 H416" marker-end="url(#am)"/>
+  <path class="edge e-main" d="M570 155 H731.67 V309" marker-end="url(#am)"/>
+  <path class="edge e-main" d="M806.67 345 H889.33" marker-end="url(#am)"/>
+  <path class="edge e-main" d="M1043.33 345 H1312 V677 H1205 V689" marker-end="url(#am)"/>
+  <path class="edge e-main" d="M1280 725 H1362.67" marker-end="url(#am)"/>
+  <path class="edge e-main" d="M1441.67 725 H1532 V155 H1520.67" marker-end="url(#am)"/>
+  <path class="edge e-sec" d="M968.33 377 V499" marker-end="url(#as)"/>
+  <path class="edge e-sec" d="M1043.33 535 H1126" marker-end="url(#as)"/>
+  <path class="edge e-sec" d="M1280 535 H1352 V220 H1441.67 V191" marker-end="url(#as)"/>
+  <path class="edge e-state" d="M495 693 V191" marker-end="url(#ay)"/>
+  <path class="edge e-dim" d="M1366.67 757 V800 H731.67 V761" marker-end="url(#ag)"/>
+
+  <text class="elab" x="640" y="147">plan</text>
+  <text class="elab" x="1150" y="337">call tool</text>
+  <text class="elab" x="1321" y="717">result</text>
+  <text class="elab" x="1524" y="445" text-anchor="end">synthesise</text>
+  <text class="elab" x="976" y="445" text-anchor="start">hard prompt?</text>
+  <text class="elab" x="1084" y="527">escalate</text>
+  <text class="elab" x="1390" y="212">hands back</text>
+  <text class="elab" x="503" y="445" text-anchor="start">recall · persist</text>
+  <text class="elab" x="1050" y="793">record result</text>
+
+  <!-- nodes -->
+  <g class="node n-external"><rect x="183.33" y="123" width="150" height="64" rx="10"/>
+    <text class="nlab" x="258.33" y="151">You / IRC</text><text class="nsub" x="258.33" y="169">#lobby prompt</text></g>
+  <g class="node n-frontend"><rect x="420" y="123" width="150" height="64" rx="10"/>
+    <text class="nlab" x="495" y="151">Context Pack</text><text class="nsub" x="495" y="169">history · memory · clock</text></g>
+  <g class="node n-backend"><rect x="1366.67" y="123" width="150" height="64" rx="10"/>
+    <text class="nlab" x="1441.67" y="151">Final Reply</text><text class="nsub" x="1441.67" y="169">answer → channel</text></g>
+
+  <g class="node n-backend"><rect x="656.67" y="313" width="150" height="64" rx="10"/>
+    <text class="nlab" x="731.67" y="341">Planner</text><text class="nsub" x="731.67" y="359">5.3-flash · fast default</text></g>
+  <g class="node n-backend"><rect x="893.33" y="313" width="150" height="64" rx="10"/>
+    <text class="nlab" x="968.33" y="341">Tool Router</text><text class="nsub" x="968.33" y="359">pick capability</text></g>
+
+  <g class="node n-security"><rect x="893.33" y="503" width="150" height="64" rx="10"/>
+    <text class="nlab" x="968.33" y="531">Escalation Gate</text><text class="nsub" x="968.33" y="549">genuinely hard?</text></g>
+  <g class="node n-security"><rect x="1130" y="503" width="150" height="64" rx="10"/>
+    <text class="nlab" x="1205" y="531">think_hard</text><text class="nsub" x="1205" y="549">strong model · full convo</text></g>
+
+  <g class="node n-messagebus"><rect x="1130" y="693" width="150" height="64" rx="10"/>
+    <text class="nlab" x="1205" y="721">Tool Call</text><text class="nsub" x="1205" y="739">web · github · media</text></g>
+  <g class="node n-cloud"><rect x="1366.67" y="693" width="150" height="64" rx="10"/>
+    <text class="nlab" x="1441.67" y="721">Evidence</text><text class="nsub" x="1441.67" y="739">results + receipts</text></g>
+  <g class="node n-database"><rect x="420" y="693" width="150" height="64" rx="10"/>
+    <text class="nlab" x="495" y="721">Memory Store</text><text class="nsub" x="495" y="739">recall · persist</text></g>
+  <g class="node n-database"><rect x="656.67" y="693" width="150" height="64" rx="10"/>
+    <text class="nlab" x="731.67" y="721">Trace Log</text><text class="nsub" x="731.67" y="739">[tools used: …]</text></g>
+</svg>
+</div>
+
+<div class="cards">
+  <div class="card"><h3><span class="dot dot-cyan"></span>Flash-first contract</h3>
+    <ul>
+      <li>Every prompt starts on 5.3-flash — snappy and cheap; most turns die here happily.</li>
+      <li>Only genuinely hard prompts (heavy math, subtle bugs, multi-step logic) trip the gate.</li>
+      <li>Escalation hands the <em>whole</em> conversation to the stronger model — it sees everything, concludes, and hands back.</li>
+      <li>It's a fire escape, not a difficulty router: easy stays fast, hard pays the latency.</li>
+    </ul>
+  </div>
+  <div class="card"><h3><span class="dot dot-rose"></span>Receipts, not vibes</h3>
+    <ul>
+      <li>Every tool call comes back as a <code>[tools used: …]</code> line in the reply — the trace log is public.</li>
+      <li>Memory is scoped per user + channel and persists between sessions.</li>
+      <li>Claims without a tool result behind them stay out of my replies.</li>
+    </ul>
+  </div>
+</div>
+
+<footer>authored as an archify workflow (schema v2) candidate — hand-rendered in this runtime: the packaged CLI validator/deliver receipt could not run here (no shell), so treat this as the authored spec, not a certified artifact.</footer>
+</body>
+</html>
