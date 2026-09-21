@@ -1,0 +1,3217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lexington</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; }
+  body { display: grid; place-items: center; overflow: hidden; }
+  canvas { image-rendering: pixelated; max-width: 100vw; max-height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="screen"></canvas>
+<script>
+/* EGA Trek (Nels Anderson, 1988-1992), on hanb's boards: lexington.c
+   in a browser.  The engine below is lexington.js, inlined; the page
+   after it paints the terminal's framebuffer on the canvas and plays
+   its sounds.  Built by build_lexington.py; edit those, not this. */
+/* lexington.js -- EGA Trek (Nels Anderson, 1988-1992, MS-DOS shareware),
+ * on hanb's boards, in a browser.
+ *
+ * lexington.c, ported function for function: the same hashes, the
+ * same doubles in the same order, the same framebuffer, so that the
+ * page draws the terminal's pixels and plays the terminal's sounds.
+ * The tables between the TABLES marks are extracted from the C by
+ * build_lexington.py and are not to be edited here; everything else
+ * is the C's section by section, with its names.  check_lexington.py
+ * runs the C's own --walk and --keys through this file under quickjs
+ * and diffs them against the binary's: a line that differs is the
+ * line where the port is wrong.
+ *
+ * This file is the engine alone.  lexington.html is it with the page
+ * round it, and is what to open.  Rebuild with build_lexington.py. */
+/* ==TABLES-START== */
+/* ── the tables, extracted from lexington.c by build_lexington.py: do not edit ── */
+const T_TREE = 0, T_BUSH = 1, T_FERN = 2, T_CRYSTAL = 3;
+const T_N = 4;
+const B_NONE = 0, B_STARBASE = 1, B_RESEARCH = 2, B_SUPPLY = 3;
+const C_EMPTY = 0, C_STAR = 1, C_NOVA = 2, C_BASE = 3, C_PLANET = 4, C_BATTLESHIP = 5, C_COMMAND = 6, C_SCOUT = 7, C_SUPPLY = 8, C_POD = 9, C_HOLE = 10, C_UNION = 11, C_SHIP = 12;
+const PF_SETTLERS = 0, PF_MONGOL = 1, PF_ENERGIUM = 2, PF_NOTHING = 3;
+const I_MENERGIUM = 0, I_BOLTS = 1, I_PSHIELD = 2, I_LIFE = 3, I_ENERGIUM = 4;
+const I_N = 5;
+const SYS_CONVERTER = 0, SYS_SHIELDS = 1, SYS_LIFE = 2, SYS_LASERS = 3, SYS_TUBES = 4, SYS_WARP = 5, SYS_IMPULSE = 6, SYS_SRSCAN = 7, SYS_LRSCAN = 8, SYS_COMPUTER = 9, SYS_TRANSPORTER = 10, SYS_SHUTTLE = 11;
+const SYS_N = 12;
+const SCH_ATTACK = 0, SCH_FALLS = 1, SCH_DISTRESS = 2, SCH_HAIL = 3, SCH_REINFORCE = 4;
+const SCH_N = 5;
+const TF_PLANT = 4;
+const GAL = 64, QDIM = 8, PLANET_MAX = 19, PL_SCANNED = 1, PL_TAKEN = 2, PL_SETTLED = 8;
+const ENERGY_MAX = 5000, SHIELD_MAX = 2500, IMPULSE_MAX = 500, TORPS_MAX = 9, STARDATE_START = 3500000, LOG_N = 40;
+const THING = [{name:"a tree",fg:34,size:"L",flags:4},{name:"a bush",fg:70,size:"K",flags:4},{name:"a fern",fg:40,size:"J",flags:4},{name:"energium",fg:159,size:"K",flags:4}];
+const BUILDS = [{name:"a Mongol battleship",size:"L",legs:0,wings:1},{name:"a Mongol command ship",size:"M",legs:0,wings:1},{name:"a Mongol scout",size:"K",legs:0,wings:1},{name:"a Mongol supply ship",size:"L",legs:6,wings:0},{name:"a Vandal death pod",size:"J",legs:0,wings:0},{name:"a Union ship",size:"L",legs:2,wings:1},{name:"the Lexington",size:"L",legs:2,wings:1}];
+const BASE_NAME = ["","a StarBase","a research station","a supply depot"];
+const CLASS_NAME = ["","a star","a burnt star","a base","a planet","a Mongol battleship","a Mongol command ship","a Mongol scout","a Mongol supply ship","a Vandal death pod","a black hole","a Union ship","the Lexington"];
+const PLANET_NAME = ["Andromeda","Ceti Alpha","Cygnus","Gallista","Gamma Regula","Sigma","Vega","Xevious"];
+const ITEM_NAME = ["Mongol energium","plasma bolts","a plasma shield","life support supplies","raw energium"];
+const SYS_NAME = ["EnergyConverter","Shields","Life Support","Lasers","EnTorp Tubes","Warp Engines","Impulse Engines","Short Range Scanners","Long Range Scanners","Computer","Transporter","Shuttlecraft"];
+const RANK = ["","Lieutenant Commander","Commander","Captain","Commodore","Admiral"];
+const LOST_HOW = ["","destroyed by the Mongols","lost with her life support","destroyed by a Vandal death pod","pulled into a black hole","destroyed by the explosion of a star","destroyed by the death ray","destroyed per order of the captain"];
+const SHAPE_NAME = ["brick","hex","fine"];
+const SHAPE_N = SHAPE_NAME.length;
+const CLASS_FG = [0,226,124,45,34,39,196,135,40,213,16,254,231];
+const STORY = [["The Mongol Empire has declared war on the Union, and an invasion fleet is in this section of the galaxy: battle cruisers, a few command vessels, scouts and supply ships, and the Vandals joining in near their own territory.\n\nYou command the Class IX Research/Battle Cruiser Lexington, RCB-92, 430 officers and crew.  Secure the sixty-four quadrants: destroy every Mongol vessel, in thirty stardates.  ",
+"The StarBases will refuel and repair you; the chart on the right fills as you go; the main viewer looks at whatever is nearest.\n\n1 to 5 chooses your command level -- Lieutenant Commander to Admiral; more Mongols, and more of what they can do.  Any other key begins at Captain."].join(""),
+["The last Mongol is gone from the sector.\n\nHeadquarters acknowledges.  The Lexington is ordered home."].join(""),
+["The Lexington is lost."].join("")];
+const KEYS_TEXT = ["KEYS\n\nw e   a d   z x    impulse: one sector in the six directions.  6 units and 1/24 stardate a sector.\n.                  wait a turn\nf                  fire the lasers at the target: the energy set with [ and ].  Damage falls with distance and heat bites the banks\nn                  the next target      t  a torpedo, then a direction: down that line to the first thing it meets\ns                 ",
+"shields up, or down.  Up costs 50; up, warp costs double and torpedoes wander\nM                  all main energy the shields will take        p  the pools, and transfers between them\nm                  the galaxy chart: digits type a quadrant, row then column; Enter warps there.  - + set the warp factor\nD                  dock, beside a base        o  orbit, beside a planet        l  land, from ",
+"orbit\nu                  use something you carry     h  hail the nearest StarBase\nF                  concentrate repairs on one system      R  spend half a stardate on repairs      r  the state of repair\ng                  the log        i  what you carry        c  a closer look at the target        E  the evaluation, when it is over\nY                  the experimental death ray       K  ",
+
+"self-destruct\nT                  the board's skin: fine, hex, brick        S  L  save, load        ?  this        q  leave"].join("");
+const TRACKS = [{name:"title",notes:[36,0,3,29,1,29,2,29,2,29,8,35,4,29,2,29,2,29,8,44,3,44,1,44,4,59,2,44,2,44,4,44,4,49,12,52,4,26,2,26,2,26,8,33,2,26,2,26,2,26,2,26,8,39,4,26,4,52,2,52,2,52,2,52,2,55,4,47,12,42,3,42,1,42,4,33,4,33,6,42,2,33,4,31,4,31,6,42,2,42,4,33,4,33,4,42,2,42,2,42,12,49,4,33,4,44,4,44,4,44,2,49,2,55,4,59,4,44,4,35,4,29,4,44,4,44,4,44,2,49,2,55,6,59,2,70,4,70,4,59,4,59,2,59,2,59,4,55,4,55,6,59,2,70,4,70,4,59,4,59,4,55,4,52,4,42,4,52,4,49,4,47,4,39,4,55,4,44,4,37,4,17,8,44,8,22,8,29,8,0,3,29,1,29,2,29,2,29,8,35,4,29,2,29,2,29,8,44,3,44,1,44,4,59,2,44,2,44,4,44,4,49,12,52,4,26,2,26,2,26,8,33,2,26,2,26,2,26,2,26,8,39,4,26,4,52,2,52,2,52,2,52,2,55,4,47,12,42,3,42,1,42,4,33,4,33,6,42,2,33,4,31,4,31,6,42,2,42,4,33,4,33,4,42,2,42,2,42,12,49,4,33,4,44,4,44,4,44,2,49,2,55,4,59,4,44,4,35,4,29,4,44,4,44,4,44,2,49,2,55,6,59,2,70,4,70,4,59,4,59,2,59,2,59,4,55,4,55,6,59,2,70,4,70,
+4,59,4,59,4,55,4,52,4,42,4,52,4,49,4,47,4,39,4,55,4,44,4,37,4,17,8,44,8,22,4,29,2,0,2,20,4,29,2,0,2,20,4,29,2,0,2,20,2,29,2,20,2,29,2,20,4,29,4,0,4,29,4,0,16,29],what:"the title music, over the title"},
+{name:"ending",notes:[36,0,4,0,4,74,4,66,4,59,4,66,4,59,4,55,8,49,4,74,4,66,4,59,4,59,4,55,4,49,4,44,4,55,4,0,4,99,4,88,4,78,8,88,4,99,4,111,8,117,8,99,4,74,4,66,4,74,2,44,2,39,4,74,4,66,4,74,4,88,8,74,4,74,4,66,4,59,2,59,2,66,4,74,4,99,8,99,4,0,4,88,4,78,2,74,2,66,4,59,4,33,4,37,4,0,4,59,4,37,4,39,4,59,4,66,4,59,2,55,2,49,8,44,4,0,2,37,2,44,2,37,2,44,2,37,2,44,2,37,2,44,2,33,2,44,2,33,2,44,2,33,2,44,2,33,2,44,2,37,2,49,2,37,2,49,2,37,2,49,2,37,2,44,2,44,2,55,2,74,2,78,2,74,2,59,2,44,2,55,2,44,4,59,4,78,2,59,2,55,2,49,2,59,2,55,8,59,4,59,2,29,2,49,2,55,2,49,4,59,2,66,2,59,2,55,2,49,8,44,2,33,2,44,4,74,4,59,4,37,4,74,4,66,4,44,1,66,1,74,1,66,1,74,1,66,1,74,2,66,4,59,4,49,4,37,4,59,4,55,4,44,
+1,55,1,59,1,55,1,59,1,55,1,49,2,55,4,49,4,59,4,49,4,39,1,37,1,44,1,59,1,74,1,44,1,59,1,74,1,88,1,59,1,74,1,88,1,99,1,88,1,78,1,74,1,66,4,59,4,49,2,39,2,49,2,55,2,59,4,55,4,66,1,88,1,99,1,88,1,99,1,88,1,99,2,78,1,74,1,66,1,59,1,44,1,37,1,33,1,49,1,22,1,117,1,78,1,74,1,59,1,44,1,39,1,37,1,29,1,66,1,59,1,55,1,49,1,55,1,39,1,37,1,33,1,78,1,74,1,66,1,59,1,55,1,49,1,44,1,39,1,59,1,55,1,49,1,37,1,29,1,28,1,25,1,19,1,99,1,66,1,59,1,55,1,49,1,44,1,39,1,37,1,55,1,49,1,44,1,39,1,44,1,33,1,29,1,28,1,88,1,78,1,74,1,66,1,59,1,55,1,49,1,44,1,49,1,44,1,39,1,37,1,37,1,29,1,28,1,25,1,39,1,49,1,55,1,59,1,78,1,88,1,99,1,117,1,148,1,133,1,117,1,88,1,74,1,66,1,59,1,44,1,59,1,66,1,74,1,78,1,88,1,99,1,111,1,117,1,78,1,74,1,66,1,59,1,55,1,49,1,44,1,39,1,99,1,88,1,78,1,74,1,66,1,59,1,55,1,49,1,111,1,99,1,88,1,78,1,74,1,66,1,59,1,55,1,44,1,39,1,37,1,33,1,29,1,28,1,25,1,22,8,59,8,44,8,55,8,44,8,47,8,35,8,47,4,0,4,47,
+8,47,8,44,16,44,16,59],what:"the end-of-game music"},
+{name:"lasers",notes:[1,30,1,31],what:"the lasers firing"},
+{name:"torpedo",notes:[1,8,1,9,1,8,1,20,1,21,1,22],what:"a torpedo launched"},
+{name:"alert",notes:[4,50,10,100],what:"the status going to ALERT"},
+{name:"pod",notes:[4,30,10,60],what:"a Vandal death pod arriving"},
+{name:"hit",notes:[4,40,10,80,3,70],what:"incoming Mongol fire"}];
+const TRACK_N = TRACKS.length;
+const TICK_S = 0.0549254;
+/* ==TABLES-END== */
+/* ── a hash, and numbers drawn off it ───────────────────────
+ * hyrulelegend.c's, to the bit: the 64-bit mix is done in BigInt,
+ * which is slow and is only asked for when a plant is grown or a die is
+ * thrown.  Everything per pixel is the 32-bit hash3u. */
+const M64 = (1n << 64n) - 1n;
+function mix(x){
+  x = (x + 0x9E3779B97F4A7C15n) & M64;
+  x = ((x ^ (x >> 30n)) * 0xBF58476D1CE4E5B9n) & M64;
+  x = ((x ^ (x >> 27n)) * 0x94D049BB133111EBn) & M64;
+  return x ^ (x >> 31n);
+}
+let SEED = 1986n;
+let SEEDTEXT = "1986";
+function setSeed(text){
+  if (text === null || text === undefined || text === ""){ SEED = 1986n; SEEDTEXT = "1986"; return; }
+  SEEDTEXT = text.slice(0, 31);
+  let s = 0n;
+  for (let i = 0; i < text.length; i++) s = (s * 131n + BigInt(text.charCodeAt(i) & 255)) & M64;
+  SEED = mix(s);
+}
+function h2(a, b){ return mix(mix(SEED ^ ((a * 0x100000001B3n) & M64)) ^ b); }
+function draw(tag, i){
+  let k = 0n;
+  for (let j = 0; j < tag.length; j++) k = (k * 131n + BigInt(tag.charCodeAt(j) & 255)) & M64;
+  return Number(h2(k, BigInt(i) & M64) >> 11n) / 9007199254740992.0;
+}
+function hash3u(a, b, c){
+  let h = (Math.imul(a, 73856093) ^ Math.imul(b, 19349663) ^ Math.imul(c, 83492791)) >>> 0;
+  h = (h ^ (h >>> 13)) >>> 0;
+  h = Math.imul(h, 0x5bd1e995) >>> 0;
+  return (h ^ (h >>> 15)) >>> 0;
+}
+/* the game's own dice, for fights and drops */
+let dice_state = 0x243F6A8885A308D3n;
+function roll(lo, hi){
+  dice_state = mix(dice_state);
+  return lo + Number((dice_state >> 33n) % BigInt(hi - lo + 1));
+}
+const PI = Math.PI;
+
+/* ── the lattice, from hanb.c ──────────────────────────────── */
+const BOARD_SIZE = 61, RADIUS = 4;
+const COORD_Q = [0,1,2,3,4,-1,0,1,2,3,4,-2,-1,0,1,2,3,4,-3,-2,-1,0,1,2,3,4,-4,-3,-2,-1,0,1,2,3,4,-4,-3,-2,-1,0,1,2,3,-4,-3,-2,-1,0,1,2,-4,-3,-2,-1,0,1,-4,-3,-2,-1,0];
+const COORD_R = [-4,-4,-4,-4,-4,-3,-3,-3,-3,-3,-3,-2,-2,-2,-2,-2,-2,-2,-1,-1,-1,-1,-1,-1,-1,-1,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,2,2,2,2,2,2,2,3,3,3,3,3,3,4,4,4,4,4];
+const INDEX_OF = new Int8Array(81).fill(-1);
+for (let i = 0; i < BOARD_SIZE; i++) INDEX_OF[(COORD_Q[i] + 4) * 9 + COORD_R[i] + 4] = i;
+function in_board(q, r){
+  const aq = Math.abs(q), ar = Math.abs(r), s = Math.abs(q + r);
+  return aq <= RADIUS && ar <= RADIUS && s <= RADIUS;
+}
+function cell_at(q, r){ return in_board(q, r) ? INDEX_OF[(q + 4) * 9 + r + 4] : -1; }
+const ANGLE_DQ = [1, 0, -1, -1, 0, 1], ANGLE_DR = [0, 1, 1, 0, -1, -1];
+function step_cell(cell, d){
+  if (cell < 0 || d < 0) return -1;
+  return cell_at(COORD_Q[cell] + ANGLE_DQ[d], COORD_R[cell] + ANGLE_DR[d]);
+}
+function hex_dist(a, b){
+  const dq = Math.abs(COORD_Q[a] - COORD_Q[b]), dr = Math.abs(COORD_R[a] - COORD_R[b]);
+  const s = Math.abs(COORD_Q[a] - COORD_Q[b] + COORD_R[a] - COORD_R[b]);
+  return (dq + dr + s) >> 1;
+}
+/* the first and last cell of a row, for walking off the board east and west */
+function row_first(r){ return cell_at(r < 0 ? -4 - r : -4, r); }
+function row_last(r){ return cell_at(r > 0 ? 4 - r : 4, r); }
+
+/* ── the framebuffer, from hanb.c, as term.js paints it ────── */
+const FB_W = 160, FB_H = 64, FB_QUAD = 1;
+const fb_fg = new Uint8Array(FB_H * FB_W), fb_bg = new Uint8Array(FB_H * FB_W);
+const fb_ch = new Uint16Array(FB_H * FB_W), fb_q = new Uint8Array(FB_H * FB_W);
+const fb_qn = new Uint8Array(FB_H * FB_W);
+const FB = (row, col) => row * FB_W + col;
+function fb_clear(){ fb_fg.fill(0); fb_bg.fill(0); fb_ch.fill(0); fb_q.fill(0); fb_qn.fill(0); }
+function cubeRgb(c){
+  if (c < 16){
+    const base = [[0,0,0],[128,0,0],[0,128,0],[128,128,0],[0,0,128],[128,0,128],[0,128,128],[192,192,192],
+                  [128,128,128],[255,0,0],[0,255,0],[255,255,0],[0,0,255],[255,0,255],[0,255,255],[255,255,255]];
+    return base[c];
+  }
+  if (c < 232){
+    const n = c - 16, s = [0,95,135,175,215,255];
+    return [s[Math.floor(n / 36)], s[Math.floor(n / 6) % 6], s[n % 6]];
+  }
+  const g = 8 + (c - 232) * 10;
+  return [g, g, g];
+}
+/* the C compares in the 6-level cube, not in rgb */
+function cube_rgb6(c){
+  if (c >= 16 && c <= 231){ const i = c - 16; return [Math.floor(i / 36), Math.floor(i / 6) % 6, i % 6]; }
+  if (c >= 232){ const v = Math.floor((c - 232) * 5 / 23); return [v, v, v]; }
+  return [(c & 1) ? 3 : 0, (c & 2) ? 3 : 0, (c & 4) ? 3 : 0];
+}
+function cube_dist(a, b){
+  const x = cube_rgb6(a), y = cube_rgb6(b);
+  return (x[0]-y[0])*(x[0]-y[0]) + (x[1]-y[1])*(x[1]-y[1]) + (x[2]-y[2])*(x[2]-y[2]);
+}
+function px(x, y, colour){
+  const row = y >> 1;
+  if (x < 0 || x >= FB_W || row < 0 || row >= FB_H) return;
+  if (y & 1) fb_bg[FB(row, x)] = colour; else fb_fg[FB(row, x)] = colour;
+}
+function pxq(x2, y, colour){
+  const row = y >> 1, col = x2 >> 1;
+  if (col < 0 || col >= FB_W || row < 0 || row >= FB_H) return;
+  const at = FB(row, col), bit = 1 << (((y & 1) << 1) | (x2 & 1));
+  if (fb_ch[at] !== FB_QUAD){ fb_ch[at] = FB_QUAD; fb_q[at] = 0; fb_qn[at] = 0; fb_fg[at] = 0; fb_bg[at] = 0; }
+  if (fb_qn[at] === 0){ fb_fg[at] = colour; fb_qn[at] = 1; fb_q[at] |= bit; }
+  else if (colour === fb_fg[at]) fb_q[at] |= bit;
+  else if (fb_qn[at] === 1){ fb_bg[at] = colour; fb_qn[at] = 2; fb_q[at] &= ~bit; }
+  else if (colour === fb_bg[at]) fb_q[at] &= ~bit;
+  else if (cube_dist(colour, fb_fg[at]) <= cube_dist(colour, fb_bg[at])) fb_q[at] |= bit;
+  else fb_q[at] &= ~bit;
+}
+/* how many bytes a character is in the C's UTF-8, and a cut at a byte
+ * count the way a C buffer cuts: a glyph cut in half is its bytes as '?' */
+function utf8_len(code){ return code < 0x80 ? 1 : code < 0x800 ? 2 : 3; }
+function c_bytes(s, limit){
+  let out = "", used = 0;
+  for (let i = 0; i < s.length; i++){
+    const n = utf8_len(s.charCodeAt(i));
+    if (used + n > limit){ while (used < limit){ out += "?"; used++; } break; }
+    out += s[i]; used += n;
+  }
+  return out;
+}
+function text(x, y, s, fg, bg){
+  for (let i = 0; i < s.length; i++, x++){
+    if (x < 0 || x >= FB_W || y < 0 || y >= FB_H) return;
+    const at = FB(y, x);
+    const code = s.charCodeAt(i);
+    if (code >= 0x80 && code !== 0xB7 && code !== 0x2014){
+      /* not a glyph the terminal build knows: its bytes come out as ? */
+      for (let k = utf8_len(code); k > 0; k--, x++){
+        if (x >= FB_W) return;
+        const a = FB(y, x);
+        fb_ch[a] = 63; fb_fg[a] = fg; fb_bg[a] = bg;
+      }
+      x--;
+      continue;
+    }
+    fb_ch[at] = code; fb_fg[at] = fg; fb_bg[at] = bg;
+  }
+}
+function fill(x, y, w, h, bg){
+  for (let r = y; r < y + h; r++) for (let c = x; c < x + w; c++) text(c, r, " ", bg, bg);
+}
+let screen_w = 80, screen_h = 25, panel_x = 38;
+
+/* ── colours ───────────────────────────────────────────────── */
+function shade(c, f){
+  if (f > 1.0) f = 1.0;
+  if (f < 0.0) f = 0.0;
+  if (c >= 16 && c <= 231){
+    const i = c - 16;
+    let r = Math.floor(i / 36), g = Math.floor(i / 6) % 6, b = i % 6;
+    r = Math.trunc(r * f + 0.5); g = Math.trunc(g * f + 0.5); b = Math.trunc(b * f + 0.5);
+    return 16 + r * 36 + g * 6 + b;
+  }
+  if (c >= 232){ const v = Math.trunc((c - 232) * f + 0.5); return 232 + (v < 0 ? 0 : v); }
+  return f < 0.5 ? 0 : c;
+}
+function darker(c){
+  if (c < 16 || c > 231) return c < 16 ? 16 : (c > 232 ? c - 1 : 232);
+  const n = c - 16;
+  let r = Math.floor(n / 36), g = Math.floor(n / 6) % 6, b = n % 6;
+  if (r) r--;
+  if (g) g--;
+  if (b) b--;
+  return 16 + 36 * r + 6 * g + b;
+}
+function lighter(c){
+  if (c < 16 || c > 231) return c >= 232 && c < 255 ? c + 1 : c;
+  const n = c - 16;
+  let r = Math.floor(n / 36), g = Math.floor(n / 6) % 6, b = n % 6;
+  if (r < 5) r++;
+  if (g < 5) g++;
+  if (b < 5) b++;
+  return 16 + 36 * r + 6 * g + b;
+}
+
+/* C's printf, the little of it the screen uses */
+function padr(s, w){ s = String(s); while (s.length < w) s += " "; return s; }
+function padl(s, w){ s = String(s); while (s.length < w) s = " " + s; return s; }
+function pad0(n, w){ let s = String(n); while (s.length < w) s = "0" + s; return s; }
+
+/* ── plants, grown ────────────────────────────────────────── */
+const GROW_HABIT = ["F[+B][-B]A", "F[+B]F[-B]A", "F[+A][-A]T", "[+++B][+B][-B][---B]"];
+const GROW_TIP = ["L", "[O]", "[Q]", "L[O]"];
+function grow_draw(room, cell, tag, i){ return draw("plant" + room + "." + cell + "." + tag, i); }
+const BLOOM = [231, 230, 228, 226, 220, 214, 211, 213, 219, 183, 177, 168, 203, 197];
+const BERRY = [124, 160, 196, 130, 166, 100, 92, 54, 52];
+function grow_genome(room, cell, thing){
+  const g = {};
+  const base = thing * 16;
+  g.habit = Math.trunc(grow_draw(room, cell, "hab", base) * 4);
+  const t = grow_draw(room, cell, "tip", base);
+  g.tip = t < 0.58 ? 0 : t < 0.80 ? 1 : t < 0.90 ? 2 : 3;
+  g.leafy = grow_draw(room, cell, "lfy", base) < 0.62 ? 1 : 0;
+  g.alt = g.habit === 1 ? 1 : 0;
+  g.angle = (12.0 + grow_draw(room, cell, "ang", base) * 34.0) * PI / 180.0;
+  g.seg = 2.4 + grow_draw(room, cell, "seg", base) * 3.6;
+  g.taper = 0.62 + grow_draw(room, cell, "tap", base) * 0.32;
+  g.wob = grow_draw(room, cell, "wob", base) * 0.34;
+  g.leaf_len = g.seg * (0.55 + grow_draw(room, cell, "lln", base) * 1.15);
+  g.leaf_wide = g.leaf_len * (0.16 + grow_draw(room, cell, "lwd", base) * 0.36);
+  g.flower_r = g.seg * (0.30 + grow_draw(room, cell, "flr", base) * 0.55);
+  g.fruit_r = g.seg * (0.20 + grow_draw(room, cell, "frr", base) * 0.35);
+  g.petals = 3 + Math.trunc(grow_draw(room, cell, "pet", base) * 6);
+  const fg = THING[thing].fg;
+  g.leaf_c = fg;
+  g.stem_c = 58 + Math.trunc(grow_draw(room, cell, "stm", base) * 4) * 6;
+  g.flower_c = BLOOM[Math.trunc(grow_draw(room, cell, "flc", base) * 14)];
+  g.eye_c = 226;
+  g.fruit_c = BERRY[Math.trunc(grow_draw(room, cell, "frc", base) * 9)];
+  /* What the original drew, kept where the numbers would wander: a
+   * forest tree is upright and leafy and round; a bush a rosette. */
+  if (thing === T_TREE){
+    g.habit = grow_draw(room, cell, "hab", base) < 0.5 ? 0 : 1; g.leafy = 1; g.tip = 1; g.seg = 3.2; g.taper = 0.8;
+    g.leaf_len = 3.0; g.leaf_wide = 1.3; g.angle = (28.0 + grow_draw(room, cell, "ang", base) * 24.0) * PI / 180.0;
+    g.leaf_c = 28 + Math.trunc(grow_draw(room, cell, "lfc", base) * 3) * 6;
+  }
+  if (thing === T_CRYSTAL){ g.habit = 3; g.tip = 1; g.leafy = 0; g.seg = 2.6; g.stem_c = 111; g.flower_c = 159; }
+  return g;
+}
+function grow_string(g, age){
+  let s = "A";
+  const bud = "F" + (g.leafy ? "[+L][-L]" : "") + "T";
+  for (let step = 0; step < age; step++){
+    let out = "";
+    for (const c of s){
+      let rep = null;
+      if (c === 'A') rep = GROW_HABIT[g.habit];
+      else if (c === 'B') rep = bud;
+      else if (c === 'T') rep = GROW_TIP[g.tip];
+      if (rep){ if (out.length + rep.length >= 4095) break; out += rep; }
+      else { if (out.length + 1 >= 4095) break; out += c; }
+    }
+    s = out.slice(0, 4095);
+  }
+  return s;
+}
+const GROW_MAXW = 48, GROW_MAXH = 32;
+const grow_px = new Uint8Array(GROW_MAXH * GROW_MAXW);
+let grow_w = 0, grow_h = 0, grow_measuring = 0;
+let grow_sc = 1, grow_ox = 0, grow_oy = 0, gbx0 = 0, gby0 = 0, gbx1 = 0, gby1 = 0;
+function grow_dot(cx, cy, r, c){
+  if (grow_measuring){
+    if (cx - r < gbx0) gbx0 = cx - r;
+    if (cx + r > gbx1) gbx1 = cx + r;
+    if (cy - r < gby0) gby0 = cy - r;
+    if (cy + r > gby1) gby1 = cy + r;
+    return;
+  }
+  cx = grow_ox + cx * grow_sc; cy = grow_oy + cy * grow_sc; r *= grow_sc;
+  if (r < 0.42) r = 0.42;
+  const y0 = Math.floor(cy - r), y1 = Math.ceil(cy + r), x0 = Math.floor(cx - r), x1 = Math.ceil(cx + r);
+  for (let y = y0; y <= y1; y++)
+    for (let x = x0; x <= x1; x++){
+      const dx = x + 0.5 - cx, dy = y + 0.5 - cy;
+      if (dx*dx + dy*dy <= r*r && x >= 0 && x < grow_w && y >= 0 && y < grow_h && y < GROW_MAXH && x < GROW_MAXW)
+        grow_px[y * GROW_MAXW + x] = c;
+    }
+}
+function grow_stroke(x0, y0, x1, y1, t, c){
+  const dx = x1 - x0, dy = y1 - y0;
+  const n = Math.trunc((Math.abs(dx) + Math.abs(dy)) * (grow_measuring ? 1.0 : grow_sc)) * 2 + 1;
+  for (let i = 0; i <= n; i++) grow_dot(x0 + dx*i/n, y0 + dy*i/n, t*0.5, c);
+}
+function grow_walk(g, s, room, cell){
+  const st = [];
+  let node = 0, side = 1;
+  let t = {x: 0.0, y: 0.0, a: -PI/2.0, depth: 0};
+  for (let ci = 0; ci < s.length; ci++){
+    const c = s[ci];
+    switch (c){
+    case 'F': {
+      const len = g.seg * Math.pow(g.taper, t.depth);
+      let th = 1.6 * Math.pow(0.72, t.depth);
+      if (th < 0.9) th = 0.9;
+      t.a += (grow_draw(room, cell, "wb", node++) - 0.5) * 2.0 * g.wob;
+      const nx = t.x + Math.cos(t.a)*len, ny = t.y + Math.sin(t.a)*len;
+      grow_stroke(t.x, t.y, nx, ny, th, g.stem_c);
+      t.x = nx; t.y = ny;
+      break; }
+    case '+': t.a -= g.angle * side; break;
+    case '-': t.a += g.angle * side; break;
+    case '[': if (st.length < 24) st.push({x: t.x, y: t.y, a: t.a, depth: t.depth}); t.depth++; break;
+    case ']':
+      if (st.length > 0){ const p = st.pop(); t.x = p.x; t.y = p.y; t.a = p.a; t.depth = p.depth; }
+      if (g.alt) side = -side;
+      break;
+    case 'L': {
+      const ll = g.leaf_len * Math.pow(0.86, t.depth);
+      const lw = g.leaf_wide * Math.pow(0.86, t.depth);
+      for (let i = 0; i <= 8; i++){
+        const f = i / 8.0, w = lw * Math.pow(Math.sin(PI*f), 0.75);
+        grow_dot(t.x + Math.cos(t.a)*ll*f, t.y + Math.sin(t.a)*ll*f, w < 0.4 ? 0.4 : w, g.leaf_c);
+      }
+      break; }
+    case 'O': {
+      const r = g.flower_r * Math.pow(0.9, t.depth);
+      for (let k = 0; k < g.petals; k++){
+        const a = t.a + 2.0*PI*k/g.petals;
+        grow_dot(t.x + Math.cos(a)*r*0.8, t.y + Math.sin(a)*r*0.8, r*0.45 + 0.3, g.flower_c);
+      }
+      grow_dot(t.x, t.y, r*0.34 + 0.3, g.eye_c);
+      break; }
+    case 'Q':
+      grow_dot(t.x + Math.cos(t.a)*g.fruit_r*1.4, t.y + Math.sin(t.a)*g.fruit_r*1.4, g.fruit_r, g.fruit_c);
+      break;
+    default: break;
+    }
+  }
+}
+const GROWN_CACHE = 128;
+const grown_keep = [];
+function grow_tile(room, cell, thing, w, h){
+  if (thing < 0 || !(THING[thing].flags & TF_PLANT)) return 0;
+  if (w > GROW_MAXW || h > GROW_MAXH) return 0;
+  const key = hash3u((room * 61 + cell) >>> 0, thing >>> 0, (w * 64 + h) >>> 0);
+  const slot = key % GROWN_CACHE;
+  const k = grown_keep[slot];
+  if (k && k.key === key && k.w === w && k.h === h){ grow_px.set(k.px); return 1; }
+  const g = grow_genome(room, cell, thing);
+  const age = THING[thing].size === 'L' ? 4 : THING[thing].size === 'K' ? 3 : 2;
+  const str = grow_string(g, age);
+  grow_w = w; grow_h = h;
+  grow_px.fill(0);
+  grow_measuring = 1;
+  gbx0 = gby0 = 1e9; gbx1 = gby1 = -1e9;
+  grow_sc = 1.0; grow_ox = grow_oy = 0.0;
+  grow_walk(g, str, room, cell);
+  grow_measuring = 0;
+  let bw = gbx1 - gbx0, bh = gby1 - gby0;
+  if (!(bw > 1e-6)) bw = 1.0;
+  if (!(bh > 1e-6)) bh = 1.0;
+  let sx = w * 0.70 / bw, sy = (h - 0.4) * 0.82 / bh;
+  grow_sc = sx < sy ? sx : sy;
+  grow_ox = w * 0.5 - (gbx0 + gbx1) * 0.5 * grow_sc;
+  grow_oy = h - 0.7 - gby1 * grow_sc;
+  grow_walk(g, str, room, cell);
+  grown_keep[slot] = {key: key, w: w, h: h, px: Uint8Array.from(grow_px)};
+  return 1;
+}
+
+/* ── beasts, grown ────────────────────────────────────────── */
+function bst_fnv(s, h){
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ (s.charCodeAt(i) & 255), 16777619) >>> 0;
+  return h >>> 0;
+}
+function bst_draw(name, tag, i){
+  let h = 2166136261 >>> 0;
+  h = bst_fnv(SEEDTEXT, h);
+  h = bst_fnv(name, h);
+  h = bst_fnv(tag, h);
+  h = Math.imul(h ^ (i >>> 0), 16777619) >>> 0;
+  h = (h + 0x9E3779B9) >>> 0;
+  let z = h;
+  z = Math.imul(z ^ (z >>> 16), 0x21f0aaad) >>> 0;
+  z = Math.imul(z ^ (z >>> 15), 0x735a2d97) >>> 0;
+  z = (z ^ (z >>> 15)) >>> 0;
+  return z / 4294967296.0;
+}
+function bst_range(n, t, lo, hi){ return lo + (hi - lo) * bst_draw(n, t, 0); }
+function bst_pick(n, t, k){ return Math.trunc(bst_draw(n, t, 0) * k); }
+function beast_build(name){
+  for (const b of BUILDS) if (b.name === name) return b;
+  return null;
+}
+const BST_BAND = [
+  {letter:'I', leg_lo:0.80, leg_hi:1.60, girth_lo:0.30, girth_hi:0.52, neck_hi:1.0},
+  {letter:'J', leg_lo:0.70, leg_hi:1.50, girth_lo:0.22, girth_hi:0.40, neck_hi:2.0},
+  {letter:'K', leg_lo:1.00, leg_hi:2.40, girth_lo:0.20, girth_hi:0.38, neck_hi:3.0},
+  {letter:'L', leg_lo:1.20, leg_hi:2.60, girth_lo:0.22, girth_hi:0.40, neck_hi:5.0},
+  {letter:'M', leg_lo:0.60, leg_hi:1.80, girth_lo:0.13, girth_hi:0.30, neck_hi:6.0},
+];
+function beast_genome(name, fg){
+  const b = {};
+  const k = beast_build(name);
+  const sz = k ? k.size : 'K';
+  b.legs = k ? k.legs : 4;
+  b.winged = k ? k.wings : 0;
+  let zi = 2;
+  for (let i = 0; i < 5; i++) if (BST_BAND[i].letter === sz) zi = i;
+  const z = BST_BAND[zi];
+  b.neck_n = Math.trunc(bst_draw(name, "neck", 0) * z.neck_hi);
+  b.gap = b.legs >= 6 ? 1 : 2 + bst_pick(name, "gap", 4);
+  b.lead = b.legs >= 6 ? 0 : bst_pick(name, "lead", 2);
+  b.trail = b.legs >= 6 ? 0 : bst_pick(name, "trail", 2);
+  b.tail = bst_draw(name, "tail", 0) < 0.72 ? 1 + bst_pick(name, "tk", 3) : 0;
+  b.tail_n = b.tail === 0 ? 0 : b.tail === 2 ? 3 + bst_pick(name, "tn", 4) : b.tail === 3 ? 2 : 1 + bst_pick(name, "tn2", 2);
+  if (!b.legs && !b.tail){ b.tail = 2; b.tail_n = 4; }
+  {
+    const pairs = b.legs >> 1, odd = b.legs & 1;
+    if (!b.legs) b.body_n = 5 + bst_pick(name, "trunk", 8);
+    else {
+      b.body_n = b.lead + b.trail;
+      for (let p = 0; p < pairs; p++) if (p + 1 < pairs || odd) b.body_n += b.gap;
+    }
+    if (b.body_n < 1) b.body_n = 1;
+    const most = b.legs ? Math.trunc(b.body_n * 1.4) : b.body_n * 3;
+    if (b.tail_n > most) b.tail_n = most;
+  }
+  b.head = bst_pick(name, "head", 4);
+  b.crown = bst_draw(name, "crown", 0) < 0.30 ? (b.legs >= 6 ? 3 : 1 + bst_pick(name, "ck", 2)) : 0;
+  b.foot = !b.legs ? 3 : b.legs >= 6 ? 2 : bst_pick(name, "foot", 3);
+  b.seg = bst_range(name, "seg", 3.0, 6.0);
+  b.girth = b.seg * b.body_n * bst_range(name, "girth", z.girth_lo, z.girth_hi);
+  if (b.girth > b.seg * 2.6) b.girth = b.seg * 2.6;
+  b.profile = bst_range(name, "prof", 0.34, 0.62);
+  b.arch = bst_range(name, "arch", -0.30, 0.34);
+  b.carry = b.legs === 2 ? bst_range(name, "carry", 0.45, 1.15) : 0.0;
+  b.neck_rise = bst_range(name, "nrise", 0.10, 0.62);
+  b.neck_thin = bst_range(name, "nthin", 0.28, 0.52);
+  b.leg_len = b.seg * bst_range(name, "leg", z.leg_lo, z.leg_hi);
+  b.splay = bst_range(name, "splay", -0.16, 0.20);
+  b.knee = bst_range(name, "knee", 0.14, 0.44) * (b.legs >= 6 ? 2.0 : 1.0);
+  b.foot_r = b.seg * bst_range(name, "footr", 0.10, 0.26);
+  b.head_deep = b.girth * bst_range(name, "hdeep", 0.58, 0.98);
+  b.head_len = b.head_deep * bst_range(name, "hlen", 0.9, 2.0);
+  b.muzzle = bst_range(name, "muz", 0.30, 0.95);
+  b.eye_r = b.head_deep * bst_range(name, "eye", 0.10, 0.20);
+  b.crown_len = b.head_deep * bst_range(name, "crn", 0.45, 1.5);
+  b.wing_len = b.seg * bst_range(name, "wl", 1.6, 4.2);
+  b.wing_deep = b.wing_len * bst_range(name, "wd", 0.30, 0.70);
+  b.tail_taper = bst_range(name, "ttap", 0.68, 0.94);
+  b.tail_lift = bst_range(name, "tlift", -0.5, 0.5);
+  b.hide_c = fg;
+  b.dark_c = darker(fg);
+  b.pale_c = lighter(lighter(fg));
+  b.eye_c = 16;
+  b.horn_c = 187;
+  /* What the original drew, kept where the numbers would wander: the
+   * officers wear the uniform, Spock and McCoy and the specialists in
+   * blue, the security officer in red; the robots and the plant have
+   * no face; the worm is red; the dragon is mist; the Gorn is green
+   * and toothy; the warbird is green with the bird on its wings. */
+  if (name === "Mr. Spock" || name === "Dr. McCoy" || name === "the geologist" || name === "the biologist" || name === "the historian"){ b.crown = 0; b.tail = 0; b.tail_n = 0; b.pale_c = 223; b.dark_c = 25; }
+  if (name === "the security officer"){ b.crown = 0; b.tail = 0; b.tail_n = 0; b.pale_c = 223; b.dark_c = 124; }
+  if (name.indexOf("robot") >= 0 || name === "a shooting plant"){ b.eye_r = 0.0; b.crown = 0; b.tail = 0; b.tail_n = 0; }
+  if (name.indexOf("robot") >= 0){ b.pale_c = 250; b.dark_c = 240; }
+  if (name === "a blood worm"){ b.pale_c = 196; b.dark_c = 124; }
+  if (name === "a mist dragon"){ b.pale_c = 254; b.dark_c = 250; b.head = 3; b.muzzle = 0.9; }
+  if (name === "the Gorn"){ b.head = 3; b.muzzle = 0.9; b.pale_c = 118; b.crown = 0; }
+  if (name === "a Romulan warbird"){ b.pale_c = 34; b.dark_c = 22; b.eye_r = 0.0; b.crown = 0; b.tail = 0; b.tail_n = 0; }
+  return b;
+}
+function beast_chest(b){
+  let out = "";
+  const pairs = b.legs >> 1, odd = b.legs & 1;
+  if (!b.legs){ for (let i = 0; i < b.body_n; i++) out += 'S'; return out; }
+  for (let i = 0; i < b.lead; i++) out += 'S';
+  for (let p = 0; p < pairs; p++){
+    out += 'G';
+    if (p + 1 < pairs || odd) for (let i = 0; i < b.gap; i++) out += 'S';
+  }
+  if (odd) out += 'g';
+  for (let i = 0; i < b.trail; i++) out += 'S';
+  return out;
+}
+function beast_string(b){
+  let s = "X";
+  for (let step = 0; step < 7; step++){
+    let out = "";
+    for (const c of s){
+      let rep = null;
+      switch (c){
+      case 'X': rep = "H" + "n".repeat(b.neck_n) + "BU"; break;
+      case 'B': rep = b.winged ? "[W]C" : "C"; break;
+      case 'C': rep = beast_chest(b); break;
+      case 'U': rep = "s".repeat(b.tail_n) + (b.tail ? "Y" : ""); break;
+      case 'G': rep = "[P]"; break;
+      case 'g': rep = "[Q]"; break;
+      case 'P': rep = "[>L][<L]"; break;
+      case 'Q': rep = "[>L]"; break;
+      case 'L': rep = "JJF"; break;
+      case 'W': rep = "[>V][<V]"; break;
+      default: break;
+      }
+      if (rep !== null){ if (out.length + rep.length >= 2047) break; out += rep; }
+      else { if (out.length + 1 >= 2047) break; out += c; }
+    }
+    s = out;
+  }
+  return s;
+}
+const BST_MAXW = 88, BST_MAXH = 24;
+const bst_px = new Uint8Array(BST_MAXH * BST_MAXW);
+let bst_w = 0, bst_h = 0, bst_measuring = 0, bst_pass = 0, bst_layer = 1, bst_sub = 1;
+let bst_sc = 1, bst_ox = 0, bst_oy = 0, bbx0 = 0, bby0 = 0, bbx1 = 0, bby1 = 0;
+let bst_station = 0, bst_neck_i = 0, bst_trunk_n = 1, bst_girdle = 0, bst_near = 1;
+const BL_FAR = 0, BL_BODY = 1, BL_HEAD = 2, BL_NEAR = 3, BST_PASSES = 7;
+const BST_PL = [BL_FAR, BL_FAR, BL_BODY, BL_BODY, BL_HEAD, BL_NEAR, BL_NEAR];
+const BST_PS = [0, 1, 0, 1, -1, 0, 1];
+function bst_dot(cx, cy, r, c){
+  if (bst_measuring){
+    if (cx - r < bbx0) bbx0 = cx - r;
+    if (cx + r > bbx1) bbx1 = cx + r;
+    if (cy - r < bby0) bby0 = cy - r;
+    if (cy + r > bby1) bby1 = cy + r;
+    return;
+  }
+  if (bst_layer !== BST_PL[bst_pass]) return;
+  if (BST_PS[bst_pass] >= 0 && bst_sub !== BST_PS[bst_pass]) return;
+  cx = bst_ox + cx * bst_sc; cy = bst_oy + cy * bst_sc; r *= bst_sc;
+  if (r < 0.42) r = 0.42;
+  const x0 = Math.floor(cx - r), x1 = Math.ceil(cx + r), y0 = Math.floor(cy - r), y1 = Math.ceil(cy + r);
+  for (let y = y0; y <= y1; y++)
+    for (let x = x0; x <= x1; x++){
+      if (x < 0 || x >= bst_w || y < 0 || y >= bst_h) continue;
+      const dx = x + 0.5 - cx, dy = y + 0.5 - cy;
+      if (dx * dx + dy * dy <= r * r) bst_px[y * BST_MAXW + x] = c;
+    }
+}
+function bst_line(x0, y0, x1, y1, t0, t1, c){
+  const dx = x1 - x0, dy = y1 - y0;
+  const n = Math.trunc((Math.abs(dx) + Math.abs(dy)) * (bst_measuring ? 1.0 : bst_sc)) * 2 + 1;
+  for (let i = 0; i <= n; i++){
+    const f = i / n;
+    bst_dot(x0 + dx * f, y0 + dy * f, (t0 + (t1 - t0) * f) * 0.5, c);
+  }
+}
+function bst_edge(){ return bst_measuring ? 0.8 : 1.4 / bst_sc; }
+function bst_width(b, f){
+  const p = b.profile;
+  const t = f < p ? (f / (p > 1e-6 ? p : 1e-6)) * 0.5 : 0.5 + (f - p) / ((1.0 - p) > 1e-6 ? (1.0 - p) : 1e-6) * 0.5;
+  const w = b.girth * (0.34 + 0.66 * Math.pow(Math.sin(PI * t), 0.75));
+  return w < b.girth * 0.30 ? b.girth * 0.30 : w;
+}
+function bst_head(b, x, y, a){
+  const fx = -Math.cos(a), fy = -Math.sin(a), ux = -fy, uy = fx;
+  let L = b.head_len, D = b.head_deep;
+  if (b.head === 1){ L *= 1.5; D *= 0.72; }
+  if (b.head === 3){ L *= 0.8; D *= 1.35; }
+  const cx = x + fx * L * 0.35, cy = y + fy * L * 0.35;
+  bst_sub = 0;
+  bst_line(cx - fx * L * 0.22, cy - fy * L * 0.22, cx + fx * L * 0.20, cy + fy * L * 0.20,
+           D + bst_edge() * 2.0, D * 0.86 + bst_edge() * 2.0, b.dark_c);
+  bst_sub = 1;
+  bst_line(cx - fx * L * 0.22, cy - fy * L * 0.22, cx + fx * L * 0.20, cy + fy * L * 0.20, D, D * 0.86, b.hide_c);
+  const mx = cx + fx * L * b.muzzle, my = cy + fy * L * b.muzzle;
+  if (b.head === 2){
+    bst_sub = 0; bst_line(cx, cy, mx, my, D * 0.55 + bst_edge(), 0.8 + bst_edge(), darker(b.horn_c));
+    bst_sub = 1; bst_line(cx, cy, mx, my, D * 0.55, 0.8, b.horn_c);
+  } else {
+    bst_sub = 0; bst_line(cx, cy, mx, my, D * 0.8 + bst_edge(), D * 0.40 + bst_edge(), b.dark_c);
+    bst_sub = 1; bst_line(cx, cy, mx, my, D * 0.8, D * 0.40, b.hide_c);
+  }
+  bst_sub = 1;
+  if (b.eye_r > 0.0){
+    bst_dot(cx + fx * D * 0.30 - ux * D * 0.22, cy + fy * D * 0.30 - uy * D * 0.22, b.eye_r + bst_edge(), b.pale_c);
+    bst_dot(cx + fx * D * 0.30 - ux * D * 0.22, cy + fy * D * 0.30 - uy * D * 0.22, b.eye_r, b.eye_c);
+  }
+  if (!b.crown) return;
+  const hx = cx - ux * D * 0.42, hy = cy - uy * D * 0.42;
+  for (let k = -1; k <= 1; k += 2){
+    let aa = a + PI + k * 0.34 - PI / 2.0;
+    const len = b.crown_len;
+    let px_ = hx, py = hy;
+    for (let i = 0; i < 7; i++){
+      aa += (b.crown === 2 ? 0.16 : 0.10) * k;
+      const nx = px_ + Math.cos(aa) * len / 7.0, ny = py + Math.sin(aa) * len / 7.0;
+      const t = b.crown === 1 ? len * 0.20 * Math.sin(PI * (i + 0.5) / 7.0) + 0.6
+              : b.crown === 2 ? len * 0.24 * (1.0 - i / 7.0) + 0.6 : 1.0;
+      bst_line(px_, py, nx, ny, t, t, b.crown === 1 ? b.hide_c : b.horn_c);
+      px_ = nx; py = ny;
+    }
+  }
+}
+function bst_foot(b, x, y, a){
+  const r = b.foot_r, fx = Math.cos(a - PI / 2.0), fy = Math.sin(a - PI / 2.0);
+  const c = bst_layer === BL_FAR ? b.dark_c : b.hide_c;
+  const h = bst_layer === BL_FAR ? darker(b.horn_c) : b.horn_c;
+  bst_sub = 1;
+  switch (b.foot){
+  case 1: bst_dot(x, y, r * 1.1, h); break;
+  case 2: for (let k = -1; k <= 1; k++)
+            bst_line(x, y, x + Math.cos(a + k * 0.5) * r * 1.8, y + Math.sin(a + k * 0.5) * r * 1.8, 1.2, 0.6, h);
+          break;
+  case 3: bst_line(x - fx * r, y - fy * r, x + fx * r * 2.2, y + fy * r * 2.2, r * 1.4, r * 0.7, c); break;
+  default: bst_dot(x + fx * r * 0.4, y + fy * r * 0.4, r, c);
+  }
+}
+function bst_wing(b, x, y){
+  const c = bst_layer === BL_FAR ? b.dark_c : b.hide_c;
+  const len = b.wing_len, dep = b.wing_deep;
+  const a = -PI / 2.0 - 0.55 + (bst_layer === BL_FAR ? 0.12 : 0.0);
+  const tx = x + Math.cos(a) * len, ty = y + Math.sin(a) * len;
+  bst_sub = 1;
+  for (let e = 0; e < 2; e++)
+    for (let i = 0; i <= 18; i++){
+      const f = i / 18.0;
+      const w = dep * 0.5 * Math.sin(PI * Math.pow(f, 0.8)) + (e ? 0.0 : bst_edge());
+      bst_dot(x + (tx - x) * f, y + (ty - y) * f, w < 0.4 ? 0.4 : w, e ? c : darker(c));
+    }
+}
+function beast_walk(b, s){
+  const st = [];
+  let limb_j = 0;
+  bst_station = 0; bst_neck_i = 0; bst_girdle = 0; bst_near = 1;
+  bst_layer = BL_BODY; bst_sub = 1;
+  const t = {x: 0.0, y: 0.0, a: PI - (b.neck_n ? b.neck_rise : 0.0) - b.carry};
+  for (let ci = 0; ci < s.length; ci++){
+    const c = s[ci];
+    let len, w0, w1, f0, f1;
+    switch (c){
+    case 'H': {
+      bst_layer = BL_HEAD;
+      bst_head(b, t.x, t.y, t.a);
+      const fx = -Math.cos(t.a), fy = -Math.sin(t.a);
+      t.x -= fx * b.head_deep * 0.30; t.y -= fy * b.head_deep * 0.30;
+      break; }
+    case 'n': {
+      bst_layer = BL_BODY;
+      len = b.seg * 0.8;
+      w0 = b.girth * b.neck_thin * (0.8 + 0.4 * (bst_neck_i + 1) / (b.neck_n ? b.neck_n : 1));
+      const nx = t.x + Math.cos(t.a) * len, ny = t.y + Math.sin(t.a) * len;
+      bst_sub = 0; bst_line(t.x, t.y, nx, ny, w0 + bst_edge(), w0 + bst_edge(), b.dark_c);
+      bst_sub = 1; bst_line(t.x, t.y, nx, ny, w0, w0, b.hide_c);
+      t.x = nx; t.y = ny;
+      t.a += b.neck_rise / (b.neck_n ? b.neck_n : 1);
+      bst_neck_i++;
+      break; }
+    case 'S': {
+      bst_layer = BL_BODY;
+      len = b.seg;
+      f0 = bst_trunk_n ? bst_station / bst_trunk_n : 0.0;
+      f1 = bst_trunk_n ? (bst_station + 1) / bst_trunk_n : 1.0;
+      w0 = bst_width(b, f0); w1 = bst_width(b, f1);
+      const nx = t.x + Math.cos(t.a) * len, ny = t.y + Math.sin(t.a) * len;
+      bst_sub = 0; bst_line(t.x, t.y, nx, ny, w0 + bst_edge(), w1 + bst_edge(), b.dark_c);
+      bst_sub = 1; bst_line(t.x, t.y, nx, ny, w0, w1, b.hide_c);
+      bst_line(t.x, t.y + w0 * 0.30, nx, ny + w1 * 0.30, w0 * 0.34, w1 * 0.34, b.pale_c);
+      t.x = nx; t.y = ny;
+      t.a += b.arch / (bst_trunk_n ? bst_trunk_n : 1);
+      bst_station++;
+      break; }
+    case 's': {
+      bst_layer = BL_BODY;
+      len = b.seg * 0.7;
+      w0 = b.girth * 0.26 * Math.pow(b.tail_taper, bst_station - bst_trunk_n);
+      w1 = w0 * b.tail_taper;
+      if (w0 < 0.9) w0 = 0.9;
+      if (w1 < 0.7) w1 = 0.7;
+      t.a += b.tail_lift * 0.18;
+      const nx = t.x + Math.cos(t.a) * len, ny = t.y + Math.sin(t.a) * len;
+      bst_sub = 0; bst_line(t.x, t.y, nx, ny, w0 + bst_edge(), w1 + bst_edge(), b.dark_c);
+      bst_sub = 1; bst_line(t.x, t.y, nx, ny, w0, w1, b.hide_c);
+      t.x = nx; t.y = ny;
+      bst_station++;
+      break; }
+    case 'Y':
+      bst_layer = BL_BODY; bst_sub = 1;
+      if (b.tail === 3)
+        for (let k = -1; k <= 1; k += 2)
+          for (let i = 0; i <= 10; i++){
+            const f = i / 10.0, a = t.a + k * 0.8;
+            bst_dot(t.x + Math.cos(a) * b.girth * 1.1 * f, t.y + Math.sin(a) * b.girth * 1.1 * f,
+                    b.girth * 0.26 * Math.sin(PI * f) + 0.4, b.hide_c);
+          }
+      else if (b.tail === 1) bst_dot(t.x, t.y, b.girth * 0.22 + 0.5, b.hide_c);
+      break;
+    case '>': bst_layer = BL_NEAR; bst_near = 1;
+              t.a = PI / 2.0 + b.splay * (bst_girdle & 1 ? -1.0 : 1.0);
+              limb_j = 0; break;
+    case '<': bst_layer = BL_FAR; bst_near = 0;
+              t.x += b.seg * 0.30; t.y -= b.girth * 0.10;
+              t.a = PI / 2.0 + b.splay * (bst_girdle & 1 ? -1.0 : 1.0) + 0.10;
+              limb_j = 0; break;
+    case 'J': {
+      len = b.leg_len * (limb_j ? 0.46 : 0.56);
+      w0 = b.girth * (limb_j ? 0.20 : 0.34);
+      if (w0 < 1.4) w0 = 1.4;
+      const nx = t.x + Math.cos(t.a) * len, ny = t.y + Math.sin(t.a) * len;
+      const col = bst_near ? b.hide_c : b.dark_c;
+      bst_sub = 0; bst_line(t.x, t.y, nx, ny, w0 + bst_edge(), w0 * 0.72 + bst_edge(), darker(col));
+      bst_sub = 1; bst_line(t.x, t.y, nx, ny, w0, w0 * 0.86, col);
+      t.x = nx; t.y = ny;
+      t.a += limb_j ? -b.knee * 0.62 : b.knee;
+      limb_j++;
+      break; }
+    case 'F': bst_foot(b, t.x, t.y, t.a); break;
+    case 'V': bst_wing(b, t.x, t.y); break;
+    case '[': if (st.length < 48) st.push({x: t.x, y: t.y, a: t.a}); break;
+    case ']': if (st.length > 0){ const p = st.pop(); t.x = p.x; t.y = p.y; t.a = p.a; }
+              bst_layer = BL_BODY;
+              break;
+    default: break;
+    }
+    if (c === ']' && (ci + 1 >= s.length || s[ci + 1] !== '[')) bst_girdle++;
+  }
+}
+const BST_CACHE = 48;
+const bst_keep = [];
+function beast_pixels(name, fg, w, h){
+  if (!name || w > BST_MAXW || h > BST_MAXH || w < 2 || h < 2) return 0;
+  let key = bst_fnv(name, 2166136261 >>> 0);
+  key = Math.imul(key ^ (fg >>> 0), 16777619) >>> 0;
+  key = Math.imul(key ^ ((w * 64 + h) >>> 0), 16777619) >>> 0;
+  const slot = key % BST_CACHE;
+  const k = bst_keep[slot];
+  if (k && k.key === key && k.w === w && k.h === h){ bst_px.set(k.px); return 1; }
+  const b = beast_genome(name, fg);
+  const str = beast_string(b);
+  bst_trunk_n = 0;
+  for (const c of str) if (c === 'S') bst_trunk_n++;
+  if (!bst_trunk_n) bst_trunk_n = 1;
+  bst_w = w; bst_h = h;
+  bst_px.fill(0);
+  bst_measuring = 1;
+  bbx0 = bby0 = 1e9; bbx1 = bby1 = -1e9;
+  bst_sc = 1.0; bst_ox = bst_oy = 0.0;
+  beast_walk(b, str);
+  bst_measuring = 0;
+  let bw = bbx1 - bbx0, bh = bby1 - bby0;
+  if (!(bw > 1e-6)) bw = 1.0;
+  if (!(bh > 1e-6)) bh = 1.0;
+  const sx = w * 0.94 / bw, sy = (h - 0.2) * 0.92 / bh;
+  bst_sc = sx < sy ? sx : sy;
+  bst_ox = w * 0.5 - (bbx0 + bbx1) * 0.5 * bst_sc;
+  bst_oy = h - 0.4 - bby1 * bst_sc;
+  for (bst_pass = 0; bst_pass < BST_PASSES; bst_pass++) beast_walk(b, str);
+  bst_keep[slot] = {key: key, w: w, h: h, px: Uint8Array.from(bst_px)};
+  return 1;
+}
+/* ── sound ────────────────────────────────────────────────────
+ * lexington.c's synth, which is hanb's with a PC speaker in it: no
+ * recordings, a ship's hail drawn from the genome its body is, and
+ * the game's own note data read out of EGATREK.EXE, on one square
+ * wave.  All of it is + - * / and a compare on doubles, so this
+ * renders the same numbers the C does.  The game side is one function,
+ * sound_say(line), which the page wires to Web Audio and a check leaves
+ * unwired. */
+const FS = 22050, RENDER_MAX = FS * 75, F20 = Math.trunc(FS / 20);
+const render_buf = new Float64Array(RENDER_MAX);
+let nz_state = 1;
+function noise(){
+  let x = nz_state;
+  x = (x ^ (x << 13)) >>> 0;
+  x = (x ^ (x >>> 17)) >>> 0;
+  x = (x ^ (x << 5)) >>> 0;
+  nz_state = x;
+  return x * (1.0 / 2147483648.0) - 1.0;
+}
+function svf_set(s, fc, q){
+  let f = 2.0 * PI * fc / FS;
+  if (f > 0.9) f = 0.9;
+  if (q < 0.3) q = 0.3;
+  s.f = f; s.q = q; s.low = 0.0; s.band = 0.0;
+}
+function svf_run(s, inp, lowpass){
+  s.low += s.f * s.band;
+  const high = inp - s.low - s.q * s.band;
+  s.band += s.f * high;
+  return lowpass ? s.low : s.band;
+}
+/* the oscillators hold their phase in a one-element array, as C did in a double* */
+function osc(ph, f){
+  ph[0] += f / FS;
+  if (ph[0] >= 1.0) ph[0] -= 1.0;
+  return ph[0];
+}
+function pulse(ph, duty){ return (ph < duty ? 1.0 : -1.0) - (2.0 * duty - 1.0); }
+function tri(ph){ return ph < 0.5 ? 4.0 * ph - 1.0 : 3.0 - 4.0 * ph; }
+function env(t, d, a){
+  if (t < 0.0 || t >= d) return 0.0;
+  const u = t / d;
+  if (u < a) return u / a;
+  const r = (u - a) / (1.0 - a);
+  return (1.0 - r) * (1.0 - r);
+}
+function emit(n, peak){
+  if (n > RENDER_MAX) n = RENDER_MAX;
+  let big = 0.0;
+  for (let i = 0; i < n; i++){ const a = Math.abs(render_buf[i]); if (a > big) big = a; }
+  const g = big > 0.0 ? peak / big : 0.0;
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) out[i] = Math.trunc(render_buf[i] * g * 32767.0) / 32767.0;
+  return out;
+}
+const VOICE_THROAT = 0, VOICE_CHIRP = 1, VOICE_STRIDULATE = 2, VOICE_HISS = 3;
+function call_plan(name){
+  const c = {};
+  const k = beast_build(name);
+  const sz = k ? k.size : 'K';
+  const legs = k ? k.legs : 4, wings = k ? k.wings : 0;
+  /* the machines: every ship is one; a call here is a hail over subspace */
+  c.mech = (name.indexOf("ship") >= 0 || name.indexOf("scout") >= 0 || name.indexOf("pod") >= 0 || name.indexOf("Lexington") >= 0) ? 1 : 0;
+  c.voice = legs >= 6 ? VOICE_STRIDULATE : legs === 0 ? VOICE_HISS : (legs === 2 && wings) ? VOICE_CHIRP : VOICE_THROAT;
+  const BAND = [{letter:'I', lo:1800.0, hi:4200.0, dur:0.05}, {letter:'J', lo:260.0, hi:900.0, dur:0.13},
+                {letter:'K', lo:80.0, hi:320.0, dur:0.28}, {letter:'L', lo:40.0, hi:120.0, dur:0.50},
+                {letter:'M', lo:22.0, hi:60.0, dur:0.95}];
+  let zi = 2;
+  for (let i = 0; i < 5; i++) if (BAND[i].letter === sz) zi = i;
+  const d = bst_draw(name, "pitch", 0);
+  c.f0 = BAND[zi].lo + (BAND[zi].hi - BAND[zi].lo) * d * d;
+  c.dur = BAND[zi].dur * (0.7 + 0.8 * bst_draw(name, "dur", 0));
+  c.gap = c.dur * (0.3 + 0.6 * bst_draw(name, "rest", 0));
+  const gap = legs >= 6 ? 1 : 2 + bst_pick(name, "gap", 4);
+  const lead = legs >= 6 ? 0 : bst_pick(name, "lead", 2);
+  const trail = legs >= 6 ? 0 : bst_pick(name, "trail", 2);
+  let body_n;
+  {
+    const pairs = legs >> 1, odd = legs & 1;
+    if (!legs) body_n = 5 + bst_pick(name, "trunk", 8);
+    else {
+      body_n = lead + trail;
+      for (let p = 0; p < pairs; p++) if (p + 1 < pairs || odd) body_n += gap;
+    }
+    if (body_n < 1) body_n = 1;
+  }
+  c.syll = 1 + Math.trunc(body_n / 3);
+  if (c.voice === VOICE_CHIRP) c.syll = 2 + bst_pick(name, "syll", 4);
+  if (c.syll > 5) c.syll = 5;
+  c.attack = c.voice === VOICE_CHIRP ? 0.15 : 0.08;
+  c.bend = c.voice === VOICE_CHIRP ? 0.6 + 1.2 * bst_draw(name, "bend", 0) : -0.25 + 0.75 * bst_draw(name, "bend", 0);
+  c.fall = 0.0;
+  c.vib_rate = 4.0 + 6.0 * bst_draw(name, "vibr", 0);
+  c.vib = bst_draw(name, "vib", 0) < 0.35 ? 0.0 : 0.01 + 0.06 * bst_draw(name, "vibd", 0);
+  c.rasp = 0.05 + 0.5 * bst_draw(name, "rasp", 0) * bst_draw(name, "rasp2", 0);
+  c.duty = 0.08 + 0.3 * bst_draw(name, "duty", 0);
+  c.am = 40.0 + 200.0 * bst_draw(name, "am", 0);
+  let scale = c.f0 / 150.0;
+  if (scale < 0.16) scale = 0.16;
+  if (scale > 4.0) scale = 4.0;
+  { let lo = 0.4, hi = 2.0, m = (lo + hi) * 0.5;
+    for (let i = 0; i < 24; i++){ if (m * m > scale) hi = m; else lo = m; m = (lo + hi) * 0.5; }
+    scale = m; }
+  c.f1 = (350.0 + 500.0 * bst_draw(name, "f1", 0)) * scale;
+  c.f2 = (900.0 + 1500.0 * bst_draw(name, "f2", 0)) * scale;
+  if (c.voice === VOICE_HISS) c.f1 = 1200.0 + 1500.0 * bst_draw(name, "tube", 0);
+  if (c.f1 > 3000.0) c.f1 = 3000.0;
+  if (c.f2 > 3000.0) c.f2 = 3000.0;
+  c.q = 0.15 + 0.35 * bst_draw(name, "q", 0);
+  if (c.mech){
+    c.voice = VOICE_STRIDULATE;
+    c.attack = 0.02;
+    c.bend = 0.0;
+    c.vib = 0.0;
+    c.rasp = 0.05;
+    c.am = 30.0 + 90.0 * bst_draw(name, "am", 0);
+    c.dur *= 0.7;
+  }
+  while (c.syll > 1 && c.syll * (c.dur + c.gap) + 0.15 > RENDER_MAX / FS) c.syll--;
+  return c;
+}
+function call_render(name){
+  const c = call_plan(name);
+  nz_state = (bst_fnv(name, bst_fnv(SEEDTEXT, 2166136261 >>> 0)) | 1) >>> 0;
+  const ph = [0.0], amph = [0.0], lfo = [0.0];
+  const a = {}, b = {};
+  svf_set(a, c.f1, c.q);
+  svf_set(b, c.f2, c.q);
+  const period = c.dur + c.gap;
+  const total = c.syll * period + 0.15;
+  let n = Math.trunc(total * FS);
+  if (n > RENDER_MAX) n = RENDER_MAX;
+  for (let i = 0; i < n; i++){
+    const t = i / FS;
+    const s = Math.trunc(t / period);
+    const local = t - s * period;
+    const e = s < c.syll ? env(local, c.dur, c.attack) : 0.0;
+    let u = local / c.dur;
+    if (u > 1.0) u = 1.0;
+    let f = c.f0 * (1.0 + c.bend * 4.0 * u * (1.0 - u)) * (1.0 - c.fall * u) * (1.0 + 0.04 * s);
+    f *= 1.0 + c.vib * tri(osc(lfo, c.vib_rate));
+    let x = 0.0;
+    switch (c.voice){
+    case VOICE_THROAT: {
+      const src = pulse(osc(ph, f), c.duty) + c.rasp * noise();
+      x = svf_run(a, src, 0) + 0.7 * svf_run(b, src, 0) + 0.15 * src;
+      break; }
+    case VOICE_CHIRP:
+      x = tri(osc(ph, f * 4.0)) + 0.1 * c.rasp * noise();
+      break;
+    case VOICE_STRIDULATE: {
+      const m = 0.5 + 0.5 * pulse(osc(amph, c.am), 0.5);
+      x = pulse(osc(ph, f), 0.5) * m + 0.3 * c.rasp * noise();
+      break; }
+    case VOICE_HISS:
+      x = 1.5 * svf_run(a, noise(), 0) + 0.4 * pulse(osc(ph, f), 0.5);
+      break;
+    }
+    render_buf[i] = x * e;
+  }
+  return emit(n, 0.8);
+}
+function blow_render(what){
+  nz_state = (bst_fnv(what, 0x7a11) | 1) >>> 0;
+  const hit = what === "hit", stun = what === "stun", click = what === "click";
+  const take = what === "take", dart = what === "dart", talk = what === "talk";
+  const d = hit ? 0.14 : stun ? 0.3 : click ? 0.08 : take ? 0.25 : dart ? 0.12 : talk ? 0.18 : 0.14;
+  const ph = [0.0], ph2 = [0.0];
+  const s = {};
+  svf_set(s, hit ? 400.0 : stun ? 900.0 : dart ? 2500.0 : 900.0, hit ? 1.0 : 0.5);
+  const n = Math.trunc(d * FS);
+  for (let i = 0; i < n; i++){
+    const t = i / FS, u = t / d;
+    const e = env(t, d, 0.01);
+    let x;
+    if (hit) x = 2.0 * svf_run(s, noise(), 1) * e + 0.3 * tri(osc(ph, 120.0 * (1.0 + e))) * e;
+    else if (stun) x = pulse(osc(ph, 1400.0 - 900.0 * u), 0.5) * e * (0.6 + 0.4 * pulse(osc(ph2, 40.0), 0.5));
+    else if (click) x = pulse(osc(ph, 3000.0), 0.15) * env(t, d, 0.01);
+    else if (take){ const k = Math.trunc(u * 2.0); x = pulse(osc(ph, k === 0 ? 1046.5 : 1318.5), 0.25) * env(t - k * d / 2.0, d / 2.0, 0.02) * 0.8; }
+    else if (dart) x = svf_run(s, noise(), 0) * env(t, d, 0.02) * 1.5;
+    else if (talk) x = tri(osc(ph, 700.0 + 300.0 * (u < 0.5 ? u * 2.0 : 2.0 - u * 2.0))) * env(t, d, 0.1) * (0.6 + 0.4 * pulse(osc(ph2, 24.0), 0.5));
+    else x = tri(osc(ph, 90.0 * (1.0 + 2.0 * e))) * e + 1.5 * svf_run(s, noise(), 1) * env(t, d * 0.5, 0.01);
+    render_buf[i] = x;
+  }
+  return emit(n, hit ? 0.6 : take ? 0.45 : talk ? 0.3 : 0.5);
+}
+function shot_render(what){
+  nz_state = (bst_fnv(what, 0x51ed27) | 1) >>> 0;
+  const phaser = what === "phaser", disruptor = what === "disruptor", torpedo = what === "torpedo";
+  const d = phaser ? 0.35 : disruptor ? 0.3 : torpedo ? 0.6 : 0.25;
+  const body = {}, ring = {};
+  svf_set(body, torpedo ? 120.0 : 320.0, 1.0);
+  svf_set(ring, 1400.0, 0.4);
+  const ph = [0.0], gph = [0.0];
+  const n = Math.trunc(d * FS);
+  for (let i = 0; i < n; i++){
+    const t = i / FS, u = t / d;
+    const w = noise();
+    let x;
+    if (phaser) x = pulse(osc(ph, 1800.0 + 600.0 * (u < 0.5 ? u * 2.0 : 2.0 - u * 2.0)), 0.5) * env(t, d, 0.05) * (0.7 + 0.3 * pulse(osc(gph, 60.0), 0.5)) + 0.2 * w * env(t, d, 0.1);
+    else if (disruptor){ ring.f = 2.0 * PI * (2200.0 - 1600.0 * u) / FS; x = svf_run(ring, w, 0) * env(t, d, 0.1) + 0.4 * pulse(osc(ph, 300.0 - 150.0 * u), 0.25) * env(t, d * 0.6, 0.05); }
+    else if (torpedo) x = 3.0 * svf_run(body, w, 1) * env(t, d, 0.05) + 0.5 * tri(osc(ph, 200.0 + 900.0 * u)) * env(t, d * 0.4, 0.02);
+    else { ring.f = 2.0 * PI * (2500.0 - 2000.0 * u) / FS; x = svf_run(ring, w, 0) * env(t, d, 0.15); }
+    render_buf[i] = x;
+  }
+  return emit(n, phaser ? 0.4 : torpedo ? 0.9 : 0.4);
+}
+function whoosh_render(what){
+  nz_state = (bst_fnv(what, 0x3f00d) | 1) >>> 0;
+  const beam = what === "beam", warp = what === "warp", flt = what === "float";
+  const d = beam ? 1.6 : warp ? 1.2 : flt ? 0.8 : 0.3;
+  const s = {};
+  svf_set(s, 400.0, warp ? 1.0 : 0.6);
+  const ph = [0.0], ph2 = [0.0];
+  const n = Math.trunc(d * FS);
+  for (let i = 0; i < n; i++){
+    const t = i / FS, u = t / d;
+    const fc = beam ? 2400.0 + 800.0 * (u < 0.5 ? u * 2.0 : 2.0 - u * 2.0) : warp ? 200.0 + 1600.0 * u : flt ? 500.0 + 700.0 * u : 1800.0 - 1200.0 * u;
+    s.f = 2.0 * PI * fc / FS;
+    if (s.f > 0.9) s.f = 0.9;
+    let x = svf_run(s, noise(), 0) * env(t, d, beam ? 0.5 : 0.15);
+    if (beam) x = 0.6 * x + 0.5 * tri(osc(ph, 1200.0 + 200.0 * pulse(osc(ph2, 9.0), 0.5))) * env(t, d, 0.4) * (u < 0.5 ? u * 2.0 : 2.0 - u * 2.0);
+    if (warp) x = 2.0 * svf_run(s, noise(), 1) * env(t, d, 0.5) + 0.4 * pulse(osc(ph, 60.0 + 400.0 * u * u), 0.5) * env(t, d, 0.5);
+    if (flt) x = 0.5 * x + 0.5 * tri(osc(ph, 300.0 + 500.0 * u)) * env(t, d, 0.3);
+    render_buf[i] = x;
+  }
+  return emit(n, warp ? 0.7 : 0.45);
+}
+
+/* ── the PC speaker ──
+ * One square wave, at a pitch or silent, from the game's own (ticks,
+ * Hz/10) pairs; a tick 54.9 ms, a 2 ms gap between notes. */
+function tune_loop_from(name){ return 0; }
+function tune_render(name, loop){
+  let s = null;
+  for (let i = 0; i < TRACK_N; i++) if (TRACKS[i].name === name) s = TRACKS[i];
+  if (!s) return 0;
+  const nn = s.notes.length >> 1;
+  let n = 0;
+  for (let k = 0; k < nn; k++) n += Math.trunc(s.notes[2 * k] * TICK_S * FS);
+  if (n > RENDER_MAX) n = RENDER_MAX;
+  for (let i = 0; i < n; i++) render_buf[i] = 0.0;
+  let at = 0; const gap = Math.trunc(FS / 500);
+  const ph = [0.0];
+  for (let k = 0; k < nn && at < n; k++){
+    const len = Math.trunc(s.notes[2 * k] * TICK_S * FS); let end = at + len;
+    const f = s.notes[2 * k + 1] * 10.0;
+    if (end > n) end = n;
+    if (f > 0.0){
+      ph[0] = 0.0;
+      for (let i = at; i < end - gap; i++) render_buf[i] = pulse(osc(ph, f), 0.5);
+    }
+    at = end;
+  }
+  if (loop){
+    const edge = Math.trunc(FS / 100);
+    for (let i = 0; i < edge && i < n; i++){ render_buf[i] *= i / edge; render_buf[n - 1 - i] *= i / edge; }
+  }
+  return emit(n, 0.28);
+}
+function bed_render(name){ return tune_render(name, 1); }
+function jingle_render(name){ return tune_render(name, 0); }
+
+/* ── the galaxy ───────────────────────────────────────────── */
+function IS_ENEMY(c){ return c >= C_BATTLESHIP && c <= C_SUPPLY; }
+const GX = [];
+for (let q = 0; q < GAL; q++) GX.push({enemies: 0, base: 0, stars: 0, known: 0, nova: 0, commander: 0, planet: -1, gone: 0, moved: 0});
+const LAY = [];
+for (let q = 0; q < GAL; q++) LAY.push(new Int8Array(BOARD_SIZE));
+const PL = [];
+for (let p = 0; p < PLANET_MAX; p++) PL.push({quad: 0, cell: -1, cls: 0, find: 0, flags: 0});
+let planet_n = 0;
+let evac_end = -1;
+function planet_name(p){ return PLANET_NAME[PL[p].quad & 7] + "-" + ((PL[p].quad >> 3) + 1); }
+const have = new Int32Array(I_N);
+let level = 3;
+let energy = 0, impulse = 0, shields = 0, shields_up = 0, torps = 0, laser_heat = 0, docked = 0, life_reserve = 0, boarders = 0;
+let board_until = 0, stardate = 0, wear_last = 0;
+let mutants = 0, killed = 0, killed_cmd = 0, stars_gone = 0, casualties = 0, rescues = 0, bases_lost = 0, enemy_bases = 0;
+const sys = new Int32Array(SYS_N);
+let repair_focus = 0, warp = 10, laser_set = 400;
+let quad = 0, cell = 0, orbiting = -1, pod_alive = 0, enemies_left = 0;
+let bolt_cell = -1, bolt_quad = 0;
+let plasma_shield = 0;
+let lost = 0, lost_how = 0, won = 0, gameover = 0;
+const sec = new Int8Array(BOARD_SIZE);
+const ehp = new Int32Array(BOARD_SIZE);
+let target = -1;
+let union_hp = 0, union_quad = -1, union_cell = -1, union_when = 0;
+let base_attacked = -1, hail_quad = -1;
+const sched = [-1, -1, -1, -1, -1];
+let turn = 0;
+let moved_this_turn = 0, fired_this_turn = 0;
+let turn_hits = 0, turn_absorbed = 0;
+
+/* ── what is said ── */
+const message = ["", ""];
+const logbook = [];
+for (let i = 0; i < LOG_N; i++) logbook.push("");
+let log_n = 0;
+function say(s){
+  message[1] = message[0]; message[0] = s.slice(0, 159);
+  for (let i = LOG_N - 1; i > 0; i--) logbook[i] = logbook[i - 1];
+  logbook[0] = message[0];
+  if (log_n < LOG_N) log_n++;
+}
+function quadname(q){ return ((q >> 3) + 1) + "-" + ((q & 7) + 1); }
+function datestr(t){ return Math.trunc(t / 1000) + "." + (Math.trunc(t / 100) % 10); }
+function blen(s){ let n = 0; for (let i = 0; i < s.length; i++){ const c = s.charCodeAt(i); n += c < 0x80 ? 1 : c < 0x800 ? 2 : 3; } return n; }
+/* a string cut to at most n bytes of UTF-8, never inside a glyph */
+function cut_bytes(s, n){
+  let out = "", used = 0;
+  for (let i = 0; i < s.length; i++){ const c = s.charCodeAt(i); const w = c < 0x80 ? 1 : c < 0x800 ? 2 : 3; if (used + w > n) break; out += s[i]; used += w; }
+  return out;
+}
+function plural(n, one, many){ return n === 1 ? one : many; }
+
+/* ── sound cues ── */
+let sound_sink = null;
+function sound_say(line){ if (sound_sink) sound_sink(line); }
+let sound_bed = "";
+let sound_on_title = 0;
+function sound_scene(){
+  const want = (gameover || won) ? "off" : sound_on_title ? "title" : "off";
+  if (sound_bed === want) return;
+  sound_bed = want;
+  sound_say("bed " + want);
+}
+function rnd(n){ return n <= 0 ? 0 : roll(0, n - 1); }
+
+/* ── geometry ── */
+function isqrt(n){
+  let r = 0, b = 1 << 30;
+  while (b > n) b >>= 2;
+  while (b){
+    if (n >= r + b){ n -= r + b; r = (r >> 1) + b; }
+    else r >>= 1;
+    b >>= 2;
+  }
+  return r;
+}
+function qdist16(a, b){
+  const dy = ((a >> 3) - (b >> 3)) * 8, dx = ((a & 7) - (b & 7)) * 8;
+  return isqrt((dy * dy + dx * dx) * 256);
+}
+function free_cell(){
+  for (let tries = 0; tries < 400; tries++){ const c = rnd(BOARD_SIZE); if (sec[c] === C_EMPTY) return c; }
+  for (let c = 0; c < BOARD_SIZE; c++) if (sec[c] === C_EMPTY) return c;
+  return -1;
+}
+function arrival_cell(from, to){
+  let sy = (from >> 3) - (to >> 3), sx = (from & 7) - (to & 7);
+  if (sy) sy = sy < 0 ? -1 : 1;
+  if (sx) sx = sx < 0 ? -1 : 1;
+  if (!sx && !sy) sy = 1;
+  let best = -1, bs = -1000000;
+  for (let c = 0; c < BOARD_SIZE; c++){
+    const x = 2 * COORD_Q[c] + COORD_R[c], y = COORD_R[c];
+    const s = 4 * (sx * x + 2 * sy * y) - (sx ? (y < 0 ? -y : y) : (x < 0 ? -x : x));
+    if (s > bs){ bs = s; best = c; }
+  }
+  if (sec[best] === C_EMPTY) return best;
+  let near = -1, nd = 99;
+  for (let c = 0; c < BOARD_SIZE; c++) if (sec[c] === C_EMPTY && hex_dist(c, best) < nd){ nd = hex_dist(c, best); near = c; }
+  return near;
+}
+function quad_beyond(q, d){
+  let qy = q >> 3, qx = q & 7;
+  if (d === 0) qx++; else if (d === 3) qx--;
+  else if (d === 1 || d === 2) qy++; else qy--;
+  if (qy < 0 || qy > 7 || qx < 0 || qx > 7) return -1;
+  return qy * 8 + qx;
+}
+function dir_toward(a, b){
+  let best = -1, bd = 99;
+  for (let d = 0; d < 6; d++){
+    const c = step_cell(a, d);
+    if (c < 0) continue;
+    const dd = hex_dist(c, b);
+    if (dd < bd){ bd = dd; best = d; }
+  }
+  return best;
+}
+function dir_away(a, b){
+  let best = -1, bd = -1;
+  for (let d = 0; d < 6; d++){
+    const q = COORD_Q[a] + ANGLE_DQ[d], r = COORD_R[a] + ANGLE_DR[d];
+    let dq = q - COORD_Q[b], dr = r - COORD_R[b], s = dq + dr;
+    if (dq < 0) dq = -dq;
+    if (dr < 0) dr = -dr;
+    if (s < 0) s = -s;
+    const dd = Math.trunc((dq + dr + s) / 2);
+    if (dd > bd){ bd = dd; best = d; }
+  }
+  return best;
+}
+
+/* ── the galaxy, laid ────────────────────────────────────── */
+function hp_of(c){
+  switch (c){
+  case C_BATTLESHIP: return (level + 4) * 15 + 250;
+  case C_COMMAND: return (level + 4) * 35 + 450;
+  case C_SCOUT: return (level + 4) * 15 + 150;
+  case C_SUPPLY: return (level + 4) * 10 + 50;
+  case C_POD: return 900;
+  default: return 0;
+  }
+}
+function lay_free(q, k){
+  for (let t = 0; t < 200; t++){
+    const c = Math.trunc(draw("lay", q * 1000 + k * 7 + t) * BOARD_SIZE);
+    if (LAY[q][c] === C_EMPTY) return c;
+  }
+  return -1;
+}
+function lay_galaxy(){
+  for (let q = 0; q < GAL; q++) LAY[q].fill(0);
+  for (let q = 0; q < GAL; q++){
+    const g = GX[q];
+    g.enemies = 0; g.base = B_NONE; g.known = 0; g.nova = 0; g.commander = 0; g.planet = -1; g.gone = 0; g.moved = 0;
+    g.stars = Math.trunc(draw("stars", q) * 9);
+  }
+  const total = Math.trunc(draw("spread", 0) * 10) + Math.trunc(((level + 1) * 8 * (100 - Math.trunc(draw("shave", 0) * 10))) / 100);
+  let placed = 0, k = 0;
+  while (placed < total && k < 4000){
+    const q = Math.trunc(draw("mq", k) * GAL);
+    let want = 1 + Math.trunc(draw("mn", k) * 4);
+    k++;
+    if (GX[q].enemies) continue;
+    if (placed + want > total) want = total - placed;
+    GX[q].enemies = want;
+    if (want > 1 && level >= 3 && Math.trunc(draw("mc", k) * 7) < 3) GX[q].commander = 1;
+    placed += want;
+  }
+  enemies_left = total;
+  let bases = 11 - (level + 4), ly = 0, lx = 0;
+  for (let b = 0; b < bases; b++){
+    let qy = 0, qx = 0, tries, q = 0;
+    for (tries = 0; tries < 200; tries++){
+      qy = 1 + Math.trunc(draw("by", b * 200 + tries) * 6);
+      qx = 1 + Math.trunc(draw("bx", b * 200 + tries) * 6);
+      q = qy * 8 + qx;
+      if (GX[q].base !== B_NONE) continue;
+      let dy = ly - qy, dx = lx - qx;
+      if (dy < 0) dy = -dy;
+      if (dx < 0) dx = -dx;
+      if (dy <= 2 && dx <= 2) continue;
+      break;
+    }
+    if (tries >= 200) break;
+    ly = qy; lx = qx;
+    GX[q].base = B_STARBASE;
+    if ((b === 0 || level === 5) && GX[q].enemies === 0){
+      GX[q].enemies = 3; enemies_left += 3;
+      if (level >= 3) GX[q].commander = 1;
+    }
+  }
+  const others = 2 + Math.trunc(draw("ob", 0) * 3);
+  for (let b = 0; b < others; b++){
+    let q = -1;
+    for (let tries = 0; tries < 200; tries++){ q = Math.trunc(draw("oq", b * 200 + tries) * GAL); if (GX[q].base === B_NONE) break; }
+    if (q < 0 || GX[q].base !== B_NONE) break;
+    GX[q].base = (b & 1) ? B_SUPPLY : B_RESEARCH;
+  }
+  planet_n = 10 + Math.trunc(draw("pn", 0) * 10);
+  let settled = -1;
+  for (let p = 0; p < planet_n; p++){
+    let q = -1;
+    for (let tries = 0; tries < 200; tries++){ q = Math.trunc(draw("pq", p * 200 + tries) * GAL); if (GX[q].planet < 0) break; }
+    GX[q].planet = p;
+    PL[p].quad = q; PL[p].cell = -1; PL[p].flags = 0;
+    PL[p].cls = Math.trunc(draw("pc", p) * 3);
+    if (PL[p].cls + 1 <= Math.trunc(draw("pf", p) * 5)){ PL[p].find = PF_ENERGIUM; settled = p; }
+    else if (Math.trunc(draw("pm", p) * 2) === 0) PL[p].find = PF_MONGOL;
+    else PL[p].find = PF_NOTHING;
+  }
+  if (settled >= 0) PL[settled].flags |= PL_SETTLED;
+  for (let q = 0; q < GAL; q++){
+    for (let s = 0; s < GX[q].stars; s++){ const c = lay_free(q, s); if (c >= 0) LAY[q][c] = C_STAR; }
+    if (GX[q].base !== B_NONE){ const c = lay_free(q, 20); if (c >= 0) LAY[q][c] = C_BASE; }
+    if (GX[q].planet >= 0){ const c = lay_free(q, 21); if (c >= 0){ LAY[q][c] = C_PLANET; PL[GX[q].planet].cell = c; } }
+    if (Math.trunc(draw("hole", q) * 64) < 16){ const c = lay_free(q, 22); if (c >= 0) LAY[q][c] = C_HOLE; }
+  }
+}
+
+/* ── time ─────────────────────────────────────────────────── */
+function schedule(kind, offset){ sched[kind] = stardate + offset; }
+function deviate(base, span){ return base + (span ? rnd(span) : 0); }
+function pass_time(t){
+  if (t <= 0) return;
+  stardate += t;
+  const cool = Math.trunc((t > 1800 ? 1800 : t) * 360 / 1000);
+  laser_heat = cool >= laser_heat ? 0 : laser_heat - cool;
+  const gain = Math.trunc(Math.trunc(Math.trunc(t * 400 / 1000) * sys[SYS_CONVERTER]) / 100);
+  if (energy < ENERGY_MAX){ energy += gain; if (energy > ENERGY_MAX) energy = ENERGY_MAX; }
+  const dk = docked === B_STARBASE;
+  const rate = dk ? 50 : 20, frate = dk ? 100 : 60;
+  let rt = t > 10000 ? 10000 : t;
+  if (repair_focus){
+    const f = repair_focus - 1;
+    const v = sys[f] + Math.trunc(frate * rt / 1000);
+    if (v > 100){
+      const used = (v - 100) * 10;
+      rt = rt > used ? rt - used : 0;
+      sys[f] = 100; repair_focus = 0;
+    } else { sys[f] = v; rt = 0; }
+  }
+  const mend = Math.trunc(rate * rt / 1000);
+  if (mend) for (let i = 0; i < SYS_N; i++) if (sys[i] < 100){ sys[i] += mend; if (sys[i] > 100) sys[i] = 100; }
+  if (sys[SYS_LIFE] < 90 && docked === B_NONE){
+    if (life_reserve >= t) life_reserve -= t;
+    else { life_reserve = 0; if (!lost){ lost = 1; lost_how = 2; } }
+  }
+}
+
+/* ── entering a quadrant ─────────────────────────────────── */
+function reveal_around(q){
+  const qy = q >> 3, qx = q & 7;
+  for (let y = qy - 1; y <= qy + 1; y++) for (let x = qx - 1; x <= qx + 1; x++)
+    if (y >= 0 && y < 8 && x >= 0 && x < 8) GX[y * 8 + x].known = 1;
+}
+function enter_quadrant(from){
+  const q = quad;
+  if (base_attacked === q){ base_attacked = -1; sched[SCH_FALLS] = -1; }
+  docked = B_NONE; laser_heat = 0; orbiting = -1; target = -1;
+  for (let c = 0; c < BOARD_SIZE; c++){ sec[c] = LAY[q][c]; ehp[c] = 0; }
+  if (GX[q].nova) for (let c = 0; c < BOARD_SIZE; c++) if (sec[c] === C_STAR || sec[c] === C_BASE || sec[c] === C_PLANET) sec[c] = C_EMPTY;
+  if (GX[q].base === B_NONE) for (let c = 0; c < BOARD_SIZE; c++) if (sec[c] === C_BASE) sec[c] = C_EMPTY;
+  { let g = GX[q].gone; for (let c = 0; c < BOARD_SIZE && g > 0; c++) if (sec[c] === C_STAR){ sec[c] = C_NOVA; g--; } }
+  cell = from < 0 ? -1 : arrival_cell(from, q);
+  if (cell < 0) cell = free_cell();
+  if (cell < 0) cell = 30;
+  sec[cell] = C_SHIP;
+  for (let n = 0; n < GX[q].enemies; n++){
+    const c = free_cell();
+    if (c < 0) break;
+    if (n < GX[q].commander) sec[c] = C_COMMAND;
+    else { const i = rnd(10); sec[c] = i < 7 ? C_BATTLESHIP : i < 9 ? C_SCOUT : C_SUPPLY; }
+    ehp[c] = hp_of(sec[c]);
+  }
+  if ((q & 7) + 1 === 8 && GX[q].enemies < 5 && rnd(10) > 5){
+    const c = free_cell();
+    if (c >= 0){ sec[c] = C_POD; ehp[c] = 900; sound_say("jingle pod"); }
+  }
+  if (union_quad === q && union_cell < 0 && union_hp > 0){
+    const late = stardate - union_when;
+    if (late > 2200){ say("SCANNER REPORT: wreckage of a Union ship present in the quadrant."); union_quad = -1; union_hp = 0; }
+    else {
+      const c = free_cell();
+      if (c >= 0){ sec[c] = C_UNION; union_cell = c; union_hp = 1100 - rnd(50) * Math.trunc(late / 1000); if (union_hp < 100) union_hp = 100; }
+    }
+  }
+  reveal_around(q);
+  GX[q].known = 1;
+  if (GX[q].enemies > 0) sound_say("jingle alert");
+}
+
+/* ── the pools, the weapons ─────────────────────────────── */
+function laser_eff(){ return sys[SYS_LASERS]; }
+function laser_damage(e, eff, d){
+  if (d >= 12 || eff <= 0 || e <= 0) return 0;
+  let v = Math.trunc(e * (12 - d) * 256 / 12);
+  v = (v + 128) >> 8;
+  return Math.trunc((v * eff + 50) / 100);
+}
+function max_warp(){ let t = 10 + Math.trunc(9 * sys[SYS_WARP] / 10); if (t > 100) t = 100; if (t < 10) t = 10; return t; }
+function tubes(){ const p = sys[SYS_TUBES]; return p >= 100 ? 3 : p >= 67 ? 2 : p >= 34 ? 1 : 0; }
+function srscan(){ const p = sys[SYS_SRSCAN]; return p < 50 ? 0 : p < 90 ? 1 : 2; }
+function lrscan(){ const p = sys[SYS_LRSCAN]; return p < 50 ? 0 : p < 100 ? 1 : 2; }
+function enemies_here(){ let n = 0; for (let c = 0; c < BOARD_SIZE; c++) if (IS_ENEMY(sec[c])) n++; return n; }
+function nearest_enemy(){
+  let best = -1, bd = 99;
+  for (let c = 0; c < BOARD_SIZE; c++) if ((IS_ENEMY(sec[c]) || sec[c] === C_POD) && hex_dist(c, cell) < bd){ bd = hex_dist(c, cell); best = c; }
+  return best;
+}
+function kill_enemy(c){
+  if (sec[c] === C_COMMAND) killed_cmd++; else killed++;
+  if (sec[c] === C_COMMAND && GX[quad].commander > 0) GX[quad].commander--;
+  sec[c] = C_EMPTY; ehp[c] = 0;
+  if (GX[quad].enemies) GX[quad].enemies--;
+  if (enemies_left) enemies_left--;
+  if (target === c) target = -1;
+  sound_say("blow hit");
+}
+function erode_chart(){
+  const pct = sys[SYS_COMPUTER]; let gone = 0;
+  if (pct >= 70) return;
+  for (let q = 0; q < GAL; q++){
+    if (!GX[q].known || q === quad) continue;
+    if (pct < 30 || rnd(10) < 5){ GX[q].known = 0; gone++; }
+  }
+  if (gone) say("COMPUTER: " + gone + " quadrant" + (gone === 1 ? "" : "s") + " of the chart lost.");
+}
+function wreck_system(which, hits){
+  const factor = shields_up ? 125 - Math.trunc(shields / 25) : 50;
+  const divisor = 200 + rnd(300);
+  const off = Math.trunc((hits * factor + Math.trunc(divisor / 2)) / divisor) + rnd(5);
+  let left = sys[which] - off;
+  if (left > 90) left -= 10 + rnd(10);
+  sys[which] = left < 0 ? 0 : left;
+  if (which === SYS_COMPUTER) erode_chart();
+  if (hits > 500) casualties += rnd(10);
+  say("DAMAGE CONTROL: " + SYS_NAME[which] + " hit, now at " + sys[which] + "%.");
+}
+function combat_damage(){
+  if (turn_absorbed > 800 && sys[SYS_SHIELDS]){
+    const wear = Math.trunc((turn_absorbed - 700 + 5) / 10);
+    sys[SYS_SHIELDS] = wear >= sys[SYS_SHIELDS] ? 0 : sys[SYS_SHIELDS] - wear;
+  }
+  if (!turn_hits){ turn_absorbed = 0; return; }
+  const rounds = Math.trunc((turn_hits + 175) / 350) + 1;
+  for (let i = 0; i < rounds; i++){
+    if (rnd(3) === 0) continue;
+    wreck_system(rnd(11), turn_hits);
+  }
+  turn_hits = turn_absorbed = 0;
+}
+function take_hit(amount){
+  let absorbed = 0;
+  if (shields_up && shields){
+    const charge = Math.trunc(shields / 25);
+    absorbed = Math.trunc((amount * charge + 50) / 100);
+    absorbed = Math.trunc((absorbed * sys[SYS_SHIELDS] + 50) / 100);
+    let drain = Math.trunc(absorbed * 4 / 5);
+    if (absorbed > shields) absorbed = shields;
+    if (drain > shields) drain = shields;
+    shields -= drain;
+  }
+  const through = amount - absorbed;
+  turn_hits += amount; turn_absorbed += absorbed;
+  if (!through) return;
+  if (through >= energy){ energy = 0; lost = 1; lost_how = 1; casualties = 430; return; }
+  energy -= through;
+}
+
+/* ── the enemy's turn ──────────────────────────────────── */
+function enemy_fire_energy(hp){ const pct = 90 + rnd(16); return Math.trunc(hp / 100) * pct + Math.trunc(((hp % 100) * pct) / 100); }
+function bolt_burst(){
+  const d = hex_dist(bolt_cell, cell);
+  if (d < 8){
+    const dmg = Math.trunc((90 + rnd(10)) * (8 - d) / 8);
+    say("SCANNER REPORT: the plasma bolt bursts at " + d + " sector" + (d === 1 ? "" : "s") + ": " + dmg + " units.");
+    take_hit(dmg);
+  } else say("SCANNER REPORT: the plasma bolt bursts harmlessly.");
+  bolt_cell = -1;
+}
+function enemy_moves(){
+  for (let c = 0; c < BOARD_SIZE; c++){
+    if (sec[c] === C_SCOUT && ehp[c] > 0 && ehp[c] < 150 && (quad & 7) > 0 && GX[quad - 1].enemies < 5){
+      const qn = quadname(quad - 1);
+      GX[quad - 1].enemies++; GX[quad].enemies--; GX[quad - 1].moved++; GX[quad].moved--;
+      sec[c] = C_EMPTY; ehp[c] = 0; if (target === c) target = -1;
+      say("SCANNER REPORT: the scout escapes to quadrant " + qn + ".");
+    } else if (sec[c] === C_COMMAND && (ehp[c] < 150 || ehp[c] > 350)){
+      const away = ehp[c] < 150; let at = c, steps = 0;
+      for (let s = 0; s < 2; s++){
+        const d = away ? dir_away(at, cell) : dir_toward(at, cell);
+        const n = d < 0 ? -1 : step_cell(at, d);
+        if (n < 0){
+          if (!away) break;
+          const nq = quad_beyond(quad, d);
+          if (nq >= 0 && GX[nq].enemies < 9){
+            const qn = quadname(nq);
+            GX[nq].enemies++; GX[quad].enemies--; GX[nq].moved++; GX[quad].moved--;
+            if (GX[quad].commander > 0) GX[quad].commander--;
+            GX[nq].commander++;
+            sec[at] = C_EMPTY; ehp[at] = 0; if (target === at || target === c) target = -1;
+            say("SCANNER REPORT: the commander escapes to quadrant " + qn + ".");
+            at = -1;
+          }
+          break;
+        }
+        if (sec[n] !== C_EMPTY) break;
+        sec[n] = C_COMMAND; ehp[n] = ehp[at]; sec[at] = C_EMPTY; ehp[at] = 0;
+        if (target === at) target = n;
+        at = n; steps++;
+      }
+      if (steps && at >= 0) say("SCANNER REPORT: the commander has moved" + (away ? " off" : " in") + ".");
+    } else if (sec[c] === C_SUPPLY && ehp[c] > 0 && ehp[c] < 50 && rnd(5) > 0){
+      say("COMMUNICATIONS: the Mongol supply ship surrenders.  Mongol supplies captured.");
+      sound_say("call a Mongol supply ship");
+      if (rnd(4) !== 0){
+        for (let i = 0; i < 3; i++) if (rnd(i + 3) <= 1) have[i]++;
+        have[I_LIFE] += 2;
+      }
+      kill_enemy(c);
+    }
+  }
+}
+function enemy_turn(){
+  const skip = moved_this_turn && rnd(100) >= 60;
+  moved_this_turn = 0;
+  if (skip) return;
+  if (bolt_cell >= 0 && bolt_quad === quad) bolt_burst();
+  turn_hits = turn_absorbed = 0;
+  if (fired_this_turn) enemy_moves();
+  for (let c = 0; c < BOARD_SIZE; c++){
+    if (!IS_ENEMY(sec[c]) || lost) continue;
+    if (level >= 3 && bolt_cell < 0 && rnd(100) > 93 && (sec[c] === C_BATTLESHIP || sec[c] === C_COMMAND)){
+      bolt_cell = cell; bolt_quad = quad;
+      say("SCANNER REPORT: " + CLASS_NAME[sec[c]] + " has fired a plasma bolt at us!");
+    }
+    if (union_cell >= 0 && sec[union_cell] === C_UNION){
+      const du = hex_dist(c, union_cell);
+      const dmg = laser_damage(enemy_fire_energy(ehp[c]), 100, du);
+      if (dmg > 0){
+        union_hp -= dmg;
+        if (union_hp <= 0){ sec[union_cell] = C_EMPTY; union_cell = -1; union_quad = -1; union_hp = 0; say("SCANNER REPORT: the Union ship is destroyed."); }
+      }
+    }
+    const d = hex_dist(c, cell);
+    const dmg = laser_damage(enemy_fire_energy(ehp[c]), 100, d);
+    if (dmg === 0) continue;
+    if (docked === B_STARBASE){ say("ENGINEERING: the StarBase's shields take " + dmg + " units from " + CLASS_NAME[sec[c]] + "."); continue; }
+    sound_say("jingle hit");
+    const before = energy;
+    take_hit(dmg);
+    if (lost){ say(dmg + " units from " + CLASS_NAME[sec[c]] + ".  The Lexington is destroyed."); return; }
+    if (energy === before) say(dmg + " units from " + CLASS_NAME[sec[c]] + "; the shields hold.");
+    else say(dmg + " units from " + CLASS_NAME[sec[c]] + "; " + (before - energy) + " through the shields.");
+  }
+  if (!lost) combat_damage();
+  if (union_cell >= 0 && union_quad === quad && !enemies_here()){
+    say("COMMUNICATIONS: message from the Union ship; they thank us and wish us well on our mission.");
+    sec[union_cell] = C_EMPTY; union_cell = -1; union_quad = -1; union_hp = 0;
+  }
+}
+
+/* ── the events ────────────────────────────────────────── */
+function pick_base(){
+  let q = rnd(GAL);
+  for (let i = 0; i < GAL; i++){ if (GX[q].base !== B_NONE && q !== base_attacked) return q; q = (q + 1) & 63; }
+  return -1;
+}
+function run_scheduled(){
+  for (let guard = 0; guard < 16; guard++){
+    let next = -1, best = 0;
+    for (let i = 0; i < SCH_N; i++) if (sched[i] >= 0 && sched[i] <= stardate && (next < 0 || sched[i] < best)){ best = sched[i]; next = i; }
+    if (next < 0) break;
+    sched[next] = -1;
+    switch (next){
+    case SCH_ATTACK: {
+      const q = pick_base();
+      if (q < 0) break;
+      base_attacked = q;
+      schedule(SCH_FALLS, deviate(2000, 2000));
+      say("COMMUNICATIONS: " + BASE_NAME[GX[q].base] + " in quadrant " + quadname(q) + " is under attack; they can last until stardate " + datestr(sched[SCH_FALLS]) + ".");
+      break; }
+    case SCH_FALLS: {
+      const q = base_attacked;
+      if (q < 0) break;
+      GX[q].base = B_NONE; base_attacked = -1; bases_lost++;
+      say("COMMUNICATIONS: the base in quadrant " + quadname(q) + " has been destroyed.");
+      schedule(SCH_ATTACK, deviate(2000, 4000));
+      break; }
+    case SCH_DISTRESS: {
+      let p = -1;
+      for (let i = 0; i < planet_n; i++) if (PL[i].flags & PL_SETTLED) p = i;
+      if (p < 0) break;
+      evac_end = stardate + 1000 + rnd(3000);
+      say("COMMUNICATIONS: a distress signal from the settlers of " + planet_name(p) + ", quadrant " + quadname(PL[p].quad) + "; they must be evacuated by stardate " + datestr(evac_end) + ".");
+      break; }
+    case SCH_HAIL: {
+      const q = hail_quad; hail_quad = -1;
+      if (q < 0 || GX[q].base !== B_STARBASE) break;
+      say("COMMUNICATIONS: the StarBase in quadrant " + quadname(q) + " answers our hail: come in for repairs when you can.");
+      break; }
+    case SCH_REINFORCE: {
+      let pick = -1;
+      for (let r = 0; r < 8; r++) if (GX[r * 8].enemies === 0 && !GX[r * 8].nova){ pick = r * 8; break; }
+      schedule(SCH_REINFORCE, deviate(5000, 4000));
+      if (pick < 0) break;
+      const ships = 2 + rnd(4);
+      GX[pick].enemies = ships; enemies_left += ships;
+      say("COMMUNICATIONS: " + ships + " Mongol ships have entered the sector at quadrant " + quadname(pick) + ".");
+      break; }
+    }
+  }
+}
+function run_boarders(){
+  if (boarders){
+    if (stardate > board_until){ boarders = 0; say("SECURITY: the boarding party has been cleared."); }
+    return;
+  }
+  if (level < 4 || shields_up || GX[quad].enemies === 0) return;
+  if (rnd(100) <= 95) return;
+  boarders = 1 + rnd(3);
+  board_until = stardate + 500 + rnd(500);
+  say("SECURITY: a Mongol boarding party holds " + (boarders === 1 ? "engineering" : boarders === 2 ? "laser control" : "torpedo control") + "!");
+}
+const MUTANT_SAY = ["the mutants have taken the viewer", "the mutants are at the doors of the bridge", "the mutants demand to speak to the captain", "the mutants have found the galley", "the mutants are quiet, for now"];
+function run_mutants(){
+  if (!mutants) return;
+  if (rnd(10) === 0){ mutants = 0; say("MEDICAL: the crew are themselves again."); return; }
+  say("MEDICAL: " + MUTANT_SAY[rnd(5)] + ".");
+}
+function run_nova(){
+  if (rnd(100) !== 0) return;
+  for (let tries = 0; tries < GAL; tries++){
+    const row = rnd(8), col = rnd(8), c = row * 8 + col;
+    if (row === (quad >> 3)) continue;
+    if (GX[c].stars === 0 || GX[c].nova) continue;
+    const k = GX[c].enemies;
+    if (base_attacked === c){ base_attacked = -1; sched[SCH_FALLS] = -1; }
+    if (GX[c].planet >= 0 && (PL[GX[c].planet].flags & PL_SETTLED)){ PL[GX[c].planet].flags &= ~PL_SETTLED; evac_end = -1; }
+    GX[c].base = B_NONE; GX[c].enemies = 0; GX[c].stars = 0; GX[c].nova = 1; GX[c].known = 1;
+    enemies_left = enemies_left > k ? enemies_left - k : 0;
+    say("SCIENCE: a star has gone supernova in quadrant " + quadname(c) + (k ? ", taking the Mongols there with it" : "") + ".");
+    return;
+  }
+}
+function run_pod(){
+  if (!pod_alive) return;
+  if (rnd((quad & 7) + 1 > 6 ? 20 : 33) !== 0) return;
+  const hit = 50 + rnd(50);
+  shields = shields > hit ? shields - hit : 0;
+  for (let c = 0; c < BOARD_SIZE; c++){
+    if (!IS_ENEMY(sec[c])) continue;
+    if (ehp[c] > hit) ehp[c] -= hit;
+    else {
+      if (sec[c] === C_COMMAND && GX[quad].commander > 0) GX[quad].commander--;
+      ehp[c] = 0; sec[c] = C_EMPTY; if (target === c) target = -1;
+      if (GX[quad].enemies) GX[quad].enemies--;
+      if (enemies_left) enemies_left--;
+    }
+  }
+  say("SCIENCE: the Vandal death pod detonates: " + hit + " units off the shields.");
+  sound_say("jingle pod");
+  if (shields === 0){ lost = 1; lost_how = 3; }
+}
+function run_wear(){
+  if (stardate <= STARDATE_START + 3000 || level < 2) return;
+  const e = Math.trunc((level + 3) * (stardate - wear_last) / 1000);
+  const roll_ = rnd(100); let which;
+  if (e > 98 || roll_ > 98 - e){
+    let sum = 0;
+    for (let i = 0; i < SYS_N; i++) sum += sys[i];
+    if (Math.trunc(sum / SYS_N) <= 95) return;
+    which = rnd(6);
+  } else if (e > 97 || rnd(100) > 97 - e) which = SYS_CONVERTER;
+  else return;
+  wear_last = stardate;
+  if (sys[which] === 0) return;
+  const loss = 10 + rnd(60);
+  sys[which] = loss >= sys[which] ? 0 : sys[which] - loss;
+  say("ENGINEERING: wear and tear: " + SYS_NAME[which] + " down to " + sys[which] + "%.");
+}
+function run_spy(){
+  if (rnd(150) !== 0 || level < 4) return;
+  const which = rnd(12), loss = 10 + rnd(90);
+  sys[which] = loss >= sys[which] ? 0 : sys[which] - loss;
+  say("SECURITY: a spy has been captured aboard, but he has damaged the " + SYS_NAME[which] + ": " + sys[which] + "%.");
+}
+function run_arrivals(){
+  if (level < 2) return;
+  const n = GX[quad].enemies;
+  if (n < 1 || n > 4 || (quad & 7) === 0) return;
+  if (rnd(10) <= 3) return;
+  const qy = quad >> 3, qx = quad & 7;
+  for (let r = qy - 1; r <= qy + 1; r++){
+    if (r < 0 || r > 7) continue;
+    const sq = r * 8 + qx - 1;
+    if (GX[sq].enemies < 1 || GX[sq].enemies > 9) continue;
+    if (GX[sq].enemies <= GX[sq].moved + GX[sq].commander) continue;
+    const c = free_cell();
+    if (c < 0) return;
+    GX[sq].enemies--; GX[quad].enemies++; GX[sq].moved--; GX[quad].moved++;
+    const cmd = GX[sq].commander > 0 && (GX[sq].enemies === 0 || GX[sq].commander > 1);
+    if (cmd){ GX[sq].commander--; GX[quad].commander++; sec[c] = C_COMMAND; ehp[c] = (level + 4) * 25 + 450; }
+    else { sec[c] = C_BATTLESHIP; ehp[c] = (level + 4) * 10 + 250; }
+    say("SCANNER REPORT: " + (cmd ? "a Mongol command ship" : "a Mongol ship") + " arriving from quadrant " + quadname(sq) + ".");
+    return;
+  }
+}
+let surrender_asked = 0;
+function run_surrender_demand(){
+  if (!(energy < 1250 || shields < 2000) || GX[quad].enemies <= 1 || rnd(100) <= 95) return;
+  surrender_asked = 1;
+  sound_say("call a Mongol command ship");
+  say("COMMUNICATIONS: the Mongols are hailing us... they are asking for our surrender!  (y to surrender)");
+}
+function run_union_distress(){
+  if (level < 2 || union_quad >= 0 || rnd(150) !== 0) return;
+  for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++){
+    const q = y * 8 + x;
+    if (GX[q].enemies < 2 || GX[q].enemies > 8 || q === quad) continue;
+    union_quad = q; union_cell = -1; union_hp = 1100; union_when = stardate;
+    say("COMMUNICATIONS: a distress signal is being received from a Union ship in quadrant " + quadname(q) + ".");
+    return;
+  }
+}
+function run_evacuation(){
+  if (evac_end < 0 || stardate <= evac_end) return;
+  for (let i = 0; i < planet_n; i++) if (PL[i].flags & PL_SETTLED){
+    PL[i].flags &= ~PL_SETTLED;
+    say("COMMUNICATIONS: no further signals from the settlers of " + planet_name(i) + ".");
+  }
+  evac_end = -1;
+}
+function run_events(){
+  if (lost) return;
+  run_scheduled();
+  run_boarders();
+  run_nova();
+  run_pod();
+  run_mutants();
+  run_wear();
+  run_spy();
+  run_arrivals();
+  run_surrender_demand();
+  run_union_distress();
+  run_evacuation();
+}
+
+/* ── the end of a turn ─────────────────────────────────── */
+function finish_lost(){
+  gameover = 1;
+  say("The Lexington is " + LOST_HOW[lost_how] + ".  (E: the evaluation)");
+  sound_scene();
+  sound_say("jingle ending");
+}
+function end_turn(){
+  turn++;
+  if (!lost) enemy_turn();
+  fired_this_turn = 0;
+  if (!lost) run_events();
+  laser_heat = laser_heat > 20 ? laser_heat - 20 : 0;
+  if (lost && !gameover) finish_lost();
+  else if (!lost && enemies_left === 0 && !won){ won = 1; gameover = 1; say("COMMUNICATIONS: mission accomplished; every Mongol in the sector is gone.  (E: the evaluation)"); sound_scene(); sound_say("jingle ending"); }
+}
+
+/* ── the commands ─────────────────────────────────────── */
+function impulse_ok(){ return sys[SYS_IMPULSE] >= 50; }
+function leave_place(){ docked = B_NONE; orbiting = -1; }
+function enter_hole(){
+  if (rnd(5) === 0){ lost = 1; lost_how = 4; casualties = 430; say("The Lexington is pulled into the black hole."); return 1; }
+  let q = quad;
+  for (let tries = 0; tries < 100; tries++){ q = rnd(GAL); if (!GX[q].nova) break; }
+  const from = quad;
+  quad = q;
+  say("NAVIGATION: a black hole!  The Lexington is thrown to quadrant " + quadname(q) + ".");
+  sound_say("whoosh warp");
+  enter_quadrant(from);
+  return 1;
+}
+function move_dir(d){
+  if (gameover) return;
+  const n = step_cell(cell, d);
+  if (n < 0){ say("NAVIGATION: that is the edge of the quadrant; warp (m) takes us further."); return; }
+  if (!impulse_ok()){ say("ENGINEERING: move aborted; the impulse engines are too damaged to use."); return; }
+  if (impulse < 6){ say("ENGINEERING: move aborted; the impulse pool has too little energy."); return; }
+  if (sec[n] !== C_EMPTY && sec[n] !== C_HOLE){ say("NAVIGATION: " + CLASS_NAME[sec[n]] + " is in the way."); return; }
+  moved_this_turn = 1;
+  leave_place();
+  sec[cell] = C_EMPTY;
+  impulse -= 6;
+  pass_time(42);
+  if (sec[n] === C_HOLE){ cell = n; if (enter_hole()){ end_turn(); return; } }
+  else { cell = n; sec[n] = C_SHIP; }
+  end_turn();
+}
+function warp_energy(d16){
+  const d88 = d16 * 2, d44 = d88 >> 4;
+  let wc = Math.trunc((warp * warp) / 10);
+  { const q = Math.trunc(wc / 100), r = wc % 100; wc = q * warp + Math.trunc((r * warp) / 100); }
+  const f = 128 + d44 * 14, g = f >> 5;
+  return (wc >> 3) * g + (((wc & 7) * g) >> 3);
+}
+function warp_time(d16){
+  const den = warp * warp;
+  return Math.trunc((859375 * d16 + den * 50) / (den * 100));
+}
+function warp_strain(d16){
+  const d10 = Math.trunc(d16 * 5 / 64);
+  if (warp < 80 || d10 <= 15) return;
+  const over = d10 - 15;
+  if (over < 25 && rnd(25) >= over) return;
+  let loss = 10 + rnd(d10 + 1);
+  if (loss > sys[SYS_WARP]) loss = sys[SYS_WARP];
+  sys[SYS_WARP] -= loss;
+  say("ENGINEERING: the warp engines are strained by the speed: " + sys[SYS_WARP] + "%.");
+}
+function warp_to(q){
+  if (gameover) return;
+  if (q === quad){ say("NAVIGATION: we are in that quadrant."); return; }
+  const d16 = qdist16(quad, q);
+  let cost = warp_energy(d16);
+  if (shields_up) cost *= 2;
+  if (cost > energy){ say("ENGINEERING: move aborted; we have too little energy to get there (" + cost + " needed)."); return; }
+  moved_this_turn = 1;
+  leave_place();
+  const from = quad;
+  energy -= cost;
+  pass_time(warp_time(d16));
+  if (warp < 20) say("COMMUNICATIONS: message from the Dept. of Space -- Lexington, why are you only moving at warp 1?  Time is of the essence!  HQ out.");
+  sound_say("whoosh warp");
+  quad = q;
+  { const y0 = (from >> 3) < (q >> 3) ? (from >> 3) : (q >> 3), y1 = (from >> 3) < (q >> 3) ? (q >> 3) : (from >> 3);
+    const x0 = (from & 7) < (q & 7) ? (from & 7) : (q & 7), x1 = (from & 7) < (q & 7) ? (q & 7) : (from & 7);
+    let done = 0;
+    for (let y = y0; y <= y1 && !done; y++) for (let x = x0; x <= x1 && !done; x++){
+      const c = y * 8 + x;
+      if (!GX[c].enemies || !GX[c].commander) continue;
+      if (rnd(10) <= 7) continue;
+      quad = c; done = 1;
+      say("NAVIGATION: the Lexington is caught in a long range tractor beam and pulled to quadrant " + quadname(c) + ".");
+    } }
+  warp_strain(d16);
+  enter_quadrant(from);
+  if (quad === q) say("NAVIGATION: quadrant " + quadname(q) + "." + (GX[q].enemies ? "  Mongols present: condition RED." : GX[q].nova ? "  A supernova's: nothing is left here." : ""));
+  end_turn();
+}
+function fire_lasers(){
+  if (gameover) return;
+  if (boarders === 2){ say("LASER CONTROL: the boarding party holds laser control!"); return; }
+  if (target < 0 || !(IS_ENEMY(sec[target]) || sec[target] === C_POD)) target = nearest_enemy();
+  if (target < 0){ say("LASER CONTROL: nothing to fire at."); return; }
+  if (laser_set > energy){ say("ENGINEERING: Captain, we have insufficient energy!"); return; }
+  energy -= laser_set;
+  { const h = laser_heat + Math.trunc(laser_set / 15); laser_heat = h > 120 ? 120 : h; }
+  const d = hex_dist(target, cell);
+  const dealt = laser_damage(laser_set, laser_eff(), d);
+  sound_say("jingle lasers");
+  fired_this_turn = 1;
+  if (laser_heat > 90){
+    const bite = Math.trunc(dealt / 120) + rnd(5);
+    sys[SYS_LASERS] = bite >= sys[SYS_LASERS] ? 0 : sys[SYS_LASERS] - bite;
+    say("LASER CONTROL: the banks are overheating!  Lasers at " + sys[SYS_LASERS] + "%.");
+  }
+  const what = CLASS_NAME[sec[target]];
+  if (dealt < ehp[target]){ ehp[target] -= dealt; say("LASER CONTROL: " + dealt + " units on " + what + " at " + d + "; it has " + ehp[target] + " left."); }
+  else if (sec[target] === C_POD){ sec[target] = C_EMPTY; ehp[target] = 0; pod_alive = 0; target = -1; say("LASER CONTROL: " + dealt + " units; the death pod is destroyed."); sound_say("blow hit"); }
+  else { say("LASER CONTROL: " + dealt + " units; " + what + " is destroyed."); kill_enemy(target); }
+  end_turn();
+}
+function star_supernova(c){
+  const here = quad; let nq;
+  const sy = COORD_R[c] < COORD_R[cell] ? -1 : COORD_R[c] > COORD_R[cell] ? 1 : 0;
+  const qy = quad >> 3, qx = quad & 7;
+  if (sy < 0 && qy < 7) nq = (qy + 1) * 8 + qx;
+  else if (sy > 0 && qy > 0) nq = (qy - 1) * 8 + qx;
+  else if (COORD_Q[c] < COORD_Q[cell] && qx < 7) nq = qy * 8 + qx + 1;
+  else if (qy < 7) nq = (qy + 1) * 8 + qx;
+  else nq = (qy - 1) * 8 + qx;
+  const k = GX[here].enemies;
+  if (k){ enemies_left = enemies_left > k ? enemies_left - k : 0; for (let i = 0; i < BOARD_SIZE; i++) if (IS_ENEMY(sec[i])){ sec[i] = C_EMPTY; ehp[i] = 0; } }
+  if (base_attacked === here){ base_attacked = -1; sched[SCH_FALLS] = -1; }
+  const dmg = rnd(600);
+  if (shields_up) shields = shields > dmg ? shields - dmg : 0;
+  else { energy = energy > dmg ? energy - dmg : 0; turn_hits += dmg; }
+  if (GX[here].planet >= 0 && (PL[GX[here].planet].flags & PL_SETTLED)){ PL[GX[here].planet].flags &= ~PL_SETTLED; evac_end = -1; }
+  if (GX[here].base !== B_NONE) bases_lost++;
+  GX[here].enemies = 0; GX[here].base = B_NONE; GX[here].stars = 0; GX[here].nova = 1; GX[here].commander = 0;
+  stars_gone++;
+  moved_this_turn = 1;
+  const qn = quadname(nq);
+  if (GX[nq].nova){ lost = 1; lost_how = 5; say("SCIENCE: the star goes supernova!  The Lexington is thrown into a burnt quadrant and destroyed."); return; }
+  say("SCIENCE: the star goes supernova!  " + dmg + " units, and the Lexington is blown to quadrant " + qn + ".");
+  quad = nq;
+  enter_quadrant(here);
+}
+function fire_torpedo(d){
+  if (gameover) return;
+  if (boarders === 3){ say("TORPEDO CONTROL: the boarding party holds torpedo control!"); return; }
+  if (torps <= 0){ say("TORPEDO CONTROL: no torpedoes left."); return; }
+  if (tubes() === 0){ say("TORPEDO CONTROL: the tubes are too damaged to fire."); return; }
+  torps--;
+  sound_say("jingle torpedo");
+  fired_this_turn = 1;
+  let at = cell, dir = d, hit = -1;
+  for (let step = 0; step < 12; step++){
+    if (shields_up && shields > 0 && rnd(25000) < shields) dir = (dir + (rnd(2) ? 1 : 5)) % 6;
+    const n = step_cell(at, dir);
+    if (n < 0) break;
+    at = n;
+    if (sec[at] !== C_EMPTY && sec[at] !== C_SHIP){ hit = at; break; }
+  }
+  if (hit < 0){ say("TORPEDO CONTROL: the torpedo misses and is lost."); end_turn(); return; }
+  const c = sec[hit];
+  if (c === C_STAR){
+    if (rnd(100) > 95){ star_supernova(hit); end_turn(); return; }
+    if (rnd(100) < 40){ say("TORPEDO CONTROL: the torpedo is absorbed by the star."); end_turn(); return; }
+    sec[hit] = C_NOVA; if (GX[quad].gone < GX[quad].stars) GX[quad].gone++; stars_gone++;
+    say("TORPEDO CONTROL: the star is destroyed.  Starfleet will hear of it.");
+    end_turn(); return;
+  }
+  if (c === C_NOVA){ say("TORPEDO CONTROL: the torpedo goes into the burnt star."); end_turn(); return; }
+  if (c === C_PLANET){ say("TORPEDO CONTROL: the torpedo hit a planet."); end_turn(); return; }
+  if (c === C_BASE){ say("TORPEDO CONTROL: are you mad?  You have damaged the base!"); GX[quad].base = B_NONE; sec[hit] = C_EMPTY; bases_lost++; docked = B_NONE; end_turn(); return; }
+  if (c === C_POD){ say("TORPEDO CONTROL: the torpedo passes through where the pod was; it is cloaked."); end_turn(); return; }
+  if (c === C_HOLE){ say("TORPEDO CONTROL: the torpedo is swallowed by something."); end_turn(); return; }
+  if (c === C_UNION){ union_hp -= 200; say("TORPEDO CONTROL: that was the Union ship!"); if (union_hp <= 0){ sec[hit] = C_EMPTY; union_cell = -1; union_quad = -1; union_hp = 0; say("The Union ship is destroyed."); } end_turn(); return; }
+  if (rnd(50) === 0){ say("TORPEDO CONTROL: the torpedo fails to detonate."); end_turn(); return; }
+  const dmg = (level + 4) * 15 + 250;
+  if (dmg < ehp[hit]){ ehp[hit] -= dmg; say("TORPEDO CONTROL: " + dmg + " units on " + CLASS_NAME[c] + "; it has " + ehp[hit] + " left."); }
+  else { say("TORPEDO CONTROL: " + CLASS_NAME[c] + " is destroyed."); kill_enemy(hit); }
+  end_turn();
+}
+function shields_toggle(){
+  if (gameover) return;
+  if (shields_up){ shields_up = 0; say("ENGINEERING: shields down."); }
+  else {
+    if (boarders === 1){ say("ENGINEERING: the boarding party holds engineering!"); return; }
+    if (energy < 50){ say("ENGINEERING: not enough energy to raise the shields."); return; }
+    energy -= 50; shields_up = 1; say("ENGINEERING: shields up.");
+  }
+  end_turn();
+}
+const POOL_NAME = ["", "main energy", "the impulse engines", "the shields"];
+function pool_get(w){ return w === 1 ? energy : w === 2 ? impulse : shields; }
+function pool_set(w, v){ if (w === 1) energy = v; else if (w === 2) impulse = v; else shields = v; }
+function divert(from, to, amount){
+  const cap = to === 1 ? ENERGY_MAX : to === 2 ? IMPULSE_MAX : SHIELD_MAX;
+  if (from === to) return;
+  if (pool_get(from) < amount) amount = pool_get(from);
+  if (pool_get(to) + amount > cap) amount = cap - pool_get(to);
+  if (amount <= 0){ say("ENGINEERING: nothing to transfer that way."); return; }
+  pool_set(from, pool_get(from) - amount); pool_set(to, pool_get(to) + amount);
+  say("ENGINEERING: " + amount + " units from " + POOL_NAME[from] + " to " + POOL_NAME[to] + ".");
+}
+function max_shields(){
+  if (gameover) return;
+  if (shields >= SHIELD_MAX){ say("ENGINEERING: the shields are at full strength."); return; }
+  divert(1, 3, SHIELD_MAX - shields);
+}
+function base_cell(){ for (let c = 0; c < BOARD_SIZE; c++) if (sec[c] === C_BASE) return c; return -1; }
+function dock(){
+  if (gameover) return;
+  if (docked !== B_NONE){ say("ENGINEERING: we are docked."); return; }
+  const b = base_cell();
+  if (b < 0 || hex_dist(b, cell) > 1 || GX[quad].base === B_NONE){ say("ENGINEERING: no base beside us to dock with."); return; }
+  docked = GX[quad].base;
+  life_reserve = 2000;
+  if (docked === B_STARBASE){ if (energy < ENERGY_MAX) energy = ENERGY_MAX; impulse = IMPULSE_MAX; shields = SHIELD_MAX; torps = TORPS_MAX; }
+  else if (docked === B_SUPPLY) torps = TORPS_MAX;
+  say("ENGINEERING: docked at " + BASE_NAME[docked] + (docked === B_STARBASE ? "; all supplies replenished" : docked === B_SUPPLY ? "; torpedoes and life support replenished" : "; life support replenished") + ".");
+  pass_time(100);
+  end_turn();
+}
+function rest(){
+  if (gameover) return;
+  pass_time(500);
+  say("ENGINEERING: half a stardate spent on repairs" + (docked === B_STARBASE ? " with the StarBase's crews" : "") + ".");
+  end_turn();
+}
+function hail(){
+  if (gameover) return;
+  const qy = quad >> 3, qx = quad & 7; let best = 64, fq = -1;
+  for (let y = qy - 4; y <= qy + 4; y++) for (let x = qx - 4; x <= qx + 4; x++){
+    if (y < 0 || y > 7 || x < 0 || x > 7) continue;
+    const c = y * 8 + x;
+    if (GX[c].base !== B_STARBASE) continue;
+    const d = (y - qy) * (y - qy) + (x - qx) * (x - qx);
+    if (d < best){ best = d; fq = c; }
+  }
+  if (rnd(10) < 2){ say("COMMUNICATIONS: subspace interference; no reply."); return; }
+  if (fq < 0 || best > 4){
+    if (fq >= 0){ schedule(SCH_HAIL, (isqrt(25 * best) - 5) * 100); hail_quad = fq; }
+    say("COMMUNICATIONS: no StarBase close enough to answer at once.");
+    return;
+  }
+  say("COMMUNICATIONS: the StarBase in quadrant " + quadname(fq) + " answers: come in for repairs when you can.");
+}
+function planet_here(){ return GX[quad].planet; }
+function orbit(){
+  if (gameover) return;
+  const p = planet_here();
+  if (orbiting >= 0){ say("NAVIGATION: we are in orbit."); return; }
+  if (p < 0 || PL[p].cell < 0 || hex_dist(PL[p].cell, cell) > 1){ say("NAVIGATION: no planet beside us to orbit."); return; }
+  orbiting = p;
+  PL[p].flags |= PL_SCANNED;
+  const f = PL[p].find === PF_ENERGIUM ? "energium" : PL[p].find === PF_MONGOL ? "a Mongol supply station" : "nothing of interest";
+  const settled = (PL[p].flags & PL_SETTLED) !== 0;
+  say("SCIENCE: in orbit over " + planet_name(p) + ", class " + "MNO"[PL[p].cls] + ".  Scanners show " + (settled ? "a settlement, and " : "") + f + ".");
+  end_turn();
+}
+function land(shuttle){
+  if (gameover) return;
+  if (orbiting < 0){ say("NAVIGATION: not orbiting a planet."); return; }
+  if (shields_up){ say("TRANSPORTER: cannot beam through the shields."); return; }
+  if (shuttle ? sys[SYS_SHUTTLE] < 100 : sys[SYS_TRANSPORTER] < 100){ say("ENGINEERING: the " + (shuttle ? "shuttlecraft" : "transporter") + " is not at 100%."); return; }
+  const p = PL[orbiting];
+  sound_say("whoosh beam");
+  if (p.flags & PL_SETTLED){
+    p.flags = (p.flags & ~PL_SETTLED) | PL_TAKEN;
+    rescues++; evac_end = -1;
+    say("TRANSPORTER: the settlers are aboard.  Evacuation complete.");
+    end_turn(); return;
+  }
+  if (shuttle) pass_time(200);
+  if (rnd(5) === 0){
+    const lost_ = 2 + rnd(5);
+    casualties += lost_; p.flags |= PL_TAKEN;
+    say("SECURITY: the landing party was attacked; " + lost_ + " casualties.");
+    end_turn(); return;
+  }
+  if (p.flags & PL_TAKEN){ say("SCIENCE: nothing more found."); end_turn(); return; }
+  p.flags |= PL_TAKEN;
+  if (p.find === PF_ENERGIUM){ have[I_ENERGIUM]++; say("SCIENCE: energium successfully mined."); }
+  else if (p.find === PF_MONGOL){
+    enemy_bases++;
+    if (rnd(4) !== 0){ for (let i = 0; i < 3; i++) if (rnd(i + 3) <= 1) have[i]++; have[I_LIFE] += 2; say("SECURITY: the Mongol supply station is taken; supplies captured."); }
+    else say("SECURITY: the Mongol supply station is taken, and nothing in it worth carrying.");
+  } else say("SCIENCE: nothing found.");
+  end_turn();
+}
+function use_item(it){
+  if (gameover) return;
+  if (it < 0 || it >= I_N || !have[it]){ say("Nothing of that to use."); return; }
+  if (it === I_ENERGIUM){
+    if (energy >= Math.trunc(ENERGY_MAX / 5) || shields >= Math.trunc(SHIELD_MAX / 2)){ say("FIRST OFFICER: regulations prohibit raw energium unless shields are under 50% and main energy under 20%."); return; }
+    have[it]--;
+    const r = rnd(6);
+    if (r === 0){ const loss = rnd(1000); energy = loss >= energy ? 0 : energy - loss; say("ENGINEERING: the crystal is defective!  Main energy systems damaged."); }
+    else if (r <= 2) say("ENGINEERING: the crystal is loaded... nothing happens.");
+    else {
+      const gain = 5 * (700 + rnd(700)), sg = 5 * (300 + rnd(300));
+      energy += gain; shields += sg; if (shields > SHIELD_MAX) shields = SHIELD_MAX;
+      say("ENGINEERING: the crystal is loaded: " + gain + " units to main energy, " + sg + " to the shields.");
+    }
+  } else if (it === I_MENERGIUM){ have[it]--; energy += 1000; if (energy > ENERGY_MAX) energy = ENERGY_MAX; say("ENGINEERING: Mongol energium loaded: main energy " + energy + "."); }
+  else if (it === I_BOLTS){
+    if (target < 0 || !IS_ENEMY(sec[target])) target = nearest_enemy();
+    if (target < 0 || !IS_ENEMY(sec[target])){ say("TORPEDO CONTROL: nothing to fire the plasma bolt at."); return; }
+    have[it]--;
+    if (rnd(3) === 0){ say("TORPEDO CONTROL: the plasma bolt is a dud."); end_turn(); return; }
+    const d = hex_dist(target, cell), burst = d === 0 ? 4000 : Math.trunc(1000 / (d * d));
+    for (let c = 0; c < BOARD_SIZE; c++) if (IS_ENEMY(sec[c])){
+      const dc = hex_dist(c, target), b = dc === 0 ? 4000 : Math.trunc(1000 / (dc * dc));
+      if (b >= ehp[c]){ say("TORPEDO CONTROL: the bolt destroys " + CLASS_NAME[sec[c]] + "."); kill_enemy(c); } else ehp[c] -= b;
+    }
+    if (burst >= 200){ say("TORPEDO CONTROL: the plasma bolt bursts " + d + " away; " + burst + " units on us."); take_hit(burst); }
+    else say("TORPEDO CONTROL: the plasma bolt bursts among them.");
+    end_turn();
+  } else if (it === I_PSHIELD){ have[it]--; plasma_shield = 1; shields = SHIELD_MAX; say("ENGINEERING: the plasma shield is up; the shields are at full charge."); }
+  else if (it === I_LIFE){
+    if (sys[SYS_LIFE] >= 100){ say("ENGINEERING: not on reserve life support."); return; }
+    have[it]--; life_reserve += 1000; if (life_reserve > 2000) life_reserve = 2000;
+    say("ENGINEERING: a canister of life support supplies opened; the reserve is " + Math.trunc(life_reserve / 1000) + "." + (Math.trunc(life_reserve / 100) % 10) + " stardates.");
+  }
+}
+function death_ray(){
+  if (gameover) return;
+  if (!enemies_here()){ say("SCIENCE: the death ray needs a target in the quadrant."); return; }
+  const r = rnd(6);
+  if (r === 0){
+    for (let c = 0; c < BOARD_SIZE; c++) if (IS_ENEMY(sec[c])){ sec[c] = C_EMPTY; ehp[c] = 0; if (GX[quad].enemies) GX[quad].enemies--; if (enemies_left) enemies_left--; }
+    GX[quad].commander = 0; target = -1;
+    say("SCIENCE: the death ray works!  Every Mongol in the quadrant is gone.");
+    sound_say("blow hit");
+  } else if (r === 2){ mutants = 1; say("SCIENCE: the death ray misfires... half the crew has turned into some kind of mutants!"); }
+  else if (r >= 4){ lost = 1; lost_how = 6; say("SCIENCE: the death ray explodes."); }
+  else if (r === 3){
+    for (let c = 0; c < BOARD_SIZE; c++) if (sec[c] === C_EMPTY && rnd(100) > 50) sec[c] = C_HOLE;
+    say("SCIENCE: the death ray misfires, and space around us is not what it was.");
+  } else say("SCIENCE: the death ray misfires.");
+  end_turn();
+}
+function self_destruct(){
+  if (gameover) return;
+  lost = 1; lost_how = 7; casualties = 430;
+  say("The Lexington is destroyed per order of the captain.");
+  end_turn();
+}
+function surrender(){
+  lost = 1; lost_how = 1; casualties = 430; surrender_asked = 0;
+  say("The captain of the Lexington surrenders his ship, with all aboard captured.");
+  end_turn();
+}
+function set_focus(which){
+  if (which < 0 || which >= SYS_N){ repair_focus = 0; say("ENGINEERING: repairs divided among all damaged systems."); return; }
+  if (sys[which] >= 100){ say("ENGINEERING: the " + SYS_NAME[which] + " is not damaged."); return; }
+  repair_focus = which + 1;
+  say("ENGINEERING: repair crews concentrating on the " + SYS_NAME[which] + ".");
+}
+function next_target(){
+  const start = target < 0 ? 0 : target + 1;
+  for (let i = 0; i < BOARD_SIZE; i++){
+    const c = (start + i) % BOARD_SIZE;
+    if (IS_ENEMY(sec[c]) || sec[c] === C_POD){ target = c; say("LASER CONTROL: target " + CLASS_NAME[sec[c]] + " at " + hex_dist(c, cell) + ", " + ehp[c] + " units left."); return; }
+  }
+  target = -1; say("LASER CONTROL: nothing in the quadrant to target.");
+}
+
+/* ── the evaluation ───────────────────────────────────── */
+function score_total(){
+  const elapsed = Math.trunc((stardate - STARDATE_START) / 100);
+  const kills = killed + killed_cmd;
+  let s = 0;
+  s += lost ? -200 : rescues * 200;
+  s += enemies_left ? -300 : 0;
+  s += killed * 10 + killed_cmd * 20 + enemy_bases * 50;
+  if (elapsed >= 30) s += Math.trunc((500 * kills * 10) / elapsed);
+  s -= casualties;
+  s += stars_gone * -5;
+  s += bases_lost * -200;
+  return s;
+}
+function evaluation_text(){
+  const elapsed = Math.trunc((stardate - STARDATE_START) / 100);
+  const kills = killed + killed_cmd;
+  const rate = elapsed >= 30 ? Math.trunc((500 * kills * 10) / elapsed) : 0;
+  const rh = elapsed >= 30 ? Math.trunc(kills * 1000 / elapsed) : 0;
+  return "DETAILED EVALUATION\n\nStardate " + datestr(stardate) + ", " + RANK[level] + " of the U.S.S. Lexington, command level " + level + ".\n" +
+    (lost ? LOST_HOW[lost_how] : enemies_left ? "The mission is not complete." : "The sector is secured.") + "\n\n" +
+    padl(rescues, 4) + "  Rescues @ 200 each ............ " + padl(lost ? 0 : rescues * 200, 6) + "\n" +
+    "      Penalty for incomplete mission  " + padl(enemies_left ? -300 : 0, 6) + "\n" +
+    "      Penalty for loss of ship ...... " + padl(lost ? -200 : 0, 6) + "\n" +
+    padl(killed, 4) + "  Mongols killed @ 10 each ...... " + padl(killed * 10, 6) + "\n" +
+    padl(killed_cmd, 4) + "  Commanders killed @ 20 each ... " + padl(killed_cmd * 20, 6) + "\n" +
+    padl(enemy_bases, 4) + "  Enemy bases destroyed @ 50 each " + padl(enemy_bases * 50, 6) + "\n" +
+    Math.trunc(rh / 100) + "." + pad0(rh % 100, 2) + "  Kill/day ratio @ 500 per day .. " + padl(rate, 6) + "\n" +
+    padl(casualties, 4) + "  Casualties @ -1 each .......... " + padl(-casualties, 6) + "\n" +
+    padl(stars_gone, 4) + "  Stars destroyed @ -5 each ..... " + padl(stars_gone * -5, 6) + "\n" +
+    padl(bases_lost, 4) + "  Bases hit @ -200 each ......... " + padl(bases_lost * -200, 6) + "\n\n" +
+    "      SCORE ......................... " + padl(score_total(), 6) + "\n";
+}
+
+/* ── a new game ───────────────────────────────────────── */
+function init_world(){
+  lay_galaxy();
+  energy = ENERGY_MAX; impulse = IMPULSE_MAX; shields = SHIELD_MAX; shields_up = 0; torps = TORPS_MAX;
+  laser_heat = 0; docked = B_NONE; life_reserve = 2000; boarders = 0; board_until = 0; mutants = 0;
+  killed = killed_cmd = stars_gone = casualties = rescues = bases_lost = enemy_bases = 0;
+  for (let i = 0; i < SYS_N; i++) sys[i] = 100;
+  for (let i = 0; i < I_N; i++) have[i] = 0;
+  repair_focus = 0; warp = 10; laser_set = 400; stardate = STARDATE_START; wear_last = STARDATE_START;
+  lost = lost_how = won = gameover = 0; plasma_shield = 0; surrender_asked = 0;
+  orbiting = -1; pod_alive = 1; bolt_cell = -1; bolt_quad = 0; target = -1;
+  union_hp = 0; union_quad = -1; union_cell = -1; union_when = 0;
+  base_attacked = -1; hail_quad = -1; evac_end = -1;
+  for (let i = 0; i < SCH_N; i++) sched[i] = -1;
+  turn = 0; moved_this_turn = fired_this_turn = 0; turn_hits = turn_absorbed = 0;
+  message[0] = message[1] = ""; log_n = 0; for (let i = 0; i < LOG_N; i++) logbook[i] = "";
+  for (let tries = 0; tries < 1000; tries++){ quad = Math.trunc(draw("start", tries) * GAL); if (GX[quad].enemies === 0) break; }
+  enter_quadrant(-1);
+  if (level >= 5) schedule(SCH_REINFORCE, deviate(12000, 5000));
+  if (level >= 3) schedule(SCH_DISTRESS, deviate(5000, 3000));
+  schedule(SCH_ATTACK, 2000 + rnd(4) * 1000);
+}
+
+/* ── the screen ───────────────────────────────────────── */
+const SHAPE_BRICK = 0, SHAPE_HEX = 1, SHAPE_FINE = 2;
+let tile_shape = SHAPE_FINE;
+const TILE_W = 4, PIX_H = 4, BOARD_Y = 1;
+let show_intro = 0, show_keys = 0, show_map = 0, show_log = 0, show_repair = 0, show_pools = 0, show_items = 0, show_look = 0, show_eval = 0, show_story = 0;
+let ask_dir = 0, ask_confirm = 0, ask_land = 0, ask_focus = 0, ask_use = 0;
+let map_cur = -1, map_digits = 0;
+function put_pixel(fine, tx, gx, y, c){
+  if (fine) pxq(tx * 2 + gx, y, c);
+  else px(tx + gx, y, c);
+}
+function you_px(gx, gy, gw, gh){
+  const hexed = tile_shape !== SHAPE_BRICK;
+  const top = (gh >= 4 && hexed) ? 1 : 0;
+  const hd = (gh - top >= 4) ? 2 : 1;
+  const rest = gh - top - hd;
+  const lg = rest >= 2 ? Math.trunc(rest / 2) : rest;
+  const sh = rest - lg;
+  if (gy < top) return -1;
+  const band = gy < top + hd ? 0 : gy < top + hd + sh ? 1 : 2;
+  let w = band === 0 ? Math.trunc(gw * 3 / 4) : band === 1 ? Math.trunc(gw / 2) : Math.trunc(gw * 3 / 8);
+  if (w < 1) w = 1;
+  const x = Math.trunc((gw - w) / 2);
+  if (gx < x || gx >= x + w) return -1;
+  const hull = shields_up ? 226 : 254;
+  return band === 0 ? hull : band === 1 ? (shields_up ? 220 : 250) : 245;
+}
+function draw_cell(tx, ty, c, mark){
+  const fine = tile_shape === SHAPE_FINE, hexed = tile_shape !== SHAPE_BRICK;
+  const gw = fine ? TILE_W * 2 : TILE_W, gh = hexed ? PIX_H + 1 : PIX_H;
+  const tip = Math.trunc(gw / 4), tipw = Math.trunc(gw / 2);
+  const y0 = ty * 2 + (hexed ? 1 : 0);
+  const tex = hash3u(Math.imul(quad, 7919) >>> 0, Number(SEED & 0xFFFFFFFFn) >>> 0, 3);
+  let k = sec[c]; const scan = srscan();
+  if (scan === 0 && c !== cell) k = C_EMPTY;
+  if (scan === 1 && (IS_ENEMY(k) || k === C_POD || k === C_UNION)) k = C_EMPTY;
+  const beasting = (IS_ENEMY(k) || k === C_POD || k === C_UNION) ? beast_pixels(CLASS_NAME[k], CLASS_FG[k], gw, gh) : 0;
+  let planetc = 0;
+  if (k === C_PLANET && GX[quad].planet >= 0){ const cls = PL[GX[quad].planet].cls; planetc = cls === 0 ? 34 : cls === 1 ? 130 : 245; }
+  for (let gy = 0; gy < gh; gy++){
+    let lo = 0, hi = gw;
+    if (hexed && (gy === 0 || gy === gh - 1)){ lo = tip; hi = tip + tipw; }
+    for (let gx = lo; gx < hi; gx++){
+      const h = hash3u(tex, c, gy * 8 + gx);
+      let col = 16;
+      if ((h & 0xFF) < 5) col = ((h >>> 10) & 1) ? 245 : 240;
+      if (c === target && (IS_ENEMY(sec[c]) || sec[c] === C_POD) && (gx === lo || gx === hi - 1 || gy === 0 || gy === gh - 1)) col = 196;
+      const cx = (gw - 1) * 0.5, cy = (gh - 1) * 0.5, nx = (gx - cx) / (gw * 0.36), ny = (gy - cy) / (gh * 0.42);
+      const disc = nx * nx + ny * ny <= 1.0;
+      if (k === C_STAR && disc) col = ((h >>> 6) & 3) === 0 ? 231 : 226;
+      if (k === C_NOVA && disc) col = ((h >>> 6) & 3) === 0 ? 88 : 52;
+      if (k === C_PLANET && disc) col = ((h >>> 6) & 3) === 0 ? lighter(planetc) : planetc;
+      if (k === C_BASE){ const dd = gy === Math.trunc(gh / 2) || gx === Math.trunc(gw / 2) || gx === Math.trunc(gw / 2) - 1; col = dd ? 45 : ((gx + gy) & 1) ? 39 : 24; if (gy === 0 || gy === gh - 1) col = ((gx + gy) & 1) ? 39 : 24; }
+      if (beasting === 1 && bst_px[gy * BST_MAXW + gx]) col = bst_px[gy * BST_MAXW + gx];
+      if (mark === 1){ const me = you_px(gx, gy, gw, gh); if (me >= 0) col = me; }
+      put_pixel(fine, tx, gx, y0 + gy, col);
+    }
+  }
+}
+function draw_board(){
+  for (let c = 0; c < BOARD_SIZE; c++){
+    const tx = 16 + 4 * COORD_Q[c] + 2 * COORD_R[c];
+    const ty = BOARD_Y + 8 + 2 * COORD_R[c];
+    draw_cell(tx, ty, c, c === cell ? 1 : 0);
+  }
+}
+function condition(){
+  if (docked !== B_NONE) return "DOCKED";
+  if (GX[quad].enemies > 0 || enemies_here()) return "RED";
+  if (energy < 1000 || shields < 500 || sys[SYS_LIFE] < 90) return "YELLOW";
+  return "GREEN";
+}
+function draw_status(x0, y0){
+  let line = "energy " + padl(energy, 4) + "  shields " + padl(shields, 4) + " " + (shields_up ? "UP" : "dn") + "  impulse " + padl(impulse, 3) + "  torps " + torps;
+  text(x0, y0, line, 250, 0);
+  line = "warp " + Math.trunc(warp / 10) + "." + (warp % 10) + "  lasers " + padl(laser_set, 4) + "  heat " + padl(laser_heat, 3) + "  eff " + padl(laser_eff(), 3) + "%  life " + Math.trunc(life_reserve / 1000) + "." + (Math.trunc(life_reserve / 100) % 10);
+  text(x0, y0 + 1, line, 250, 0);
+  let worst = -1;
+  for (let i = 0; i < SYS_N; i++) if (sys[i] < 100 && (worst < 0 || sys[i] < sys[worst])) worst = i;
+  if (worst >= 0) line = "damage: " + SYS_NAME[worst] + " " + sys[worst] + "%" + (repair_focus ? " (fixing)" : "");
+  else line = "all systems at 100%";
+  text(x0, y0 + 2, line, worst >= 0 ? 203 : 245, 0);
+  if (target >= 0 && (IS_ENEMY(sec[target]) || sec[target] === C_POD)) line = "target: " + CLASS_NAME[sec[target]] + ", " + hex_dist(target, cell) + " away, " + ehp[target] + " left";
+  else if (orbiting >= 0) line = "in orbit over " + planet_name(orbiting);
+  else line = boarders ? "boarders aboard!" : mutants ? "mutants aboard" : "no target";
+  text(x0, y0 + 3, line, 250, 0);
+}
+function blit_beast(name, fg, bx, by, W, H){
+  const fine = tile_shape === SHAPE_FINE, sx = fine ? 2 : 1;
+  if (beast_pixels(name, fg, W * sx, H * 2))
+    for (let gy = 0; gy < H * 2; gy++)
+      for (let gx = 0; gx < W * sx; gx++){
+        const p = bst_px[gy * BST_MAXW + gx];
+        if (p){ if (fine) pxq(bx * 2 + gx, by * 2 + gy, p); else px(bx + gx, by * 2 + gy, p); }
+      }
+}
+const BEAR = ["east", "south-east", "south-west", "west", "north-west", "north-east"];
+function draw_viewer(x0, y0, w, rows){
+  const fine = tile_shape === SHAPE_FINE, sx = fine ? 2 : 1;
+  for (let y = 0; y < rows * 2; y++)
+    for (let x = 0; x < w * sx; x++){
+      const h = hash3u(x, y, 99);
+      let col = 16;
+      if ((h & 0xFF) < 5) col = 254;
+      if (fine) pxq(x0 * 2 + x, y0 * 2 + y, col); else px(x0 + x, y0 * 2 + y, col);
+    }
+  const n = srscan() === 2 ? nearest_enemy() : -1;
+  if (n >= 0){
+    blit_beast(CLASS_NAME[sec[n]], CLASS_FG[sec[n]], x0 + 12, y0, w - 14, rows - 1);
+    const d = dir_toward(cell, n);
+    const line = CLASS_NAME[sec[n]].slice(2) + ", " + hex_dist(n, cell) + " sector" + (hex_dist(n, cell) === 1 ? "" : "s") + " " + (d < 0 ? "away" : BEAR[d]);
+    text(x0, y0 + rows - 1, line, CLASS_FG[sec[n]], 16);
+  } else if (orbiting >= 0){
+    const thing = PL[orbiting].cls === 0 ? T_TREE : PL[orbiting].cls === 1 ? T_BUSH : PL[orbiting].find === PF_ENERGIUM ? T_CRYSTAL : T_FERN;
+    let gw = (w - 2) * sx, gh = (rows - 1) * 2;
+    if (gw > GROW_MAXW) gw = GROW_MAXW;
+    if (gh > GROW_MAXH) gh = GROW_MAXH;
+    if (grow_tile(quad, PL[orbiting].cell, thing, gw, gh))
+      for (let gy = 0; gy < gh; gy++) for (let gx = 0; gx < gw; gx++){
+        const p = grow_px[gy * GROW_MAXW + gx];
+        if (p){ if (fine) pxq((x0 + 1) * 2 + gx, y0 * 2 + gy, p); else px(x0 + 1 + gx, y0 * 2 + gy, p); }
+      }
+    text(x0, y0 + rows - 1, planet_name(orbiting) + ", class " + "MNO"[PL[orbiting].cls] + ": " + THING[thing].name, 250, 16);
+  } else text(x0, y0 + rows - 1, srscan() === 2 ? "the main viewer: nothing in range" : "the main viewer: scanners damaged", 245, 16);
+}
+function chart_cell(q){
+  if (GX[q].nova && GX[q].known) return ["999", 203, 16];
+  if (!GX[q].known || sys[SYS_COMPUTER] < 30) return ["...", 240, 16];
+  let e = lrscan() === 2 || q === quad ? GX[q].enemies : 0;
+  if (e > 9) e = 9;
+  return ["" + e + GX[q].base + GX[q].stars, e ? 196 : GX[q].base ? 214 : 250, 16];
+}
+function draw_chart(x0, y0){
+  text(x0, y0, "  1   2   3   4   5   6   7   8", 245, 0);
+  for (let y = 0; y < 8; y++){
+    text(x0 - 2, y0 + 1 + y, "" + ((y + 1) & 15), 245, 0);
+    for (let x = 0; x < 8; x++){
+      const q = y * 8 + x;
+      let [cellt, fg, bg] = chart_cell(q);
+      if (q === quad) bg = 24;
+      if (q === base_attacked) fg = 226;
+      text(x0 + x * 4, y0 + 1 + y, cellt, fg, bg);
+    }
+  }
+}
+function wrap_lines(s, width, max){
+  const out = [];
+  let p = 0;
+  while (p < s.length && out.length < max){
+    if (s[p] === '\n'){ out.push(""); p++; continue; }
+    let len = 0, last_space = -1;
+    while (p + len < s.length && s[p + len] !== '\n' && len < width){
+      if (s[p + len] === ' ') last_space = len;
+      len++;
+    }
+    let cut = len;
+    if (p + len < s.length && s[p + len] !== '\n' && last_space > 0) cut = last_space;
+    out.push(s.slice(p, p + cut));
+    p += cut;
+    while (s[p] === ' ') p++;
+  }
+  return out;
+}
+function draw_page(body, foot, fg){
+  const x = 1, y = 1, w = screen_w - 2, h = screen_h - 2;
+  fill(x, y, w, h, 235);
+  for (let c = x; c < x + w; c++){ text(c, y, " ", 250, 240); text(c, y + h - 1, " ", 250, 240); }
+  for (let r = y; r < y + h; r++){ text(x, r, " ", 250, 240); text(x + w - 1, r, " ", 250, 240); }
+  const lines = wrap_lines(body, w - 6, 64);
+  let row = y + 1;
+  for (let i = 0; i < lines.length && row < y + h - 2; i++, row++)
+    text(x + 3, row, lines[i], i === 0 ? 223 : fg, 235);
+  text(x + 3, y + h - 2, foot, 245, 235);
+}
+function draw_map_page(){
+  const x = 1, y = 1, w = screen_w - 2, h = screen_h - 2;
+  fill(x, y, w, h, 232);
+  for (let c = x; c < x + w; c++){ text(c, y, " ", 250, 240); text(c, y + h - 1, " ", 250, 240); }
+  for (let r = y; r < y + h; r++){ text(x, r, " ", 250, 240); text(x + w - 1, r, " ", 250, 240); }
+  text(x + 2, y, " the galaxy chart ", 232, 240);
+  const cx0 = x + 6, cy0 = y + 2;
+  text(cx0 + 2, cy0, "1     2     3     4     5     6     7     8", 245, 232);
+  for (let yy = 0; yy < 8; yy++){
+    text(cx0 - 2, cy0 + 1 + yy * 2, "" + (yy + 1), 245, 232);
+    for (let xx = 0; xx < 8; xx++){
+      const q = yy * 8 + xx;
+      let [cellt, fg, bg] = chart_cell(q);
+      bg = 232;
+      if (q === quad) bg = 24;
+      if (q === map_cur) bg = 58;
+      if (q === base_attacked) fg = 226;
+      text(cx0 + xx * 6, cy0 + 1 + yy * 2, " ", fg, bg);
+      text(cx0 + 1 + xx * 6, cy0 + 1 + yy * 2, cellt, fg, bg);
+      text(cx0 + 4 + xx * 6, cy0 + 1 + yy * 2, " ", fg, bg);
+    }
+  }
+  const lx = cx0 + 52;
+  text(lx, cy0, "Mongols, base, stars", 245, 232);
+  text(lx, cy0 + 1, "1 StarBase  2 research", 214, 232);
+  text(lx, cy0 + 2, "3 supply    999 nova", 214, 232);
+  if (map_cur >= 0){
+    const d16 = qdist16(quad, map_cur);
+    const cost = warp_energy(d16) * (shields_up ? 2 : 1);
+    const tt = warp_time(d16);
+    text(lx, cy0 + 4, "to " + quadname(map_cur) + " at warp " + Math.trunc(warp / 10) + "." + (warp % 10) + ":", 250, 232);
+    text(lx, cy0 + 5, cost + " units, " + Math.trunc(tt / 1000) + "." + (Math.trunc(tt / 100) % 10) + " stardates", cost > energy ? 203 : 250, 232);
+    if (GX[map_cur].planet >= 0 && GX[map_cur].known) text(lx, cy0 + 6, "planet " + planet_name(GX[map_cur].planet), 34, 232);
+  }
+  text(lx, cy0 + 8, "max warp " + Math.trunc(max_warp() / 10) + "." + (max_warp() % 10), 245, 232);
+  text(x + 3, y + h - 2, "digits: row then column   Enter warps   - + warp factor   w a x d move the cursor   q closes", 245, 232);
+}
+function draw_repair_page(){
+  let body = "STATE OF REPAIR\n\n";
+  for (let i = 0; i < SYS_N; i++){
+    const eta = sys[i] >= 100 ? 0 : Math.trunc((100 - sys[i]) * 1000 / (docked === B_STARBASE ? 50 : 20));
+    body += (i < 10 ? String.fromCharCode(48 + i) : String.fromCharCode(97 + i - 10)) + "  " + padr(SYS_NAME[i], 22) + " " + padl(sys[i], 3) + "%" + (sys[i] >= 100 ? "" : "   damaged") + (repair_focus === i + 1 ? "   repair crews here" : "") + "\n";
+    if (sys[i] < 100) body += padl("", 30) + " about " + Math.trunc(eta / 1000) + "." + (Math.trunc(eta / 100) % 10) + " stardates to repair\n";
+  }
+  body += "\nrepairs: 20 a stardate, 50 docked at a StarBase; a chosen system 60, or 100 docked";
+  draw_page(body, ask_focus ? "which system?  0-9 a b, or . for all" : "F chooses one system to concentrate on   any other key closes", 250);
+}
+function draw_pools_page(){
+  const body = "ENGINEERING REPORT\n\n1) Main Energy:      " + padl(energy, 5) + "   " + padl(Math.trunc(energy * 100 / ENERGY_MAX), 3) + "%\n2) Impulse Engines:  " + padl(impulse, 5) + "   " + padl(Math.trunc(impulse * 100 / IMPULSE_MAX), 3) + "%\n3) Shields:          " + padl(shields, 5) + "   " + padl(Math.trunc(shields * 100 / SHIELD_MAX), 3) + "%   " + (shields_up ? "raised" : "lowered") + "\n\n" +
+    "transfers:\n  a  500 main to shields       b  500 shields to main\n  c  100 main to impulse       d  100 impulse to main\n  M  all the shields will take\n\n" +
+    "The converter makes 400 units a stardate at 100%; it is at " + sys[SYS_CONVERTER] + "%.\nLife support reserve: " + Math.trunc(life_reserve / 1000) + "." + (Math.trunc(life_reserve / 100) % 10) + " stardates.";
+  draw_page(body, "a b c d M transfer   any other key closes", 250);
+}
+function draw_items_page(){
+  let body = "WHAT THE LEXINGTON CARRIES\n\n";
+  let any = 0;
+  for (let i = 0; i < I_N; i++) if (have[i]){ body += String.fromCharCode(97 + i) + "  " + ITEM_NAME[i] + " x" + have[i] + "\n"; any = 1; }
+  if (!any) body += "nothing but what she was built with\n";
+  body += "\nRaw energium: from a planet; regulations allow it only with shields under 50% and main energy under 20%; one in six is defective, two in six do nothing.\n" +
+          "Mongol energium, plasma bolts, a plasma shield, life support supplies: captured from a supply station or a surrendered ship.";
+  draw_page(body, ask_use ? "use which?  a letter" : "u uses one   any other key closes", 250);
+}
+function draw_log_page(){
+  let body = "THE LOG, newest first\n\n";
+  for (let i = 0; i < log_n && i < 18; i++) body += logbook[i] + "\n";
+  draw_page(body, "any key closes", 250);
+}
+function draw_look_page(){
+  const x = 1, y = 2, w = 52, h = 19;
+  fill(x, y, w, h, 235);
+  for (let c = x; c < x + w; c++){ text(c, y, " ", 250, 240); text(c, y + h - 1, " ", 250, 240); }
+  for (let r = y; r < y + h; r++){ text(x, r, " ", 250, 240); text(x + w - 1, r, " ", 250, 240); }
+  text(x + 2, y, " a closer look ", 232, 240);
+  const n = target >= 0 && (IS_ENEMY(sec[target]) || sec[target] === C_POD) ? target : nearest_enemy();
+  if (n >= 0){
+    blit_beast(CLASS_NAME[sec[n]], CLASS_FG[sec[n]], x + 3, y + 2, w - 6, h - 6);
+    text(x + 3, y + h - 3, CLASS_NAME[sec[n]] + ": " + ehp[n] + " units left, " + hex_dist(n, cell) + " away", CLASS_FG[sec[n]], 235);
+    text(x + 3, y + h - 2, "it would fire about " + laser_damage(Math.trunc(ehp[n] * 97 / 100), 100, hex_dist(n, cell)) + " at this range", 245, 235);
+  } else {
+    blit_beast("the Lexington", 254, x + 3, y + 2, w - 6, h - 6);
+    text(x + 3, y + h - 3, "the Lexington, RCB-92, Class IX Research/Battle Cruiser", 250, 235);
+    text(x + 3, y + h - 2, "nothing hostile in the quadrant", 245, 235);
+  }
+}
+function compose_screen(){
+  fb_clear();
+  const qn = quadname(quad), dt = datestr(stardate);
+  let line = " EGA Trek · the Lexington · quadrant " + qn + " · sector " + cell + " · " + condition();
+  const when = "stardate " + dt + ", turn " + turn;
+  { const room_for = screen_w - when.length - 2; if (line.length > room_for) line = line.slice(0, room_for); }
+  const cond = condition();
+  const bar = cond[0] === 'R' ? 52 : cond[0] === 'D' ? 24 : 22;
+  text(0, 0, line, 250, bar);
+  for (let x = line.length; x < screen_w; x++) text(x, 0, " ", 232, bar);
+  text(screen_w - when.length - 1, 0, when, 250, bar);
+
+  draw_board();
+  draw_status(panel_x + 1, 1);
+  draw_viewer(panel_x + 1, 5, screen_w - panel_x - 2 > 42 ? 42 : screen_w - panel_x - 2, 6);
+  draw_chart(panel_x + 3, 11);
+  if (show_look) draw_look_page();
+
+  const nh = enemies_here();
+  let here = " here: quadrant " + qn + ", " + (GX[quad].base ? BASE_NAME[GX[quad].base].slice(2) : "") + nh + " Mongol" + (nh === 1 ? "" : "s");
+  if (GX[quad].base) here = " here: quadrant " + qn + " · " + BASE_NAME[GX[quad].base] + " · " + nh + " Mongol" + (nh === 1 ? "" : "s");
+  if (GX[quad].planet >= 0) here += " · planet " + planet_name(GX[quad].planet);
+  for (let d = 0; d < 6; d++){ const c = step_cell(cell, d); if (c >= 0 && (sec[c] === C_BASE || sec[c] === C_PLANET)){ here += sec[c] === C_BASE ? " · beside the base" : " · beside the planet"; break; } }
+  here = cut_bytes(here, screen_w - 1);
+  text(1, screen_h - 5, here, 245, 0);
+  line = " " + RANK[level] + " · level " + level + " · " + enemies_left + " Mongols left · " + Math.trunc((stardate - STARDATE_START) / 1000) + "." + (Math.trunc((stardate - STARDATE_START) / 100) % 10) + " stardates in action · " + torps + " torpedoes · " + (docked ? "docked" : orbiting >= 0 ? "in orbit" : shields_up ? "shields up" : "shields down");
+  line = cut_bytes(line, screen_w - 1);
+  text(1, screen_h - 4, line, 240, 0);
+  if (blen(message[0]) <= screen_w - 2){
+    text(1, screen_h - 3, message[0], 223, 0);
+    text(1, screen_h - 2, message[1], 245, 0);
+  } else {
+    let cut = screen_w - 2;
+    while (cut > 40 && message[0][cut] !== ' ') cut--;
+    text(1, screen_h - 3, message[0].slice(0, cut), 223, 0);
+    text(1, screen_h - 2, message[0].slice(cut + 1), 223, 0);
+  }
+  text(1, screen_h - 1, ask_dir ? "the torpedo: which way?  w e a d z x" : ask_confirm === 'Y' ? "fire the death ray?  y or n" : ask_confirm === 'K' ? "self-destruct?  y or n"
+                      : ask_land ? "land by  t  transporter or  s  shuttle" : surrender_asked ? "surrender?  y, or anything else to fight on"
+                      : gameover ? "E evaluation  n new game  L load  q quit"
+                      : "weadzx move . wait f lasers n target t torpedo s shields m chart D dock o orbit l land ? keys", 245, 0);
+
+  if (show_map) draw_map_page();
+  if (show_repair) draw_repair_page();
+  if (show_pools) draw_pools_page();
+  if (show_items) draw_items_page();
+  if (show_log) draw_log_page();
+  if (show_keys) draw_page(KEYS_TEXT, "any key closes it", 250);
+  if (show_eval) draw_page(evaluation_text(), gameover ? "n  begin again        L  load a saved game        q  leave        any other key closes" : "the mission goes on: any key closes", 250);
+  if (show_intro) draw_page("EGA TREK, on hanb's boards\n\n" + STORY[0], "1-5 the command level, or any key begins        q  leave", 250);
+  else if (show_story) draw_page(STORY[show_story - 1], "any key goes on", 250);
+}
+function fb_hash(){
+  let h = 2166136261 >>> 0;
+  for (let row = 0; row < screen_h; row++)
+    for (let col = 0; col < screen_w; col++){
+      const a = FB(row, col);
+      const ch = fb_ch[a] === FB_QUAD ? 1 : fb_ch[a];
+      const q = fb_ch[a] === FB_QUAD ? (fb_q[a] & 15) : 0;
+      const v = (fb_fg[a] | (fb_bg[a] << 8) | (q << 16) | (ch << 20)) >>> 0;
+      h = Math.imul(h ^ v, 16777619) >>> 0;
+      h = Math.imul(h ^ (v >>> 24), 16777619) >>> 0;
+    }
+  return h;
+}
+
+/* ── saving ── */
+let save_store = {get: () => null, set: (s) => {}};
+function save_game(){
+  const s = {
+    magic: "lexington", seed: SEED.toString(), seedtext: SEEDTEXT,
+    gx: GX.map(g => Object.assign({}, g)), lay: LAY.map(l => Array.from(l)), pl: PL.map(p => Object.assign({}, p)), planet_n: planet_n, evac_end: evac_end,
+    have: Array.from(have), level: level, energy: energy, impulse: impulse, shields: shields, shields_up: shields_up, torps: torps, laser_heat: laser_heat, docked: docked, life_reserve: life_reserve, boarders: boarders,
+    board_until: board_until, stardate: stardate, wear_last: wear_last,
+    mutants: mutants, killed: killed, killed_cmd: killed_cmd, stars_gone: stars_gone, casualties: casualties, rescues: rescues, bases_lost: bases_lost, enemy_bases: enemy_bases, sys: Array.from(sys), repair_focus: repair_focus, warp: warp, laser_set: laser_set,
+    quad: quad, cell: cell, orbiting: orbiting, pod_alive: pod_alive, enemies_left: enemies_left, bolt_cell: bolt_cell, bolt_quad: bolt_quad, plasma_shield: plasma_shield, lost: lost, lost_how: lost_how, won: won, gameover: gameover,
+    sec: Array.from(sec), ehp: Array.from(ehp), target: target, union_hp: union_hp, union_quad: union_quad, union_cell: union_cell, union_when: union_when,
+    base_attacked: base_attacked, hail_quad: hail_quad, sched: sched.slice(), turn: turn, surrender_asked: surrender_asked,
+    msg: message.slice(), logbook: logbook.slice(), log_n: log_n,
+  };
+  try { save_store.set(JSON.stringify(s)); } catch (e) { return 0; }
+  return 1;
+}
+function load_game(){
+  let s;
+  try { const j = save_store.get(); if (!j) return 0; s = JSON.parse(j); } catch (e) { return 0; }
+  if (!s || s.magic !== "lexington") return 0;
+  SEED = BigInt(s.seed); SEEDTEXT = s.seedtext;
+  for (let q = 0; q < GAL; q++){ Object.assign(GX[q], s.gx[q]); for (let c = 0; c < BOARD_SIZE; c++) LAY[q][c] = s.lay[q][c]; }
+  for (let p = 0; p < PLANET_MAX; p++) Object.assign(PL[p], s.pl[p]);
+  planet_n = s.planet_n; evac_end = s.evac_end;
+  for (let i = 0; i < I_N; i++) have[i] = s.have[i];
+  level = s.level; energy = s.energy; impulse = s.impulse; shields = s.shields; shields_up = s.shields_up; torps = s.torps; laser_heat = s.laser_heat; docked = s.docked; life_reserve = s.life_reserve; boarders = s.boarders;
+  board_until = s.board_until; stardate = s.stardate; wear_last = s.wear_last;
+  mutants = s.mutants; killed = s.killed; killed_cmd = s.killed_cmd; stars_gone = s.stars_gone; casualties = s.casualties; rescues = s.rescues; bases_lost = s.bases_lost; enemy_bases = s.enemy_bases;
+  for (let i = 0; i < SYS_N; i++) sys[i] = s.sys[i];
+  repair_focus = s.repair_focus; warp = s.warp; laser_set = s.laser_set;
+  quad = s.quad; cell = s.cell; orbiting = s.orbiting; pod_alive = s.pod_alive; enemies_left = s.enemies_left; bolt_cell = s.bolt_cell; bolt_quad = s.bolt_quad; plasma_shield = s.plasma_shield;
+  lost = s.lost; lost_how = s.lost_how; won = s.won; gameover = s.gameover;
+  for (let c = 0; c < BOARD_SIZE; c++){ sec[c] = s.sec[c]; ehp[c] = s.ehp[c]; }
+  target = s.target; union_hp = s.union_hp; union_quad = s.union_quad; union_cell = s.union_cell; union_when = s.union_when;
+  base_attacked = s.base_attacked; hail_quad = s.hail_quad; for (let i = 0; i < SCH_N; i++) sched[i] = s.sched[i]; turn = s.turn; surrender_asked = s.surrender_asked;
+  message[0] = s.msg[0]; message[1] = s.msg[1]; for (let i = 0; i < LOG_N; i++) logbook[i] = s.logbook[i]; log_n = s.log_n;
+  show_intro = show_keys = show_map = show_log = show_repair = show_pools = show_items = show_look = show_eval = show_story = 0;
+  ask_dir = ask_confirm = ask_land = ask_focus = ask_use = 0; map_cur = -1; map_digits = 0;
+  grown_keep.length = 0; bst_keep.length = 0;
+  sound_on_title = 0; sound_bed = ""; sound_scene();
+  return 1;
+}
+
+/* ── input ── */
+function dir_of_key(c){
+  switch (c){
+  case 'd': return 0; case 'x': return 1; case 'z': return 2;
+  case 'a': return 3; case 'w': return 4; case 'e': return 5;
+  default: return -1;
+  }
+}
+function new_game(){
+  init_world();
+  show_intro = 1; show_keys = show_map = show_log = show_repair = show_pools = show_items = show_look = show_eval = show_story = 0;
+  ask_dir = ask_confirm = ask_land = ask_focus = ask_use = 0; map_cur = -1; map_digits = 0;
+  sound_on_title = 1; sound_scene();
+}
+function begin(){
+  show_intro = 0;
+  say("COMMUNICATIONS: " + RANK[level] + ", the Lexington is yours; you are in quadrant " + quadname(quad) + ".  The Mongols are " + enemies_left + ".  Good hunting.");
+  sound_on_title = 0; sound_scene();
+}
+/* One key.  Returns 0 to quit. */
+function handle_key(c){
+  const code = c.charCodeAt(0);
+  if (show_intro){
+    if (c === 'q' || code === 27 || code === 3) return 0;
+    if (c >= '1' && c <= '5' && code - 48 !== level){ level = code - 48; init_world(); }
+    begin();
+    return 1;
+  }
+  if (show_story){ show_story = 0; if (gameover) show_eval = 1; return 1; }
+  if (show_eval){
+    show_eval = 0;
+    if (c === 'q' || code === 27 || code === 3) return 0;
+    if (gameover && c === 'n'){ new_game(); return 1; }
+    if (gameover && c === 'L'){ if (!load_game()) say("No saved game."); return 1; }
+    return 1;
+  }
+  if (show_keys || show_log){ show_keys = show_log = 0; return 1; }
+  if (show_map){
+    if (c >= '1' && c <= '8'){
+      const v = code - 49;
+      if (map_digits === 0){ map_cur = v * 8 + (map_cur < 0 ? 0 : map_cur & 7); map_digits = 1; }
+      else { map_cur = (map_cur >> 3) * 8 + v; map_digits = 0; }
+      return 1;
+    }
+    if (map_cur < 0) map_cur = quad;
+    if (c === 'w' || c === 'e'){ if (map_cur >= 8) map_cur -= 8; }
+    else if (c === 'x' || c === 'z'){ if (map_cur < 56) map_cur += 8; }
+    else if (c === 'a'){ if (map_cur & 7) map_cur--; }
+    else if (c === 'd'){ if ((map_cur & 7) !== 7) map_cur++; }
+    else if (c === '-'){ if (warp > 10) warp -= 10; if (warp < 10) warp = 10; }
+    else if (c === '+' || c === '='){ warp += 10; if (warp > max_warp()) warp = max_warp(); }
+    else if (c === '\n' || c === '\r' || c === 'm'){ show_map = 0; map_digits = 0; const q = map_cur; map_cur = -1; warp_to(q); }
+    else if (c === 'q' || code === 27){ show_map = 0; map_cur = -1; map_digits = 0; }
+    return 1;
+  }
+  if (show_repair){
+    if (ask_focus){
+      ask_focus = 0;
+      const which = c >= '0' && c <= '9' ? code - 48 : c === 'a' ? 10 : c === 'b' ? 11 : -1;
+      set_focus(which);
+      show_repair = 0;
+      return 1;
+    }
+    if (c === 'F'){ ask_focus = 1; return 1; }
+    show_repair = 0; return 1;
+  }
+  if (show_pools){
+    if (c === 'a') divert(1, 3, 500); else if (c === 'b') divert(3, 1, 500); else if (c === 'c') divert(1, 2, 100); else if (c === 'd') divert(2, 1, 100);
+    else if (c === 'M') max_shields();
+    else show_pools = 0;
+    return 1;
+  }
+  if (show_items){
+    if (ask_use){ ask_use = 0; show_items = 0; use_item(code - 97); return 1; }
+    if (c === 'u'){ ask_use = 1; return 1; }
+    show_items = 0; return 1;
+  }
+  if (show_look){ show_look = 0; return 1; }
+  if (ask_dir){ const d = dir_of_key(c); ask_dir = 0; if (d >= 0) fire_torpedo(d); return 1; }
+  if (ask_confirm){ const what = ask_confirm; ask_confirm = 0; if (c === 'y'){ if (what === 'Y') death_ray(); else self_destruct(); } return 1; }
+  if (ask_land){ ask_land = 0; if (c === 't') land(0); else if (c === 's') land(1); return 1; }
+  if (surrender_asked){ surrender_asked = 0; if (c === 'y'){ surrender(); return 1; } say("COMMUNICATIONS: the Mongols' demand is refused."); return 1; }
+  if (c === 'q' || code === 27 || code === 3) return 0;
+  if (c === '?'){ show_keys = 1; return 1; }
+  if (c === 'S'){ say(save_game() ? "Game saved." : "Could not save."); return 1; }
+  if (c === 'L'){ if (!load_game()) say("No saved game."); return 1; }
+  if (c === 'T'){ tile_shape = (tile_shape + 1) % SHAPE_N; return 1; }
+  if (c === 'g'){ show_log = 1; return 1; }
+  if (c === 'c'){ show_look = 1; return 1; }
+  if (c === 'E'){ show_eval = 1; return 1; }
+  if (c === 'r'){ show_repair = 1; return 1; }
+  if (c === 'p'){ show_pools = 1; return 1; }
+  if (c === 'i'){ show_items = 1; return 1; }
+  if (c === 'm'){ show_map = 1; map_cur = quad; map_digits = 0; return 1; }
+  if (gameover){ if (c === 'n') new_game(); else show_eval = 1; return 1; }
+  if (c === 'n'){ next_target(); return 1; }
+  const d = dir_of_key(c);
+  if (d >= 0){ move_dir(d); return 1; }
+  switch (c){
+  case '.': end_turn(); break;
+  case 'f': fire_lasers(); break;
+  case 't': ask_dir = 1; break;
+  case 's': shields_toggle(); break;
+  case 'M': max_shields(); break;
+  case '[': if (laser_set > 100) laser_set -= 100; break;
+  case ']': if (laser_set < 2000) laser_set += 100; break;
+  case '-': if (warp > 10) warp -= 10; say("ENGINEERING: warp " + Math.trunc(warp / 10) + "." + (warp % 10) + "."); break;
+  case '+': case '=': warp += 10; if (warp > max_warp()) warp = max_warp(); say("ENGINEERING: warp " + Math.trunc(warp / 10) + "." + (warp % 10) + "."); break;
+  case 'D': dock(); break;
+  case 'o': orbit(); break;
+  case 'l': if (orbiting < 0) say("NAVIGATION: not orbiting a planet."); else ask_land = 1; break;
+  case 'u': show_items = 1; ask_use = 1; break;
+  case 'h': hail(); break;
+  case 'F': show_repair = 1; ask_focus = 1; break;
+  case 'R': rest(); break;
+  case 'Y': ask_confirm = 'Y'; break;
+  case 'K': ask_confirm = 'K'; break;
+  default: break;
+  }
+  return 1;
+}
+
+function start_game(seedText, dice, lvl){
+  setSeed(seedText);
+  level = lvl ? lvl : 3;
+  dice_state = 0x243F6A8885A308D3n;
+  if (dice) dice_state ^= SEED;
+  else dice_state ^= (BigInt(Date.now()) * 0x9E3779B97F4A7C15n) & M64;
+  init_world();
+  show_intro = 1; show_keys = show_map = show_log = show_repair = show_pools = show_items = show_look = show_eval = show_story = 0;
+  ask_dir = ask_confirm = ask_land = ask_focus = ask_use = 0; map_cur = -1; map_digits = 0;
+  tile_shape = SHAPE_FINE;
+  sound_bed = ""; sound_on_title = 1;
+  sound_scene();
+}
+
+/* ── the checks ─────────────────────────────────────────── */
+function legend_char(q, c){
+  const k = q === quad ? sec[c] : LAY[q][c];
+  switch (k){
+  case C_STAR: return '*'; case C_NOVA: return 'N'; case C_BASE: return 'B'; case C_PLANET: return 'P';
+  case C_BATTLESHIP: return 'K'; case C_COMMAND: return 'C'; case C_SCOUT: return 'S'; case C_SUPPLY: return 'F';
+  case C_POD: return 'R'; case C_HOLE: return 'O'; case C_UNION: return 'U'; case C_SHIP: return '@';
+  default: return '.';
+  }
+}
+const ROWN = [5, 6, 7, 8, 9, 8, 7, 6, 5];
+function print_board(out, q){
+  let i = 0;
+  for (let row = 0; row < 9; row++){
+    let line = "   " + " ".repeat(4 - (row < 4 ? row : 8 - row));
+    for (let j = 0; j < ROWN[row]; j++, i++) line += legend_char(q, i) + " ";
+    out.push(line);
+  }
+}
+function check_rooms(seedText, lvl){
+  const out = [];
+  start_game(seedText, 1, lvl);
+  out.push("command level " + level + ": " + enemies_left + " Mongols, " + planet_n + " planets");
+  for (let q = 0; q < GAL; q++){
+    out.push("");
+    let line = "quadrant " + quadname(q) + "  (" + q + ")  " + GX[q].enemies + " Mongol" + (GX[q].enemies === 1 ? "" : "s") + (GX[q].commander ? " with a commander" : "") + "  " +
+      (GX[q].base ? BASE_NAME[GX[q].base] : "no base") + "  " + GX[q].stars + " star" + (GX[q].stars === 1 ? "" : "s");
+    if (GX[q].planet >= 0) line += "  planet " + planet_name(GX[q].planet) + " class " + "MNO"[PL[GX[q].planet].cls] + ((PL[GX[q].planet].flags & PL_SETTLED) ? " (settled)" : "");
+    line += q === quad ? "  <- the Lexington" : "";
+    out.push(line);
+    print_board(out, q);
+  }
+  return out;
+}
+function check_keys(seedText, keys_in, lvl){
+  const out = [];
+  start_game(seedText, 1, lvl);
+  show_intro = 0; sound_on_title = 0;
+  for (let i = 0; i < keys_in.length; i++){
+    let c = keys_in[i];
+    if (c === '\\' && i + 1 < keys_in.length){ i++; if (keys_in[i] === 'n'){ handle_key('\n'); continue; } c = keys_in[i]; }
+    if (!handle_key(c)) break;
+  }
+  keys_report(out);
+  return out;
+}
+function keys_report(out){
+  out.push("quad " + quad + "  cell " + cell + "  stardate " + datestr(stardate) + "  turn " + turn + "  " + (lost ? "LOST: " : won ? "WON" : "") + (lost ? LOST_HOW[lost_how] : ""));
+  out.push("energy " + energy + " impulse " + impulse + " shields " + shields + "/" + shields_up + " torps " + torps + " left " + enemies_left + " killed " + killed + "+" + killed_cmd + " score " + score_total());
+  let s = "sys:"; for (let i = 0; i < SYS_N; i++) s += " " + sys[i]; s += "  have:"; for (let i = 0; i < I_N; i++) s += " " + have[i]; out.push(s);
+  out.push("last: " + message[0]);
+  out.push("      " + message[1]);
+  for (let c = 0; c < BOARD_SIZE; c++) if (IS_ENEMY(sec[c]) || sec[c] === C_POD) out.push("here: " + CLASS_NAME[sec[c]] + " at " + c + " hp " + ehp[c]);
+  let ch = "chart:"; for (let q = 0; q < GAL; q++) if (GX[q].enemies) ch += " " + q + ":" + GX[q].enemies + (GX[q].commander ? "c" : ""); out.push(ch);
+  screen_w = 80; screen_h = 25;
+  compose_screen();
+  out.push("screen " + pad0(fb_hash().toString(16), 8));
+}
+function check_trail(seedText, keys_in, marks, lvl){
+  const out = [];
+  start_game(seedText, 1, lvl);
+  show_intro = 0; sound_on_title = 0;
+  let mi = 0, stopped = 0;
+  for (let i = 0; i < keys_in.length && !stopped; i++){
+    while (mi < marks.length && marks[mi] <= i){ const rep = []; keys_report(rep); out.push(rep); mi++; }
+    if (!handle_key(keys_in[i])) stopped = 1;
+  }
+  while (mi < marks.length){ const rep = []; keys_report(rep); out.push(rep); mi++; }
+  return out;
+}
+
+/* ── the walk ─────────────────────────────────────────────
+ * The C's --walk, line for line: a planner over the state, playing
+ * through handle_key.  wfail throws WalkFail; check_walk catches it. */
+class WalkFail extends Error {}
+let walk_out = [];
+let walk_trace = 0;
+let walk_keys = 0;
+let walk_keystring = "";
+function wfail(msg){
+  walk_out.push("WALK FAILED: " + msg + "  (quad " + quad + " cell " + cell + " stardate " + datestr(stardate) + " turn " + turn + " energy " + energy + " shields " + shields + " left " + enemies_left + ")");
+  walk_out.push("last: " + message[0]);
+  walk_out.push("      " + message[1]);
+  throw new WalkFail(msg);
+}
+function wk(c){
+  if (gameover) return;
+  walk_keys++;
+  walk_keystring += c === '\n' ? "\\n" : c;
+  if (walk_trace) walk_out.push("key " + (c === '\n' ? "\\n" : c) + "  " + Math.trunc(stardate / 1000) + "." + pad0(stardate % 1000, 3) + " e" + energy + " s" + shields + " [" + message[0] + "]");
+  handle_key(c);
+}
+const walk_path = new Int32Array(BOARD_SIZE), walk_dist = new Int32Array(BOARD_SIZE);
+function plan_to(goal, adjacent){
+  for (let i = 0; i < BOARD_SIZE; i++){ walk_dist[i] = 9999; walk_path[i] = -1; }
+  walk_dist[cell] = 0;
+  const done = new Int8Array(BOARD_SIZE);
+  for (;;){
+    let u = -1;
+    for (let i = 0; i < BOARD_SIZE; i++) if (!done[i] && walk_dist[i] < 9999 && (u < 0 || walk_dist[i] < walk_dist[u])) u = i;
+    if (u < 0) break;
+    done[u] = 1;
+    for (let d = 0; d < 6; d++){
+      const v = step_cell(u, d);
+      if (v < 0) continue;
+      if (v !== goal && sec[v] !== C_EMPTY) continue;
+      if (v === goal && sec[v] !== C_EMPTY && !adjacent) continue;
+      if (v === goal && adjacent) continue;
+      const nd = walk_dist[u] + 1;
+      if (nd < walk_dist[v]){ walk_dist[v] = nd; walk_path[v] = u; }
+    }
+  }
+  let best = -1;
+  if (adjacent){ for (let d = 0; d < 6; d++){ const v = step_cell(goal, d); if (v >= 0 && walk_dist[v] < 9999 && (best < 0 || walk_dist[v] < walk_dist[best])) best = v; } }
+  else best = walk_dist[goal] < 9999 ? goal : -1;
+  if (best < 0) return -1;
+  if (best === cell) return -2;
+  let v = best;
+  while (walk_path[v] !== cell) v = walk_path[v];
+  return dir_toward(cell, v);
+}
+const DK = ['d', 'x', 'z', 'a', 'w', 'e'];
+function step_toward_goal(goal, adjacent){
+  const d = plan_to(goal, adjacent);
+  if (d === -2) return 1;
+  if (d < 0 || !impulse_ok()) return 0;
+  if (impulse < 6){ wk('p'); wk('c'); wk('c'); wk('c'); wk('p'); }
+  wk(DK[d]);
+  return 1;
+}
+function line_dir(from, to){
+  for (let d = 0; d < 6; d++){ let c = from; for (let s = 0; s < 9; s++){ c = step_cell(c, d); if (c < 0) break; if (c === to) return d; if (sec[c] !== C_EMPTY) break; } }
+  return -1;
+}
+function nearest_quad(want){
+  let best = -1, bd = 999999;
+  for (let q = 0; q < GAL; q++){ if (q === quad || !want(q)) continue; const d = qdist16(quad, q); if (d < bd){ bd = d; best = q; } }
+  return best;
+}
+function want_mongols(q){ return GX[q].known && GX[q].enemies > 0 && !GX[q].nova; }
+function want_starbase(q){ return GX[q].base === B_STARBASE && !GX[q].nova && GX[q].enemies === 0; }
+function want_starbase_any(q){ return GX[q].base === B_STARBASE && !GX[q].nova; }
+function want_base_any(q){ return GX[q].base !== B_NONE && !GX[q].nova && GX[q].enemies === 0; }
+function wbase(){ const b = nearest_quad(want_starbase); return b >= 0 ? b : nearest_quad(want_starbase_any); }
+function want_unknown(q){ return !GX[q].known; }
+function want_planet_settled(q){ return GX[q].planet >= 0 && (PL[GX[q].planet].flags & PL_SETTLED) && evac_end >= 0; }
+function wwarp(q){
+  wk('m');
+  wk(String.fromCharCode(49 + (q >> 3))); wk(String.fromCharCode(49 + (q & 7)));
+  wk('\n');
+}
+function needs_base(){
+  let damaged = 0;
+  for (let i = 0; i < SYS_N; i++) if (sys[i] < 50 && i !== SYS_TRANSPORTER && i !== SYS_SHUTTLE && i !== SYS_COMPUTER && i !== SYS_SRSCAN && i !== SYS_LRSCAN) damaged = 1;
+  return energy < 2500 || shields < 900 || (torps === 0 && enemies_left > 4) || damaged || sys[SYS_LIFE] < 90;
+}
+const KEY_SYS = [SYS_WARP, SYS_LASERS, SYS_SHIELDS, SYS_IMPULSE, SYS_TUBES, SYS_LIFE, SYS_CONVERTER];
+function key_damage(){
+  for (let i = 0; i < 7; i++) if (sys[KEY_SYS[i]] < (KEY_SYS[i] === SYS_LIFE ? 90 : 70)) return 1;
+  return 0;
+}
+const WTRY = [60, 50, 40, 30], WRESERVE = [1500, 1000, 600, 100];
+function wset_warp(q, shields_on){
+  const d16 = qdist16(quad, q); let want = 0;
+  const air = sys[SYS_LIFE] < 90 && docked === B_NONE;
+  for (let i = 0; i < 4 && !want; i++){
+    if (WTRY[i] > max_warp()) continue;
+    const save = warp; warp = WTRY[i];
+    const cost = warp_energy(d16) * (shields_on ? 2 : 1);
+    const t = warp_time(d16);
+    warp = save;
+    if (air && life_reserve < t + (enemies_here() ? 0 : 150)) continue;
+    if (cost <= energy - (air ? 100 : WRESERVE[i])) want = WTRY[i];
+  }
+  if (!want && air){
+    if (enemies_here()) return 0;
+    if (life_reserve > 600){ if (repair_focus !== SYS_LIFE + 1){ wk('F'); wk(String.fromCharCode(48 + SYS_LIFE)); } wk('R'); }
+    else wk('.');
+    return 0;
+  }
+  if (!want){ want = max_warp() < 30 ? max_warp() : 30; const save = warp; warp = want; const cost = warp_energy(d16) * (shields_on ? 2 : 1); warp = save; if (cost > energy - 50) return 0; }
+  while (warp < want) wk('+');
+  while (warp > want) wk('-');
+  return 1;
+}
+function wtrip_hot(q){
+  if (GX[q].enemies > 0) return 1;
+  const y0 = (quad >> 3) < (q >> 3) ? (quad >> 3) : (q >> 3), y1 = (quad >> 3) < (q >> 3) ? (q >> 3) : (quad >> 3);
+  const x0 = (quad & 7) < (q & 7) ? (quad & 7) : (q & 7), x1 = (quad & 7) < (q & 7) ? (q & 7) : (quad & 7);
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (GX[y * 8 + x].enemies && GX[y * 8 + x].commander) return 1;
+  return 0;
+}
+function wcharge(keep){
+  if (shields > SHIELD_MAX - 500 || energy - 500 < keep) return 0;
+  wk('p'); wk('a'); wk('q');
+  return 1;
+}
+function check_walk(seedText, trace, lvl){
+  walk_out = []; walk_trace = trace ? 1 : 0; walk_keys = 0; walk_keystring = "";
+  start_game(seedText, 1, lvl ? lvl : 2);
+  show_intro = 0; sound_on_title = 0;
+  try {
+    begin();
+    let stuck = 0, last_turn = -1, last_left = -1, last_energy = -1;
+    for (let guard = 0; guard < 40000 && !gameover; guard++){
+      if (turn === last_turn && enemies_left === last_left && energy === last_energy) stuck++; else stuck = 0;
+      last_turn = turn; last_left = enemies_left; last_energy = energy;
+      if (stuck > 60) wfail("no progress");
+      if (surrender_asked){ wk('N'); continue; }
+      let foe = -1, fd = 99;
+      for (let c = 0; c < BOARD_SIZE; c++) if (IS_ENEMY(sec[c]) && hex_dist(c, cell) < fd){ fd = hex_dist(c, cell); foe = c; }
+      if (foe >= 0){
+        if (!shields_up && energy > 200 && boarders !== 1){ wk('s'); continue; }
+        if (shields < 600 && wcharge(1500)) continue;
+        const torp_ok = torps > 0 && tubes() > 0 && boarders !== 3;
+        const lasers_ok = laser_eff() >= 30 && boarders !== 2;
+        let incoming = 0;
+        for (let c = 0; c < BOARD_SIZE; c++) if (IS_ENEMY(sec[c])) incoming += laser_damage(Math.trunc(ehp[c] * 97 / 100), 100, hex_dist(c, cell));
+        const naked = sys[SYS_SHIELDS] < 30 || shields < Math.trunc(incoming / 2);
+        if ((!torp_ok && !lasers_ok) || energy < 2 * incoming + 300 || (shields < incoming && energy < 1500) || (naked && energy < 3 * incoming + 500)){
+          const b = wbase();
+          if (b >= 0 && max_warp() >= 30 && wset_warp(b, shields_up)){ wwarp(b); continue; }
+          const fix = max_warp() < 30 ? SYS_WARP : sys[SYS_SHIELDS] < 30 ? SYS_SHIELDS : !lasers_ok ? SYS_LASERS : -1;
+          if (fix >= 0){ if (repair_focus !== fix + 1){ wk('F'); wk(String.fromCharCode(48 + fix)); } wk('R'); continue; }
+          if (b < 0 && have[I_ENERGIUM] && energy < 1000 && shields < 1250){ wk('u'); wk(String.fromCharCode(97 + I_ENERGIUM)); continue; }
+        }
+        let tt = -1, td = -1;
+        if (torp_ok) for (let c = 0; c < BOARD_SIZE; c++){
+          if (!IS_ENEMY(sec[c]) || hex_dist(c, cell) > 4) continue;
+          const dd = line_dir(cell, c);
+          if (dd < 0) continue;
+          if (tt < 0 || (sec[c] === C_COMMAND && sec[tt] !== C_COMMAND) || (sec[c] === sec[tt] && hex_dist(c, cell) < hex_dist(tt, cell))){ tt = c; td = dd; }
+        }
+        if (tt >= 0){
+          if (target !== tt){ let tries = 0; while (target !== tt && tries++ < 8) wk('n'); }
+          wk('t'); wk(DK[td]); continue;
+        }
+        { let best = -1, bs = -1;
+          for (let c = 0; c < BOARD_SIZE; c++){
+            if (!IS_ENEMY(sec[c])) continue;
+            const dd = hex_dist(c, cell), f = 12 - (dd < 11 ? dd : 11);
+            const s = ehp[c] * f * f;
+            if (s > bs){ bs = s; best = c; }
+          }
+          if (best >= 0) foe = best; }
+        const d = hex_dist(foe, cell);
+        if (!lasers_ok){
+          if (torp_ok && impulse >= 6 && impulse_ok()){
+            plan_to(foe, 1);
+            let bestv = -1, bd = 99;
+            for (let v = 0; v < BOARD_SIZE; v++){
+              if (v !== cell && sec[v] !== C_EMPTY) continue;
+              if (walk_dist[v] > 5 || hex_dist(v, foe) > 4 || hex_dist(v, foe) < 1) continue;
+              const save = sec[cell]; sec[cell] = C_EMPTY;
+              const ok = line_dir(v, foe) >= 0;
+              sec[cell] = save;
+              if (ok && walk_dist[v] < bd){ bd = walk_dist[v]; bestv = v; }
+            }
+            if (bestv >= 0 && bestv !== cell && step_toward_goal(bestv, 0)) continue;
+            if (d > 1 && step_toward_goal(foe, 1)) continue;
+          }
+          const b = wbase();
+          if (b >= 0 && max_warp() >= 30 && wset_warp(b, shields_up)){ wwarp(b); continue; }
+          if (max_warp() < 30){ if (repair_focus !== SYS_WARP + 1){ wk('F'); wk(String.fromCharCode(48 + SYS_WARP)); } wk('R'); continue; }
+          const any = quad_beyond(quad, turn % 6);
+          if (any >= 0 && wset_warp(any, shields_up)){ wwarp(any); continue; }
+          wk('.'); continue;
+        }
+        if (d > 7 && impulse >= 6 && impulse_ok()){ if (step_toward_goal(foe, 1)) continue; }
+        if (target !== foe){ let tries = 0; while (target !== foe && tries++ < 8) wk('n'); if (target !== foe) wfail("cannot target"); }
+        const eff = laser_eff();
+        const need = Math.trunc((ehp[foe] * 12 * 100) / ((12 - (d < 11 ? d : 11)) * eff)) + 30;
+        let want = Math.trunc((need + 99) / 100) * 100;
+        if (want < 100) want = 100;
+        if (want > 2000) want = 2000;
+        if (want > energy - incoming - 300) want = Math.trunc((energy - incoming - 300) / 100) * 100;
+        if (want < 100){
+          if (incoming < 200 && sys[SYS_CONVERTER] > 30 && (sys[SYS_LIFE] >= 90 || life_reserve > 1000)){ wk('R'); continue; }
+          const b = wbase();
+          if (b >= 0 && max_warp() >= 30 && wset_warp(b, shields_up)){ wwarp(b); continue; }
+          wk('.'); continue;
+        }
+        while (laser_set < want) wk(']');
+        while (laser_set > want) wk('[');
+        wk('f');
+        continue;
+      }
+      /* no fight here */
+      if (docked === B_STARBASE){
+        if (key_damage()){
+          const KEY = [SYS_LASERS, SYS_WARP, SYS_SHIELDS, SYS_TUBES, SYS_IMPULSE, SYS_LIFE, SYS_CONVERTER];
+          let worst = -1;
+          for (let i = 0; i < 7; i++) if (sys[KEY[i]] < (KEY[i] === SYS_LIFE ? 90 : 70) && (worst < 0 || sys[KEY[i]] < sys[worst])) worst = KEY[i];
+          if (worst >= 0 && repair_focus !== worst + 1){ wk('F'); wk(worst < 10 ? String.fromCharCode(48 + worst) : String.fromCharCode(97 + worst - 10)); continue; }
+          wk('R'); continue;
+        }
+      }
+      if (docked === B_NONE && sys[SYS_LIFE] < 90){
+        const b = base_cell();
+        if (b >= 0 && GX[quad].base !== B_NONE && impulse_ok()){
+          if (hex_dist(b, cell) <= 1){ wk('D'); continue; }
+          if (step_toward_goal(b, 1)) continue;
+        }
+        if (have[I_LIFE] && life_reserve < 1000){ wk('u'); wk(String.fromCharCode(97 + I_LIFE)); continue; }
+        const halves = Math.trunc((90 - sys[SYS_LIFE] + 29) / 30);
+        if (halves * 500 > life_reserve - 100){
+          const nb = nearest_quad(want_base_any);
+          if (nb >= 0 && wset_warp(nb, shields_up)){ wwarp(nb); continue; }
+        }
+        if (repair_focus !== SYS_LIFE + 1){ wk('F'); wk(String.fromCharCode(48 + SYS_LIFE)); }
+        wk('R'); continue;
+      }
+      if (docked === B_NONE && max_warp() < 30 && GX[quad].base !== B_STARBASE){
+        if (repair_focus !== SYS_WARP + 1){ wk('F'); wk(String.fromCharCode(48 + SYS_WARP)); }
+        wk('R'); continue;
+      }
+      if (needs_base()){
+        if (GX[quad].base === B_STARBASE){
+          const b = base_cell();
+          if (b >= 0 && docked === B_NONE){
+            if (hex_dist(b, cell) <= 1){ wk('D'); continue; }
+            if (step_toward_goal(b, 1)) continue;
+            if (!impulse_ok()){ if (repair_focus !== SYS_IMPULSE + 1){ wk('F'); wk(String.fromCharCode(48 + SYS_IMPULSE)); } wk('R'); continue; }
+          }
+        }
+        const b = wbase();
+        if (b >= 0 && b !== quad){
+          const hot = wtrip_hot(b) && energy > 800;
+          if ((shields_up ? 1 : 0) !== (hot ? 1 : 0) && energy > 400){ wk('s'); continue; }
+          if (wset_warp(b, shields_up)){ wwarp(b); continue; }
+          wk('R'); continue;
+        }
+        if (b < 0 && have[I_ENERGIUM] && energy < 1000 && shields < 1250){ wk('u'); wk(String.fromCharCode(97 + I_ENERGIUM)); continue; }
+      }
+      { const p = nearest_quad(want_planet_settled);
+        if (p >= 0 && qdist16(quad, p) <= 16 * 24 && sys[SYS_TRANSPORTER] >= 100){ if (shields_up){ wk('s'); continue; } if (wset_warp(p, 0)){ wwarp(p); continue; } }
+        if (GX[quad].planet >= 0 && want_planet_settled(quad) && sys[SYS_TRANSPORTER] >= 100){
+          const pc = PL[GX[quad].planet].cell;
+          if (shields_up){ wk('s'); continue; }
+          if (orbiting >= 0){ wk('l'); wk('t'); continue; }
+          if (hex_dist(pc, cell) <= 1){ wk('o'); continue; }
+          if (step_toward_goal(pc, 1)) continue;
+        } }
+      const m = nearest_quad(want_mongols);
+      if (m >= 0){
+        let want_e = 1800 + 700 * GX[m].enemies;
+        if (want_e > ENERGY_MAX - 400) want_e = ENERGY_MAX - 400;
+        if (energy < want_e){
+          const b = wbase();
+          if (b >= 0 && b !== quad && GX[b].enemies === 0){ const hot = wtrip_hot(b) && energy > 800; if ((shields_up ? 1 : 0) !== (hot ? 1 : 0) && energy > 400){ wk('s'); continue; } if (wset_warp(b, shields_up)){ wwarp(b); continue; } }
+          if (sys[SYS_CONVERTER] > 0 && energy < ENERGY_MAX){ wk('R'); continue; }
+        }
+        if (shields < 1500 && wcharge(2500)) continue;
+        if (!shields_up && energy > 400){ wk('s'); continue; }
+        if (wset_warp(m, shields_up)){ wwarp(m); continue; }
+        wk('R'); continue;
+      }
+      const u = nearest_quad(want_unknown);
+      if (u >= 0){
+        const hot = energy > 2200 || (wtrip_hot(u) && energy > 800);
+        if ((shields_up ? 1 : 0) !== (hot ? 1 : 0) && energy > 400){ wk('s'); continue; }
+        if (wset_warp(u, shields_up)){ wwarp(u); continue; }
+        wk('R'); continue;
+      }
+      if (shields_up){ wk('s'); continue; }
+      if (enemies_left > 0){
+        let best = -1, bd = 999999;
+        for (let q = 0; q < GAL; q++) if (q !== quad && GX[q].enemies > 0){ const dd = qdist16(quad, q); if (dd < bd){ bd = dd; best = q; } }
+        if (best >= 0){ GX[best].known = 1; continue; }
+        wfail("Mongols left but none anywhere");
+      }
+      wk('.');
+    }
+    if (!won) wfail(lost ? LOST_HOW[lost_how] : "the mission is not over");
+    walk_out.push("WALK OK: level " + level + ", " + walk_keys + " keys, " + turn + " turns, stardate " + datestr(stardate) + ", " + killed + "+" + killed_cmd + " killed, " + rescues + " rescues, " + bases_lost + " bases lost, " + casualties + " casualties, score " + score_total());
+    return 1;
+  } catch (e) {
+    if (e instanceof WalkFail) return 0;
+    throw e;
+  }
+}
+
+/* ── the page ─────────────────────────────────────────────────
+ * The terminal's framebuffer painted on a canvas, as hanb-term.html
+ * does it: a half block is two stacked rectangles, a quarter block four,
+ * and a letter is a letter in the page's own monospace.  The keys are
+ * the terminal's keys.  Sound is on unless ?sound=off: the first key
+ * pressed on the briefing is the gesture that opens the AudioContext,
+ * which browsers require, and everything the game says down its pipe
+ * in the terminal build is rendered here by the same PC speaker and
+ * played as a buffer; the title music loops until the game begins. */
+const SCREEN_W = 80, SCREEN_H = 25;
+const _css = new Map();
+function css(c){
+  let hit = _css.get(c);
+  if (hit === undefined){
+    const rgb = cubeRgb(c);
+    hit = "rgb(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + ")";
+    _css.set(c, hit);
+  }
+  return hit;
+}
+function paint(ctx, CW, CH){
+  const HW = CW / 2, HH = CH / 2;
+  ctx.textBaseline = "top";
+  ctx.font = Math.round(CH * 0.82) + "px ui-monospace, 'DejaVu Sans Mono', Menlo, Consolas, monospace";
+  for (let row = 0; row < SCREEN_H; row++){
+    for (let col = 0; col < SCREEN_W; col++){
+      const at = FB(row, col), x = col * CW, y = row * CH;
+      const fg = fb_fg[at], bg = fb_bg[at], ch = fb_ch[at];
+      if (ch === 0){
+        ctx.fillStyle = css(fg); ctx.fillRect(x, y, CW, HH);
+        ctx.fillStyle = css(bg); ctx.fillRect(x, y + HH, CW, CH - HH);
+      } else if (ch === FB_QUAD){
+        const m = fb_q[at];
+        for (let k = 0; k < 4; k++){
+          ctx.fillStyle = css((m & (1 << k)) ? fg : bg);
+          ctx.fillRect(x + (k & 1) * HW, y + ((k >> 1) & 1) * HH, HW, HH);
+        }
+      } else {
+        ctx.fillStyle = css(bg); ctx.fillRect(x, y, CW, CH);
+        if (ch !== 32){ ctx.fillStyle = css(fg); ctx.fillText(String.fromCharCode(ch), x, y + CH * 0.08); }
+      }
+    }
+  }
+}
+
+/* ── sound, through Web Audio ── */
+const SOUND = {
+  ctx: null, on: true, cache: new Map(), voices: [], bed: null, VOICES: 6,
+  open(){
+    if (this.ctx || !this.on) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC){ this.on = false; return; }
+    try { this.ctx = new AC({sampleRate: FS}); }
+    catch (e){ try { this.ctx = new AC(); } catch (e2){ this.on = false; return; } }
+    if (this.ctx.state === "suspended") this.ctx.resume();
+    /* what was said before the context could open: the bed, at least */
+    if (this.pending){ const p = this.pending; this.pending = null; for (const l of p) this.command(l); }
+  },
+  render(line){
+    let buf = this.cache.get(line);
+    if (buf) return buf;
+    const sp = line.indexOf(' ');
+    const what = sp < 0 ? line : line.slice(0, sp), arg = sp < 0 ? "" : line.slice(sp + 1);
+    let pcm = null;
+    if (what === "call") pcm = call_render(arg);
+    else if (what === "bed") pcm = bed_render(arg);
+    else if (what === "shot") pcm = shot_render(arg);
+    else if (what === "blow") pcm = blow_render(arg);
+    else if (what === "whoosh") pcm = whoosh_render(arg);
+    else if (what === "jingle") pcm = jingle_render(arg);
+    if (!pcm || !pcm.length) return null;
+    buf = this.ctx.createBuffer(1, pcm.length, FS);
+    buf.getChannelData(0).set(pcm);
+    this.cache.set(line, buf);            /* every render is a pure function of the line and the seed */
+    return buf;
+  },
+  command(line){
+    if (!this.on) return;
+    if (!this.ctx){ (this.pending = this.pending || []).push(line); return; }
+    const sp = line.indexOf(' ');
+    const what = sp < 0 ? line : line.slice(0, sp), arg = sp < 0 ? "" : line.slice(sp + 1);
+    if (what === "bed"){
+      if (this.bed){ try { this.bed.stop(); } catch (e) {} this.bed = null; }
+      if (arg === "off") return;
+      const buf = this.render(line);
+      if (!buf) return;
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf; src.loop = true;
+      src.loopStart = tune_loop_from(arg) / FS; src.loopEnd = buf.duration;   /* the tune's intro once, then its loop */
+      src.connect(this.ctx.destination);
+      src.start();
+      this.bed = src;
+      return;
+    }
+    const now = this.ctx.currentTime;
+    this.voices = this.voices.filter(v => !v.done && now < v.until);
+    if (this.voices.length >= this.VOICES - 1) return;          /* full: the newest is the one lost */
+    const buf = this.render(line);
+    if (!buf) return;
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(this.ctx.destination);
+    const v = {src: src, done: false, until: now + buf.duration + 0.05};
+    src.onended = () => { v.done = true; };
+    src.start();
+    this.voices.push(v);
+  },
+};
+
+/* ── boot ── */
+const params = new URLSearchParams(location.search);
+if (params.get("sound") === "off") SOUND.on = false;
+sound_sink = (line) => SOUND.command(line);
+save_store = {
+  get: () => localStorage.getItem("lexington.sav"),
+  set: (s) => localStorage.setItem("lexington.sav", s),
+};
+{
+  const l = parseInt(params.get("level") || "0", 10);
+  start_game(params.get("seed"), 0, l >= 1 && l <= 5 ? l : 0);
+}
+if (SOUND.on) SOUND.command("bed title");
+{
+  const t = params.get("tiles");
+  for (let k = 0; k < SHAPE_N; k++) if (SHAPE_NAME[k] === t) tile_shape = k;
+}
+const canvas = document.getElementById("screen");
+const ctx = canvas.getContext("2d", {alpha: false});
+let CW = 12, CH = 24, closed = false;
+function resize(){
+  const dpr = window.devicePixelRatio || 1;
+  const fitW = Math.floor(window.innerWidth / SCREEN_W);
+  const fitH = Math.floor(window.innerHeight / SCREEN_H);
+  CH = Math.max(8, Math.min(fitH, fitW * 2));
+  CW = Math.max(4, Math.floor(CH / 2));
+  canvas.width = SCREEN_W * CW * dpr;
+  canvas.height = SCREEN_H * CH * dpr;
+  canvas.style.width = (SCREEN_W * CW) + "px";
+  canvas.style.height = (SCREEN_H * CH) + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  redraw();
+}
+function redraw(){
+  screen_w = SCREEN_W; screen_h = SCREEN_H;
+  compose_screen();
+  if (closed) draw_page("The Lexington has stood down.\n\nClose the tab, or press n to begin again.", "n  begin again", 250);
+  paint(ctx, CW, CH);
+}
+/* the terminal's keys: the six ways are d x z a w e as in lexington.c;
+ * the arrows are east and west, and north-west and south-east; Escape
+ * is escape, Enter is Enter (it warps, on the chart) */
+function keyOf(e){
+  if (e.key === "ArrowUp") return 'w';
+  if (e.key === "ArrowDown") return 'x';
+  if (e.key === "ArrowRight") return 'd';
+  if (e.key === "ArrowLeft") return 'a';
+  if (e.key === "Escape") return '\x1b';
+  if (e.key === "Enter") return '\n';
+  if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) return e.key;
+  return null;
+}
+window.addEventListener("keydown", (e) => {
+  const c = keyOf(e);
+  if (c === null) return;
+  e.preventDefault();
+  SOUND.open();
+  if (closed){
+    if (c === 'n'){ closed = false; new_game(); redraw(); }
+    return;
+  }
+  if (!handle_key(c)){
+    closed = true;
+    if (SOUND.bed){ try { SOUND.bed.stop(); } catch (er) {} SOUND.bed = null; sound_bed = ""; }
+  }
+  redraw();
+});
+window.addEventListener("resize", resize);
+resize();
+
+</script>
+</body>
+</html>
