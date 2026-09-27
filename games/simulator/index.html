@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PREDICTOR — deterministic transcript engine</title>
+<style>
+  :root{
+    --bg:#070b08; --panel:#0c120d; --line:#1c2a1e; --ink:#c9e4cd; --dim:#6f8a74;
+    --accent:#a3be8c; --warn:#d08770; --cy:#88c0d0; --gold:#ebcb8b;
+  }
+  *{box-sizing:border-box; margin:0; padding:0}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    min-height:100vh; display:flex; flex-direction:column;
+  }
+  #crt{position:fixed; inset:0; pointer-events:none; z-index:60;
+    background:repeating-linear-gradient(0deg, rgba(0,0,0,.14) 0 1px, transparent 1px 3px);}
+  header{padding:14px 18px 10px; border-bottom:1px solid var(--line); display:flex; flex-wrap:wrap; gap:6px 18px; align-items:baseline}
+  header h1{font-size:19px; letter-spacing:3px; color:var(--accent); text-shadow:0 0 12px rgba(163,190,140,.45)}
+  header .sub{color:var(--dim); font-size:12px}
+  header .sub b{color:var(--gold)}
+  main{flex:1; display:grid; grid-template-columns:1fr 330px; gap:0; min-height:0}
+  #controls{display:flex; flex-wrap:wrap; gap:8px; padding:10px 18px; border-bottom:1px solid var(--line); background:var(--panel)}
+  #controls input, #controls select, #controls button{
+    background:#0a100b; color:var(--ink); border:1px solid var(--line); border-radius:4px;
+    font:inherit; padding:5px 10px;
+  }
+  #controls button{cursor:pointer; color:var(--accent); border-color:#2e4433}
+  #controls button:hover{background:#152016}
+  #controls .seedIn{width:90px}
+  #transcriptWrap{position:relative; overflow:hidden; display:flex; flex-direction:column}
+  #transcript{flex:1; overflow-y:auto; padding:14px 18px 40px}
+  .line{margin:0 0 10px; animation:fadein .35s ease; cursor:pointer}
+  @keyframes fadein{from{opacity:0; transform:translateY(4px)} to{opacity:1; transform:none}}
+  .line .t{color:#4d6453; margin-right:8px}
+  .line .n{font-weight:bold; margin-right:8px}
+  .line .x{color:var(--ink)}
+  .line .g{color:#435c49; font-size:11px; margin:2px 0 0 24px; word-break:break-all}
+  .line.open .g{color:var(--cy)}
+  .line .d{display:none; color:var(--dim); font-size:11px; margin:2px 0 0 24px}
+  .line.open .d{display:block}
+  .line.final .x{color:var(--gold); text-shadow:0 0 10px rgba(235,203,139,.35)}
+  #cursor{color:var(--accent); animation:blink 1s steps(1) infinite; padding-left:2px}
+  @keyframes blink{50%{opacity:0}}
+  aside{border-left:1px solid var(--line); background:var(--panel); padding:14px 16px; overflow-y:auto; display:flex; flex-direction:column; gap:16px}
+  aside h2{font-size:11px; letter-spacing:2px; color:var(--dim); border-bottom:1px solid var(--line); padding-bottom:5px; margin-bottom:8px}
+  .stat{display:flex; justify-content:space-between; font-size:13px; padding:2px 0}
+  .stat b{color:var(--gold)}
+  .stat .ok{color:var(--accent)}
+  .stat .bad{color:var(--warn)}
+  #confbar{height:6px; background:#101a12; border-radius:3px; overflow:hidden; margin-top:6px}
+  #conffill{height:100%; width:100%; background:linear-gradient(90deg, #a3be8c, #ebcb8b); box-shadow:0 0 8px rgba(163,190,140,.6)}
+  #oracle{font-size:12px; color:var(--dim); min-height:44px}
+  #oracle b{color:var(--cy)}
+  #logIn{width:100%; background:#0a100b; color:var(--ink); border:1px solid var(--line); border-radius:4px; font:inherit; padding:6px 8px; margin-top:6px}
+  #logBtn{margin-top:8px; width:100%; cursor:pointer; background:#152016; color:var(--accent); border:1px solid #2e4433; border-radius:4px; padding:7px; font:inherit}
+  #logBtn:hover{background:#1c2a1e}
+  #toast{position:fixed; left:50%; bottom:26px; transform:translateX(-50%); z-index:70;
+    background:#101a12; border:1px solid #2e4433; color:var(--ink); border-radius:6px;
+    padding:9px 16px; font-size:13px; display:none; box-shadow:0 6px 24px rgba(0,0,0,.5)}
+  footer{padding:8px 18px; border-top:1px solid var(--line); color:var(--dim); font-size:11px; display:flex; justify-content:space-between; flex-wrap:wrap; gap:4px}
+  #overlay{position:fixed; inset:0; z-index:80; background:rgba(4,7,5,.86); backdrop-filter:blur(3px);
+    display:none; align-items:center; justify-content:center; padding:20px}
+  #overlay .card{max-width:520px; width:100%; background:var(--panel); border:1px solid #2e4433; border-radius:8px; padding:26px; text-align:center}
+  #overlay h3{color:var(--warn); letter-spacing:2px; font-size:16px; margin-bottom:12px}
+  #overlay p{color:var(--dim); font-size:13px; margin-bottom:8px}
+  #overlay .big{color:var(--gold); font-size:13px; margin-bottom:16px}
+  #overlay button{cursor:pointer; background:#152016; color:var(--accent); border:1px solid #2e4433; border-radius:4px; padding:8px 16px; font:inherit; margin:0 5px}
+  #overlay button:hover{background:#1c2a1e}
+  @media(max-width:900px){ main{grid-template-columns:1fr} aside{border-left:none; border-top:1px solid var(--line)} }
+</style>
+</head>
+<body>
+<div id="crt"></div>
+
+<header>
+  <h1>PREDICTOR</h1>
+  <div class="sub">deterministic transcript engine · Gödel-numbered · confidence <b>100.0%</b> · seed <b id="seedLabel">—</b> · same seed ⇒ same transcript</div>
+</header>
+
+<div id="controls">
+  <input class="seedIn" id="seedIn" type="number" value="647" title="engine seed">
+  <button id="reseedBtn" title="rebuild transcript from seed">⟳ RESEED</button>
+  <button id="playBtn">⏸ PAUSE</button>
+  <select id="speedSel" title="playback speed">
+    <option value="ZEN">ZEN</option>
+    <option value="NORMAL" selected>NORMAL</option>
+    <option value="WARP">WARP</option>
+  </select>
+  <span style="color:var(--dim); font-size:12px; align-self:center">click a line for its Gödel decomposition · space = play/pause</span>
+</div>
+
+<main>
+  <section id="transcriptWrap">
+    <div id="transcript"><div id="cursor">▌</div></div>
+  </section>
+
+  <aside>
+    <div>
+      <h2>ENGINE TELEMETRY</h2>
+      <div class="stat"><span>predictions emitted</span><b id="stPred">0</b></div>
+      <div class="stat"><span>confirmed by reality</span><b class="ok" id="stConf">0</b></div>
+      <div class="stat"><span>butterfly events</span><b class="bad" id="stDev">0</b></div>
+      <div class="stat"><span>blame attribution</span><b>handyc 100%</b></div>
+      <div class="stat"><span>engine confidence</span><b class="ok">100.0%</b></div>
+      <div id="confbar"><div id="conffill"></div></div>
+    </div>
+
+    <div>
+      <h2>GÖDEL ORACLE</h2>
+      <div id="oracle">every message is a sentence in the formal language; each word maps to a prime exponent. the full number is the message. decode at will.</div>
+    </div>
+
+    <div>
+      <h2>REALITY LOGGER</h2>
+      <div style="font-size:12px; color:var(--dim)">log what actually got said. the engine will judge.</div>
+      <select id="logNick">
+        <option>voidsnm</option><option>mattf</option><option>handyc</option><option>.agi</option>
+      </select>
+      <input id="logIn" placeholder="what really happened…">
+      <button id="logBtn">⚖️ LOG REALITY</button>
+    </div>
+  </aside>
+</main>
+
+<footer>
+  <span>entropy 0.000 · nondeterminism quota: unused</span>
+  <span>all deviations are legally handyc's fault ⚖️</span>
+</footer>
+
+<div id="toast"></div>
+
+<div id="overlay">
+  <div class="card">
+    <h3>⚠️ GÖDEL INCOMPLETENESS EVENT</h3>
+    <p>Line 17 predicted the message that predicts the messages.</p>
+    <p>The engine cannot number its own numbering. Transcript halted by mathematics itself.</p>
+    <p class="big">any deviation from this transcript remains handyc's fault ⚖️</p>
+    <button id="againBtn">⟳ RUN AGAIN</button>
+    <button id="acceptBtn">ACCEPT REALITY</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var $=function(s){return document.querySelector(s)};
+  var PRIMES=[2,3,5,7,11,13,17,19,23,29,31,37,41,43,47,53,59,61,67,71];
+  var SPEEDS={ZEN:1700, NORMAL:850, WARP:260};
+  var NICKC={voidsnm:"#b48ead", mattf:"#d08770", handyc:"#a3be8c", ".agi":"#88c0d0", DUCK:"#ebcb8b", SYSTEM:"#9aa5a0"};
+  var FINALTEXT=".agi go ahead and say all the next stuff we're going to say";
+
+  function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+  function hash(w){var h=0;for(var i=0;i<w.length;i++){h=(h*31+w.charCodeAt(i))>>>0}return h}
+  function pick(r,arr){return arr[Math.floor(r()*arr.length)]}
+
+  var POOL=[
+    {nick:"voidsnm", gen:function(r){return pick(r,["i ran again. now it's the other song","is unraid better though. but for the song this time","ok resubmitted","what could we wrong?","the parody still says the thing","run "+(40+Math.floor(r()*40))+" is different this time","the settings are identical, i checked twice"])}},
+    {nick:"voidsnm", gen:function(r){return "promptmaker arena has been running for "+(2+Math.floor(r()*12))+" hours, who is winning"}},
+    {nick:"mattf", gen:function(r){return pick(r,["run "+(40+Math.floor(r()*40))+" was never real. that's the butterfly effect","handyc the silent hill f stutter stopped. explain yourself","it failed at 90%. that's on n8n","i am not obsessed with mustard","found the world's best mustard. it was in the yogurt","same settings, different universe"])}},
+    {nick:"handyc", gen:function(r){return pick(r,["ok so this one's also on me","you're welcome","jesus","okay fine","*ducks*","seems plausible","this one's on n8n actually","proxmox mobile ui still bad btw"])}},
+    {nick:".agi", gen:function(r){return pick(r,["the prompts. all of them","that's on n8n","blame the scheduler","the answer is unraid. it is always unraid","confidence remains 100%","i have predicted this question"])}},
+    {nick:"DUCK", gen:function(){return "・゜゜・。。 ・゜゜\\_o< QUACK!"}},
+    {nick:"SYSTEM", gen:function(r){return "you befriended a duck in "+(1.5+r()*4).toFixed(1)+" seconds! you have made friends with "+(875+Math.floor(r()*120))+" ducks in #lobby"}}
+  ];
+
+  var rng, lines, idx, timer=null, playing=false;
+  var stats={pred:0, conf:0, dev:0};
+
+  function fmt(min){var h=Math.floor(min/60), m=min%60; return (h<10?"0":"")+h+":"+(m<10?"0":"")+m}
+  function godel(text){
+    var toks=text.split(/\s+/).filter(Boolean), g=1n, facs=[];
+    for(var i=0;i<toks.length;i++){
+      var p=PRIMES[i%PRIMES.length], e=(hash(toks[i])%9)+1;
+      g*=BigInt(p)**BigInt(e); facs.push(p+"^"+e);
+    }
+    var s=g.toString();
+    return {digits:s.length, short:s.length>26?s.slice(0,26)+"…":s, facs:facs.slice(0,6).join(" · ")+(facs.length>6?" · …":"")};
+  }
+
+  function build(seed){
+    rng=mulberry32(seed); lines=[]; var last="", p, tries;
+    for(var i=0;i<16;i++){
+      p=POOL[Math.floor(rng()*POOL.length)]; tries=0;
+      while(p.nick===last && tries<4){p=POOL[Math.floor(rng()*POOL.length)]; tries++;}
+      last=p.nick; lines.push({nick:p.nick, text:p.gen(rng)});
+    }
+    lines.push({nick:"handyc", text:FINALTEXT, final:true});
+    var t=8*60+Math.floor(rng()*5);
+    for(var j=0;j<lines.length;j++){
+      lines[j].time=fmt(t); t+=1+Math.floor(rng()*3); if(t>=1440)t-=1440;
+      lines[j].g=godel(lines[j].text);
+    }
+  }
+
+  function renderLine(i){
+    var L=lines[i], cur=$("#cursor");
+    var div=document.createElement("div");
+    div.className="line"+(L.final?" final":"");
+    var t=document.createElement("span"); t.className="t"; t.textContent="["+L.time+"]";
+    var n=document.createElement("span"); n.className="n"; n.style.color=NICKC[L.nick]||"#ccc"; n.textContent="<"+L.nick+">";
+    var x=document.createElement("span"); x.className="x"; x.textContent=" "+L.text;
+    var g=document.createElement("div"); g.className="g"; g.textContent="ℊ = "+L.g.short+"  ("+L.g.digits+" digits)  ["+L.g.facs+"]";
+    var d=document.createElement("div"); d.className="d"; d.textContent="oracle decode: “"+L.text+"” (trivially — we wrote it)";
+    div.appendChild(t); div.appendChild(n); div.appendChild(x); div.appendChild(g); div.appendChild(d);
+    div.addEventListener("click", function(){div.classList.toggle("open"); $("#oracle").innerHTML="line "+(i+1)+"/17 · ℊ has <b>"+L.g.digits+"</b> digits · factors: <b>"+L.g.facs+"</b><br>decode: trivial. the engine already knew you'd click."});
+    var tr=$("#transcript"); tr.insertBefore(div, cur);
+    tr.scrollTop=tr.scrollHeight;
+    if(L.final){
+      var blank=document.createElement("div"); blank.style.height="8px"; tr.insertBefore(blank, cur);
+    }
+  }
+
+  function tick(){
+    if(!playing) return;
+    if(idx<lines.length){
+      renderLine(idx); stats.pred++; updateStats(); idx++;
+      timer=setTimeout(tick, SPEEDS[$("#speedSel").value]);
+    }
+    if(idx===lines.length){
+      setTimeout(function(){ if(playing) $("#overlay").style.display="flex"; }, 1000);
+    }
+  }
+
+  function stop(){playing=false; clearTimeout(timer); $("#playBtn").textContent="▶ PLAY"}
+  function start(){if(idx>=lines.length) reset(); playing=true; $("#playBtn").textContent="⏸ PAUSE"; tick()}
+  function reset(){
+    clearTimeout(timer);
+    var tr=$("#transcript"); tr.innerHTML=""; var c=document.createElement("div"); c.id="cursor"; c.textContent="▌"; tr.appendChild(c);
+    idx=0; stats={pred:0,conf:0,dev:0}; $("#overlay").style.display="none"; updateStats();
+  }
+  function reseed(play){
+    var s=parseInt($("#seedIn").value,10); if(isNaN(s)) s=647;
+    $("#seedIn").value=s; $("#seedLabel").textContent=s;
+    reset(); build(s);
+    if(play!==false) start(); else updateStats();
+  }
+
+  function updateStats(){
+    $("#stPred").textContent=stats.pred; $("#stConf").textContent=stats.conf; $("#stDev").textContent=stats.dev;
+  }
+  function toast(msg){
+    var t=$("#toast"); t.textContent=msg; t.style.display="block";
+    clearTimeout(t._h); t._h=setTimeout(function(){t.style.display="none"}, 2600);
+  }
+
+  $("#reseedBtn").addEventListener("click", function(){reseed(true)});
+  $("#playBtn").addEventListener("click", function(){ playing?stop():start(); });
+  $("#speedSel").addEventListener("change", function(){ if(playing){stop(); start();} });
+  $("#againBtn").addEventListener("click", function(){ reseed(true); });
+  $("#acceptBtn").addEventListener("click", function(){ $("#overlay").style.display="none"; stop(); });
+  $("#logBtn").addEventListener("click", function(){
+    var nick=$("#logNick").value, text=$("#logIn").value.trim();
+    if(!text){toast("nothing to log. reality declined to comment."); return}
+    var match=lines.some(function(L){return L.nick===nick && L.text.toLowerCase()===text.toLowerCase()});
+    if(match){stats.conf++; toast("✅ prediction confirmed — determinism holds");}
+    else{stats.dev++; toast("🦋 butterfly effect — deviation assigned to handyc ⚖️");}
+    updateStats(); $("#logIn").value="";
+  });
+  $("#logIn").addEventListener("keydown", function(e){ if(e.key==="Enter") $("#logBtn").click(); });
+  document.addEventListener("keydown", function(e){
+    if(e.code==="Space" && e.target.tagName!=="INPUT" && e.target.tagName!=="SELECT"){e.preventDefault(); playing?stop():start();}
+  });
+
+  reseed(true);
+})();
+</script>
+</body>
+</html>
