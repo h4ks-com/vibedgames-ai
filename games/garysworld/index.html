@@ -2835,6 +2835,343 @@ window.GW = window.GW || {};
 Object.assign(window.GW, { HOUSE, SCENE, SCHEDULE_TEXT, PLACES, parseSchedule, taskAt, placeFor, hhmm, words });
 })();
 </script>
+<script data-inline="src/biosphere.js">
+/* Gary's World: a world's own life.
+ *
+ * As in hanb.c, a world is a pure function of its seed, and what a planet changes are its rules: how its
+ * colours are turned (Rth keeps its own: green grass, blue water), how strong its pull is (and so how tall
+ * things grow), and the plants and animals it has. Its plants are grown, not modelled: hanb.c's grammar,
+ *
+ *   axiom            A
+ *   A (upright)  ->  F[+B][-B]A        A (forked)  ->  F[+A][-A]T
+ *   A (alternate)->  F[+B]F[-B]A       A (rosette) ->  [+++B][+B][-B][---B]
+ *   B            ->  F[+L][-L]T   or   F T
+ *   T            ->  L | [O] | [Q] | L[O]          (leaf, flower, fruit)
+ *
+ * with a genome of numbers for each species (angle, segment, taper, wobble, leaf, petals, colours), walked by
+ * a turtle in three dimensions (each branch rolled about its stem, so a plant is a plant from every side).
+ * Each species is grown once when you land, into one geometry, and drawn instanced, so a forest of them
+ * costs no more than a forest of oaks. A rocky world has no life, or a little that's hardy; a moon, almost
+ * never any. GW.BIO is null on Rth (and in the Shed universes' Rths), which keep everything as it was. */
+(() => {
+window.GW = window.GW || {};
+const AW = window.GW.AWAY;
+const fnv = s => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } h += 0x9E3779B9; h = Math.imul(h ^ (h >>> 16), 0x21f0aaad); h = Math.imul(h ^ (h >>> 15), 0x735a2d97); return ((h ^ (h >>> 15)) >>> 0) / 4294967296; };
+const TAU = Math.PI * 2;
+
+// a colour matrix that turns hues round by `turn` (0..1) and scales the saturation, keeping the lightness:
+// what hanb.c does by swapping channels, but continuous
+function hueMatrix(turn, sat = 1) {
+  const a = turn * TAU, c = Math.cos(a), s = Math.sin(a), lr = 0.213, lg = 0.715, lb = 0.072;
+  const m = [lr + c * (1 - lr) + s * -lr, lg + c * -lg + s * -lg, lb + c * -lb + s * (1 - lb),
+    lr + c * -lr + s * 0.143, lg + c * (1 - lg) + s * 0.14, lb + c * -lb + s * -0.283,
+    lr + c * -lr + s * -(1 - lr), lg + c * -lg + s * lg, lb + c * (1 - lb) + s * lb];
+  // saturation about the grey of the same lightness
+  return m.map((v, i) => { const row = Math.floor(i / 3), col = i % 3, grey = [lr, lg, lb][col]; return grey + (v - grey) * sat; });
+}
+const applyM = (m, c) => { const r = c.r, g = c.g, b = c.b; return new THREE.Color(Math.max(0, m[0] * r + m[1] * g + m[2] * b), Math.max(0, m[3] * r + m[4] * g + m[5] * b), Math.max(0, m[6] * r + m[7] * g + m[8] * b)); };
+
+function make(AW) {
+  if (!AW || !AW.path) return null;
+  const seed = AW.path.slice(0, AW.surf || AW.path.length).join('.'), r = (tag, i = 0) => fnv(seed + '|' + tag + '|' + i);
+  const living = AW.type === 'earthlike', moon = AW.type === 'moon', rocky = AW.type === 'rockyplanet';
+  const hardy = !living && (rocky ? r('hardy') < 0.4 : moon && r('hardy') < 0.08);
+  // the pull of the world: light worlds grow tall and thin, heavy ones low and stout
+  const gravity = 0.45 + r('g') * 1.2, tall = Math.pow(1 / gravity, 0.75);
+  // the turn of life's colours: now and then near Rth's own green, mostly anywhere round the wheel
+  const lifeTurn = r('lt') < 0.14 ? (r('lt2') - 0.5) * 0.1 : 0.12 + r('lt3') * 0.76, lifeSat = 0.75 + r('ls') * 0.6;
+  const life = hueMatrix(lifeTurn, lifeSat);
+  const waterTurn = r('wt') < 0.3 ? 0 : r('wt2'), water = hueMatrix(waterTurn, 0.8 + r('ws') * 0.5);
+  const MINERAL = ['#b05a3a', '#c8a060', '#3a3a42', '#d8d4cc', '#8a6a8a', '#5a7a6a', '#a8a090', '#c87840', '#605048', '#9aa8b8', '#e0c8a0', '#704030'];
+  const mineral = new THREE.Color(MINERAL[Math.floor(r('min') * MINERAL.length)]), mineralK = living ? 0.25 + r('mk') * 0.4 : 0.75;
+  // the sky: a living world's air is any colour; a rocky world's thin and dusty, or none at all
+  const skyBase = new THREE.Color().setHSL(living ? (0.58 + (r('sky') < 0.4 ? (r('sk2') - 0.5) * 0.1 : r('sk3'))) % 1 : r('sk4'), living ? 0.35 + r('sks') * 0.4 : 0.25 + r('sks') * 0.3, living ? 0.62 : 0.55);
+  const airless = moon || (rocky && r('air') < 0.3);
+  const sky = airless ? { air: false, day: [new THREE.Color('#000000'), new THREE.Color('#060608')], night: [new THREE.Color('#000000'), new THREE.Color('#030306')] }
+    : { air: true, thin: !living, day: [skyBase.clone().multiplyScalar(0.72), skyBase.clone().lerp(new THREE.Color('#ffffff'), 0.35)], night: [new THREE.Color('#020308'), skyBase.clone().multiplyScalar(0.07)] };
+  const bio = { seed, r, living, rocky, moon, hardy, airless, gravity, tall, life, lifeTurn, water, mineral, mineralK, sky, flora: [], fauna: [], people: null };
+  // the animals: the world leans one way in its legs (hanb.c's `legs` rule), and most of its beasts follow
+  bio.lean = [4, 4, 6, 0, 2, 8][Math.floor(r('lean') * 6)];
+  const nFauna = living ? 5 + Math.floor(r('nfa') * 3) : 0;
+  for (let i = 0; i < nFauna; i++) bio.fauna.push(faunaGenome(bio, i));
+  // the people: every living world has a people of its own, human-sized give or take, of their own look
+  if (living) bio.people = peopleGenome(bio, seed);
+  // the plants
+  const nFlora = living ? 4 + Math.floor(r('nf') * 3) : hardy ? 2 : 0;
+  for (let i = 0; i < nFlora; i++) bio.flora.push(floraGenome(bio, i, living ? (i < 2 ? 'tree' : i < nFlora - 1 ? 'shrub' : r('role', i) < 0.5 ? 'tree' : 'shrub') : 'hardy'));
+  return bio;
+}
+
+/* ---------------- an animal species ----------------
+ * hanb.c's body grammar (X -> H n..n B U; B -> [W] C; C the girdles, each a pair of legs; U the tail) read as
+ * numbers for the rigs Gary's World has: four legs the country's quadruped (reshaped, recoloured, its habits
+ * from the nearest beast of Rth), six or eight the arthropod, none the serpent, two (with wings) the flyer. */
+const SYL = ['ka', 'zu', 'vel', 'or', 'thi', 'mon', 'ra', 'quo', 'shen', 'ix', 'bal', 'ny', 'dro', 'lum', 'ga', 'et', 'yss', 'pho', 'rin', 'tak', 'ul', 'zem', 'ko', 'ari'];
+const ROLE_NOUN = { grazer: ['grazer', 'browser', 'strider', 'plodder'], small: ['hopper', 'skitter', 'nibbler', 'burrower'], hunter: ['stalker', 'prowler', 'ripper', 'hunter'], scuttler: ['scuttler', 'crawler', 'carapace', 'creeper'], slither: ['coil', 'slitherer', 'eel', 'worm'], flyer: ['glider', 'wing', 'swoop', 'flitter'] };
+function faunaGenome(bio, i) {
+  const r = tag => bio.r('fa.' + tag, i), pick = (a, t) => a[Math.floor(r(t) * a.length)];
+  const legs = r('lg') < 0.55 ? bio.lean : pick([0, 2, 4, 4, 4, 6, 8], 'lg2');
+  const role = legs === 0 ? 'slither' : legs === 2 ? 'flyer' : legs >= 6 ? 'scuttler' : pick(['grazer', 'grazer', 'small', 'hunter', 'grazer'], 'role');
+  const name = (() => { let w = ''; const n = 2 + (r('ns') < 0.4 ? 1 : 0); for (let k = 0; k < n; k++) w += SYL[Math.floor(r('sy' + k) * SYL.length)]; return w[0].toUpperCase() + w.slice(1) + ' ' + pick(ROLE_NOUN[role], 'nn'); })();
+  const hue = r('hh'), hide = new THREE.Color().setHSL(hue, 0.25 + r('hs') * 0.6, 0.18 + r('hl') * 0.5), accent = new THREE.Color().setHSL((hue + 0.3 + r('ah') * 0.4) % 1, 0.5 + r('as') * 0.4, 0.35 + r('al') * 0.4);
+  const size = (role === 'small' ? 0.4 + r('sz') * 0.8 : role === 'hunter' ? 0.8 + r('sz') * 1.4 : role === 'grazer' ? 0.7 + r('sz') * 2.2 : 0.7 + r('sz') * 2.5) * Math.sqrt(bio.tall);
+  return { i, id: 'alien' + i, legs, role, name, hide, accent, belly: hide.clone().lerp(new THREE.Color('#ffffff'), 0.4 + r('bl') * 0.3), eyes: new THREE.Color().setHSL(r('eh'), 0.9, 0.55),
+    size, legX: 0.6 + r('lx') * 1.3, neckX: 0.4 + r('nx') * 2.4, headX: 0.7 + r('hx') * 0.8, bodyX: 0.8 + r('bx') * 0.7,
+    horns: r('ho') < 0.35, antlers: r('an') < 0.2, tusks: r('tu') < 0.2, spots: r('sp') < 0.35, hump: r('hu') < 0.2, ruff: r('ru') < 0.25, wool: r('wo') < 0.15, fangs: role === 'hunter',
+    pairs: legs === 6 ? 3 : 4, claws: r('cl') < 0.5, tail: Math.floor(r('tl') * 7), segs: 10 + Math.floor(r('sg') * 16),
+    temper: role === 'hunter' ? (r('tm') < 0.6 ? 'hostile' : 'neutral') : role === 'scuttler' ? (r('tm') < 0.3 ? 'hostile' : 'neutral') : role === 'slither' ? 'neutral' : 'prey',
+    herd: role === 'grazer' ? [2, 6] : role === 'small' ? [1, 4] : role === 'hunter' ? [1, 3] : [1, 2], where: role === 'grazer' ? pick(['field', 'meadow'], 'wh') : role === 'small' ? 'meadow' : 'wood' };
+}
+
+/* ---------------- a people ----------------
+ * Their name is the one starships.js gives them (the same hash), so a starfaring people is the same people. */
+const PSYL = ['ka', 'ro', 'mi', 'ven', 'dor', 'la', 'thu', 'bel', 'sa', 'mor', 'qui', 'zen', 'pa', 'lo', 'tri', 'gan', 'fel', 'ush', 'ae', 'kel', 'nor', 'vo', 'ri', 'tam'];
+const h32 = s => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; };
+const pword = k => { let s = ''; for (let i = 0; i < 2 + h32(k + 'n') % 2; i++) s += PSYL[h32(k + '|' + i) % PSYL.length]; return s[0].toUpperCase() + s.slice(1); };
+function peopleGenome(bio, seed) {
+  const r = tag => bio.r('pp.' + tag), pick = (a, t) => a[Math.floor(r(t) * a.length)];
+  const skinHue = r('sh'), skin = new THREE.Color().setHSL(skinHue, r('sk') < 0.25 ? 0.05 : 0.25 + r('ss') * 0.5, 0.3 + r('sl') * 0.45);
+  const features = ['antennae', 'horns', 'crest', 'ears', 'eye3', 'tail', 'arms4', 'gills'].filter((f, k) => r('ft' + k) < [0.25, 0.25, 0.2, 0.3, 0.12, 0.25, 0.1, 0.15][k]);
+  return { name: pword('people|' + seed), skin, skinHex: '#' + skin.getHexString(), height: (0.82 + r('ht') * 0.5) * Math.pow(bio.tall, 0.35), slim: 0.8 + r('sm') * 0.45,
+    head: pick(['round', 'tall', 'wide', 'dome', 'round'], 'hd'), bald: r('bd') < 0.35, hair: new THREE.Color().setHSL(r('hh'), 0.4 + r('hs') * 0.5, 0.15 + r('hl') * 0.55), features,
+    accent: new THREE.Color().setHSL((skinHue + 0.5) % 1, 0.6, 0.5), eyes: new THREE.Color().setHSL(r('eh'), 0.8, r('el') < 0.5 ? 0.12 : 0.55),
+    clothes: Array.from({ length: 6 }, (_, k) => '#' + new THREE.Color().setHSL(bio.r('pp.cl', k), 0.3 + bio.r('pp.cs', k) * 0.5, 0.2 + bio.r('pp.cv', k) * 0.5).getHexString()) };
+}
+// make a minifigure one of them: their skin, height and build, their head's shape and whatever grows on it
+function nativise(f, P) {
+  const SKIN = '#fac80a', skinM = new THREE.MeshLambertMaterial({ color: P.skin }), acc = new THREE.MeshLambertMaterial({ color: P.accent }), eyeM = new THREE.MeshBasicMaterial({ color: P.eyes });
+  f.g.traverse(m => { if (m.isMesh && m.material && m.material.color && '#' + m.material.color.getHexString() === SKIN) m.material = skinM; });
+  f.g.scale.set(P.slim, P.height, P.slim);
+  const H = f.head, add = (geo, mat, x, y, z, rx = 0, rz = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.set(rx, 0, rz); m.castShadow = true; H.add(m); return m; };
+  if (P.head === 'tall') H.scale.set(0.9, 1.35, 0.9); else if (P.head === 'wide') H.scale.set(1.3, 0.9, 1.1); else if (P.head === 'dome') add(new THREE.SphereGeometry(0.15, 12, 8), skinM, 0, 0.3, 0);
+  for (const ft of P.features) {
+    if (ft === 'antennae') for (const s of [-1, 1]) { add(new THREE.CylinderGeometry(0.008, 0.012, 0.28, 5), acc, s * 0.06, 0.46, 0, 0, -s * 0.35); add(new THREE.SphereGeometry(0.03, 8, 6), acc, s * 0.11, 0.58, 0); }
+    if (ft === 'horns') for (const s of [-1, 1]) add(new THREE.ConeGeometry(0.035, 0.18, 6), acc, s * 0.11, 0.4, 0, 0, -s * 0.5);
+    if (ft === 'crest') add(new THREE.BoxGeometry(0.02, 0.14, 0.26), acc, 0, 0.4, -0.02);
+    if (ft === 'ears') for (const s of [-1, 1]) add(new THREE.ConeGeometry(0.035, 0.2, 4), skinM, s * 0.16, 0.22, -0.01, 0, -s * 1.25);
+    if (ft === 'eye3') add(new THREE.SphereGeometry(0.022, 8, 6), eyeM, 0, 0.27, 0.13);
+    if (ft === 'gills') for (const s of [-1, 1]) for (let k = 0; k < 3; k++) add(new THREE.BoxGeometry(0.01, 0.06, 0.04), acc, s * 0.13, 0.1 + k * 0.03, 0.02);
+    if (ft === 'tail') { const t = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.05, 0.6, 6), skinM); t.position.set(0, 0.62, -0.18); t.rotation.x = -0.9; f.body.add(t); }
+    if (ft === 'arms4') for (const a of f.arms) { const b = a.clone(); b.position.y -= 0.14; b.scale.setScalar(0.85); f.body.add(b); }
+  }
+  // the minifigure's own eyes, in theirs
+  f.g.traverse(m => { if (m.isMesh && m.parent === H && m.geometry && m.geometry.parameters && m.geometry.parameters.width === 0.025) m.material = eyeM; });
+  if (P.bald) H.children.forEach(m => { if (m.isMesh && m.geometry && m.geometry.parameters && Math.abs((m.geometry.parameters.radiusTop || 0) - 0.142) < 1e-3) m.visible = false; });
+  return f;
+}
+
+/* ---------------- a plant species ---------------- */
+const HABIT = ['F[+B][-B]A', 'F[+B]F[-B]A', 'F[+A][-A]T', '[+++B][+B][-B][---B]'], TIP = ['L', '[O]', '[Q]', 'L[O]'];
+function floraGenome(bio, i, role) {
+  const r = tag => bio.r('fl.' + tag, i), crystal = role === 'hardy' && r('cry') < 0.6;
+  const g = {
+    i, role, crystal,
+    habit: role === 'shrub' ? (r('hab') < 0.5 ? 3 : 1) : Math.floor(r('hab') * 3),
+    tip: (t => t < 0.55 ? 0 : t < 0.75 ? 1 : t < 0.88 ? 2 : 3)(r('tip')),
+    leafy: r('lfy') < 0.7, angle: (14 + r('ang') * 36) * Math.PI / 180, roll: (60 + r('roll') * 100) * Math.PI / 180,
+    seg: 1, taper: 0.62 + r('tap') * 0.3, wob: r('wob') * 0.4, stout: 0.03 + r('stt') * 0.055,
+    leafLen: 0.6 + r('lln') * 1.1, leafWide: 0.25 + r('lwd') * 0.5, flowerR: 0.3 + r('flr') * 0.5, fruitR: 0.2 + r('frr') * 0.35, petals: 3 + Math.floor(r('pet') * 6),
+    leafShape: crystal ? 'shard' : ['blade', 'round', 'needle', 'frond', 'cup'][Math.floor(r('lsh') * 5)],
+    height: (role === 'tree' ? 5 + r('ht') * 14 : role === 'shrub' ? 0.7 + r('ht') * 1.8 : 0.5 + r('ht') * 2.5) * bio.tall,
+    age: role === 'tree' ? 4 : 3,
+  };
+  // colours: leaves from Rth's greens turned by the world's rule, each species its own shade; stems, flowers, fruit
+  const leaf = applyM(bio.life, new THREE.Color().setHSL(0.24 + (r('lh') - 0.5) * 0.16, 0.45 + r('lsat') * 0.35, 0.28 + r('ll') * 0.22));
+  g.leafCol = crystal ? new THREE.Color().setHSL(r('ch'), 0.5, 0.7) : leaf;
+  g.stemCol = crystal ? g.leafCol.clone().multiplyScalar(0.7) : r('sc') < 0.6 ? applyM(bio.life, new THREE.Color().setHSL(0.07 + r('sh') * 0.05, 0.35, 0.22 + r('sl') * 0.12)) : new THREE.Color().setHSL(r('sh2'), 0.3 + r('ss') * 0.4, 0.15 + r('sl2') * 0.6);
+  g.flowerCol = new THREE.Color().setHSL(r('fh'), 0.6 + r('fs') * 0.35, 0.5 + r('fl') * 0.3);
+  g.eyeCol = new THREE.Color().setHSL(r('eh'), 0.8, 0.55);
+  g.fruitCol = new THREE.Color().setHSL(r('frh'), 0.7, 0.45);
+  return g;
+}
+function grow(g, age) {
+  let s = 'A';
+  for (let k = 0; k < age; k++) {
+    const next = s.replace(/[ABT]/g, c => c === 'A' ? HABIT[g.habit] : c === 'B' ? (g.leafy ? 'F[+L][-L]T' : 'FT') : TIP[g.tip]);
+    if ((next.match(/F/g) || []).length > 160) break; s = next;
+  }
+  return s.replace(/A/g, 'FT').replace(/B/g, 'FT').replace(/T/g, TIP[g.tip]);
+}
+// walk the string with a turtle in 3D, into one geometry with vertex colours (`lo` for far away: fewer sides, no flowers)
+function plantGeometry(g, lo) {
+  const str = grow(g, lo ? Math.max(2, g.age - 1) : g.age), parts = [];
+  const R = (() => { let n = 0; return () => fnv(g.i + '|' + g.habit + '|' + (n++)); })();
+  const up = new THREE.Vector3(0, 1, 0), X = new THREE.Vector3(1, 0, 0), Z = new THREE.Vector3(0, 0, 1);
+  let t = { p: new THREE.Vector3(), q: new THREE.Quaternion(), d: 0 }; const stack = [];
+  const sides = lo ? 3 : 5, push = (geo, col, m) => { geo = geo.index ? geo.toNonIndexed() : geo; geo.applyMatrix4(m); const n = geo.attributes.position.count, c = new Float32Array(n * 3); for (let k = 0; k < n; k++) { c[k * 3] = col.r; c[k * 3 + 1] = col.g; c[k * 3 + 2] = col.b; } geo.setAttribute('color', new THREE.BufferAttribute(c, 3)); if (geo.attributes.uv) geo.deleteAttribute('uv'); parts.push(geo); };
+  const M = new THREE.Matrix4(), S = new THREE.Vector3();
+  const rot = (axis, a) => t.q.multiply(new THREE.Quaternion().setFromAxisAngle(axis, a));
+  let node = 0;
+  for (const ch of str) {
+    if (ch === 'F') {
+      const len = g.seg * Math.pow(g.taper, t.d), rad = Math.max(0.012, g.stout * Math.pow(g.taper, t.d * 1.25));
+      rot(X, (R() - 0.5) * 2 * g.wob); rot(Z, (R() - 0.5) * 2 * g.wob); node++;
+      const dir = up.clone().applyQuaternion(t.q), geo = new THREE.CylinderGeometry(rad * g.taper, rad, len, sides, 1, true); geo.translate(0, len / 2, 0);
+      if (g.crystal) { geo.dispose(); const c = new THREE.CylinderGeometry(0, rad * 2.4, len * 1.3, 6, 1); c.translate(0, len * 0.65, 0); M.compose(t.p, t.q, S.set(1, 1, 1)); push(c, g.stemCol, M); }
+      else { M.compose(t.p, t.q, S.set(1, 1, 1)); push(geo, g.stemCol, M); }
+      t.p.addScaledVector(dir, len);
+    } else if (ch === '+') rot(Z, g.angle);
+    else if (ch === '-') rot(Z, -g.angle);
+    else if (ch === '[') { stack.push({ p: t.p.clone(), q: t.q.clone(), d: t.d }); t.d++; rot(up, g.roll * (stack.length + node % 3)); }
+    else if (ch === ']') { const s = stack.pop(); if (s) t = s; }
+    else if (ch === 'L') {
+      const ll = g.leafLen * Math.pow(0.86, t.d) * g.seg, lw = g.leafWide * ll, q = t.q.clone().multiply(new THREE.Quaternion().setFromAxisAngle(Z, 0.7));
+      let geo;
+      if (g.leafShape === 'needle') { geo = new THREE.ConeGeometry(lw * 0.25, ll, 3, 1); geo.translate(0, ll / 2, 0); }
+      else if (g.leafShape === 'shard') { geo = new THREE.OctahedronGeometry(lw * 0.6, 0); geo.scale(0.6, ll / lw * 1.2, 0.6); geo.translate(0, ll * 0.6, 0); }
+      else if (g.leafShape === 'cup') { geo = new THREE.SphereGeometry(lw * 0.7, lo ? 4 : 6, lo ? 2 : 3, 0, TAU, 0, Math.PI / 2); geo.rotateX(Math.PI); geo.translate(0, ll * 0.5, 0); }
+      else { geo = new THREE.OctahedronGeometry(1, 0); geo.scale(lw * (g.leafShape === 'round' ? 1 : g.leafShape === 'frond' ? 0.5 : 0.6), ll / 2 * (g.leafShape === 'frond' ? 1.6 : 1), lw * 0.12); geo.translate(0, ll / 2 * (g.leafShape === 'frond' ? 1.6 : 1), 0); }
+      M.compose(t.p, q, S.set(1, 1, 1)); push(geo, g.leafCol, M);
+    } else if (ch === 'O' && !lo) {
+      const rr = g.flowerR * Math.pow(0.9, t.d) * g.seg * 0.5;
+      for (let k = 0; k < g.petals; k++) { const a = k / g.petals * TAU, geo = new THREE.OctahedronGeometry(rr * 0.45, 0); M.compose(t.p.clone().add(new THREE.Vector3(Math.cos(a) * rr * 0.8, 0, Math.sin(a) * rr * 0.8).applyQuaternion(t.q)), t.q, S.set(1, 0.4, 1)); push(geo, g.flowerCol, M); }
+      const eye = new THREE.OctahedronGeometry(rr * 0.35, 0); M.compose(t.p, t.q, S.set(1, 1, 1)); push(eye, g.eyeCol, M);
+    } else if (ch === 'Q') {
+      const rr = g.fruitR * g.seg * 0.4, geo = new THREE.IcosahedronGeometry(rr, 0); M.compose(t.p.clone().addScaledVector(up.clone().applyQuaternion(t.q), rr * 1.4), t.q, S.set(1, 1, 1)); push(geo, g.fruitCol, M);
+    }
+  }
+  // one geometry, its foot at the origin and one unit tall (it's scaled to the species' height when drawn)
+  let n = 0; for (const p of parts) n += p.attributes.position.count;
+  const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), col = new Float32Array(n * 3); let o = 0;
+  for (const p of parts) { if (!p.attributes.normal) p.computeVertexNormals(); pos.set(p.attributes.position.array, o * 3); nor.set(p.attributes.normal.array, o * 3); col.set(p.attributes.color.array, o * 3); o += p.attributes.position.count; p.dispose(); }
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3)); geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  geo.computeBoundingBox(); const bb = geo.boundingBox, h = Math.max(0.01, bb.max.y - Math.min(0, bb.min.y)), w = Math.max(bb.max.x - bb.min.x, bb.max.z - bb.min.z);
+  geo.translate(-(bb.min.x + bb.max.x) / 2, -Math.min(0, bb.min.y), -(bb.min.z + bb.max.z) / 2); geo.scale(1 / h, 1 / h, 1 / h);
+  geo.userData = { aspect: w / h, tris: n / 3 }; geo.computeBoundingSphere();
+  return geo;
+}
+
+const BIO = make(AW);
+window.GW.BIO = BIO;
+window.GW.bioTools = { nativise, hueMatrix, applyM, plantGeometry, grow, floraGenome, fnv };
+})();
+</script>
+<script data-inline="src/culture.js">
+/* Gary's World: the kingdoms' own ways.
+ *
+ * A kingdom (hanb's Q, the landregion of a continent) is a nation: it has a flag, and its towns are built its
+ * own way, in its own colours (whitewash, ochre, painted fronts, stone, timber-framed, adobe, brick), under its
+ * own roofs (gables, hips, flat roofs, domes, onion domes, pagoda eaves, mansards, spires), with its own
+ * windows (sashes, arches, shutters, lattices). All of it from the kingdom's seed, so it's the same every
+ * visit. Gary's kingdom on Rth keeps the brick and gables of Shady Lane (it has a flag, though). The door and
+ * windows stay where they always are on a front, so openings.js finds them in every style.
+ */
+(() => {
+window.GW = window.GW || {};
+const fnv = s => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } h += 0x9E3779B9; h = Math.imul(h ^ (h >>> 16), 0x21f0aaad); h = Math.imul(h ^ (h >>> 15), 0x735a2d97); return ((h ^ (h >>> 15)) >>> 0) / 4294967296; };
+const TAU = Math.PI * 2;
+const SCHEMES = {
+  brick: { walls: ['#8e3b2c', '#7a3226', '#9a4a36', '#6e3a2e', '#a0583e', '#8a4a3a', '#b8a890', '#d8cfb8'], roofs: ['#4a4f55', '#5a5f66', '#7a3b2a', '#8a4a30'], face: 'brick' },
+  whitewash: { walls: ['#f2eee4', '#ece4d2', '#f6f2ea', '#e2dccc'], roofs: ['#b8582e', '#a84a28', '#c86a38', '#3a5a8a'], face: 'plaster' },
+  ochre: { walls: ['#d8a860', '#c88a48', '#e0b878', '#b87a40', '#d89a58'], roofs: ['#8a3a22', '#a04a2a', '#6a4a30'], face: 'plaster' },
+  painted: { walls: ['#c84a3a', '#e8b83a', '#3a7aa8', '#4a9a6a', '#e08a4a', '#8a4a8a', '#f0e8d0', '#3a5a7a'], roofs: ['#4a4a4a', '#7a3a2a', '#3a3a3a'], face: 'plaster' },
+  stone: { walls: ['#a8a49a', '#b8b2a4', '#8e8a82', '#c4bcaa', '#9a968c'], roofs: ['#3e4248', '#4a4e54', '#5a5048'], face: 'stone' },
+  timber: { walls: ['#efe6d0', '#e8dcc0', '#f2ead8'], roofs: ['#5a3a2a', '#6a4a30', '#4a3a2a'], face: 'timber' },
+  adobe: { walls: ['#c89070', '#b87a58', '#d8a888', '#a87050'], roofs: ['#a87050', '#8a5a40'], face: 'plaster' },
+  pastel: { walls: ['#e8c8d0', '#c8d8e8', '#d8e8c8', '#f0e0b8', '#d8c8e8', '#c8e8e0'], roofs: ['#4a5a6a', '#6a4a5a', '#5a6a4a'], face: 'plaster' },
+};
+const ROOFS = ['gable', 'gable', 'hip', 'flat', 'dome', 'onion', 'pagoda', 'mansard', 'spire'];
+const WINDOWS = ['sash', 'arch', 'shutter', 'lattice', 'round'];
+const cache = new Map();
+
+// the kingdom a cell of the land is in, and its ways (null where there's none: the sea, the wild lands)
+function cultureOf(chain) {
+  const q = (chain || []).find(x => x.kind === 'landregion'); if (!q) return null;
+  const AW = window.GW.AWAY, where = AW ? AW.path.slice(0, AW.surf).join('.') : 'rth' + ((window.GW.U && window.GW.U.cur && window.GW.U.cur.id) || ''), key = where + '|' + (q.name || '?');
+  if (cache.has(key)) return cache.get(key);
+  const r = (t, i = 0) => fnv(key + '|' + t + '|' + i), pick = (a, t) => a[Math.floor(r(t) * a.length)];
+  const home = !AW && q.home;
+  const scheme = home ? 'brick' : pick(Object.keys(SCHEMES), 'sch'), S = SCHEMES[scheme];
+  const C = { key, name: q.name || 'a kingdom', home, scheme, walls: S.walls, roofs: S.roofs.slice(), face: S.face,
+    roof: home ? 'gable' : pick(ROOFS, 'roof'), windows: home ? 'sash' : pick(WINDOWS, 'win'), frame: home ? '#f4f1ea' : pick(['#f4f1ea', '#2a2a2a', '#3a5a8a', '#8a3a2a', '#e8d080', '#3a6a4a'], 'frm'),
+    tall: home ? 1 : 0.8 + r('tall') * 0.5, roofH: home ? 1 : 0.7 + r('rh') * 0.9 };
+  if (!home && r('rc') < 0.4) C.roofs = [new THREE.Color().setHSL(r('rch'), 0.4, 0.35).getStyle()];
+  if (C.roof === 'dome' || C.roof === 'onion') C.roofs = [pick(['#c8a040', '#5a9a8a', '#d8d4c8', '#3a6aa8', '#b85a3a'], 'dom')];
+  C.flag = flagOf(r, pick);
+  cache.set(key, C); return C;
+}
+
+/* ---------------- a flag ---------------- */
+const FLAGCOLS = ['#c8102e', '#003da5', '#ffffff', '#ffd100', '#009a44', '#000000', '#ff8200', '#6a2c91', '#00a3e0', '#7a1f1f', '#2a5a2a', '#e8d8b0'];
+function flagOf(r, pick) {
+  const cols = []; while (cols.length < 3) { const c = FLAGCOLS[Math.floor(r('fc', cols.length * 7 + cols.length) * FLAGCOLS.length)]; if (!cols.includes(c)) cols.push(c); else cols.push(FLAGCOLS[(FLAGCOLS.indexOf(c) + 5) % FLAGCOLS.length]); }
+  return { layout: pick(['vtri', 'htri', 'cross', 'saltire', 'canton', 'diag', 'disc', 'hoist', 'stripes', 'bicolour'], 'fl'), emblem: pick([null, null, 'star', 'sun', 'crescent', 'ring', 'tree'], 'em'), cols };
+}
+const flagTexCache = new Map();
+function flagTexture(C) {
+  if (flagTexCache.has(C.key)) return flagTexCache.get(C.key);
+  const c = document.createElement('canvas'); c.width = 192; c.height = 128; const x = c.getContext('2d'), W = 192, H = 128, [a, b, d] = C.flag.cols;
+  const F = C.flag; x.fillStyle = a; x.fillRect(0, 0, W, H);
+  if (F.layout === 'vtri') { x.fillStyle = b; x.fillRect(W / 3, 0, W / 3, H); x.fillStyle = d; x.fillRect(2 * W / 3, 0, W / 3, H); }
+  else if (F.layout === 'htri') { x.fillStyle = b; x.fillRect(0, H / 3, W, H / 3); x.fillStyle = d; x.fillRect(0, 2 * H / 3, W, H / 3); }
+  else if (F.layout === 'bicolour') { x.fillStyle = b; x.fillRect(0, H / 2, W, H / 2); }
+  else if (F.layout === 'cross') { x.fillStyle = d; x.fillRect(52, 0, 28, H); x.fillRect(0, 50, W, 28); x.fillStyle = b; x.fillRect(58, 0, 16, H); x.fillRect(0, 56, W, 16); }
+  else if (F.layout === 'saltire') { x.strokeStyle = b; x.lineWidth = 22; x.beginPath(); x.moveTo(0, 0); x.lineTo(W, H); x.moveTo(W, 0); x.lineTo(0, H); x.stroke(); }
+  else if (F.layout === 'canton') { for (let k = 0; k < 7; k++) { x.fillStyle = k % 2 ? b : a; x.fillRect(0, k * H / 7, W, H / 7); } x.fillStyle = d; x.fillRect(0, 0, W * 0.42, H * 4 / 7); }
+  else if (F.layout === 'diag') { x.fillStyle = b; x.beginPath(); x.moveTo(W, 0); x.lineTo(W, H); x.lineTo(0, H); x.fill(); }
+  else if (F.layout === 'disc') { x.fillStyle = b; x.beginPath(); x.arc(W / 2, H / 2, 34, 0, TAU); x.fill(); }
+  else if (F.layout === 'hoist') { x.fillStyle = b; x.fillRect(0, H / 2, W, H / 2); x.fillStyle = d; x.beginPath(); x.moveTo(0, 0); x.lineTo(W * 0.42, H / 2); x.lineTo(0, H); x.fill(); }
+  else if (F.layout === 'stripes') { for (let k = 0; k < 5; k++) { x.fillStyle = [a, b, d, b, a][k]; x.fillRect(0, k * H / 5, W, H / 5); } }
+  // an emblem, in the colour least like the field under it
+  if (F.emblem) { const ex = F.layout === 'canton' || F.layout === 'hoist' ? 36 : W / 2, ey = F.layout === 'canton' ? 36 : H / 2; x.fillStyle = F.layout === 'disc' ? a : d === a ? b : d; x.strokeStyle = x.fillStyle; x.lineWidth = 6;
+    if (F.emblem === 'star') { x.beginPath(); for (let k = 0; k < 10; k++) { const rr = k % 2 ? 9 : 22, an = -Math.PI / 2 + k * Math.PI / 5; x.lineTo(ex + Math.cos(an) * rr, ey + Math.sin(an) * rr); } x.fill(); }
+    else if (F.emblem === 'sun') { x.beginPath(); x.arc(ex, ey, 12, 0, TAU); x.fill(); for (let k = 0; k < 12; k++) { const an = k / 12 * TAU; x.beginPath(); x.moveTo(ex + Math.cos(an) * 16, ey + Math.sin(an) * 16); x.lineTo(ex + Math.cos(an) * 26, ey + Math.sin(an) * 26); x.stroke(); } }
+    else if (F.emblem === 'crescent') { x.beginPath(); x.arc(ex, ey, 20, 0, TAU); x.fill(); x.fillStyle = F.layout === 'disc' ? b : a; x.beginPath(); x.arc(ex + 8, ey - 3, 17, 0, TAU); x.fill(); }
+    else if (F.emblem === 'ring') { x.beginPath(); x.arc(ex, ey, 18, 0, TAU); x.stroke(); }
+    else if (F.emblem === 'tree') { x.fillRect(ex - 3, ey, 6, 22); x.beginPath(); x.moveTo(ex, ey - 24); x.lineTo(ex + 20, ey + 6); x.lineTo(ex - 20, ey + 6); x.fill(); } }
+  const t = new THREE.CanvasTexture(c); t.anisotropy = 4; flagTexCache.set(C.key, t); return t;
+}
+
+/* ---------------- a front, in the kingdom's style ----------------
+ * The same layout as country.js's TEX.facade (two windows on each of three floors, the door bottom left), so the
+ * openings land where they should; the wall is painted pale and the house's own colour multiplies it. */
+const faceCache = new Map();
+function facadeTexture(C, R) {
+  const key = C.face + '|' + C.windows + '|' + C.frame; if (faceCache.has(key)) return faceCache.get(key);
+  const c = document.createElement('canvas'); c.width = c.height = 256; const x = c.getContext('2d'), S = 256;
+  x.fillStyle = '#e4e0d8'; x.fillRect(0, 0, S, S);
+  if (C.face === 'brick') for (let rr = 0; rr < 48; rr++) for (let i = -1; i < 12; i++) { const v = 200 + R() * 55 | 0; x.fillStyle = `rgb(${v},${v},${v})`; x.fillRect(i * 22 + (rr % 2 ? 11 : 0) + 1, rr * 5.33 + 1, 20, 3.6); }
+  else if (C.face === 'stone') for (let rr = 0; rr < 16; rr++) for (let i = -1; i < 6; i++) { const v = 190 + R() * 60 | 0; x.fillStyle = `rgb(${v},${v},${v})`; x.fillRect(i * 48 + (rr % 2 ? 24 : 0) + 2, rr * 16 + 2, 44, 13); }
+  else for (let k = 0; k < 600; k++) { const v = 215 + R() * 35 | 0; x.fillStyle = `rgba(${v},${v},${v},0.5)`; x.fillRect(R() * S, R() * S, 3 + R() * 6, 2 + R() * 4); }
+  if (C.face === 'timber') { x.fillStyle = '#3a2618'; for (const X of [0, 30, 100, 160, 226, 250]) x.fillRect(X, 0, 8, S); for (const Y of [0, 84, 164, 248]) x.fillRect(0, Y, S, 8); x.lineWidth = 7; x.strokeStyle = '#3a2618'; for (const [x0, y0, x1, y1] of [[100, 84, 160, 164], [160, 84, 100, 164]]) { x.beginPath(); x.moveTo(x0, y0); x.lineTo(x1, y1); x.stroke(); } }
+  for (let f = 0; f < 3; f++) for (let w = 0; w < 2; w++) { const X = 40 + w * 120, Y = 18 + f * 80; if (f === 2 && w === 0) continue;
+    x.fillStyle = C.frame;
+    if (C.windows === 'arch' || C.windows === 'round') { x.beginPath(); x.arc(X + 28, Y + (C.windows === 'round' ? 25 : 14), C.windows === 'round' ? 31 : 32, 0, TAU); x.fill(); if (C.windows === 'arch') x.fillRect(X - 4, Y + 14, 64, 40); }
+    else x.fillRect(X - 4, Y - 4, 64, 58);
+    x.fillStyle = '#23303a';
+    if (C.windows === 'round') { x.beginPath(); x.arc(X + 28, Y + 25, 26, 0, TAU); x.fill(); }
+    else if (C.windows === 'arch') { x.beginPath(); x.arc(X + 28, Y + 14, 28, Math.PI, 0); x.fill(); x.fillRect(X, Y + 14, 56, 36); }
+    else x.fillRect(X, Y, 56, 50);
+    x.fillStyle = C.frame;
+    if (C.windows === 'lattice') { for (let k = 1; k < 4; k++) { x.fillRect(X + k * 14, Y, 2, 50); x.fillRect(X, Y + k * 12.5, 56, 2); } }
+    else { x.fillRect(X + 26, Y, 4, 50); x.fillRect(X, Y + 24, 56, 3); }
+    if (C.windows === 'shutter') { x.fillStyle = '#2e5a3a'; x.fillRect(X - 20, Y - 2, 16, 54); x.fillRect(X + 60, Y - 2, 16, 54); x.fillStyle = 'rgba(0,0,0,0.25)'; for (let k = 0; k < 9; k++) { x.fillRect(X - 20, Y + k * 6, 16, 2); x.fillRect(X + 60, Y + k * 6, 16, 2); } }
+  }
+  x.fillStyle = '#2e3a2a'; x.fillRect(46, 188, 48, 68); x.fillStyle = C.frame; x.fillRect(42, 184, 56, 4);
+  if (C.windows === 'arch' || C.windows === 'round') { x.beginPath(); x.arc(70, 188, 24, Math.PI, 0); x.fill(); x.fillStyle = '#2e3a2a'; x.beginPath(); x.arc(70, 190, 20, Math.PI, 0); x.fill(); }
+  const t = new THREE.CanvasTexture(c); t.anisotropy = 4; faceCache.set(key, t); return t;
+}
+
+/* ---------------- roofs ----------------
+ * Each in the unit box the gable fills (x and z from -0.5 to 0.5, y from 0 to 1), scaled to the house. */
+function roofGeometry(kind) {
+  let g;
+  if (kind === 'hip') { g = new THREE.ConeGeometry(0.72, 1, 4, 1); g.rotateY(Math.PI / 4); g.translate(0, 0.5, 0); }
+  else if (kind === 'mansard') { g = new THREE.CylinderGeometry(0.42, 0.72, 1, 4, 1); g.rotateY(Math.PI / 4); g.translate(0, 0.5, 0); }
+  else if (kind === 'flat') { const parts = [new THREE.BoxGeometry(1.04, 0.25, 1.04)]; parts[0].translate(0, 0.125, 0); g = parts[0]; }
+  else if (kind === 'dome') { g = new THREE.SphereGeometry(0.5, 16, 8, 0, TAU, 0, Math.PI / 2); g.scale(1, 2, 1); }
+  else if (kind === 'onion') { const pts = []; for (let k = 0; k <= 16; k++) { const t = k / 16, y = t, rr = 0.5 * Math.sin(Math.min(1, t * 1.25) * Math.PI) * (1 - t * 0.6) + (t < 0.15 ? 0.42 : 0); pts.push(new THREE.Vector2(Math.max(0.005, t > 0.97 ? 0.005 : rr), y)); } g = new THREE.LatheGeometry(pts, 14); }
+  else if (kind === 'pagoda') { const a = new THREE.CylinderGeometry(0.3, 0.8, 0.45, 4, 1); a.rotateY(Math.PI / 4); a.translate(0, 0.22, 0); const b = new THREE.CylinderGeometry(0.0, 0.55, 0.55, 4, 1); b.rotateY(Math.PI / 4); b.translate(0, 0.72, 0);
+    g = merge([a, b]); }
+  else if (kind === 'spire') { g = new THREE.ConeGeometry(0.62, 1, 8, 1); g.translate(0, 0.5, 0); }
+  return g;
+}
+function merge(gs) { const ps = [], ns = [], us = []; for (let g of gs) { g = g.index ? g.toNonIndexed() : g; ps.push(...g.attributes.position.array); ns.push(...g.attributes.normal.array); us.push(...(g.attributes.uv ? g.attributes.uv.array : new Float32Array(g.attributes.position.count * 2))); }
+  const out = new THREE.BufferGeometry(); out.setAttribute('position', new THREE.Float32BufferAttribute(ps, 3)); out.setAttribute('normal', new THREE.Float32BufferAttribute(ns, 3)); out.setAttribute('uv', new THREE.Float32BufferAttribute(us, 2)); return out; }
+
+window.GW.CULTURE = { cultureOf, flagTexture, facadeTexture, roofGeometry, ROOFS };
+})();
+</script>
 <script data-inline="src/world.js">
 /* world.js: Shady Lane in Automataville, around Gary's house, with Beano's house at number 17 across the way.
    - Shady Lane: a brick-paved canal street. The houses have tall gables (stepped, neck, bell, spout,
@@ -3189,7 +3526,7 @@ function buildWorld(scene, house) {
   const cDay = [new THREE.Color('#3f7fd0'), new THREE.Color('#bcd6ee')], cDusk = [new THREE.Color('#2a3566'), new THREE.Color('#f0a46a')], cNight = [new THREE.Color('#070d22'), new THREE.Color('#1a2440')];
   const tmpA = new THREE.Color(), tmpB = new THREE.Color(), state = { sunDir: new THREE.Vector3(0, 1, 0), dark: -1 };
   // the sky of another world: none at all on a moon (black, the stars out by day, hard light), a thin dusty one on a rocky planet
-  const AW = window.GW && window.GW.AWAY, SKY = !AW ? null : AW.type === 'moon' ? { air: false, day: [new THREE.Color('#000000'), new THREE.Color('#050508')], night: [new THREE.Color('#000000'), new THREE.Color('#030306')] }
+  const AW = window.GW && window.GW.AWAY, SKY = !AW ? null : window.GW.BIO ? window.GW.BIO.sky : AW.type === 'moon' ? { air: false, day: [new THREE.Color('#000000'), new THREE.Color('#050508')], night: [new THREE.Color('#000000'), new THREE.Color('#030306')] }
     : AW.type === 'rockyplanet' ? { air: true, thin: true, day: [new THREE.Color('#8a6a52'), new THREE.Color('#d8b088')], night: [new THREE.Color('#050306'), new THREE.Color('#150d0c')] } : null;
   let tPrev = performance.now();
   function update(minute, focus, date) {
@@ -3799,19 +4136,20 @@ function arthro(o) {
   const head = ball(s * 0.08, shell, 1.2, 0.6, 1); head.position.x = s * 0.24; body.add(head);
   for (const z of [-1, 1]) for (let k = 0; k < 3; k++) { const e = ball(s * 0.008, glowM('#ff4a2a')); e.position.set(s * 0.29, s * 0.03, z * s * (0.02 + k * 0.012)); body.add(e); }
   const legs = [];
-  for (let i = 0; i < 4; i++) for (const z of [-1, 1]) { const hip = new THREE.Group(); hip.position.set(s * (0.12 - i * 0.09), 0, z * s * 0.1); body.add(hip);
+  const pairs = o.pairs || 4;   // (another world's beasts: three pairs or four, claws or none, a tail or none)
+  for (let i = 0; i < pairs; i++) for (const z of [-1, 1]) { const hip = new THREE.Group(); hip.position.set(s * (0.12 - i * 0.36 / pairs), 0, z * s * 0.1); body.add(hip);
     const out = new THREE.Group(); out.rotation.x = -z * 1.1; hip.add(out);
     const up = seg(out, s * 0.16, s * 0.012, s * 0.02, shell, 6); const kn = new THREE.Group(); kn.position.y = -s * 0.16; up.add(kn); kn.rotation.x = z * 1.9; seg(kn, s * 0.2, s * 0.006, s * 0.014, dark, 6);
     legs.push({ hip, out, kn, i, z, set: (i + (z > 0 ? 1 : 0)) % 2 }); }
   const claws = [];
-  for (const z of [-1, 1]) { const arm = new THREE.Group(); arm.position.set(s * 0.26, 0, z * s * 0.08); body.add(arm); const a1 = ball(s * 0.03, shell, 3, 1, 1); a1.position.x = s * 0.08; arm.add(a1);
+  for (const z of o.claws === false ? [] : [-1, 1]) { const arm = new THREE.Group(); arm.position.set(s * 0.26, 0, z * s * 0.08); body.add(arm); const a1 = ball(s * 0.03, shell, 3, 1, 1); a1.position.x = s * 0.08; arm.add(a1);
     const pincer = new THREE.Group(); pincer.position.x = s * 0.18; arm.add(pincer); const p1 = ball(s * 0.045, shell, 1.8, 0.8, 1); p1.position.x = s * 0.05; pincer.add(p1);
     const fing = new THREE.Group(); fing.position.set(s * 0.09, 0, -z * s * 0.02); pincer.add(fing); const f1 = cone(s * 0.018, s * 0.1, shell, 6); f1.rotation.z = -Math.PI / 2; f1.position.x = s * 0.05; fing.add(f1);
     const fing2 = new THREE.Group(); fing2.position.set(s * 0.09, 0, z * s * 0.02); pincer.add(fing2); const f2 = f1.clone(); fing2.add(f2);
     arm.rotation.y = z * 0.4; claws.push({ arm, pincer, fing, fing2, z }); }
   const tail = []; let par = body;
-  for (let i = 0; i < 6; i++) { const j = new THREE.Group(); j.position.set(i ? -s * 0.07 : -s * 0.3, 0, 0); par.add(j); const m = ball(s * (0.045 - i * 0.004), shell, 1.4, 1, 1); m.position.x = -s * 0.035; j.add(m); tail.push(j); par = j; }
-  const sting = cone(s * 0.018, s * 0.08, dark, 6); sting.position.x = -s * 0.08; sting.rotation.z = Math.PI / 2; par.add(sting);
+  for (let i = 0; i < (o.tail != null ? o.tail : 6); i++) { const j = new THREE.Group(); j.position.set(i ? -s * 0.07 : -s * 0.3, 0, 0); par.add(j); const m = ball(s * (0.045 - i * 0.004), shell, 1.4, 1, 1); m.position.x = -s * 0.035; j.add(m); tail.push(j); par = j; }
+  const sting = cone(s * 0.018, s * 0.08, dark, 6); sting.position.x = -s * 0.08; sting.rotation.z = Math.PI / 2; if (par !== body) par.add(sting);
   const st = { lastL: 0, atk: 0, ph: 0 };
   function animate(a, dt, t, moving) {
     st.ph += dt * (a.speed || 0) / (s * 0.18) * Math.PI;
@@ -3915,7 +4253,7 @@ const SPECIES = {
   icewyrm:    { name: 'Ice Wyrm', size: 'N', biome: 'frost', rig: 'serpent', len: 800, titan: true, look: { mat: ['ice', '#a8c8e0'], spines: ['ice', '#f0faff'], eyes: '#7fe0ff', segs: 30 } },
 };
 const mat = spec => Array.isArray(spec) ? M(spec[0], spec[1], spec[2]) : spec;
-const MATS = ['mat', 'headMat', 'wingMat', 'club', 'beard', 'crown', 'spikes', 'spines', 'rings', 'robe', 'rags', 'hood', 'ribs', 'horns', 'wings'], FLAGS = ['eyes', 'bird', 'maw', 'segs', 'horn', 'fire', 'ghost', 'hunch', 'bones', 'gaunt', 'float', 'shamble', 'crawl', 'weapon', 'orb', 'build'];
+const MATS = ['mat', 'headMat', 'wingMat', 'club', 'beard', 'crown', 'spikes', 'spines', 'rings', 'robe', 'rags', 'hood', 'ribs', 'horns', 'wings'], FLAGS = ['pairs', 'claws', 'tail', 'eyes', 'bird', 'maw', 'segs', 'horn', 'fire', 'ghost', 'hunch', 'bones', 'gaunt', 'float', 'shamble', 'crawl', 'weapon', 'orb', 'build'];
 function options(L, size) { const o = { size }; for (const k of MATS) if (L[k]) o[k] = mat(L[k]); if (L.armor) o.armor = Array.isArray(L.armor) ? METAL(...L.armor) : L.armor; for (const k of FLAGS) if (L[k] != null) o[k] = L[k]; return o; }
 function build(sp) {
   const S = SPECIES[sp], o = options(S.look || {}, S.len);
@@ -3992,7 +4330,13 @@ GW.buildOpenings = function (root, o) {
     const g = new THREE.Group(); g.position.set(sp.c[0], sp.y0, -sp.c[1]); g.rotation.y = Math.atan2(sp.n[0], -sp.n[1]); group.add(g);
     const { wd, ht } = sp, door = sp.kind === 'door', hv = h32(sp.house || sp.key), mats = [];
     // the mask: where the opening is (and nothing nearer is in the way), the stencil gets this opening's number
-    const mask = new THREE.Mesh(new THREE.PlaneGeometry(wd, ht), new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, stencilWrite: true, stencilRef: ref, stencilFunc: THREE.AlwaysStencilFunc, stencilZPass: THREE.ReplaceStencilOp }));
+    // (its outline: a rectangle, or the round or arched window of a kingdom that builds them: see culture.js)
+    const shape = !door && (sp.shape === 'round' || sp.shape === 'arch') ? sp.shape : 'rect', archY = ht * 0.72, rr = Math.min(wd, ht) / 2 * 0.95;
+    let maskGeo;
+    if (shape === 'round') { maskGeo = new THREE.CircleGeometry(rr, 28); }
+    else if (shape === 'arch') { const sh = new THREE.Shape(); sh.moveTo(-wd / 2, -ht / 2); sh.lineTo(wd / 2, -ht / 2); sh.lineTo(wd / 2, archY - ht / 2); sh.absarc(0, archY - ht / 2, wd / 2, 0, Math.PI, false); sh.lineTo(-wd / 2, -ht / 2); maskGeo = new THREE.ShapeGeometry(sh, 16); }
+    else maskGeo = new THREE.PlaneGeometry(wd, ht);
+    const mask = new THREE.Mesh(maskGeo, new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, stencilWrite: true, stencilRef: ref, stencilFunc: THREE.AlwaysStencilFunc, stencilZPass: THREE.ReplaceStencilOp }));
     mask.position.set(0, ht / 2, 0.012); mask.renderOrder = 10; g.add(mask);
     // the room: the inside of a box behind the facade, drawn only through the opening
     const W = Math.max(3.2, wd + 2.2), D = door ? 4.2 : 3.6, Hh = 2.75, floor = door ? 0 : -0.85;
@@ -4010,14 +4354,25 @@ GW.buildOpenings = function (root, o) {
         const leaf = new THREE.Mesh(new THREE.BoxGeometry(lw - 0.03, ht - 0.03, 0.05), leafM); leaf.position.set(-s * lw / 2, ht / 2, -0.03); leaf.renderOrder = 12; hinge.add(leaf);
         L.hinges.push([hinge, -s * 1.45]);
       }
-    } else {      // two casements, hinged at the sides, swinging out; frames and glass
+    } else if (shape === 'round') {   // a round window: one pane in a ring, hinged at the side, swinging out
+      const hinge = new THREE.Group(); hinge.position.set(-rr, ht / 2, 0.03); g.add(hinge); const pane = new THREE.Group(); pane.position.x = rr; hinge.add(pane);
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(rr * 0.96, Math.min(0.05, rr * 0.08), 6, 24), frameMat); ring.renderOrder = 13; pane.add(ring);
+      for (const a of [0, Math.PI / 2]) { const b = new THREE.Mesh(new THREE.BoxGeometry(rr * 1.9, 0.035, 0.04), frameMat); b.rotation.z = a; b.renderOrder = 13; pane.add(b); }
+      const gl = new THREE.Mesh(new THREE.CircleGeometry(rr * 0.94, 24), glassMat); gl.renderOrder = 14; pane.add(gl);
+      L.hinges = [[hinge, -1.2]];
+    } else {      // two casements, hinged at the sides, swinging out; frames and glass (under a fixed arched light, in an arch)
       L.hinges = [];
+      const sashH = shape === 'arch' ? archY : ht;
+      if (shape === 'arch') { const top = new THREE.Group(); top.position.set(0, archY, 0.03); g.add(top);
+        const arc = new THREE.Mesh(new THREE.TorusGeometry(wd / 2 * 0.97, 0.03, 5, 18, Math.PI), frameMat); arc.renderOrder = 13; top.add(arc);
+        const sill = new THREE.Mesh(new THREE.BoxGeometry(wd, 0.05, 0.05), frameMat); sill.renderOrder = 13; top.add(sill);
+        const half = new THREE.Mesh(new THREE.CircleGeometry(wd / 2 * 0.95, 18, 0, Math.PI), glassMat); half.renderOrder = 14; top.add(half); }
       for (const s of [-1, 1]) {
         const hinge = new THREE.Group(); hinge.position.set(s * wd / 2, 0, 0.03); g.add(hinge);
         const sw = wd / 2, bar = Math.min(0.06, wd * 0.06), sash = new THREE.Group(); sash.position.x = -s * sw / 2; hinge.add(sash);
-        for (const [x, y, w, h] of [[0, ht / 2 - bar / 2, sw, bar], [0, -ht / 2 + bar / 2, sw, bar], [-sw / 2 + bar / 2, 0, bar, ht], [sw / 2 - bar / 2, 0, bar, ht], [0, ht / 6, sw, bar * 0.6], [0, -ht / 6, sw, bar * 0.6]]) {
-          const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.05), frameMat); b.position.set(x, ht / 2 + y, 0); b.renderOrder = 13; sash.add(b); }
-        const gl = new THREE.Mesh(new THREE.PlaneGeometry(sw - bar, ht - bar), glassMat); gl.position.set(0, ht / 2, 0); gl.renderOrder = 14; sash.add(gl);
+        for (const [x, y, w, h] of [[0, sashH / 2 - bar / 2, sw, bar], [0, -sashH / 2 + bar / 2, sw, bar], [-sw / 2 + bar / 2, 0, bar, sashH], [sw / 2 - bar / 2, 0, bar, sashH], [0, sashH / 6, sw, bar * 0.6], [0, -sashH / 6, sw, bar * 0.6]]) {
+          const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.05), frameMat); b.position.set(x, sashH / 2 + y, 0); b.renderOrder = 13; sash.add(b); }
+        const gl = new THREE.Mesh(new THREE.PlaneGeometry(sw - bar, sashH - bar), glassMat); gl.position.set(0, sashH / 2, 0); gl.renderOrder = 14; sash.add(gl);
         L.hinges.push([hinge, -s * 1.25]);
       }
     }
@@ -4339,8 +4694,11 @@ function buildProps(root, o) {
   const bikeGeo = merge(bikeParts(0, 0, 0, '#2a4a8a'));
   const paved = c => c.cls === 'paved' && c.town;
   function makeFolk(p, cyclist, role, dest, child) {
-    const R = Math.random, pick = a => a[Math.floor(R() * a.length)], f = NP.figure({ shirt: role && role.shirt || pick(SHIRTS), legs: pick(LEGS), hair: pick(HAIR), long: R() < 0.35, hat: role && role.hat || (R() < 0.12 ? pick(['#1b2a34', '#b40000', '#1e5aa8']) : null) });
-    f.g.traverse(m => { if (m.isMesh) m.castShadow = true; }); life.add(f.g); if (child) f.g.scale.setScalar(0.72);
+    const R = Math.random, pick = a => a[Math.floor(R() * a.length)], PP = window.GW.BIO && window.GW.BIO.people;
+    const f = NP.figure(PP ? { shirt: role && role.shirt && R() < 0.5 ? role.shirt : pick(PP.clothes), legs: pick(PP.clothes), hair: '#' + PP.hair.getHexString(), long: !PP.bald && R() < 0.3, hat: role && role.hat && R() < 0.5 ? pick(PP.clothes) : null }
+      : { shirt: role && role.shirt || pick(SHIRTS), legs: pick(LEGS), hair: pick(HAIR), long: R() < 0.35, hat: role && role.hat || (R() < 0.12 ? pick(['#1b2a34', '#b40000', '#1e5aa8']) : null) });
+    if (PP) window.GW.bioTools.nativise(f, PP);   // one of the people of this world (biosphere.js)
+    f.g.traverse(m => { if (m.isMesh) m.castShadow = true; }); life.add(f.g); if (child) f.g.scale.multiplyScalar(0.72);
     let bike = null; if (cyclist) { bike = new THREE.Mesh(bikeGeo, MAT1); bike.castShadow = true; life.add(bike); }
     return { f, bike, p: p.slice(), yaw: R() * TAU, goal: null, walk: R() * 9, speed: (cyclist ? 4.5 + R() * 1.5 : 1.1 + R() * 0.4) * (role && role.pace || 1), wait: R() * 1.5, cyclist, role, dest, stuck: 0, best: Infinity, fade: 1 };
   }
@@ -4408,7 +4766,8 @@ function buildProps(root, o) {
   function folkTell(f) {
     const r = f.role; if (!r) return 'Going about their business.';
     const d = f.dest ? `, on the way to ${f.dest.name}` : '';
-    const who = /^a /.test(r[1]) ? r[1][0].toUpperCase() + r[1].slice(1) + d : `Someone ${r[1]}${d}`;
+    const PP = window.GW.BIO && window.GW.BIO.people, them = PP ? `${/^[AEIOU]/.test(PP.name) ? 'An' : 'A'} ${PP.name}` : null;
+    const who = /^a /.test(r[1]) ? (them ? `${them}, ${r[1].slice(2)}` : r[1][0].toUpperCase() + r[1].slice(1)) + d : `${them || 'Someone'} ${r[1]}${d}`;
     return who + '.';
   }
   function dropFolk(f) { life.remove(f.f.g); if (f.bike) life.remove(f.bike); const i = folk.indexOf(f); if (i >= 0) folk.splice(i, 1); }
@@ -4622,12 +4981,18 @@ function groundMaterial() {
   const m = new THREE.MeshLambertMaterial({ map: TEX.grass });
   m.onBeforeCompile = sh => {
     for (const k of ['dirt', 'rock', 'cotton', 'forest', 'macro', 'sand', 'snow', 'mud', 'pave']) sh.uniforms['t_' + k] = { value: TEX[k] };
+    const B = window.GW.BIO, L = B ? B.life : [1, 0, 0, 0, 1, 0, 0, 0, 1];
+    sh.uniforms.u_life = { value: new THREE.Matrix3().set(...L) }; sh.uniforms.u_mineral = { value: B ? B.mineral : new THREE.Color(1, 1, 1) }; sh.uniforms.u_mineralK = { value: B ? B.mineralK : 0 };
     sh.vertexShader = 'attribute vec4 splat;\nattribute vec4 splat2;\nvarying vec4 vSplat;\nvarying vec4 vSplat2;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n vSplat = splat; vSplat2 = splat2;');
-    sh.fragmentShader = 'uniform sampler2D t_dirt; uniform sampler2D t_rock; uniform sampler2D t_cotton; uniform sampler2D t_forest; uniform sampler2D t_macro; uniform sampler2D t_sand; uniform sampler2D t_snow; uniform sampler2D t_mud; uniform sampler2D t_pave;\nvarying vec4 vSplat;\nvarying vec4 vSplat2;\n' +
+    sh.fragmentShader = 'uniform mat3 u_life; uniform vec3 u_mineral; uniform float u_mineralK;\nuniform sampler2D t_dirt; uniform sampler2D t_rock; uniform sampler2D t_cotton; uniform sampler2D t_forest; uniform sampler2D t_macro; uniform sampler2D t_sand; uniform sampler2D t_snow; uniform sampler2D t_mud; uniform sampler2D t_pave;\nvarying vec4 vSplat;\nvarying vec4 vSplat2;\n' +
       sh.fragmentShader.replace('#include <map_fragment>', `
         vec4 s = vSplat; vec4 s2 = vSplat2; float g = clamp(1.0 - s.x - s.y - s.z - s.w - s2.x - s2.y - s2.z - s2.w, 0.0, 1.0);
-        vec4 tex = texture2D(map, vUv) * g + texture2D(t_dirt, vUv) * s.x + texture2D(t_rock, vUv * 0.7) * s.y + texture2D(t_cotton, vUv * 0.5) * s.z + texture2D(t_forest, vUv) * s.w
-          + texture2D(t_sand, vUv * 0.6) * s2.x + texture2D(t_snow, vUv * 0.5) * s2.y + texture2D(t_mud, vUv) * s2.z + texture2D(t_pave, vUv * 1.5) * s2.w;
+        // a world's rules (biosphere.js): its living layers turned to its own colours, its stone tinted; Rth's untouched
+        vec4 lifeT = texture2D(map, vUv) * g + texture2D(t_cotton, vUv * 0.5) * s.z + texture2D(t_forest, vUv) * s.w;
+        vec4 minT = texture2D(t_dirt, vUv) * s.x + texture2D(t_rock, vUv * 0.7) * s.y + texture2D(t_sand, vUv * 0.6) * s2.x + texture2D(t_mud, vUv) * s2.z;
+        lifeT.rgb = max(u_life * lifeT.rgb, vec3(0.0));
+        minT.rgb = mix(minT.rgb, dot(minT.rgb, vec3(0.3, 0.59, 0.11)) * u_mineral * 2.1, u_mineralK);
+        vec4 tex = lifeT + minT + texture2D(t_snow, vUv * 0.5) * s2.y + texture2D(t_pave, vUv * 1.5) * s2.w;
         vec3 mac = texture2D(t_macro, vUv * 0.0416667).rgb;
         tex.rgb *= 0.78 + 0.44 * mac;
         diffuseColor *= mapTexelToLinear(tex);`);
@@ -4711,11 +5076,20 @@ function buildCountry(scene, world) {
   const pineGeo = (() => { const parts = []; for (let i = 0; i < 4; i++) { const g = new THREE.ConeGeometry(2.2 - i * 0.45, 2.6, 9, 1); g.translate(0, 1.3 + i * 1.5, 0); parts.push(g); } return mergeGeos(parts); })();
   const rockGeo = (() => { const g = new THREE.DodecahedronGeometry(1, 1), p = g.attributes.position; for (let j = 0; j < p.count; j++) { const x = p.getX(j), y = p.getY(j), z = p.getZ(j), s = 0.75 + 0.45 * noise(x * 1.7 + 3, y * 1.7 + z * 1.3, 7); p.setXYZ(j, x * s, y * s * 0.7, z * s); } g.computeVertexNormals(); return g; })();   // a smooth bumpiness, so the faces stay joined
   const tuftGeo = (() => { const parts = []; for (let i = 0; i < 3; i++) { const g = new THREE.PlaneGeometry(0.9, 0.62); g.translate(0, 0.31, 0); g.rotateY(i * Math.PI / 3); parts.push(g); } return mergeGeos(parts); })();
+  // another world's plants: each species grown once from its genome (biosphere.js), near and far versions
+  const BIO = window.GW.BIO, GT = window.GW.bioTools;
+  const FLORA = BIO && BIO.flora.length ? BIO.flora.map(g => ({ g, near: GT.plantGeometry(g, false), far: GT.plantGeometry(g, true) })) : null;
+  const floraMats = FLORA ? FLORA.map(() => windy(new THREE.MeshLambertMaterial({ vertexColors: true }), 0.025, 'position.y')) : null;
+  const TREES = FLORA ? FLORA.map((f, k) => k).filter(k => FLORA[k].g.role !== 'shrub') : null, SHRUBS = FLORA ? FLORA.map((f, k) => k).filter(k => FLORA[k].g.role !== 'tree') : null;
+  const recolour = (tex, m) => { const img = tex.image, c = document.createElement('canvas'); c.width = img.width; c.height = img.height; const x = c.getContext('2d'); x.drawImage(img, 0, 0);
+    const d = x.getImageData(0, 0, c.width, c.height), a = d.data; for (let i = 0; i < a.length; i += 4) { const r = a[i], g = a[i + 1], b = a[i + 2]; a[i] = Math.min(255, Math.max(0, m[0] * r + m[1] * g + m[2] * b)); a[i + 1] = Math.min(255, Math.max(0, m[3] * r + m[4] * g + m[5] * b)); a[i + 2] = Math.min(255, Math.max(0, m[6] * r + m[7] * g + m[8] * b)); }
+    x.putImageData(d, 0, 0); const t = new THREE.CanvasTexture(c); t.wrapS = tex.wrapS; t.wrapT = tex.wrapT; return t; };
   const barkMat = new THREE.MeshLambertMaterial({ map: TEX.bark });
   const leafMat = windy(new THREE.MeshLambertMaterial({ map: TEX.leaves, vertexColors: false }), 0.045, 'position.y - 0.8');
   const pineMat = windy(new THREE.MeshLambertMaterial({ map: TEX.pine }), 0.035, 'position.y - 1.0');
   const rockMat = new THREE.MeshLambertMaterial({ map: TEX.rock });
-  const tuftMat = windy(new THREE.MeshLambertMaterial({ map: BLADES, alphaTest: 0.45, side: THREE.DoubleSide }), 0.22, 'position.y');
+  if (BIO) rockMat.color.copy(new THREE.Color(1, 1, 1).lerp(BIO.mineral.clone().multiplyScalar(1.7), BIO.mineralK * 0.85));   // the world's own stone
+  const tuftMat = windy(new THREE.MeshLambertMaterial({ map: BIO ? recolour(BLADES, BIO.life) : BLADES, alphaTest: 0.45, side: THREE.DoubleSide }), 0.22, 'position.y');
   const postMat = new THREE.MeshLambertMaterial({ map: TEX.timber });
   const deadGeo = (() => { const parts = [], R = rng(12); const t = new THREE.CylinderGeometry(0.1, 0.28, 5, 6); t.translate(0, 2.5, 0); parts.push(t);
     for (let i = 0; i < 4; i++) { const b = new THREE.CylinderGeometry(0.03, 0.09, 1.6 + R(), 5); b.translate(0, 0.8, 0); b.rotateZ(0.7 + R() * 0.5); b.rotateY(i * 1.7); b.translate(0, 2.4 + i * 0.6, 0); parts.push(b); } return mergeGeos(parts); })();
@@ -4724,6 +5098,7 @@ function buildCountry(scene, world) {
   const mireMat = new THREE.MeshPhongMaterial({ color: '#2a3322', specular: '#5a6a4a', shininess: 40, transparent: true, opacity: 0.82, normalMap: WATER_N2, normalScale: new THREE.Vector2(0.3, 0.3) });
   const pondMat = new THREE.MeshPhongMaterial({ color: '#2f4a47', specular: '#8fa3a8', shininess: 60, normalMap: WATER_N2, normalScale: new THREE.Vector2(0.35, 0.35) });
   const seaMat = new THREE.MeshPhongMaterial({ color: '#1d4a6e', specular: '#9ab8cc', shininess: 70, normalMap: WATER_N2, normalScale: new THREE.Vector2(0.4, 0.4) });
+  if (BIO) for (const m of [mireMat, pondMat, seaMat]) m.color.copy(GT.applyM(BIO.water, m.color));
   // houses: brick walls with windows, and a roof; gables to the street, as in Shady Lane
   const wallGeo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
   const gableGeo = (() => { const g = new THREE.BufferGeometry(), P = [], U = [];
@@ -4739,6 +5114,19 @@ function buildCountry(scene, world) {
   const lampPostGeo = new THREE.CylinderGeometry(0.06, 0.09, 4, 6).translate(0, 2, 0), lampHeadGeo = new THREE.BoxGeometry(0.34, 0.42, 0.34).translate(0, 4.1, 0);
   const lampPostMat = new THREE.MeshLambertMaterial({ color: '#2a2d30' }), lampHeadMat = new THREE.MeshLambertMaterial({ color: '#f4ecd0', emissive: '#000' });
   const shedGeo = new THREE.BoxGeometry(3, 2.4, 2.5).translate(0, 1.2, 0);
+  // the kingdoms' ways (culture.js): a front painted in each kingdom's style, its roofs, its flags
+  const CULT = window.GW.CULTURE, CMATS = new Map(), RGEO = new Map(), FMATS = new Map(), cultureByKey = new Map();
+  function cultureMats(key) { if (CMATS.has(key)) return CMATS.get(key); const C = cultureByKey.get(key), m = new THREE.MeshLambertMaterial({ map: CULT.facadeTexture(C, rng(7)) }), ms = [m, m, flatTopMat, flatTopMat, m, m]; CMATS.set(key, ms); return ms; }
+  const roofGeo = kind => { if (!RGEO.has(kind)) RGEO.set(kind, CULT.roofGeometry(kind)); return RGEO.get(kind); };
+  const poleGeo = new THREE.CylinderGeometry(0.05, 0.07, 1, 6).translate(0, 0.5, 0), poleMat = new THREE.MeshLambertMaterial({ color: '#d8d8d0' }), flagGeo = new THREE.PlaneGeometry(1.8, 1.2, 8, 1).translate(0.9, 0, 0);
+  function flagMat(C) { if (FMATS.has(C.key)) return FMATS.get(C.key);
+    const m = new THREE.MeshLambertMaterial({ map: CULT.flagTexture(C), side: THREE.DoubleSide });
+    m.onBeforeCompile = sh => { sh.uniforms.uTime = WIND; sh.vertexShader = 'uniform float uTime;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n transformed.z += sin(uTime * 4.0 - position.x * 3.2) * 0.12 * position.x; transformed.y -= position.x * 0.04;'); };
+    FMATS.set(C.key, m); return m; }
+  function flagpole(g, C, x, y, h, ht, x0, y0, sc = 1) {
+    const p = new THREE.Mesh(poleGeo, poleMat); p.scale.y = ht; p.position.set(x - x0, h, -(y - y0)); p.castShadow = true; g.add(p);
+    const f = new THREE.Mesh(flagGeo, flagMat(C)); f.position.set(x - x0, h + ht - 0.7, -(y - y0)); f.rotation.y = hash2(x | 0, y | 0, 5) * 0.6; f.scale.setScalar(sc); f.position.y -= (sc - 1) * 0.6; f.castShadow = true; g.add(f);
+  }
   // shops and public buildings (their uses and names come from the hanb core: see AMEN there)
   const civicMat = new THREE.MeshLambertMaterial({ map: TEX.civic }), civicMats = [civicMat, civicMat, flatTopMat, flatTopMat, civicMat, civicMat];
   const awningGeo = new THREE.BoxGeometry(1, 1, 1), awningMat = new THREE.MeshLambertMaterial({ color: '#ffffff' });
@@ -4825,8 +5213,9 @@ function buildCountry(scene, world) {
     g.position.set(x0, 0, -y0);
     const ground = groundMesh(x0, y0, near ? SEG : FAR_SEG, near ? 0 : 0.3); g.add(ground);
     const cells = LAND.lCells(x0, y0, x0 + CH, y0 + CH).filter(c => !inRect(c.centre, 4) && !exclude(c.centre) && clearOf(c.centre));
+    const cWalls = new Map(), cRoofs = new Map(), wallsOf = C => { if (!cWalls.has(C.key)) cWalls.set(C.key, []); return cWalls.get(C.key); }, roofsOf = kd => { if (!cRoofs.has(kd)) cRoofs.set(kd, []); return cRoofs.get(kd); };
     const oaks = [], pines = [], rocks = [], dead = [], walls = [], roofs = [], flats = [], spires = [], sheds = [], posts = [], water = [], civics = [], awnings = [], opens = [];
-    const tree = (list, x, y, s, R, col) => { if (BARREN) return; list.push([x, y, s, R() * TAU, col]); if (near) obst.push({ x, y, r: 0.45 * s }); };
+    const tree = (list, x, y, s, R, col) => { if (BARREN && !(BIO && BIO.hardy && R() < 0.3)) return; list.push([x, y, s, R() * TAU, col]); if (near) obst.push({ x, y, r: 0.45 * s * (FLORA ? 0.6 : 1) }); };
     const spot = (c, R, rr = 3.2) => { const a = R() * TAU, d = Math.sqrt(R()) * rr; return [c.centre[0] + Math.cos(a) * d, c.centre[1] + Math.sin(a) * d]; };
     for (const c of cells) {
       const R = cellR(c), [cx0, cy0] = c.centre, wildB = BIOME_OF[c.wild], k = c.kind;
@@ -4837,6 +5226,7 @@ function buildCountry(scene, world) {
           const [H, col] = CIVIC[use] || [10, '#d0c8bc'], ctr = c.i === HANB.CENTRE, nb = LAND.NB[0], w = Math.hypot(...nb) * 1.02, lat = Math.atan2(nb[1], nb[0]), hs = [-1, 1].flatMap(a => [-1, 1].map(b => heightAt([cx0 + a * w / 2, cy0 + b * w / 2]))), h0 = Math.min(...hs), h1 = Math.max(...hs);
           civics.push({ x: cx0, y: cy0, h: h0 - 0.3, sx: w, sy: H + (h1 - h0) + 0.3, sz: w, rot: lat, col });
           if (ctr && (use === 'cityhall' || use === 'townhall')) { civics.push({ x: cx0, y: cy0, h: h1 + H, sx: 5, sy: 12, sz: 5, rot: 0, col }); spires.push({ x: cx0, y: cy0, h: h1 + H + 12, sx: 0.8, sy: 0.6, sz: 0.8, rot: 0 }); }
+          if (ctr && near) { const CU = CULT.cultureOf(c.chain); if (CU) flagpole(g, CU, cx0 + 2, cy0, h1 + H + (use === 'cityhall' || use === 'townhall' ? 12 : 0), 8, x0, y0, 2); }   // the kingdom's flag
           if (ctr && use === 'hospital') { civics.push({ x: cx0, y: cy0, h: h1 + H, sx: 6, sy: 1.2, sz: 6, rot: 0, col: '#d04040' }); }
           if (near) { const lc = Math.cos(lat), ls = Math.sin(lat); obst.push({ x: cx0, y: cy0, r: 0, poly: [[1, 1], [1, -1], [-1, -1], [-1, 1]].map(([a, b]) => [cx0 + (lc * a - ls * b) * w / 2, cy0 + (ls * a + lc * b) * w / 2]) }); }
           if (near) {   // its windows on every outside face (and on the front one, the doors): see openings.js
@@ -4860,12 +5250,15 @@ function buildCountry(scene, world) {
         }
         const w = row ? 7.75 : 7.8, d = row ? 7.2 : 7.8, big = c.cell.kind === 'mat' || c.cell.kind !== k;
         const HR = big ? rng(Math.imul(c.m.path ? c.m.path[24] + 1 : 3, 9973) ^ SEED) : R;
-        const H = k === 'stable' ? 4 : k === 'church' || c.church ? 13 + HR() * 4 : row ? 7 + R() * 3.2 : k === 'innhall' ? 7.5 : 6 + HR() * 9;
+        const CU = (row || k === 'innhall') && k !== 'garyhouse' && k !== 'nbhouse' ? CULT.cultureOf(c.chain) : null, own = CU && !CU.home; if (own) cultureByKey.set(CU.key, CU);   // the kingdom's way of building (culture.js)
+        const H = (k === 'stable' ? 4 : k === 'church' || c.church ? 13 + HR() * 4 : row ? 7 + R() * 3.2 : k === 'innhall' ? 7.5 : 6 + HR() * 9) * (own ? CU.tall : 1);
         const corners = [[1, 1], [1, -1], [-1, -1], [-1, 1]].map(([a, b]) => [cx0 + cs * a * d / 2 - sn * b * w / 2, cy0 + sn * a * d / 2 + cs * b * w / 2]);
         const hs = corners.map(q => heightAt(q)), h0 = Math.min(...hs), h1 = Math.max(...hs);
-        const col = row ? BRICK[Math.floor(R() * BRICK.length)] : k === 'stable' ? '#7a5a3a' : k === 'innhall' ? '#d8c8a0' : ['#8a8078', '#9a8a78', '#7a6a60', '#a09080', '#8e3b2c'][Math.floor(HR() * 5)];
-        walls.push({ x: cx0, y: cy0, h: h0 - 0.3, sx: d, sy: H + (h1 - h0) + 0.3, sz: w, rot: yaw, col });
-        if (row || k === 'innhall' || k === 'stable') roofs.push({ x: cx0, y: cy0, h: h1 + H, sx: d + 0.3, sy: 3 + R() * 2.4, sz: w + 0.2, rot: yaw, col: ROOF[Math.floor(R() * ROOF.length)] });
+        const col = own ? CU.walls[Math.floor(R() * CU.walls.length)] : row ? BRICK[Math.floor(R() * BRICK.length)] : k === 'stable' ? '#7a5a3a' : k === 'innhall' ? '#d8c8a0' : ['#8a8078', '#9a8a78', '#7a6a60', '#a09080', '#8e3b2c'][Math.floor(HR() * 5)];
+        (own ? wallsOf(CU) : walls).push({ x: cx0, y: cy0, h: h0 - 0.3, sx: d, sy: H + (h1 - h0) + 0.3, sz: w, rot: yaw, col });
+        if (row || k === 'innhall' || k === 'stable') { const rs = 3 + R() * 2.4, rc = ROOF[Math.floor(R() * ROOF.length)];
+          if (own) roofsOf(CU.roof).push({ x: cx0, y: cy0, h: h1 + H, sx: d + 0.3, sy: CU.roof === 'flat' ? 1 : rs * CU.roofH * (CU.roof === 'dome' || CU.roof === 'onion' ? 0.9 : 1), sz: w + 0.2, rot: yaw, col: CU.roofs[Math.floor(R() * CU.roofs.length)] });
+          else roofs.push({ x: cx0, y: cy0, h: h1 + H, sx: d + 0.3, sy: rs, sz: w + 0.2, rot: yaw, col: rc }); }
         if (c.church && c.i === HANB.CENTRE) spires.push({ x: cx0, y: cy0, h: h1 + H, sx: 1, sy: 1, sz: 1, rot: 0 });
         if (near && (row || k === 'innhall') && k !== 'garyhouse') {   // the door and windows painted on its front, where the real ones go (see openings.js)
           const sy = H + (h1 - h0) + 0.3, base = h0 - 0.3, key = (window.GW.AWAY ? window.GW.AWAY.label : NM.town || 'home') + ':' + c.q + ',' + c.r;
@@ -4873,7 +5266,7 @@ function buildCountry(scene, world) {
           const dr = rect(46, 188, 48, 68), top = dr.y0 + dr.ht; dr.y0 = Math.max(dr.y0, heightAt(dr.c) - 0.02); dr.ht = top - dr.y0;
           opens.push(Object.assign(dr, { key: key + ':d', kind: 'door', n: [cs, sn], house: key, use: shop ? use : null, reach: true }));
           for (let f = 0; f < 3; f++) for (let wi = 0; wi < 2; wi++) { if (f === 2 && wi === 0) continue;
-            const r = rect(40 + wi * 120, 18 + f * 80, 56, 50); opens.push(Object.assign(r, { key: key + ':w' + f + wi, kind: 'window', n: [cs, sn], house: key, use: shop && f === 2 ? use : null, reach: r.y0 - heightAt(r.c) < 2.1 })); }
+            const r = rect(40 + wi * 120, 18 + f * 80, 56, 50); opens.push(Object.assign(r, { key: key + ':w' + f + wi, kind: 'window', n: [cs, sn], house: key, use: shop && f === 2 ? use : null, shape: own ? CU.windows : 'sash', reach: r.y0 - heightAt(r.c) < 2.1 })); }
         }
         if (shop) {   // a shopfront: an awning in the trade's colour over the ground floor, and the name above it
           const col = SHOPCOL[use] || '#6a4a3a', fx = cx0 + cs * (d / 2 + 0.55), fy = cy0 + sn * (d / 2 + 0.55);
@@ -4886,7 +5279,8 @@ function buildCountry(scene, world) {
       if (c.cls === 'farm') { if (near && R() < 0.5) obst.push(...farmstead(g, cx0, cy0, facing(c), R, x0, y0)); else if (R() < 0.5) tree(oaks, ...spot(c, R), 0.9 + R() * 0.4, R); continue; }
       if (c.cls === 'shed') { const yaw = R() * TAU; sheds.push({ x: cx0, y: cy0, h: heightAt(c.centre) - 0.1, sx: 1, sy: 1, sz: 1, rot: yaw }); if (near) obst.push({ x: cx0, y: cy0, r: 1.6 }); continue; }
       if (c.cls === 'water') { water.push(c); continue; }
-      if (c.cls === 'paved') { if (near && c.town && R() < 0.07) { const q = spot(c, R, 2.5); posts.push({ x: q[0], y: q[1], h: heightAt(q) - 0.05, sx: 1, sy: 1, sz: 1, rot: 0 }); obst.push({ x: q[0], y: q[1], r: 0.15 }); } continue; }
+      if (c.cls === 'paved') { if (near && k === 'square' && hash2(c.q, c.r, 31) < 0.12) { const CU = CULT.cultureOf(c.chain); if (CU) flagpole(g, CU, cx0, cy0, heightAt(c.centre), 7, x0, y0); }   // the kingdom's flag over its squares
+        if (near && c.town && R() < 0.07) { const q = spot(c, R, 2.5); posts.push({ x: q[0], y: q[1], h: heightAt(q) - 0.05, sx: 1, sy: 1, sz: 1, rot: 0 }); obst.push({ x: q[0], y: q[1], r: 0.15 }); } continue; }
       if (c.cls === 'wood') {
         const big = wildB === 'titanwood', n = near ? 2 + Math.floor(R() * 3) : 1 + Math.floor(R() * 2);
         const pineish = wildB === 'frost' || wildB === 'peaks' || c.chain.some(x => x.kind === 'mountains' || x.kind === 'upland') ? 0.7 : 0.3;
@@ -4908,12 +5302,19 @@ function buildCountry(scene, world) {
     const inst = (geo, mat, list, place) => { if (!list.length) return null; const m = new THREE.InstancedMesh(geo, mat, list.length), M = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), c = new THREE.Color();
       list.forEach((it, i) => { const o = place ? place(it) : it; q.setFromEuler(e.set(0, o.rot || 0, 0)); M.compose(new THREE.Vector3(o.x - x0, o.h, -(o.y - y0)), q, new THREE.Vector3(o.sx, o.sy, o.sz)); m.setMatrixAt(i, M); if (o.col) m.setColorAt(i, c.set(o.col)); });
       m.castShadow = near; m.receiveShadow = true; m.frustumCulled = false; g.add(m); return m; };   // (three culls an instanced mesh by its first instance's bounds)
+    if (FLORA) {   // the world's own plants in place of oaks and pines: big ones where trees grow, small ones in hedges and gardens
+      const per = FLORA.map(() => []);
+      for (const t of oaks.concat(pines)) { const [x, y, sc] = t, pool = sc < 0.6 && SHRUBS.length ? SHRUBS : TREES.length ? TREES : SHRUBS, k = pool[Math.floor(hash2(x | 0, y | 0, 9) * pool.length)]; per[k].push(t); }
+      per.forEach((list, k) => { const F = FLORA[k], H = F.g.height; inst(near ? F.near : F.far, floraMats[k], list, ([x, y, sc, r]) => { const hh = H * (0.7 + 0.3 * sc) * (0.8 + hash2(y | 0, x | 0, 11) * 0.4); return { x, y, h: heightAt([x, y]) - 0.05, sx: hh, sy: hh, sz: hh, rot: r }; }); });
+      oaks.length = 0; pines.length = 0;
+    }
     inst(trunkGeo, barkMat, oaks.concat(pines), ([x, y, s]) => ({ x, y, h: heightAt([x, y]) - 0.1, sx: s, sy: s * 3.2, sz: s }));
     inst(canopyGeo, leafMat, oaks, ([x, y, s, r]) => ({ x, y, h: heightAt([x, y]) + s * 2.6, sx: s * 1.15, sy: s, sz: s * 1.15, rot: r, col: new THREE.Color().setHSL(0.26 + hash2(x | 0, y | 0, 3) * 0.06, 0.55, 0.42 + hash2(y | 0, x | 0, 4) * 0.14) }));
     inst(pineGeo, pineMat, pines, ([x, y, s, r, c]) => ({ x, y, h: heightAt([x, y]) + s * 1.6, sx: s, sy: s * 1.2, sz: s, rot: r, col: c || '#ffffff' }));
     inst(rockGeo, rockMat, rocks, ([x, y, s, c]) => ({ x, y, h: heightAt([x, y]) - s * 0.25, sx: s * 1.3, sy: s, sz: s, rot: x, col: c || '#ffffff' }));
     inst(deadGeo, deadMat, dead, ([x, y, s, r]) => ({ x, y, h: heightAt([x, y]) - 0.2, sx: s, sy: s, sz: s, rot: r }));
     inst(wallGeo, civicMats, civics); inst(awningGeo, awningMat, awnings);
+    for (const [key, list] of cWalls) inst(wallGeo, cultureMats(key), list); for (const [kind, list] of cRoofs) inst(kind === 'gable' ? gableGeo : roofGeo(kind), roofMat, list);
     inst(wallGeo, houseMats, walls); inst(gableGeo, roofMat, roofs); inst(spireGeo, spireMat, spires); inst(shedGeo, postMat, sheds);
     inst(lampPostGeo, lampPostMat, posts); inst(lampHeadGeo, lampHeadMat, posts);
     for (const [x, y, s] of rocks) if (s > 0.8 && near) obst.push({ x, y, r: s });
@@ -4992,7 +5393,7 @@ function buildCountry(scene, world) {
   };
   function makeAnimal(sp, x, y, R, over, scale) {
     const base = SPECIES[sp];
-    const S = over ? Object.assign({}, base, over, { len: base.len, ht: base.ht, wid: base.wid, leg: base.leg, neck: base.neck, headS: base.headS, tail: base.tail, na: base.na }) : base, g = new THREE.Group();
+    const S = over && over.alien ? Object.assign({}, base, over) : over ? Object.assign({}, base, over, { len: base.len, ht: base.ht, wid: base.wid, leg: base.leg, neck: base.neck, headS: base.headS, tail: base.tail, na: base.na }) : base, g = new THREE.Group();
     const hide = new THREE.MeshLambertMaterial({ map: fur(S.col, S.spots, S.belly, S.saddle) }), headM = S.head === S.col ? hide : new THREE.MeshLambertMaterial({ map: fur(S.head, null, S.belly) });
     const dark = new THREE.MeshLambertMaterial({ color: '#2a2420' }), ivory = new THREE.MeshLambertMaterial({ color: '#efe6cf' });
     const eyeM = new THREE.MeshPhongMaterial({ color: '#15100c', shininess: 90, specular: '#ffffff', emissive: '#000000' });
@@ -5087,6 +5488,7 @@ function buildCountry(scene, world) {
       else if (elite && R() < 0.32) out.push(makeGiant(elite, x, y, R));
       return out;
     }
+    if (ALIEN) return spawnAlien(cells, R, out);
     const fields = open.filter(c => c.cls === 'field'), grass = open.filter(c => c.cls === 'grass'), wood = open.filter(c => c.cls === 'wood');
     const parks = cells.filter(c => c.town && c.cls === 'grass' && !inRect(c.centre, 10));
     if (R() > 0.55) return out;                                       // about one herd in two chunks
@@ -5099,6 +5501,35 @@ function buildCountry(scene, world) {
     if (!sp || !c) return out;
     const S = SPECIES[sp], n = S.herd[0] + Math.floor(R() * R() * (S.herd[1] - S.herd[0] + 1));
     for (let k = 0; k < n; k++) out.push(makeAnimal(sp, c.centre[0] + (R() - 0.5) * 5, c.centre[1] + (R() - 0.5) * 5, R));
+    return out;
+  }
+  // another world's beasts (biosphere.js): quadrupeds as the nearest beast of Rth reshaped, the rest on giants.js's rigs
+  const ALIEN = (() => {
+    if (!BIO || !BIO.fauna.length) return null;
+    const BASE = { grazer: ['cow', 'deer', 'sheep'], small: ['rabbit'], hunter: ['wolf', 'bear', 'boar'] }, hex = c => '#' + c.getHexString();
+    return BIO.fauna.map(f => {
+      if (f.legs === 4) {
+        const base = BASE[f.role][f.i % BASE[f.role].length], B = SPECIES[base];
+        const S = Object.assign({}, B, { name: f.name, col: hex(f.hide), head: hex(f.hide.clone().multiplyScalar(0.85)), belly: hex(f.belly), spots: f.spots ? hex(f.accent) : null, saddle: f.ruff ? hex(f.accent) : B.saddle,
+          ruff: f.ruff ? hex(f.accent) : null, wool: f.wool && f.role !== 'hunter', alien: true, horns: f.horns ? hex(f.accent.clone().lerp(new THREE.Color('#ffffff'), 0.4)) : B.horns, antlers: f.antlers && f.role === 'grazer' ? 0.35 + f.size * 0.15 : B.antlers, tusks: f.tusks || B.tusks, hump: f.hump, fangs: f.fangs || B.fangs, shine: hex(f.eyes),
+          len: B.len * f.bodyX, leg: B.leg * f.legX, neck: B.neck * f.neckX, headS: B.headS * f.headX, temper: f.temper, herd: f.herd, where: f.where, loot: [[f.name.split(' ')[0] + ' hide', 0.6]] });
+        return { f, quad: base, S, scale: f.size };
+      }
+      const id = 'alien' + f.i, mat = f.legs >= 6 ? 'chitin' : f.legs === 0 ? 'scale' : 'feather';
+      window.GW.GIANTS.SPECIES[id] = { name: f.name, size: 'S', biome: 'alien', rig: f.legs >= 6 ? 'arthro' : f.legs === 0 ? 'serpent' : 'wing', lv: [2, 5], hpX: 0.8, dmgX: 0.7, aggro: f.temper === 'hostile' ? 10 : 0, swing: 1.4,
+        len: f.legs === 2 ? 1.6 * f.size : f.legs === 0 ? 2.6 * f.size : 3.4 * f.size, speed: [1.2, 4], temper: f.temper, loot: [[f.name.split(' ')[0] + ' ' + (mat === 'chitin' ? 'shell' : mat), 0.6]],
+        look: { mat: [mat, hex(f.hide), hex(f.accent)], wingMat: [mat, hex(f.accent)], spines: f.horns ? [mat, hex(f.accent)] : null, eyes: hex(f.eyes), bird: f.legs === 2, pairs: f.pairs, claws: f.claws, tail: f.tail, segs: f.segs } };
+      return { f, giant: id };
+    });
+  })();
+  // (for testing: one of the world's species, here)
+  function spawnAlienAt(i, x, y) { if (!ALIEN) return null; const A = ALIEN[i], R = Math.random, a = A.giant ? makeGiant(A.giant, x, y, R) : makeAnimal(A.quad, x, y, R, A.S, A.scale); return a; }
+  function spawnAlien(cells, R, out) {
+    const open = cells.filter(c => !c.town && !inRect(c.centre, 10) && c.cls !== 'water'); if (!open.length || R() > 0.6) return out;
+    const c = open[Math.floor(R() * open.length)], want = c.cls === 'wood' ? 'wood' : c.cls === 'field' ? 'field' : 'meadow';
+    const fits = ALIEN.filter(a => a.f.where === want || (want === 'field' && a.f.where === 'meadow') || a.f.role === 'flyer'); const A = (fits.length ? fits : ALIEN)[Math.floor(R() * (fits.length || ALIEN.length))];
+    const n = A.f.herd[0] + Math.floor(R() * R() * (A.f.herd[1] - A.f.herd[0] + 1));
+    for (let k = 0; k < n; k++) { const x = c.centre[0] + (R() - 0.5) * 6, y = c.centre[1] + (R() - 0.5) * 6; out.push(A.giant ? makeGiant(A.giant, x, y, R) : makeAnimal(A.quad, x, y, R, A.S, A.scale)); }
     return out;
   }
   const pickW = (R, list) => { const tot = list.reduce((s, q) => s + q[1], 0); let r = R() * tot; for (const [k, w] of list) { r -= w; if (r <= 0 && w > 0) return k; } return null; };
@@ -5564,7 +5995,7 @@ function buildCountry(scene, world) {
     }
     return p.slice();
   }
-  const api = { spawnGiant, spawnAnimal, hunt, owns, heightAt, waterAt, obstacles: obstaclesNear, openingsNear, zoneAt, update, creatures: () => creatures, pickables, mapDraw, roadY: () => RY0, group, sign, SPECIES, damage, lootable, startFight, drawPlate, env, titans: () => titans,
+  const api = { spawnAlienAt, spawnGiant, spawnAnimal, hunt, owns, heightAt, waterAt, obstacles: obstaclesNear, openingsNear, zoneAt, update, creatures: () => creatures, pickables, mapDraw, roadY: () => RY0, group, sign, SPECIES, damage, lootable, startFight, drawPlate, env, titans: () => titans,
     landing, ready: false, _buildChunk: buildChunk, setExclude(f) { exclude = f; }, clear(x, y, r) { clear.push([x, y, r]); },
     // level the land for something big: flat within r, easing back to the hills by r2; at the height of its centre, never under the sea
     pad(x, y, r, r2) { const h = Math.max(1, macroH([x, y])); PADS.push({ x, y, r, r2, h }); return h; }, blocked: p => { const c = LAND.at(p); return !owns(p) || c.cls === 'house' || c.cls === 'shed'; } };
@@ -6093,7 +6524,7 @@ function buildDungeon(scene, country, world) {
     const out = [];
     const C = CR(), nm = k => L.crypt === 'last' ? SLOTS[k] : String(k + 1);
     if (L.down) { const d = at(...L.down), dd = Math.hypot(p[0] - d[0], p[1] - d[1]); if (dd < 2.2) out.push({ d: dd, label: `descend to level ${nm(L.n + 1)} (${L.n + 2} of ${C.levels})`, down: true }); }
-    const u = at(...L.up), du = Math.hypot(p[0] - u[0], p[1] - (u[1] + 1)); if (du < 2.2) out.push({ d: du, label: L.n ? `climb up to level ${nm(L.n - 1)}` : L.crypt === 'last' ? 'climb back up into the chapel' : 'climb back up into the mausoleum', up: true });
+    const u = at(...L.up), du = Math.hypot(p[0] - u[0], p[1] - (u[1] + 1)); if (du < 2.2) out.push({ d: du, label: L.n ? `climb up to level ${nm(L.n - 1)}` : L.crypt === 'last' ? 'climb back up into the chapel' : L.crypt === 'ship' ? 'go out through the airlock and down the ramp' : 'climb back up into the mausoleum', up: true });
     return out;
   }
   // the chapel on the road: a roofless ruin with the crypt stairs in its floor
@@ -7349,7 +7780,7 @@ const shed = GW.buildShed(root), inShed = p => shed.inside(p);
 const openings = GW.buildOpenings(root, { sources: (p, r) => country.openingsNear(p, r).concat(AWAY ? [] : world.openings.filter(o => Math.hypot(o.c[0] - p[0], o.c[1] - p[1]) < r)),
   openNow: use => { const U = window.HANB && HANB.USE[use]; if (!U) return true; const [a, b] = U[4], m = minute(); return b > a ? m >= a && m < b : m >= a || m < b; },
   say: (k, t) => say(k, t), sound: k => sfx(k), env: () => ({ dark: lastDark, min: minute(), auth: (GW.PROPS && GW.PROPS.authorityOf(GW.LAND.at(P.p))) || 'town' }) });
-let lastDark = 0;
+let lastDark = 0, kingdomT = 0, kingdomNow;
 const houseOpen = GW.AWAY ? null : GW.buildHouseOpenings(house, { sound: k => sfx(k) });
 GW.PROPS = GW.buildProps(root, { heightAt: p => country.heightAt(p), owns: p => country.owns(p), waterAt: p => country.waterAt(p), barren: () => !!(GW.AWAY && /rockyplanet|moon/.test(GW.AWAY.type || '')), clock: () => ({ min: minute(), day: worldDate().getUTCDay() }) });
 const dungeon = GW.buildDungeon(root, country, world), inDungeon = p => dungeon.inside(p);
@@ -8248,6 +8679,8 @@ function warpText(t) {
   // the places on Gary's way (continent, kingdom, county, town, neighbourhood), and Rth's continents
   for (let d = LAND.SURF; d < 25; d++) { const c = LAND.cellOf(LAND.GARY.slice(0, d + 1)); if (c && c.name && norm(c.name) === q) { teleport(LAND.GARY.slice(0, d + 1), `You speak the word of warping, and you are in ${c.name}.`); return true; } }
   { const b = LAND.board(LAND.HOME.slice(0, LAND.SURF)), i = b.cells.findIndex(c => c.name && norm(c.name) === q); if (i >= 0) { teleport(LAND.HOME.slice(0, LAND.SURF).concat([i]), `You speak the word of warping, and you are on ${b.cells[i].name}.`); return true; } }
+  // the other kingdoms of this continent (a kingdom is big: you come down at its middle)
+  { const base = LAND.HOME.slice(0, LAND.SURF + 1), b = LAND.board(base), i = b.cells.findIndex(c => c.kind === 'landregion' && c.name && norm(c.name) === q); if (i >= 0) { teleport(base.concat([i]), `You speak the word of warping, and you are in the kingdom of ${b.cells[i].name}.`); return true; } }
   // an address, as the Teleport takes it
   if (tpText(t)) return true;
   say('sys', 'Warp where, or to whom? Try Gary, the lich, Beano, the kitchen, the attic, up, down, level 17, the Ossuary, the Bone Collector, Kroyl, or a continent.'); return false;
@@ -8532,6 +8965,8 @@ function frame() {
   const sky = world.update(minute(), new THREE.Vector3(P.p[0], P.h, -P.p[1]), worldDate());
   country.update(dt, P.p, now / 1000, sky.dark, PLAYER);
   if (houseOpen) houseOpen.update(dt, [{ k: P.k, p: P.p }, { k: gary.k, p: gary.p }]);
+  if (frame.place === 'world' && P.k === G && !inDungeon(P.p) && (kingdomT -= dt) <= 0) { kingdomT = 1; const C = GW.CULTURE.cultureOf(GW.LAND.at(P.p).chain), nm = C ? C.name : null;
+    if (nm !== kingdomNow) { if (kingdomNow !== undefined && nm) say('sys', `You cross into the kingdom of ${nm}.`); kingdomNow = nm; } }
   lastDark = sky.dark; openings.update(dt, P.p, { dark: sky.dark, min: minute(), auth: GW.PROPS.authorityOf ? GW.PROPS.authorityOf(GW.LAND.at(P.p)) || 'town' : 'town', visible: frame.place === 'world' && P.k === G && !inDungeon(P.p) });
   if (frame.place === 'world') GW.PROPS.update(dt, P.p, now / 1000, sky.dark, P.p); GW.PROPS.group.visible = frame.place === 'world';
   dungeon.update(dt, P, now / 1000, PLAYER);
