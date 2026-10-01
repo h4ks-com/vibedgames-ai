@@ -1543,8 +1543,20 @@ const U = {
   goHome() { try { localStorage.removeItem(AWAYKEY); localStorage.setItem(ARRIVE, 'gary'); } catch (e) { /* */ } location.reload(); },
   colour(seed) { const h = h32(seed); return `hsl(${h % 360},${55 + h % 30}%,${48 + (h >> 8) % 14}%)`; },
 };
+// Automataville time: the wall clock of the town's own zone (CET, with its summer time), worked out from the
+// absolute moment (UTC) and not from the time zone of whatever computer runs this. So every copy of Gary's World,
+// anywhere, agrees on the hour, the date, where the sun is and what Gary is doing, without talking to each other.
+const SITE_TZ = 'CET';
+let siteFmt = null; try { siteFmt = new Intl.DateTimeFormat('en-GB', { timeZone: SITE_TZ, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' }); } catch (e) { /* no zone data: a fixed +1 h */ }
+function siteTime(ms = Date.now()) {
+  let o;
+  if (siteFmt) { o = {}; for (const q of siteFmt.formatToParts(new Date(ms))) o[q.type] = +q.value; if (o.hour === 24) o.hour = 0; }
+  else { const d = new Date(ms + 3600e3); o = { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate(), hour: d.getUTCHours(), minute: d.getUTCMinutes(), second: d.getUTCSeconds() }; }
+  const off = Math.round((Date.UTC(o.year, o.month - 1, o.day, o.hour, o.minute, o.second) - Math.floor(ms / 1000) * 1000) / 60000);
+  return { y: o.year, mo: o.month, d: o.day, min: o.hour * 60 + o.minute + o.second / 60, off, day: Date.UTC(o.year, o.month - 1, o.day) };
+}
 window.GW = window.GW || {};
-window.GW.U = U; window.GW.AWAY = away;
+window.GW.U = U; window.GW.AWAY = away; window.GW.siteTime = siteTime; window.GW.SITE_TZ = SITE_TZ;
 })();
 </script>
 <script data-hanb-core>
@@ -1738,7 +1750,7 @@ kind('forestland', { label: 'Forest country', col: '#3f7f3f', at: [41, 41], ch: 
 kind('mountains', { label: 'Mountains', col: '#8a8a8a', at: [37, 42], ch: [['mountains', 3], ['rock', 2], ['ice', 1], ['forest', 1]], named: 1 });
 kind('lake', { label: 'Lake', col: '#3a70a8', at: [36, 41], ch: [['lake', 1]], mat: 'water', named: 1 });
 kind('river', { label: 'River', col: '#3a78b8', at: [36, 40], ch: [['river', 3], ['farmland', 1]], mat: 'water', named: 1 });
-kind('farmland', { label: 'Farmland', col: '#a8b860', at: [36, 40], ch: [['farmland', 3], ['field', 6], ['ditch', 1], ['hedge', 1], ['tree', 0.3], ['farmstead', 0.3]], mat: 'soil' });
+kind('farmland', { label: 'Farmland', col: '#a8b860', at: [36, 40], ch: [['farmland', 3], ['field', 6], ['ditch', 1], ['hedge', 1], ['tree', 0.3], ['farmstead', 0.3], ['hamlet', 0.12]], mat: 'soil' });
 kind('forest', { label: 'Forest', col: '#2f6f3a', at: [37, 40], ch: [['forest', 6], ['tree', 5], ['undergrowth', 3], ['clearing', 1], ['stream', 0.4]], mat: 'plant' });
 kind('clearing', { label: 'Clearing', col: '#7fae5a', at: [36, 40], ch: [['lawn', 4], ['shrub', 1], ['tree', 0.5]], mat: 'plant' });
 kind('stream', { label: 'Stream', col: '#4a88c8', at: [36, 39], ch: [['water', 3], ['rock', 1]], mat: 'water' });
@@ -1818,6 +1830,95 @@ kind('garden', { label: 'Garden', col: '#6aa060', at: [37, 38], ch: [['lawn', 5]
 kind('yard', { label: 'Yard', col: '#8a8478', at: [36, 38], ch: [['pavement', 5], ['bike', 0.3], ['shrub', 0.3]], mat: 'stone' });
 kind('quay', { label: 'Quay', col: '#8a8a82', at: [36, 39], ch: [['pavement', 4], ['bollard', 0.4], ['bike', 0.5]], mat: 'stone' });
 kind('garyhouse', { label: 'Gary’s house', col: '#e8b85a', at: [37, 37] });
+/* Amenities. What a place has depends on the authority it answers to, not on the size of its hexagon: a city's
+ * districts and a town's are the same size, but the city runs a hospital and a fire service where the town has a
+ * doctor and a police post, and a hamlet among the fields has only what the farms around it need. USE: label,
+ * size (0 a shop in a terrace, 1 a public building on its own block, 2 a big one), what's inside, who works there,
+ * and the hours it keeps (in minutes; a close before the open runs past midnight). */
+kind('hamlet', { label: 'Hamlet', col: '#b89a70', at: [38, 38], named: 1, settled: 1, note: 'A hamlet among the fields: a green, some cottages, and what the farms around it need.' });
+kind('shop', { label: 'Shop', col: '#d0a060', at: [37, 37], settled: 1, mat: 'brick' });
+kind('civic', { label: 'Public building', col: '#a8a098', at: [38, 38], settled: 1 });
+kind('civichall', { label: 'Public building', col: '#b8b0a4', at: [37, 37], settled: 1, mat: 'brick' });
+const H_ = h => h * 60, DAY = [0, 1440];
+const USE = {
+  villageshop: ['Village shop and post office', 0, ['Counter', 'Shelves', 'Post counter'], 'The shopkeeper', [H_(7), H_(18)]],
+  pub: ['Pub', 0, ['Bar', 'Table', 'Hearth', 'Settle'], 'The landlord', [H_(11), H_(23.5)]],
+  smithy: ['Smithy', 0, ['Forge', 'Anvil', 'Bellows'], 'The smith', [H_(6), H_(17)]],
+  farmsupply: ['Farm supplies', 0, ['Sacks of feed', 'Tools', 'Counter'], 'The merchant', [H_(7), H_(17)]],
+  chapel: ['Chapel', 0, ['Pew', 'Pew', 'Lectern'], 'The minister', [H_(8), H_(20)]],
+  vet: ['Vet', 0, ['Examination table', 'Cabinet'], 'The vet', [H_(8), H_(18)]],
+  villageschool: ['Village school', 0, ['Desk', 'Desk', 'Blackboard'], 'The teacher', [H_(8.5), H_(15.5)]],
+  generalstore: ['General store', 0, ['Counter', 'Shelves', 'Barrels'], 'The storekeeper', [H_(8), H_(18)]],
+  bakery: ['Bakery', 0, ['Oven', 'Counter', 'Bread racks'], 'The baker', [H_(6), H_(17)]],
+  butcher: ['Butcher', 0, ['Counter', 'Cold room', 'Block'], 'The butcher', [H_(7), H_(17)]],
+  greengrocer: ['Greengrocer', 0, ['Crates', 'Counter'], 'The greengrocer', [H_(8), H_(18)]],
+  market: ['Food market', 0, ['Stall', 'Stall', 'Stall'], 'A stallholder', [H_(7), H_(14)]],
+  chemist: ['Chemist', 0, ['Counter', 'Shelves'], 'The chemist', [H_(9), H_(18)]],
+  doctor: ['Doctor’s surgery', 0, ['Waiting room', 'Desk', 'Couch'], 'The doctor', [H_(8), H_(17)]],
+  cafe: ['Café', 0, ['Table', 'Counter', 'Coffee machine'], 'The owner', [H_(8), H_(18)]],
+  restaurant: ['Restaurant', 0, ['Table', 'Table', 'Kitchen'], 'The chef', [H_(12), H_(23)]],
+  hardware: ['Hardware shop', 0, ['Shelves', 'Counter'], 'The owner', [H_(8), H_(18)]],
+  bank: ['Bank', 0, ['Counter', 'Vault door'], 'A clerk', [H_(9), H_(16)]],
+  postoffice: ['Post office', 0, ['Counter', 'Sorting frames'], 'The postmaster', [H_(9), H_(17.5)]],
+  bookshop: ['Bookshop', 0, ['Bookcase', 'Bookcase', 'Counter'], 'The bookseller', [H_(9.5), H_(18)]],
+  hairdresser: ['Hairdresser', 0, ['Chair', 'Mirror'], 'The hairdresser', [H_(9), H_(18)]],
+  supermarket: ['Supermarket', 0, ['Aisle', 'Aisle', 'Checkout'], 'A cashier', [H_(8), H_(22)]],
+  cornershop: ['Corner shop', 0, ['Shelves', 'Counter'], 'The shopkeeper', [H_(7), H_(23)]],
+  hotel: ['Hotel', 0, ['Reception', 'Bed', 'Bed'], 'The night porter', DAY],
+  nightclub: ['Night club', 0, ['Bar', 'Dance floor'], 'A bouncer', [H_(22), H_(4)]],
+  cinema: ['Cinema', 0, ['Screen', 'Seats', 'Kiosk'], 'The projectionist', [H_(13), H_(24)]],
+  policepost: ['Police post', 0, ['Front desk', 'Desk'], 'A constable', [H_(8), H_(20)]],
+  primaryschool: ['Primary school', 1, ['Classroom', 'Classroom', 'Hall'], 'A teacher', [H_(8.5), H_(15.5)]],
+  secondaryschool: ['Secondary school', 2, ['Classroom', 'Classroom', 'Laboratory', 'Gym'], 'A teacher', [H_(8.5), H_(16)]],
+  townhall: ['Town hall', 1, ['Council chamber', 'Desk', 'Desk'], 'A clerk', [H_(9), H_(17)]],
+  cityhall: ['City hall', 2, ['Council chamber', 'Desk', 'Registry'], 'A clerk', [H_(9), H_(17)]],
+  police: ['Police station', 1, ['Front desk', 'Cells', 'Desk'], 'The desk sergeant', DAY],
+  firestation: ['Fire station', 1, ['Fire engine', 'Pole', 'Lockers'], 'A firefighter', DAY],
+  healthcentre: ['Health centre', 1, ['Waiting room', 'Consulting room', 'Dispensary'], 'A nurse', [H_(8), H_(18)]],
+  hospital: ['Hospital', 2, ['Ward bed', 'Ward bed', 'Nurses’ station', 'Operating theatre'], 'A nurse', DAY],
+  library: ['Library', 1, ['Bookcase', 'Bookcase', 'Reading table'], 'The librarian', [H_(10), H_(20)]],
+  courthouse: ['Courthouse', 1, ['Courtroom', 'Bench', 'Dock'], 'A clerk of the court', [H_(9), H_(17)]],
+  museum: ['Museum', 1, ['Display case', 'Display case', 'Statue'], 'A guard', [H_(10), H_(17)]],
+  theatre: ['Theatre', 1, ['Stage', 'Seats', 'Foyer'], 'An usher', [H_(18), H_(23.5)]],
+  markethall: ['Market hall', 1, ['Stall', 'Stall', 'Stall'], 'A stallholder', [H_(7), H_(18)]],
+  deptstore: ['Department store', 2, ['Counter', 'Rails', 'Escalator'], 'A shop assistant', [H_(9.5), H_(19)]],
+  station: ['Railway station', 2, ['Platform', 'Ticket office', 'Concourse'], 'A guard', [H_(5), H_(25)]],
+  pool: ['Swimming pool', 1, ['Pool', 'Changing rooms'], 'A lifeguard', [H_(7), H_(21)]],
+};
+/* who has what: the centre and the districts of a city, of a town, a market town on the highway, and a hamlet */
+const AMEN = {
+  cityCentre: ['cityhall', 'courthouse', 'police', 'museum', 'theatre', 'cinema', 'library', 'markethall', 'deptstore', 'bank', 'bank', 'postoffice', 'hotel', 'hotel', 'pub', 'pub', 'pub', 'pub', 'cafe', 'cafe', 'cafe', 'cafe', 'restaurant', 'restaurant', 'restaurant', 'restaurant', 'bookshop', 'bookshop', 'chemist', 'bakery', 'nightclub', 'nightclub', 'hairdresser'],
+  cityDistrict: ['supermarket', 'bakery', 'butcher', 'greengrocer', 'pub', 'pub', 'cafe', 'chemist', 'doctor', 'primaryschool', 'hairdresser', 'cornershop', 'cornershop', 'restaurant'],
+  cityWide: ['hospital', 'firestation', 'police', 'secondaryschool', 'station', 'firestation', 'pool', 'secondaryschool', 'hospital', 'police', 'library'],
+  townCentre: ['townhall', 'police', 'firestation', 'healthcentre', 'library', 'generalstore', 'bakery', 'butcher', 'greengrocer', 'chemist', 'cafe', 'cafe', 'pub', 'pub', 'pub', 'restaurant', 'hardware', 'bank', 'postoffice', 'bookshop', 'hairdresser', 'hotel', 'market'],
+  townDistrict: ['cornershop', 'pub', 'primaryschool', 'bakery'],
+  townWide: ['secondaryschool'],
+  waytown: ['generalstore', 'bakery', 'butcher', 'market', 'pub', 'pub', 'chemist', 'doctor', 'smithy', 'postoffice', 'bank', 'policepost', 'cafe', 'hardware', 'chapel'],
+  hamlet: ['villageshop', 'pub', 'smithy', 'farmsupply', 'chapel', 'vet', 'villageschool'],
+};
+const WIDE_NAMED = new Set(['cityhall', 'townhall', 'courthouse', 'museum', 'theatre', 'markethall', 'station']);
+function amenName(use, r, i, where, town) {
+  const U = USE[use];
+  if (use === 'pub') return innName(r(i, 'pub'));
+  const Title = t => t.replace(/(^|\s)\S/g, m => m.toUpperCase()), who = genName('shop|' + r(i, 'nm'));
+  if (WIDE_NAMED.has(use)) return `${town || where} ${Title(U[0])}`;
+  if (U[1]) return `${where} ${Title(U[0])}`;
+  if (use === 'doctor') return `Dr ${who}’s surgery`;
+  if (use === 'hotel' || use === 'cinema' || use === 'nightclub' || use === 'restaurant' || use === 'cafe') return `${who} ${Title(U[0])}`;
+  return `${who}’s ${U[0].toLowerCase()}`;
+}
+/* spread a list of amenities over a board's blocks: big ones take a block of their own (a civic block), shops go
+ * into the terraces of the blocks, a few to a block */
+function placeAmenities(cells, list, r, where, town) {
+  const blocks = cells.map((c, i) => [c, i]).filter(([c]) => c.kind === 'block' && !c.home);
+  for (let k = blocks.length - 1; k > 0; k--) { const j = Math.floor(r(k, 'shuf') * (k + 1)); [blocks[k], blocks[j]] = [blocks[j], blocks[k]]; }
+  let b = 0, sb = 0;
+  const big = list.filter(u => USE[u][1]), small = list.filter(u => !USE[u][1]);
+  for (const u of big) { if (b >= blocks.length) break; const [, i] = blocks[b++]; cells[i] = { kind: 'civic', use: u, name: amenName(u, r, i, where, town), seat: cells[i].seat, town }; }
+  const rest = blocks.slice(b);
+  small.forEach((u, k) => { if (!rest.length) return; const [c, i] = rest[(sb++) % Math.max(1, Math.min(rest.length, Math.ceil(small.length / 2)))]; (c.amen = c.amen || []).push([u, amenName(u, r, i * 7 + k, where, town)]); });
+  return cells;
+}
 /* things a metre across, and the ground */
 const THING = (id, label, col, mat, o = {}) => kind(id, Object.assign({ label, col, mat, at: [36, 36] }, o));
 THING('tree', 'Tree', '#2f7a36', 'wood', { v: 'K' });
@@ -2019,7 +2120,9 @@ const hhmm = t => { t = ((Math.round(t) % 1440) + 1440) % 1440; return String(Ma
 let SCHED = { text: '', name: '', list: [], ver: 0 };
 function setSchedule(text, name) { SCHED = { text, name, list: parseSchedule(text), ver: SCHED.ver + 1 }; cache.clear(); }
 let clockOverride = null;           // minutes after midnight while you look at another time of Gary's day; null: your own clock
-const clockMin = () => { if (clockOverride != null) return clockOverride; const d = new Date(); return d.getHours() * 60 + d.getMinutes(); };
+// Automataville time: CET (with its summer time) from the absolute moment, not the local zone, so every copy agrees
+const siteMin = () => { try { const o = {}; for (const q of new Intl.DateTimeFormat('en-GB', { timeZone: 'CET', hourCycle: 'h23', hour: 'numeric', minute: 'numeric' }).formatToParts(new Date())) o[q.type] = +q.value; return (o.hour % 24) * 60 + o.minute; } catch (e) { const d = new Date(Date.now() + 3600e3); return d.getUTCHours() * 60 + d.getUTCMinutes(); } };
+const clockMin = () => { if (clockOverride != null) return clockOverride; return siteMin(); };
 // what Gary is doing now, and where: { i (task index, or -1), task, place, storey, lot, k, key }
 function garyNow() {
   const L = SCHED.list, now = clockMin();
@@ -2132,6 +2235,7 @@ function genBoard(u, path) {
   /* Gary's route is fixed in any universe that has a Gary in it */
   const h = homePath(u);
   if (h && d < HOME_DEPTH && samePrefix(path, h, d)) { const [kd, nm, , lb] = HOME[d], was = cells[h[d]] || {}; cells[h[d]] = { kind: kd, name: nm, home: true, label: lb };
+    if (kd === 'district' || kd === 'oldtown') Object.assign(cells[h[d]], { seat: was.seat || (parent.kind === 'city' ? 'city' : 'town'), town: was.town || parent.name, extra: was.extra || [] });
     if (was.face != null) Object.assign(cells[h[d]], { face: was.face, lat: was.lat, lon: was.lon, pent: was.pent, voidWedge: was.voidWedge }); }
   if (h && d === HOME_DEPTH && samePrefix(path, h, d)) for (const lot of GARY_LOTS) cells[lot] = { kind: 'garyhouse', name: 'Gary’s house', home: true, note: 'A terraced house with the same floor plan as his maker’s, plus a basement and a sub-basement. Its storeys are 1 m cells on the boards below; switch storey with [ and ].' };
   cells.forEach((c, i) => finish(c, ctx, i));
@@ -2228,12 +2332,49 @@ const GEN = {
       return { kind: lat >= 2.9 ? 'frostwastes' : pickW(wild, r(i, 'biome')) };
     });
   },
-  block({ r, u, path }) {
+  // a city or a town tags its districts with the authority they answer to, and shares out the city-wide services
+  city(ctx) { return seatBoard(ctx, 'city'); },
+  town(ctx) { return seatBoard(ctx, 'town'); },
+  district(ctx) { const p = ctx.parent, seat = p.seat || 'town';
+    return placeAmenities(grammar(ctx), AMEN[seat + 'District'].concat(p.extra || []), ctx.r, p.name, p.town); },
+  oldtown(ctx) { const p = ctx.parent, seat = p.seat || 'town';
+    return placeAmenities(grammar(ctx), AMEN[seat + 'Centre'].concat(p.extra || []), ctx.r, p.town || p.name, p.town); },
+  // a hamlet: a green, the services round it, cottages, and the fields
+  hamlet({ r, parent }) {
+    const pick = AMEN.hamlet.filter((u, k) => k < 2 || r(k, 'has') < 0.55), ring1 = COORDS.map((_, i) => i).filter(i => ring(i) === 1 || ring(i) === 2);
+    const at = new Map(); pick.forEach((u, k) => at.set(ring1[Math.floor(r(k, 'at') * ring1.length)], u));
+    return COORDS.map((_, i) => {
+      if (i === CENTRE) return { kind: 'lawn', name: 'The green' };
+      if (at.has(i)) { const u = at.get(i); return { kind: 'shop', use: u, name: u === 'pub' ? innName(r(i, 'pub')) : u === 'chapel' || u === 'villageschool' ? `${parent.name} ${USE[u][0].toLowerCase()}` : amenName(u, r, i, parent.name) }; }
+      if (ring(i) === 1) return { kind: 'road', name: 'Round the green' };
+      if (ring(i) === 2) return r(i, 'c') < 0.55 ? { kind: 'rowhouse', name: 'Cottage' } : { kind: 'garden' };
+      if (ring(i) === 3) return { kind: r(i, 'g') < 0.4 ? 'garden' : r(i, 'y') < 0.3 ? 'yard' : 'hedge' };
+      return { kind: r(i, 'f') < 0.8 ? 'field' : 'hedge' };
+    });
+  },
+  // a public building on a block of its own: the building (bigger for the big ones), a forecourt, the street round it
+  civic({ r, parent }) {
+    const big = USE[parent.use] ? USE[parent.use][1] : 1;
+    return COORDS.map((_, i) => {
+      const n = ring(i);
+      if (n === 4) return { kind: 'street' };
+      if (n <= big) return { kind: 'civichall', use: parent.use, name: parent.name };
+      if (n === big + 1) return { kind: parent.use === 'hospital' || parent.use === 'secondaryschool' || parent.use === 'primaryschool' ? 'lawn' : 'square', name: parent.name };
+      return { kind: r(i, 'g') < 0.6 ? 'yard' : 'lawn' };
+    });
+  },
+  shop(ctx) { return amenInterior(ctx); },
+  civichall(ctx) { return amenInterior(ctx); },
+  block({ r, u, path, parent }) {
     const home = homePath(u), mine = home && path.length === HOME_DEPTH && samePrefix(path, home, HOME_DEPTH);
+    // the shops of the block, spread round its terrace (never on Gary's lots)
+    const shopAt = new Map(), am = (!mine && parent.amen) || [], terrace = COORDS.map((_, i) => i).filter(i => ring(i) === 3);
+    am.forEach((a, k) => shopAt.set(terrace[(Math.floor(r(0, 'off') * 18) + Math.floor(k * 18 / am.length)) % 18], a));
     return COORDS.map((_, i) => {
       const n = ring(i);
       if (n === 4) return mine ? { kind: 'street', name: 'Shady Lane' } : { kind: 'street' };
       if (mine && i === BEANO_LOT) return { kind: 'rowhouse', name: 'Beano’s house', note: '17 Shady Lane, where Beano lives: down the street from Gary, on the other side.' };
+      if (n === 3 && shopAt.has(i)) { const [use, name] = shopAt.get(i); return { kind: 'shop', use, name }; }
       if (n === 3) { let no = 1 + Math.floor(r(i, 'no') * 120); if (mine && no === 17) no = 19; return { kind: 'rowhouse', name: 'No. ' + no }; }
       return { kind: r(i, 'g') < 0.1 ? 'shed' : 'garden' };
     });
@@ -2270,18 +2411,18 @@ const GEN = {
       return { kind: pickW([['farmland', 4], ['forest', 2], ['hedge', ci === 36 ? 1 : 0.01]].filter(([k]) => fits(k, ci)), r(i, 'k')) };
     });
   },
-  waytown({ r }) {
+  waytown({ r, parent }) {
     const a = r(0, 'ang') * Math.PI, sn = Math.sin(a), cs = Math.cos(a);
     const off = COORDS.map(([q, rr]) => { const [x, y] = axialToXY(q, rr); return Math.abs(-sn * x + cs * y); });
     const beside = COORDS.map((_, i) => i).filter(i => off[i] >= 0.55 && off[i] < 1.5 && ring(i) >= 1 && ring(i) <= 3);
     const inns = new Set([beside[Math.floor(r(1, 'i1') * beside.length)], r(2, 'two') < 0.5 ? beside[Math.floor(r(2, 'i2') * beside.length)] : -1]);
-    return COORDS.map((_, i) => {
+    return placeAmenities(COORDS.map((_, i) => {
       if (i === CENTRE) return { kind: 'square', name: 'Market square' };
       if (off[i] < 0.55) return { kind: 'street', name: 'High street' };
       if (inns.has(i)) return { kind: 'inn', name: innName(r(i, 'nm')) };
       if (ring(i) === 4) return { kind: r(i, 'o') < 0.7 ? 'farmland' : 'garden' };
       return { kind: pickW([['block', 5], ['street', 1.5], ['church', 0.2], ['park', 0.4]], r(i, 'k')) };
-    });
+    }), AMEN.waytown, r, parent.name, parent.name);
   },
   inn({ r, ci, parent }) {
     if (ci <= 36) return innInterior(r, parent);
@@ -2326,6 +2467,23 @@ function innInterior(r, parent) {
     if (r(i, 't') < 0.2) return { kind: 'furniture', name: 'Table' };
     if (r(i, 'g') < 0.1) return { kind: 'traveller', name: GUESTS[Math.floor(r(i, 'who') * GUESTS.length)] };
     return { kind: 'floor', name: 'Common room' };
+  });
+}
+/* a city's or town's board: its districts and old town learn whose they are, and the city-wide services are shared out among the districts */
+function seatBoard(ctx, seat) {
+  const cells = grammar(ctx), town = ctx.parent.name, ds = cells.map((c, i) => [c, i]).filter(([c]) => c.kind === 'district');
+  cells.forEach(c => { if (c.kind === 'district' || c.kind === 'oldtown') Object.assign(c, { seat, town, extra: [] }); });
+  if (ds.length) AMEN[seat + 'Wide'].forEach((u, k) => ds[(k + Math.floor(ctx.r(0, 'wide') * ds.length)) % ds.length][0].extra.push(u));
+  return cells;
+}
+/* inside a shop or a public building: walls, a door onto the street, what the trade needs, whoever works there */
+function amenInterior({ r, parent }) {
+  const U = USE[parent.use] || ['Building', 0, ['Table'], 'Someone', DAY];
+  return COORDS.map(([q, rr], i) => {
+    if (ring(i) === 4) return q === 0 && rr === 4 ? { kind: 'doorway', name: 'Door to the street' } : { kind: 'structure', name: 'Wall' };
+    if (i === CENTRE) return { kind: 'person', name: U[3], note: `${U[3]} of ${parent.name || 'the place'}.` };
+    if (r(i, 'f') < 0.3) return { kind: 'furniture', name: U[2][Math.floor(r(i, 'n') * U[2].length)] };
+    return { kind: 'floor', name: parent.name || U[0] };
   });
 }
 function quarks(fl) { const at = [idx(0, -1), idx(1, 0), idx(-1, 1)]; return COORDS.map((_, i) => { const j = at.indexOf(i); return j >= 0 ? { kind: 'quark', name: fl[j] + ' quark' } : { kind: 'gluon' }; }); }
@@ -2400,7 +2558,7 @@ function locateFrom(h, pos, b) {                  /* locate(), about any route *
     const [cq, cr] = toChild(...COORDS[h[d - 1]], d); p = [p[0] + cq, p[1] + cr]; }
   return null;
 }
-return { board, stepPath, homePath: anchor, garyPath: garyRoute, locateBlock: (x, y) => locateFrom(anchor(), blockPos(x, y), HOME_DEPTH + 1), K_KINDS: K, genName,
+return { board, stepPath, USE, AMEN, ring, idx, homePath: anchor, garyPath: garyRoute, locateBlock: (x, y) => locateFrom(anchor(), blockPos(x, y), HOME_DEPTH + 1), K_KINDS: K, genName,
   K, COORDS, CENTRE, DIRV, toChild, splitChild, axialToXY, xyToAxial, idx, inBoard, planToBlock, blockToPlan, lotK, HOME_DEPTH, cellChar, ALPHABET, describeChar, LAT };
 })();
 </script>
@@ -2465,7 +2623,7 @@ const CLASS = {};
 const cls = (c, list) => list.split(' ').forEach(k => { CLASS[k] = c; });
 cls('water', 'water canal river lake pond ditch stream sea ocean worldocean facevoid');
 cls('paved', 'street road pavement highway quay square yard footpath gpath bike lamp bollard bench stall person');
-cls('house', 'rowhouse garyhouse nbhouse building innhall stable church inn structure floor furniture');
+cls('house', 'rowhouse garyhouse nbhouse building innhall stable church inn structure floor furniture shop civichall');
 cls('farm', 'farmstead');
 cls('shed', 'shed');
 cls('field', 'field farmland');
@@ -2494,7 +2652,7 @@ function lInfo(q, r) {
     const wild = chain.find(x => x.kind in WILD);
     // parts of a creature too big to draw (a dragon 1.4 km long is a region of the map): the ground under it
     c = { q, r, i, m, cell, chain, kind: s.kind, cls: CLASS[s.kind] || 'grass', name: s.name, wild: wild ? wild.kind : null,
-      town: chain.some(x => ['city', 'town', 'waytown', 'oldtown', 'district'].includes(x.kind)), church: chain.some(x => x.kind === 'church'),
+      town: chain.some(x => ['city', 'town', 'waytown', 'oldtown', 'district', 'hamlet'].includes(x.kind)), church: chain.some(x => x.kind === 'church'),
       beast: chain.find(x => K[x.kind] && K[x.kind].beast) || null };
   }
   c.centre = lCentre(q, r);
@@ -2627,7 +2785,8 @@ for (const f of SCENE.floors) {
     const w = new Map(); for (const t of words(x.name)) w.set(t, 3); for (const t of words(x.type)) w.set(t, Math.max(w.get(t) || 0, 1.5)); if (room) for (const t of words(room.name)) w.set(t, Math.max(w.get(t) || 0, 1.2));
     if (x.id === 'lab-desk' || x.id === 'lab-chair') for (const t of ['console', 'lab']) w.set(t, 2);
     PLACES.push({ k, level: f.level, name: x.name, room: room ? room.name : f.name, floor: f.name, fix: x, front, look: [x.x, x.y],
-      seat: seat != null ? { p: [x.x + fv[0] * v, x.y + fv[1] * v], h: seat, yaw: Math.atan2(fv[1], fv[0]) } : null, w });
+      seat: seat != null ? { p: [x.x + fv[0] * v, x.y + fv[1] * v], h: seat, yaw: Math.atan2(fv[1], fv[0]) } : null, w,
+      bed: x.type === 'bed' ? { c: [x.x, x.y], fv, d: x.d, w: x.w, h: seat } : null });
   }
   for (const r of f.rooms) { const w = new Map(); for (const t of words(r.name)) w.set(t, 2); PLACES.push({ k, level: f.level, name: r.name, room: r.name, floor: f.name, front: centroid(r.poly), w }); }
 }
@@ -2811,6 +2970,8 @@ const PAINTED = ['#f1ece2', '#e8dfca', '#dcdcd4', '#c9d3d0'];
 const DOORS = ['#1f3b2c', '#23303f', '#5b1f24', '#2b2b2b', '#3d5a45', '#1d2f4d', '#6b2f1f'];
 const GABLES = ['step', 'step', 'neck', 'bell', 'spout', 'cornice', 'cornice', 'plain'];
 
+// the doors and windows of the canal houses, for openings.js to make real when you're near
+const OPENS = [];
 /* ---------------- a canal house ---------------- */
 // x0..x1 along the street; its front at yFace, going back `depth` (towards +y, or towards -y when `far`)
 function canalHouse(g, R, x0, x1, yFace, depth, far, lit, walls) {
@@ -2829,6 +2990,9 @@ function canalHouse(g, R, x0, x1, yFace, depth, far, lit, walls) {
   const doorAt = R() < 0.5 ? 0 : n - 1, door = { x: X(gap + doorAt * (ww + gap) + ww / 2), z: faceZ, far, ww };
   for (let s = 0; s < st; s++) for (let i = 0; i < n; i++) {
     const u = gap + i * (ww + gap) + ww / 2;
+    const okey = 'sl:' + x0.toFixed(2) + ':' + (far ? 'f' : 'n'), on = { c: [X(u), -faceZ], n: [0, far ? 1 : -1], house: okey };
+    if (s === 0 && i === doorAt) OPENS.push(Object.assign({ key: okey + ':d', kind: 'door', wd: ww, ht: 2.45, y0: 0.18, reach: true }, on));
+    else { const h0 = s * sh + (s ? 0.75 : 0.7), ht = s === st - 1 ? sh * 0.58 : sh * 0.66; OPENS.push(Object.assign({ key: okey + ':w' + s + i, kind: 'window', wd: ww, ht, y0: h0, reach: h0 < 2.1 }, on)); }
     if (s === 0 && i === doorAt) { put(u, 0.18, ww, 2.45, mat('#ffffff', { map: DOOR(pick(R, DOORS)) })); box(g, X(u) - ww / 2 - 0.1, X(u) + ww / 2 + 0.1, far ? yFace : yFace - 0.6, far ? yFace + 0.6 : yFace, 0, 0.18, mat('#9d9a92')); continue; }
     const h0 = s * sh + (s ? 0.75 : 0.7), ht = s === st - 1 ? sh * 0.58 : sh * 0.66;
     put(u, h0, ww, ht, winM);
@@ -2950,7 +3114,7 @@ function buildWorld(scene, house) {
   along(new THREE.Mesh(new THREE.ExtrudeGeometry(prof(t => archH * sine(t) + 0.005, t => archH * sine(t) - 0.03), { depth: BRW - 0.6, bevelEnabled: false }), cobble), BR0 + BRW - 0.3);
   for (const x of [BR0, BR0 + BRW - 0.3]) { along(new THREE.Mesh(new THREE.ExtrudeGeometry(prof(t => archH * sine(t) + 0.8, t => archH * sine(t)), { depth: 0.3, bevelEnabled: false }), brickMat('#6e3428')), x + 0.3); wallSeg([x + 0.15, CAN0 + 0.3], [x + 0.15, CAN1 - 0.3]); }
   // the terrace on Gary's side, a passage to the alley at its east end; each house its own gable
-  const nb = [];
+  const nb = []; OPENS.length = 0;
   for (let n = -N; n <= N; n++) { if (!n) continue; const x0 = LX0 + n * LOT, depth = 9 + R() * 5; canalHouse(g, R, x0, x0 + LOT, 0, depth, false, lit, walls); nb.push({ x0, x1: x0 + LOT, depth }); }
   // across the way; Beano's is the one a few doors down from Gary's, number 17
   const beanoX = LX0 + 3.5 * LOT; let beano = null;
@@ -3012,8 +3176,8 @@ function buildWorld(scene, house) {
   scene.fog = new THREE.Fog('#c9d8e6', 70, 300);
   const up = +(house.up || 0);
   function sunPos(minute, date) {                  // a plain astronomical formula for Automataville's latitude and longitude, good to a degree or so
-    const lat = 52.16 * DEG, lon = 4.497, d = date || new Date(), day = (Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) - Date.UTC(d.getFullYear(), 0, 0)) / 864e5;
-    const tz = -d.getTimezoneOffset() / 60, g2 = 2 * Math.PI / 365 * (day - 1 + (minute / 60 - 12) / 24);
+    const lat = 52.16 * DEG, lon = 4.497, d = date || new Date(GW.siteTime().day), day = (d.getTime() - Date.UTC(d.getUTCFullYear(), 0, 0)) / 864e5;
+    const tz = (d.tzOff != null ? d.tzOff : GW.siteTime().off) / 60, g2 = 2 * Math.PI / 365 * (day - 1 + (minute / 60 - 12) / 24);
     const decl = 0.006918 - 0.399912 * Math.cos(g2) + 0.070257 * Math.sin(g2) - 0.006758 * Math.cos(2 * g2) + 0.000907 * Math.sin(2 * g2) - 0.002697 * Math.cos(3 * g2) + 0.00148 * Math.sin(3 * g2);
     const eqt = 229.18 * (0.000075 + 0.001868 * Math.cos(g2) - 0.032077 * Math.sin(g2) - 0.014615 * Math.cos(2 * g2) - 0.040849 * Math.sin(2 * g2));
     const ha = ((minute + eqt + 4 * lon - 60 * tz) / 4 - 180) * DEG;
@@ -3066,7 +3230,7 @@ function buildWorld(scene, house) {
   const AWAY = window.GW && window.GW.AWAY;
   if (AWAY) { g.visible = false; walls.length = 0; shapes.length = 0; }
   const FAR_OFF = 1e13;
-  return { beano: beano && UN.cur.gary ? [beano.x, FAR + 1.6] : null, away: !!AWAY, clear: AWAY ? [] : [[X0 - 22, FAR - 48, 14], [X0 - 20, BACK + 50, 34]], setIndoor(v) { state.indoor = v; }, setDim(v) { state.dim = v; }, group: g, walls, groundAt, zoneAt, exit: { x: X1, road: (CAN0 + 0.4) / 2, y0: CAN0, y1: 0.4 }, canal: AWAY ? null : { y: (CAN0 + CAN1) / 2, x0: X0, x1: X1 }, mapShapes: shapes, update, state, lot: { x0: LX0, x1: LX1 }, bounds: AWAY ? { x0: FAR_OFF, x1: FAR_OFF + 1, y0: FAR_OFF, y1: FAR_OFF + 1 } : { x0: X0, x1: X1, y0: FAR, y1: BACK + ALLEY }, streetName: UN.names.street };
+  return { openings: OPENS, beano: beano && UN.cur.gary ? [beano.x, FAR + 1.6] : null, away: !!AWAY, clear: AWAY ? [] : [[X0 - 22, FAR - 48, 14], [X0 - 20, BACK + 50, 34]], setIndoor(v) { state.indoor = v; }, setDim(v) { state.dim = v; }, group: g, walls, groundAt, zoneAt, exit: { x: X1, road: (CAN0 + 0.4) / 2, y0: CAN0, y1: 0.4 }, canal: AWAY ? null : { y: (CAN0 + CAN1) / 2, x0: X0, x1: X1 }, mapShapes: shapes, update, state, lot: { x0: LX0, x1: LX1 }, bounds: AWAY ? { x0: FAR_OFF, x1: FAR_OFF + 1, y0: FAR_OFF, y1: FAR_OFF + 1 } : { x0: X0, x1: X1, y0: FAR, y1: BACK + ALLEY }, streetName: UN.names.street };
 }
 
 window.GW = window.GW || {};
@@ -3765,6 +3929,222 @@ function humanoid(look, size) { const r = person(options(look, size)); r.g.trave
 window.GW.GIANTS = { SPECIES, build, humanoid, skin };
 })();
 </script>
+<script data-inline="src/openings.js">
+/* Gary's World: doors and windows that open, on every house.
+ *
+ * The houses are solid (instanced boxes with a painted front, or the canal houses of Shady Lane), so near you
+ * each painted door and window gets a real one over it: a door leaf on its hinges, casement sashes that swing
+ * out, glass. Behind each opening is a room, seen through it as through a portal (a stencil mask in the opening,
+ * the room drawn only where the mask is): a hall with its stairs behind a door, a front room behind a window,
+ * shelves behind a shop's. The rooms are lit like the houses they're in: by day, dim; in the evening, warm,
+ * if anyone's up; dark once they've gone to bed (early in a town, late in the city). F opens and closes the
+ * nearest; what you open stays open. Shop doors stand open while the shop is.
+ *
+ * A spec (from country.openingsNear or world.openings): { key, kind: 'door'|'window', c: [x, y] centre of the
+ * opening's bottom edge on the facade, n: [nx, ny] outward, wd, ht, y0 (height of its bottom), house (a key),
+ * use (a shop's or a public building's), reach (can you reach it from the street) }. */
+(() => {
+const TAU = Math.PI * 2;
+window.GW = window.GW || {};
+GW.buildOpenings = function (root, o) {
+  const group = new THREE.Group(); group.name = 'openings'; root.add(group);
+  const STORE = 'garyworld-openings-v1'; let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(STORE) || '{}') || {}; } catch (e) { saved = {}; }
+  const persist = () => { try { const ks = Object.keys(saved); if (ks.length > 600) for (const k of ks.slice(0, ks.length - 600)) delete saved[k]; localStorage.setItem(STORE, JSON.stringify(saved)); } catch (e) { /* storage unavailable */ } };
+  const h32 = s => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0) / 4294967296; };
+
+  /* ---------------- the rooms behind: painted inside surfaces ---------------- */
+  const tex = (w, h, draw) => { const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h); const t = new THREE.CanvasTexture(c); t.anisotropy = 4; return t; };
+  const PAPER = ['#d8cfb8', '#c8d4c0', '#e0d0c0', '#b8c8d8', '#d8c0b0', '#efe6d4', '#c0b0a0'];
+  const paper = (x, w, h, col) => { x.fillStyle = col; x.fillRect(0, 0, w, h); x.fillStyle = 'rgba(0,0,0,0.045)'; for (let i = 0; i < w; i += 18) x.fillRect(i, 0, 7, h); x.fillStyle = '#f2eee6'; x.fillRect(0, h - h * 0.06, w, h * 0.06); };
+  const wallT = PAPER.map(col => tex(128, 128, (x, w, h) => paper(x, w, h, col)));
+  const floorT = tex(128, 128, (x, w, h) => { for (let i = 0; i < 8; i++) { x.fillStyle = `hsl(28,${34 + (i % 3) * 6}%,${26 + (i * 37) % 12}%)`; x.fillRect(0, i * 16, w, 15); x.fillStyle = 'rgba(0,0,0,0.3)'; x.fillRect((i * 53) % w, i * 16, 2, 16); } });
+  const ceilT = tex(64, 64, (x, w, h) => { x.fillStyle = '#f2efe8'; x.fillRect(0, 0, w, h); const g = x.createRadialGradient(32, 32, 1, 32, 32, 30); g.addColorStop(0, '#fffbe8'); g.addColorStop(0.15, '#fff2c8'); g.addColorStop(1, 'rgba(255,242,200,0)'); x.fillStyle = g; x.fillRect(0, 0, w, h); });
+  // the far wall, with what stands against it
+  // (seen from inside the box, a face's texture reads mirrored: these are painted the right way round for that)
+  const texIn = (w, h, draw) => { const t = tex(w, h, draw); t.wrapS = THREE.RepeatWrapping; t.repeat.x = -1; return t; };
+  const backT = {
+    room: PAPER.map((col, i) => texIn(256, 128, (x, w, h) => { paper(x, w, h, col);
+      if (i % 3 === 0) { x.fillStyle = '#5a3a24'; x.fillRect(70, 60, 116, 60); x.fillStyle = '#6e4a30'; for (let k = 0; k < 3; k++) x.fillRect(74, 64 + k * 18, 108, 14); x.fillStyle = '#c8b070'; for (let k = 0; k < 3; k++) x.fillRect(124, 69 + k * 18, 8, 3); }
+      else if (i % 3 === 1) { x.fillStyle = '#7a3a34'; x.fillRect(50, 78, 156, 34); x.fillRect(46, 66, 20, 46); x.fillRect(190, 66, 20, 46); x.fillStyle = '#8a4a40'; x.fillRect(56, 70, 144, 18); }
+      else { x.fillStyle = '#4a3020'; x.fillRect(80, 22, 96, 100); x.fillStyle = '#2a1a10'; for (let k = 0; k < 4; k++) x.fillRect(84, 26 + k * 24, 88, 20); for (let k = 0; k < 40; k++) { x.fillStyle = `hsl(${k * 47 % 360},40%,${35 + k % 3 * 10}%)`; x.fillRect(86 + (k % 10) * 8.5, 30 + Math.floor(k / 10) * 24, 6, 15); } }
+      x.fillStyle = '#3a2a1a'; x.fillRect(20, 24, 40, 30); x.fillStyle = ['#6a8aa8', '#a88a5a', '#7aa070'][i % 3]; x.fillRect(24, 28, 32, 22); })),
+    hall: PAPER.map(col => texIn(256, 128, (x, w, h) => { paper(x, w, h, col);
+      for (let k = 0; k < 9; k++) { x.fillStyle = k % 2 ? '#6a4a30' : '#7a5a3a'; x.fillRect(140 + k * 12, 120 - k * 12, 116 - k * 12, 12); }   // the stairs going up
+      x.fillStyle = '#3a2a1a'; x.fillRect(30, 30, 6, 60); x.fillRect(18, 34, 30, 4); x.fillStyle = '#2a4a6a'; x.fillRect(16, 38, 12, 34); x.fillStyle = '#8a3a2a'; x.fillRect(32, 38, 12, 30); })),
+    shop: texIn(256, 128, (x, w, h) => { x.fillStyle = '#e8e4da'; x.fillRect(0, 0, w, h);
+      for (let r = 0; r < 4; r++) { x.fillStyle = '#8a6a4a'; x.fillRect(0, 18 + r * 26, w, 4); for (let k = 0; k < 32; k++) { x.fillStyle = `hsl(${(k * 67 + r * 31) % 360},${45 + k % 3 * 10}%,${42 + k % 4 * 8}%)`; x.fillRect(4 + k * 8, 6 + r * 26 + (k % 3), 6, 12 - (k % 3)); } }
+      x.fillStyle = '#6a4a30'; x.fillRect(60, 104, 140, 24); }),
+    civic: texIn(256, 128, (x, w, h) => { x.fillStyle = '#e4e2dc'; x.fillRect(0, 0, w, h); x.fillStyle = '#c8c4bc'; x.fillRect(0, h - 10, w, 10); x.fillStyle = '#5a6a7a'; x.fillRect(90, 50, 76, 50); x.fillStyle = '#f0f0f0'; x.fillRect(96, 56, 64, 30); x.fillStyle = '#3a4a5a'; x.font = 'bold 12px sans-serif'; x.fillText('ENQUIRIES', 98, 74); }),
+  };
+  const doorT = col => tex(64, 128, (x, w, h) => { x.fillStyle = col; x.fillRect(0, 0, w, h); x.strokeStyle = 'rgba(0,0,0,0.35)'; x.lineWidth = 3; x.strokeRect(8, 10, w - 16, 46); x.strokeRect(8, 66, w - 16, 52); x.fillStyle = '#c9a53b'; x.beginPath(); x.arc(w - 12, 64, 3, 0, TAU); x.fill(); });
+  const DOOR_COLS = ['#1f3b2c', '#23303f', '#5b1f24', '#2b2b2b', '#3d5a45', '#1d2f4d', '#6b2f1f'], DOOR_T = DOOR_COLS.map(doorT);
+  const CIVIC_DOOR = tex(64, 128, (x, w, h) => { x.fillStyle = '#3a4a52'; x.fillRect(0, 0, w, h); x.fillStyle = '#a8c0cc'; x.fillRect(8, 8, w - 16, h - 40); x.fillStyle = '#c8c8c8'; x.fillRect(w - 14, 70, 6, 24); });
+  const frameMat = new THREE.MeshLambertMaterial({ color: '#f2efe6' }), glassMat = new THREE.MeshBasicMaterial({ color: '#a8c0d0', transparent: true, opacity: 0.22, depthWrite: false, side: THREE.DoubleSide });
+
+  /* ---------------- one opening, made live ---------------- */
+  const KEEP = THREE.KeepStencilOp;
+  const gated = (m, ref) => Object.assign(m, { stencilWrite: true, stencilRef: ref, stencilFunc: THREE.EqualStencilFunc, stencilFail: KEEP, stencilZFail: KEEP, stencilZPass: KEEP, depthTest: false, depthWrite: false });
+  const live = new Map(), freeRefs = Array.from({ length: 250 }, (_, i) => i + 1);
+  function isOpen(sp) { if (sp.key in saved) return saved[sp.key]; return !!(sp.kind === 'door' && sp.use && o.openNow && o.openNow(sp.use)); }
+  function make(sp) {
+    const ref = freeRefs.pop(); if (!ref) return null;
+    const g = new THREE.Group(); g.position.set(sp.c[0], sp.y0, -sp.c[1]); g.rotation.y = Math.atan2(sp.n[0], -sp.n[1]); group.add(g);
+    const { wd, ht } = sp, door = sp.kind === 'door', hv = h32(sp.house || sp.key), mats = [];
+    // the mask: where the opening is (and nothing nearer is in the way), the stencil gets this opening's number
+    const mask = new THREE.Mesh(new THREE.PlaneGeometry(wd, ht), new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, stencilWrite: true, stencilRef: ref, stencilFunc: THREE.AlwaysStencilFunc, stencilZPass: THREE.ReplaceStencilOp }));
+    mask.position.set(0, ht / 2, 0.012); mask.renderOrder = 10; g.add(mask);
+    // the room: the inside of a box behind the facade, drawn only through the opening
+    const W = Math.max(3.2, wd + 2.2), D = door ? 4.2 : 3.6, Hh = 2.75, floor = door ? 0 : -0.85;
+    const pi = Math.floor(hv * PAPER.length), back = sp.use ? (sp.civic ? backT.civic : backT.shop) : door ? backT.hall[pi] : backT.room[(pi + Math.floor(sp.c[0] * 7 + sp.c[1] * 3) % 3 + 3) % PAPER.length];
+    const M = map => { const m = gated(new THREE.MeshBasicMaterial({ map, side: THREE.BackSide }), ref); mats.push(m); return m; };
+    const wallM = M(sp.use ? null : wallT[pi]); if (sp.use) wallM.color.set('#e8e4da');
+    const room = new THREE.Mesh(new THREE.BoxGeometry(W, Hh, D), [wallM, wallM, M(ceilT), M(floorT), wallM, M(back)]);
+    room.position.set(0, floor + Hh / 2, -D / 2 - 0.02); room.renderOrder = 11; g.add(room);
+    const L = { sp, ref, g, mask, room, mats, amt: isOpen(sp) ? 1 : 0, lit: hv };
+    if (door) {   // the leaf, hinged on its left, swinging in (a public building's double doors: a leaf on each side)
+      const leafM = gated(new THREE.MeshLambertMaterial({ map: sp.civic ? CIVIC_DOOR : DOOR_T[Math.floor(hv * 97) % DOOR_T.length] }), ref); mats.push(leafM);
+      L.hinges = [];
+      for (const s of sp.double ? [-1, 1] : [-1]) {
+        const lw = sp.double ? wd / 2 : wd, hinge = new THREE.Group(); hinge.position.set(s * wd / 2, 0, 0); g.add(hinge);
+        const leaf = new THREE.Mesh(new THREE.BoxGeometry(lw - 0.03, ht - 0.03, 0.05), leafM); leaf.position.set(-s * lw / 2, ht / 2, -0.03); leaf.renderOrder = 12; hinge.add(leaf);
+        L.hinges.push([hinge, -s * 1.45]);
+      }
+    } else {      // two casements, hinged at the sides, swinging out; frames and glass
+      L.hinges = [];
+      for (const s of [-1, 1]) {
+        const hinge = new THREE.Group(); hinge.position.set(s * wd / 2, 0, 0.03); g.add(hinge);
+        const sw = wd / 2, bar = Math.min(0.06, wd * 0.06), sash = new THREE.Group(); sash.position.x = -s * sw / 2; hinge.add(sash);
+        for (const [x, y, w, h] of [[0, ht / 2 - bar / 2, sw, bar], [0, -ht / 2 + bar / 2, sw, bar], [-sw / 2 + bar / 2, 0, bar, ht], [sw / 2 - bar / 2, 0, bar, ht], [0, ht / 6, sw, bar * 0.6], [0, -ht / 6, sw, bar * 0.6]]) {
+          const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.05), frameMat); b.position.set(x, ht / 2 + y, 0); b.renderOrder = 13; sash.add(b); }
+        const gl = new THREE.Mesh(new THREE.PlaneGeometry(sw - bar, ht - bar), glassMat); gl.position.set(0, ht / 2, 0); gl.renderOrder = 14; sash.add(gl);
+        L.hinges.push([hinge, -s * 1.25]);
+      }
+    }
+    pose(L); return L;
+  }
+  function pose(L) { const e = L.amt * L.amt * (3 - 2 * L.amt); for (const [h, a] of L.hinges) h.rotation.y = a * e; }
+  function drop(L) { group.remove(L.g); L.g.traverse(m => { if (m.geometry) m.geometry.dispose(); }); for (const m of L.mats) m.dispose(); L.mask.material.dispose(); freeRefs.push(L.ref); live.delete(L.sp.key); }
+
+  /* ---------------- light: is anyone up in there? ---------------- */
+  const WARM = new THREE.Color(1, 0.84, 0.58), DIM = new THREE.Color(0.52, 0.52, 0.55), DARK = new THREE.Color(0.05, 0.055, 0.08);
+  function lightOf(L, dark, min, auth) {
+    const sp = L.sp;
+    if (sp.use) return o.openNow && o.openNow(sp.use) ? (dark > 0.4 ? WARM : DIM) : dark > 0.4 ? DARK : DIM;
+    if (dark < 0.35) return DIM;
+    // households: up till about ten in a town, past midnight in the city; and some are up early
+    const late = auth === 'city' ? 24.5 * 60 : 22 * 60, h = min < 12 * 60 ? min + 1440 : min, r = L.lit;
+    const up = h < late ? r < 0.78 : h < late + 120 ? r < 0.2 : (min > 5.5 * 60 && min < 8 * 60) ? r < 0.45 : r < 0.04;
+    return up ? WARM : DARK;
+  }
+
+  /* ---------------- per frame ---------------- */
+  let tScan = 0;
+  function update(dt, p, env) {
+    tScan -= dt;
+    if (tScan <= 0) { tScan = 0.3;
+      const specs = o.sources(p, 18).map(sp => [sp, Math.hypot(sp.c[0] - p[0], sp.c[1] - p[1])]).sort((a, b) => a[1] - b[1]).slice(0, 44).map(x => x[0]);
+      const want = new Set(specs.map(s => s.key));
+      for (const L of [...live.values()]) if (!want.has(L.sp.key)) drop(L);
+      for (const sp of specs) if (!live.has(sp.key)) { const L = make(sp); if (L) live.set(sp.key, L); }
+    }
+    const shown = env.visible !== false; group.visible = shown;
+    for (const L of live.values()) {
+      const to = isOpen(L.sp) ? 1 : 0; if (L.amt !== to) { L.amt += Math.sign(to - L.amt) * Math.min(Math.abs(to - L.amt), dt * 1.4); pose(L); }
+      const c = lightOf(L, env.dark, env.min, env.auth); for (const m of L.mats) if (m.side === THREE.BackSide) m.color.lerp(c, Math.min(1, dt * 3));
+    }
+  }
+  // F: the nearest door or window you can reach from where you stand (outside it)
+  function nearest(p) {
+    let best = null, bd = 1.9;
+    for (const L of live.values()) { const sp = L.sp; if (!sp.reach) continue;
+      const mid = [sp.c[0], sp.c[1]], dx = p[0] - mid[0], dy = p[1] - mid[1], d = Math.hypot(dx, dy); if (d > bd || dx * sp.n[0] + dy * sp.n[1] < -0.1) continue;
+      bd = d; best = L; }
+    if (!best) return null;
+    const L = best, open = isOpen(L.sp), what = L.sp.kind === 'door' ? (L.sp.use ? 'door' : 'front door') : 'window';
+    return { d: bd, label: `${open ? 'close' : 'open'} the ${what}`, go: () => toggle(L) };
+  }
+  function toggle(L) {
+    const sp = L.sp, now = !isOpen(sp); saved[sp.key] = now; persist();
+    if (o.sound) o.sound(sp.kind === 'door' ? 'door' : 'window', sp.c);
+    if (now && sp.kind === 'door' && o.say) {
+      const env = o.env ? o.env() : { dark: 0, min: 720, auth: 'town' }, c = lightOf(L, env.dark, env.min, env.auth);
+      o.say('emote', sp.use ? (o.openNow && o.openNow(sp.use) ? 'The door swings open; a bell over it rings.' : 'The door opens on a shop closed for the night, dark and still.')
+        : c === DARK ? 'The door opens on a dark hall. Somewhere upstairs, someone is snoring.' : c === WARM ? '“Hello? Who’s there?” calls someone from the back of the house.' : 'The door opens on a quiet hall, a staircase going up.');
+    }
+  }
+  return { update, nearest, group, get count() { return live.size; }, live };
+};
+})();
+
+/* Gary's own house: it has real rooms, so its doors and windows need no portals. Every doorway in the plans gets
+ * a leaf on its hinges (the front door in the house's colour, the inside ones painted white) and every window
+ * a pair of casements in place of its plain glass. Doors swing into the room, windows out. F opens and closes
+ * them; and anyone walking through a closed door (you, Gary) pushes it open, as people do. */
+GW.buildHouseOpenings = function (house, o) {
+  const STORE = 'garyworld-houseopen-v1', uni = (window.GW.U && window.GW.U.cur && window.GW.U.cur.id) || 'prime'; let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(STORE) || '{}') || {}; } catch (e) { saved = {}; }
+  const persist = () => { try { localStorage.setItem(STORE, JSON.stringify(saved)); } catch (e) { /* storage unavailable */ } };
+  const innerM = new THREE.MeshLambertMaterial({ color: '#f2efe6' }), frontM = new THREE.MeshLambertMaterial({ color: '#1f3b2c' }), knobM = new THREE.MeshLambertMaterial({ color: '#c9a53b' });
+  const frameMat = new THREE.MeshLambertMaterial({ color: '#f4f1ea' }), glassMat = new THREE.MeshBasicMaterial({ color: '#bfe0f5', transparent: true, opacity: 0.28, depthWrite: false, side: THREE.DoubleSide });
+  const all = [];
+  for (const fl of house.floors) {
+    const F = fl.F, W = F.walls, e = fl.elev, H = fl.H, g = fl.group;
+    // the plain glass goes: the casements bring their own
+    for (const m of g.children) if (m.isMesh && m.material && m.material.transparent && m.renderOrder === 2) m.visible = false;
+    W.ext.concat(W.int).forEach((w, wi) => w.open.forEach((op, oi) => {
+      if (op.full) return;
+      const len = (op.s1 - op.s0) * w.len, head = Math.min(op.head, H - 0.05); if (len < 0.4) return;
+      const key = uni + ':' + fl.k + ':' + wi + ':' + oi, door = !op.win, d = w.d, out = w.out, th = Math.atan2(d[1], d[0]);
+      if (door && len > 2.1) return;                                  // an archway, not a door
+      const pt = (s, off) => [w.a[0] + d[0] * s * w.len + out[0] * off, w.a[1] + d[1] * s * w.len + out[1] * off];
+      const it = { key, k: fl.k, door, main: !!op.main, len, mid: pt((op.s0 + op.s1) / 2, w.ext ? w.t / 2 : 0), out, hinges: [], amt: 0 };
+      if (door) {   // one leaf (two for a wide doorway), hinged at the jamb, in the wall's inner face, swinging into the house
+        const off = w.ext ? 0.03 : 0, two = len > 1.25, lw = two ? len / 2 : len, h = Math.min(head, 2.1) - 0.01;
+        for (const sd of two ? [0, 1] : [0]) {
+          const hp = pt(sd ? op.s1 : op.s0, off), hinge = new THREE.Group(); hinge.position.set(hp[0], e, -hp[1]); hinge.rotation.y = th + (sd ? Math.PI : 0); g.add(hinge);
+          const leaf = new THREE.Mesh(new THREE.BoxGeometry(lw - 0.02, h, 0.04), op.main ? frontM : innerM); leaf.position.set(lw / 2, h / 2, sd ? 0.02 : -0.02); leaf.castShadow = true; hinge.add(leaf);
+          const knob = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 6), knobM); knob.position.set(lw - 0.08, 1.0, sd ? -0.04 : 0.04); hinge.add(knob);
+          const knob2 = knob.clone(); knob2.position.z = -knob.position.z; hinge.add(knob2);
+          // in (away from `out`): the far leaf is turned round, so it opens the other way about its own hinge
+          it.hinges.push([hinge, th + (sd ? Math.PI : 0), sd ? -1.5 : 1.5]);
+        }
+        it.c = pt((op.s0 + op.s1) / 2, 0);
+      } else {      // two casements in the window's opening, at the outer face, swinging out
+        const off = w.ext ? w.t - 0.035 : 0, sill = Math.max(0, Math.min(op.sill, head - 0.1)), ht = head - sill, sw = len / 2, bar = 0.05;
+        for (const sd of [0, 1]) {
+          const hp = pt(sd ? op.s1 : op.s0, off), hinge = new THREE.Group(); hinge.position.set(hp[0], e + sill, -hp[1]); hinge.rotation.y = th; g.add(hinge);
+          const sash = new THREE.Group(); sash.position.x = sd ? -sw / 2 : sw / 2; hinge.add(sash);
+          for (const [x, y, bw, bh] of [[0, ht - bar / 2, sw, bar], [0, bar / 2, sw, bar], [-sw / 2 + bar / 2, ht / 2, bar, ht], [sw / 2 - bar / 2, ht / 2, bar, ht], [0, ht / 2, sw, bar * 0.6]]) {
+            const b = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, 0.045), frameMat); b.position.set(x, y, 0); sash.add(b); }
+          const gl = new THREE.Mesh(new THREE.PlaneGeometry(sw - bar, ht - bar), glassMat); gl.position.set(0, ht / 2, 0); gl.renderOrder = 2; sash.add(gl);
+          it.hinges.push([hinge, th, sd ? 1.25 : -1.25]);
+        }
+        it.c = pt((op.s0 + op.s1) / 2, 0); it.sill = sill;
+      }
+      it.amt = saved[key] ? 1 : 0; pose(it); all.push(it);
+    }));
+  }
+  function pose(it) { const e = it.amt * it.amt * (3 - 2 * it.amt); for (const [h, base, a] of it.hinges) h.rotation.y = base + a * e; }
+  const isOpen = it => !!saved[it.key];
+  function set(it, v) { if (isOpen(it) === v) return; saved[it.key] = v; if (!v) delete saved[it.key]; persist(); if (o.sound) o.sound(it.door ? 'door' : 'window'); }
+  // who is in a doorway pushes its door open
+  function update(dt, walkers) {
+    for (const it of all) {
+      if (it.door && !isOpen(it)) for (const wk of walkers) if (wk.k === it.k && Math.hypot(wk.p[0] - it.c[0], wk.p[1] - it.c[1]) < Math.max(0.55, it.len / 2)) { set(it, true); break; }
+      const to = isOpen(it) ? 1 : 0; if (it.amt !== to) { it.amt += Math.sign(to - it.amt) * Math.min(Math.abs(to - it.amt), dt * 1.6); pose(it); }
+    }
+  }
+  function nearest(p, k) {
+    let best = null, bd = 1.5;
+    for (const it of all) { if (it.k !== k) continue; const d = Math.hypot(p[0] - it.c[0], p[1] - it.c[1]); if (d < bd && (it.door || it.sill < 1.6)) { bd = d; best = it; } }
+    if (!best) return null;
+    const it = best, what = it.door ? (it.main ? 'front door' : 'door') : 'window';
+    return { d: bd, label: `${isOpen(it) ? 'close' : 'open'} the ${what}`, go: () => set(it, !isOpen(it)) };
+  }
+  return { update, nearest, all };
+};
+</script>
 <script data-inline="src/props.js">
 /* props.js: the things that make a place look lived in, and the small life about them.
    Things, placed with each chunk of land from what its cells are (country.js calls chunk()):
@@ -3958,12 +4338,81 @@ function buildProps(root, o) {
   const NP = window.NPCs, folk = [], SHIRTS = ['#1e5aa8', '#b40000', '#237841', '#f2cd37', '#a0a5a9', '#ff698f', '#fe8a18', '#6c6e68', '#1b2a34', '#dfeef1'], LEGS = ['#1b2a34', '#6c6e68', '#582a12', '#1e5aa8', '#a0a5a9'], HAIR = ['#1b2a34', '#582a12', '#958a73', '#f2cd37', '#6c6e68', '#b40000'];
   const bikeGeo = merge(bikeParts(0, 0, 0, '#2a4a8a'));
   const paved = c => c.cls === 'paved' && c.town;
-  function makeFolk(p, cyclist) {
-    const R = Math.random, pick = a => a[Math.floor(R() * a.length)], f = NP.figure({ shirt: pick(SHIRTS), legs: pick(LEGS), hair: pick(HAIR), long: R() < 0.35, hat: R() < 0.12 ? pick(['#1b2a34', '#b40000', '#1e5aa8']) : null });
-    f.g.traverse(m => { if (m.isMesh) m.castShadow = true; }); life.add(f.g);
+  function makeFolk(p, cyclist, role, dest, child) {
+    const R = Math.random, pick = a => a[Math.floor(R() * a.length)], f = NP.figure({ shirt: role && role.shirt || pick(SHIRTS), legs: pick(LEGS), hair: pick(HAIR), long: R() < 0.35, hat: role && role.hat || (R() < 0.12 ? pick(['#1b2a34', '#b40000', '#1e5aa8']) : null) });
+    f.g.traverse(m => { if (m.isMesh) m.castShadow = true; }); life.add(f.g); if (child) f.g.scale.setScalar(0.72);
     let bike = null; if (cyclist) { bike = new THREE.Mesh(bikeGeo, MAT1); bike.castShadow = true; life.add(bike); }
-    return { f, bike, p: p.slice(), yaw: R() * TAU, goal: null, walk: R() * 9, speed: cyclist ? 4.5 + R() * 1.5 : 1.1 + R() * 0.4, wait: R() * 3, cyclist };
+    return { f, bike, p: p.slice(), yaw: R() * TAU, goal: null, walk: R() * 9, speed: (cyclist ? 4.5 + R() * 1.5 : 1.1 + R() * 0.4) * (role && role.pace || 1), wait: R() * 1.5, cyclist, role, dest, stuck: 0, best: Infinity, fade: 1 };
   }
+
+  /* ---------------- who is out, and why ----------------
+   * A small town keeps to the sun: up at dawn, in bed soon after dark, and its streets busy in the middle of the
+   * day. A city never quite stops, and what's afoot at night isn't what's afoot by day: night-shift nurses, bakers
+   * at four, people going to the clubs and coming home from them. Everyone out has somewhere to be (an amenity
+   * that's open, or home), keeps their own hours (a city's more loosely than a town's), and goes in when they
+   * get there; others come out of the places that are open. */
+  const authorityOf = c => { const ks = (c && c.chain || []).map(x => x.kind); return ks.includes('city') ? 'city' : ks.includes('town') ? 'town' : ks.includes('waytown') ? 'market' : ks.includes('hamlet') ? 'hamlet' : null; };
+  // a window of the day, eased at its ends (minutes; b < a runs past midnight)
+  const win = (m, a, b, ramp = 40) => { if (b < a) return Math.max(win(m, a, b + 1440, ramp), win(m + 1440, a, b + 1440, ramp)); return m < a - ramp || m > b + ramp ? 0 : m < a ? (m - a + ramp) / ramp : m > b ? (b + ramp - m) / ramp : 1; };
+  const HR = h => h * 60, WEEKDAY = d => d >= 1 && d <= 5;
+  // id, what they're about, where they go, when (m, weekday 0-6, dark 0-1) → weight, by authority [city, town, market, hamlet], and how they look
+  const ROLES = [
+    ['commuter', 'on the way to work', ['station', 'cityhall', 'townhall', 'bank', 'courthouse', 'library', 'deptstore', 'police', 'postoffice'], (m, d) => WEEKDAY(d) ? win(m, HR(7), HR(8.75)) : 0, [1.2, 0.7, 0.3, 0.1], { cyc: 0.45 }],
+    ['homeward', 'on the way home from work', null, (m, d) => WEEKDAY(d) ? win(m, HR(16.75), HR(18.5)) : 0, [1.2, 0.8, 0.4, 0.2], { cyc: 0.45 }],
+    ['shopper', 'out shopping', ['supermarket', 'bakery', 'butcher', 'greengrocer', 'market', 'generalstore', 'villageshop', 'chemist', 'bookshop', 'deptstore', 'markethall', 'cornershop', 'hardware', 'hairdresser', 'postoffice'], (m, d) => win(m, HR(9), HR(17.5)) * (d === 0 ? 0.15 : d === 6 ? 1.6 : 1), [1, 1, 1, 0.6], { cyc: 0.3 }],
+    ['school', 'on the way to school', ['primaryschool', 'secondaryschool', 'villageschool'], (m, d) => WEEKDAY(d) ? win(m, HR(7.9), HR(8.5), 20) : 0, [0.8, 0.8, 0.6, 0.5], { child: 0.75, cyc: 0.3 }],
+    ['afterschool', 'on the way home from school', null, (m, d) => WEEKDAY(d) ? win(m, HR(15.3), HR(16.2), 20) : 0, [0.8, 0.8, 0.6, 0.5], { child: 0.8, cyc: 0.3 }],
+    ['cafe', 'going for a coffee', ['cafe'], m => win(m, HR(8.5), HR(17)), [0.6, 0.4, 0.3, 0], {}],
+    ['pub', 'off to the pub', ['pub', 'hotel'], (m, d, dk, a) => a === 'city' ? win(m, HR(17), HR(24.5)) : win(m, HR(18), HR(21.5)), [0.9, 0.8, 0.8, 0.9], {}],
+    ['diner', 'going out for dinner', ['restaurant', 'hotel'], m => win(m, HR(18.5), HR(21.5)), [0.8, 0.4, 0.2, 0], {}],
+    ['show', 'going to the theatre', ['theatre', 'cinema'], m => win(m, HR(19), HR(20.5), 30), [0.5, 0.2, 0, 0], {}],
+    ['clubber', 'going out dancing', ['nightclub'], m => win(m, HR(22.5), HR(1.5)), [0.8, 0, 0, 0], { pace: 1.15 }],
+    ['reveller', 'going home after a night out', null, m => win(m, HR(0.5), HR(4), 60), [0.7, 0.05, 0, 0], { pace: 0.8 }],
+    ['nurse', 'a nurse, on the way to a shift', ['hospital', 'healthcentre'], m => win(m, HR(6.3), HR(7)) + win(m, HR(14.5), HR(15)) + win(m, HR(21.5), HR(22.2)), [0.5, 0.15, 0, 0], { shirt: '#dfeef1', cyc: 0.5 }],
+    ['visitor', 'going to visit someone in hospital', ['hospital', 'doctor', 'healthcentre'], m => win(m, HR(10), HR(19.5)), [0.3, 0.2, 0.1, 0], {}],
+    ['baker', 'a baker, on the way to light the ovens', ['bakery'], m => win(m, HR(4), HR(5.5), 30), [0.4, 0.4, 0.4, 0.3], { shirt: '#ffffff', cyc: 0.4 }],
+    ['cleaner', 'a street sweeper, on the early round', null, m => win(m, HR(5), HR(7)), [0.4, 0.1, 0, 0], { shirt: '#fe8a18' }],
+    ['farmer', 'a farmer, in town for supplies', ['farmsupply', 'market', 'smithy', 'generalstore', 'vet'], (m, d) => d === 0 ? 0 : win(m, HR(5.5), HR(9)), [0, 0.2, 0.9, 1.2], { shirt: '#582a12', hat: '#582a12' }],
+    ['constable', 'a police officer, on patrol', null, (m, d, dk, a) => a === 'city' ? 0.3 : win(m, HR(8), HR(20)) * 0.3, [0.6, 0.4, 0.3, 0], { shirt: '#1b2a34', hat: '#1b2a34' }],
+    ['dogwalker', 'walking the dog', null, (m, d, dk, a) => win(m, HR(6.5), HR(8)) + win(m, HR(17.5), a === 'city' ? HR(22.5) : HR(20)), [0.6, 0.6, 0.6, 0.6], {}],
+    ['jogger', 'out for a run', null, m => win(m, HR(6), HR(7.5)) + win(m, HR(18), HR(19.5)) * 0.6, [0.5, 0.25, 0.1, 0.05], { pace: 2.4, shirt: '#ff698f' }],
+    ['church', 'on the way to church', ['chapel'], (m, d) => d === 0 ? win(m, HR(9.5), HR(10.3), 30) : 0, [0.4, 0.8, 1, 1.4], { hat: '#1b2a34' }],
+    ['stroller', 'out for a walk', null, (m, d) => win(m, HR(10), HR(17)) * (d === 0 || d === 6 ? 1.6 : 0.6), [0.5, 0.5, 0.4, 0.4], {}],
+    ['nightowl', 'out late, for reasons of their own', null, m => win(m, HR(1), HR(5), 60), [0.25, 0, 0, 0], {}],
+  ];
+  const AUTH_I = { city: 0, town: 1, market: 2, hamlet: 3 }, CROWD = { city: 26, town: 16, market: 12, hamlet: 7 };
+  // the weight of each role now, for someone here (their own clock runs a little early or late: more so in a city)
+  function roleWeights(auth, m, d, dark) {
+    const ai = AUTH_I[auth];
+    return ROLES.map(r => { let w = r[3](m, d, dark, auth) * r[4][ai];
+      // small places go to bed with the dark: only the pub keeps a few out, and not for long
+      if (auth !== 'city' && dark > 0.6 && r[0] !== 'pub' && r[0] !== 'baker' && r[0] !== 'farmer') w *= 0.1;
+      return w; });
+  }
+  // the amenities about: where people can be going (refreshed as you move)
+  let AM = [], amAt = null;
+  function amenitiesNear(focus) {
+    if (amAt && Math.hypot(amAt[0] - focus[0], amAt[1] - focus[1]) < 40) return AM;
+    amAt = focus.slice(); const seen = new Map();
+    for (const c of LAND.lCells(focus[0] - 220, focus[1] - 220, focus[0] + 220, focus[1] + 220)) {
+      if ((c.kind !== 'shop' && c.kind !== 'civichall') || !c.cell.use) continue;
+      const key = c.cell.name + '|' + (c.m.q | 0) + ',' + (c.m.r | 0); if (seen.has(key)) continue;
+      // the door: the first bit of street out from the building, away from the middle of its block
+      const mc = c.m.centre || c.centre, a = Math.atan2(c.centre[1] - mc[1], c.centre[0] - mc[0]); let door = null;
+      for (let k = 3; k < 40 && !door; k += 1) { const q = [c.centre[0] + Math.cos(a) * k, c.centre[1] + Math.sin(a) * k]; if (at(q).cls === 'paved') door = q; }
+      if (door) seen.set(key, { use: c.cell.use, name: c.cell.name, p: c.centre, door });
+    }
+    return (AM = [...seen.values()]);
+  }
+  const openNow = (use, m) => { const U = window.HANB && HANB.USE[use]; if (!U) return true; const [a, b] = U[4]; return b > a ? m >= a && m < b : m >= a || m < b; };
+  function folkTell(f) {
+    const r = f.role; if (!r) return 'Going about their business.';
+    const d = f.dest ? `, on the way to ${f.dest.name}` : '';
+    const who = /^a /.test(r[1]) ? r[1][0].toUpperCase() + r[1].slice(1) + d : `Someone ${r[1]}${d}`;
+    return who + '.';
+  }
+  function dropFolk(f) { life.remove(f.f.g); if (f.bike) life.remove(f.bike); const i = folk.indexOf(f); if (i >= 0) folk.splice(i, 1); }
+  function fadeFig(f) { const op = Math.max(0, f.fade); f.f.g.traverse(m => { if (m.isMesh) { if (!m.userData.own) { m.material = m.material.clone(); m.userData.own = true; } m.material.transparent = true; m.material.opacity = op; } }); if (f.bike) f.bike.visible = op > 0.5; }
   let tLife = 0;
   function update(dt, focus, time, dark, P) {
     tLife -= dt; const day = 1 - dark, R = Math.random, near = (a, r) => Math.hypot(a[0] - focus[0], a[1] - focus[1]) < r;
@@ -3976,8 +4425,23 @@ function buildProps(root, o) {
       if (flies.length < 10 && day > 0.5 && (here.cls === 'grass' || here.cls === 'field')) { const p = findNear(focus, c => c.cls === 'grass' || c.cls === 'field', 3, 20, 8); if (p) { const g = new THREE.Group(), colr = ['#f0c030', '#ffffff', '#e06020', '#6080f0', '#e070c0'][Math.floor(R() * 5)]; const mat = flyMat.clone(); mat.color.set(colr);
         const w1 = new THREE.Mesh(wingGeo, mat), w2 = new THREE.Mesh(wingGeo, mat); w1.position.x = 0.035; w2.position.x = -0.035; g.add(w1, w2); life.add(g); flies.push({ g, w1, w2, p, h: 0.6, ph: R() * 9, home: p.slice() }); } }
       if (cats.length < 2 && inTownish) { const p = findNear(focus, c => c.cls === 'paved' && c.town, 5, 25, 10); if (p) { const m = new THREE.Mesh(catGeo, MAT1); m.castShadow = true; life.add(m); cats.push({ m, p, yaw: R() * TAU, t: 0 }); } }
-      const want = inTownish && here.town ? 18 : 0;
-      for (let n = 0; n < (folk.length < 6 ? 6 : 2) && folk.length < want && NP; n++) { const p = findNear(focus, paved, 6, 50, 60); if (p) folk.push(makeFolk(p, R() < 0.25)); }
+      // the people: how many depends on the hour and the place; each with a reason to be out
+      const auth = inTownish && here.town ? authorityOf(here) || 'town' : null, ck = o.clock ? o.clock() : { min: 720, day: 3 };
+      if (auth && NP) {
+        const W = roleWeights(auth, ck.min, ck.day, dark), tot = W.reduce((a, b) => a + b, 0), want = Math.min(28, Math.round(CROWD[auth] * Math.min(1.6, tot) / 1.6 + (auth === 'city' ? 1 : 0)));
+        const ams = amenitiesNear(focus);
+        for (let n = 0; n < (folk.length < 6 ? 5 : 2) && folk.length < want; n++) {
+          // a role (each person's own clock a little off the town's: looser in the city)
+          const skew = (R() - 0.5) * (auth === 'city' ? 150 : 50), Wp = roleWeights(auth, (ck.min + skew + 1440) % 1440, ck.day, dark), wsum = Wp.reduce((a, b) => a + b, 0); if (wsum <= 0) continue; let x = R() * wsum, ri = 0;
+          for (; ri < Wp.length - 1; ri++) { x -= Wp[ri]; if (x < 0) break; }
+          const role = ROLES[ri], opts = role[2] ? ams.filter(a => role[2].includes(a.use) && openNow(a.use, ck.min) || (role[0] === 'nurse' || role[0] === 'baker' || role[0] === 'commuter') && role[2].includes(a.use)) : [];
+          const dest = opts.length ? opts[Math.floor(R() * opts.length)] : null;
+          // some come out of a place that's open; the rest are already on their way somewhere
+          const from = ams.filter(a => openNow(a.use, ck.min) && Math.hypot(a.door[0] - focus[0], a.door[1] - focus[1]) < 55 && Math.hypot(a.door[0] - focus[0], a.door[1] - focus[1]) > 8);
+          const p = !dest && from.length && R() < 0.35 ? from[Math.floor(R() * from.length)].door.slice() : findNear(focus, paved, 8, 50, 60);
+          if (p) folk.push(makeFolk(p, R() < (role[5].cyc || 0.15), role, dest, R() < (role[5].child || 0)));
+        }
+      }
     }
     // ducks: paddle about, bob, keep away from you
     for (const d of ducks.slice()) { d.ph += dt; const dx = d.p[0] - focus[0], dy = d.p[1] - focus[1], dist = Math.hypot(dx, dy);
@@ -4008,7 +4472,19 @@ function buildProps(root, o) {
       c.m.position.set(c.p[0], o.heightAt(c.p), -c.p[1]); c.m.rotation.y = c.yaw; if (!near(c.p, 60) || barren) { life.remove(c.m); cats.splice(cats.indexOf(c), 1); } }
     // townsfolk: walk from one paved spot to another along the street; cyclists faster, on their bikes
     for (const f of folk.slice()) {
-      if (!f.goal || Math.hypot(f.goal[0] - f.p[0], f.goal[1] - f.p[1]) < 0.6) { f.wait -= dt; if (f.wait <= 0) { const g2 = findNear(f.p, (c, p) => paved(c) && [0.25, 0.5, 0.75].every(t => paved(at([f.p[0] + (p[0] - f.p[0]) * t, f.p[1] + (p[1] - f.p[1]) * t]))), 5, f.cyclist ? 40 : 20, 10); f.goal = g2; f.wait = f.cyclist ? 0 : 1 + R() * 5; } }
+      const toDest = f.dest ? Math.hypot(f.dest.door[0] - f.p[0], f.dest.door[1] - f.p[1]) : Infinity;
+      if (f.dest && toDest < 1.2) { f.going = true; }                                         // there: in they go
+      if (f.going) { f.fade -= dt * 1.5; fadeFig(f); if (f.fade <= 0) { dropFolk(f); continue; } }
+      else if (!f.goal || Math.hypot(f.goal[0] - f.p[0], f.goal[1] - f.p[1]) < 0.6) { f.wait -= dt; if (f.wait <= 0) {
+        const clear = p => [0.25, 0.5, 0.75].every(t => paved(at([f.p[0] + (p[0] - f.p[0]) * t, f.p[1] + (p[1] - f.p[1]) * t])));
+        let g2 = null;
+        if (f.dest && toDest < 14 && clear(f.dest.door)) g2 = f.dest.door.slice();            // in sight of the door: straight to it
+        else if (f.dest) {                                                                    // otherwise the hop that brings them nearest
+          let bd = Infinity; for (let k = 0; k < 14; k++) { const q = findNear(f.p, (c, p) => paved(c) && clear(p), 4, f.cyclist ? 30 : 16, 3); if (!q) continue; const dq = Math.hypot(f.dest.door[0] - q[0], f.dest.door[1] - q[1]); if (dq < bd) { bd = dq; g2 = q; } }
+          if (bd < f.best - 0.5) { f.best = bd; f.stuck = 0; } else if (++f.stuck > 12) f.dest = null;   // can't find the way: they give up and wander
+        }
+        if (!g2) g2 = findNear(f.p, (c, p) => paved(c) && clear(p), 5, f.cyclist ? 40 : 20, 10);
+        f.goal = g2; f.wait = f.cyclist || f.dest ? 0 : 1 + R() * 5; } }
       let moving = false;
       if (f.goal && f.wait <= 0) { const want = Math.atan2(f.goal[1] - f.p[1], f.goal[0] - f.p[0]); f.yaw += Math.atan2(Math.sin(want - f.yaw), Math.cos(want - f.yaw)) * Math.min(1, dt * 5);
         const dd = Math.hypot(P[0] - f.p[0], P[1] - f.p[1]), slowNear = dd < 1.5 ? 0.2 : 1; f.p[0] += Math.cos(f.yaw) * f.speed * dt * slowNear; f.p[1] += Math.sin(f.yaw) * f.speed * dt * slowNear; moving = true; f.walk += dt * f.speed * (f.cyclist ? 1.6 : 2.6); }
@@ -4017,11 +4493,13 @@ function buildProps(root, o) {
       const sw = moving ? Math.sin(f.walk) * (f.cyclist ? 0.9 : 0.6) : 0;
       if (f.cyclist) { fg.legs[0].rotation.x = -1.1 + sw * 0.5; fg.legs[1].rotation.x = -1.1 - sw * 0.5; fg.arms[0].rotation.x = fg.arms[1].rotation.x = -1.1; f.bike.position.set(f.p[0], h, -f.p[1]); f.bike.rotation.y = f.yaw; }
       else { fg.legs[0].rotation.x = sw; fg.legs[1].rotation.x = -sw; fg.arms[0].rotation.x = -sw * 0.8; fg.arms[1].rotation.x = sw * 0.8; }
-      if (!near(f.p, 90) || barren) { life.remove(fg.g); if (f.bike) life.remove(f.bike); folk.splice(folk.indexOf(f), 1); }
+      if (!near(f.p, 90) || barren) dropFolk(f);
     }
     life.visible = true;
   }
-  return { chunk, update, group: life, counts: () => ({ ducks: ducks.length, pigeons: pigeons.length, butterflies: flies.length, cats: cats.length, folk: folk.length }) };
+  // the nearest person in the street, and what they're about (for F)
+  const folkNear = (p, r = 2.5) => { let best = null, bd = r; for (const f of folk) { const d = Math.hypot(f.p[0] - p[0], f.p[1] - p[1]); if (d < bd && !f.going) { bd = d; best = f; } } return best ? { d: bd, role: best.role, dest: best.dest, tell: folkTell(best), f: best } : null; };
+  return { chunk, update, group: life, folkNear, folk, roleWeights, authorityOf, counts: () => ({ ducks: ducks.length, pigeons: pigeons.length, butterflies: flies.length, cats: cats.length, folk: folk.length }) };
 }
 window.GW = window.GW || {}; window.GW.buildProps = buildProps;
 })();
@@ -4088,6 +4566,11 @@ const TEX = {
     for (let f = 0; f < 3; f++) for (let w = 0; w < 2; w++) { const X = 40 + w * 120, Y = 18 + f * 80; if (f === 2 && w === 0) continue;
       x.fillStyle = '#f4f1ea'; x.fillRect(X - 4, Y - 4, 64, 58); x.fillStyle = '#23303a'; x.fillRect(X, Y, 56, 50); x.fillStyle = '#f4f1ea'; x.fillRect(X + 26, Y, 4, 50); for (const k of [1, 2]) x.fillRect(X, Y + k * 16, 56, 3); }
     x.fillStyle = '#2e3a2a'; x.fillRect(46, 188, 48, 68); x.fillStyle = '#f4f1ea'; x.fillRect(42, 184, 56, 4); }),
+  // a public building: pale stone, four storeys of wide windows in a grid, a cornice
+  civic: paint(256, (x, S, R) => { x.fillStyle = '#e4e0d8'; x.fillRect(0, 0, S, S);
+    for (let r = 0; r < 32; r++) { x.fillStyle = `rgba(0,0,0,${0.03 + R() * 0.04})`; x.fillRect(0, r * 8, S, 1); }
+    for (let f = 0; f < 4; f++) for (let w = 0; w < 3; w++) { const X = 14 + w * 82, Y = 16 + f * 60; x.fillStyle = '#c8c2b6'; x.fillRect(X - 3, Y - 3, 64, 44); x.fillStyle = '#2a3844'; x.fillRect(X, Y, 58, 38); x.fillStyle = '#d8d4cc'; x.fillRect(X + 28, Y, 3, 38); }
+    x.fillStyle = '#b8b2a6'; x.fillRect(0, 0, S, 6); }),
   // roof tiles, in rows
   tiles: paint(128, (x, S, R) => { x.fillStyle = '#c8c8c8'; x.fillRect(0, 0, S, S);
     for (let r = 0; r < 16; r++) for (let i = -1; i < 9; i++) { const v = 150 + R() * 90 | 0; x.fillStyle = `rgb(${v},${v},${v})`; x.fillRect(i * 16 + (r % 2 ? 8 : 0) + 1, r * 8 + 1, 14, 6); } }),
@@ -4186,6 +4669,7 @@ function buildCountry(scene, world) {
   }
   const softFloor = v => v > 3 ? v : 0.35 + Math.log1p(Math.exp((v - 0.35) * 2)) / 2;     // dry land stays above the sea
   // the height of the land, before the water cut into it: counties are flat or hilly, mountains are mountains
+  const PADS = [];
   function macroH(p) {
     const [x, y] = p, m = LAND.macro(p), ws = m.wild[0] + m.wild[1] + m.wild[2] + m.wild[3] + m.wild[4];
     let land = m.base + m.rug * (fbm(x / 320, y / 320, SEED) * 46 - 18 + fbm(x / 70, y / 70, SEED + 9, 3) * 7 - 3.5);
@@ -4194,6 +4678,7 @@ function buildCountry(scene, world) {
     if (ws > 0.01) land = land * (1 - ws) + wildH(x, y, m.wild);
     let h = m.sea > 0.001 ? lerp(land, -24 + fbm(x / 200, y / 200, SEED + 5) * 10, smooth(0, 1, m.sea)) : land;
     const td = townDist(p); if (td < 160) h *= smooth(4, 160, td);                 // Shady Lane's streets are at 0
+    for (const f of PADS) { const d = Math.hypot(x - f.x, y - f.y); if (d < f.r2) h = lerp(f.h, h, smooth(f.r, f.r2, d)); }   // levelled ground: a spaceport's field
     return h;
   }
   // canals, ponds, rivers and lakes: the cell's water sits a little below the land around it, and its bed below that
@@ -4254,6 +4739,31 @@ function buildCountry(scene, world) {
   const lampPostGeo = new THREE.CylinderGeometry(0.06, 0.09, 4, 6).translate(0, 2, 0), lampHeadGeo = new THREE.BoxGeometry(0.34, 0.42, 0.34).translate(0, 4.1, 0);
   const lampPostMat = new THREE.MeshLambertMaterial({ color: '#2a2d30' }), lampHeadMat = new THREE.MeshLambertMaterial({ color: '#f4ecd0', emissive: '#000' });
   const shedGeo = new THREE.BoxGeometry(3, 2.4, 2.5).translate(0, 1.2, 0);
+  // shops and public buildings (their uses and names come from the hanb core: see AMEN there)
+  const civicMat = new THREE.MeshLambertMaterial({ map: TEX.civic }), civicMats = [civicMat, civicMat, flatTopMat, flatTopMat, civicMat, civicMat];
+  const awningGeo = new THREE.BoxGeometry(1, 1, 1), awningMat = new THREE.MeshLambertMaterial({ color: '#ffffff' });
+  const CIVIC = { hospital: [18, '#eef0f0'], cityhall: [15, '#d8c8a8'], townhall: [12, '#d8c8a8'], courthouse: [14, '#c8c0b0'], police: [10, '#b8c0cc'], firestation: [8, '#9a4a3a'],
+    healthcentre: [8, '#e8e4dc'], library: [11, '#c8b89a'], museum: [14, '#d0c8b8'], theatre: [15, '#b89a88'], markethall: [11, '#b87a5a'], deptstore: [17, '#d0ccc4'],
+    station: [10, '#a8743e'], pool: [8, '#c8dce4'], primaryschool: [8, '#c89a70'], secondaryschool: [11, '#b88a64'] };
+  const SHOPCOL = { pub: '#2e5a3a', cafe: '#7a4a2a', restaurant: '#6a2a2a', bakery: '#c8a060', butcher: '#b03030', greengrocer: '#3a8a3a', chemist: '#2a8a6a', doctor: '#3a6ab0', bank: '#2a3a6a',
+    postoffice: '#c83a2a', supermarket: '#e07020', cornershop: '#c05a2a', bookshop: '#4a3a6a', hairdresser: '#b04a8a', hotel: '#5a4a3a', nightclub: '#3a1a4a', cinema: '#8a1a2a', hardware: '#6a6a3a',
+    generalstore: '#8a6a3a', market: '#3a7a3a', smithy: '#3a3a3a', farmsupply: '#6a7a3a', chapel: '#6a6a7a', vet: '#3a7a8a', villageshop: '#8a3a3a', villageschool: '#6a5a3a', policepost: '#2a4a8a' };
+  // painted name boards, one texture per name
+  const SIGNS = new Map();
+  function signTex(text, col) {
+    const key = text + '|' + col; if (SIGNS.has(key)) return SIGNS.get(key);
+    if (SIGNS.size > 300) { for (const t of SIGNS.values()) t.dispose(); SIGNS.clear(); }
+    const c = document.createElement('canvas'); c.width = 512; c.height = 96; const x = c.getContext('2d');
+    x.fillStyle = col; x.fillRect(0, 0, 512, 96); x.strokeStyle = '#e8d8a0'; x.lineWidth = 6; x.strokeRect(5, 5, 502, 86);
+    let fs = 54; x.font = `600 ${fs}px Georgia, serif`; while (x.measureText(text).width > 470 && fs > 20) { fs -= 2; x.font = `600 ${fs}px Georgia, serif`; }
+    x.fillStyle = '#f4ecd0'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(text, 256, 50);
+    const t = new THREE.CanvasTexture(c); t.anisotropy = 4; SIGNS.set(key, t); return t;
+  }
+  const signGeo = new THREE.PlaneGeometry(1, 1);
+  function nameBoard(g, text, col, x, y, h, yaw, w, x0, y0) {
+    const m = new THREE.Mesh(signGeo, new THREE.MeshBasicMaterial({ map: signTex(text, col) })), cs = Math.cos(yaw), sn = Math.sin(yaw);
+    m.scale.set(w, w * 96 / 512, 1); m.position.set(x - x0, h, -(y - y0)); m.rotation.y = Math.atan2(cs, -sn); m.userData.sign = true; g.add(m); return m;
+  }
   const BRICK = ['#8e3b2c', '#7a3226', '#9a4a36', '#6e3a2e', '#a0583e', '#8a4a3a', '#b8a890', '#d8cfb8'], ROOF = ['#4a4f55', '#4a4f55', '#5a5f66', '#7a3b2a', '#8a4a30'];
 
   // what the ground is made of at a point: paving, road, cotton, forest floor, rock; sand, snow, mud in the Wild
@@ -4315,14 +4825,39 @@ function buildCountry(scene, world) {
     g.position.set(x0, 0, -y0);
     const ground = groundMesh(x0, y0, near ? SEG : FAR_SEG, near ? 0 : 0.3); g.add(ground);
     const cells = LAND.lCells(x0, y0, x0 + CH, y0 + CH).filter(c => !inRect(c.centre, 4) && !exclude(c.centre) && clearOf(c.centre));
-    const oaks = [], pines = [], rocks = [], dead = [], walls = [], roofs = [], flats = [], spires = [], sheds = [], posts = [], water = [];
+    const oaks = [], pines = [], rocks = [], dead = [], walls = [], roofs = [], flats = [], spires = [], sheds = [], posts = [], water = [], civics = [], awnings = [], opens = [];
     const tree = (list, x, y, s, R, col) => { if (BARREN) return; list.push([x, y, s, R() * TAU, col]); if (near) obst.push({ x, y, r: 0.45 * s }); };
     const spot = (c, R, rr = 3.2) => { const a = R() * TAU, d = Math.sqrt(R()) * rr; return [c.centre[0] + Math.cos(a) * d, c.centre[1] + Math.sin(a) * d]; };
     for (const c of cells) {
       const R = cellR(c), [cx0, cy0] = c.centre, wildB = BIOME_OF[c.wild], k = c.kind;
       if (c.cls === 'house') {
         // a terraced house per cell of a street block; a big building fills its whole cell (all of it, if it's bigger)
-        const yaw = facing(c), cs = Math.cos(yaw), sn = Math.sin(yaw), row = k === 'rowhouse' || k === 'garyhouse' || k === 'nbhouse';
+        const yaw = facing(c), cs = Math.cos(yaw), sn = Math.sin(yaw), use = c.cell.use, shop = k === 'shop', civ = k === 'civichall', row = k === 'rowhouse' || k === 'garyhouse' || k === 'nbhouse' || shop;
+        if (civ) {   // a public building: every cell of it the same height and stone, a flat roof; a tower on a city or town hall
+          const [H, col] = CIVIC[use] || [10, '#d0c8bc'], ctr = c.i === HANB.CENTRE, nb = LAND.NB[0], w = Math.hypot(...nb) * 1.02, lat = Math.atan2(nb[1], nb[0]), hs = [-1, 1].flatMap(a => [-1, 1].map(b => heightAt([cx0 + a * w / 2, cy0 + b * w / 2]))), h0 = Math.min(...hs), h1 = Math.max(...hs);
+          civics.push({ x: cx0, y: cy0, h: h0 - 0.3, sx: w, sy: H + (h1 - h0) + 0.3, sz: w, rot: lat, col });
+          if (ctr && (use === 'cityhall' || use === 'townhall')) { civics.push({ x: cx0, y: cy0, h: h1 + H, sx: 5, sy: 12, sz: 5, rot: 0, col }); spires.push({ x: cx0, y: cy0, h: h1 + H + 12, sx: 0.8, sy: 0.6, sz: 0.8, rot: 0 }); }
+          if (ctr && use === 'hospital') { civics.push({ x: cx0, y: cy0, h: h1 + H, sx: 6, sy: 1.2, sz: 6, rot: 0, col: '#d04040' }); }
+          if (near) { const lc = Math.cos(lat), ls = Math.sin(lat); obst.push({ x: cx0, y: cy0, r: 0, poly: [[1, 1], [1, -1], [-1, -1], [-1, 1]].map(([a, b]) => [cx0 + (lc * a - ls * b) * w / 2, cy0 + (ls * a + lc * b) * w / 2]) }); }
+          if (near) {   // its windows on every outside face (and on the front one, the doors): see openings.js
+            const sy = H + (h1 - h0) + 0.3, base = h0 - 0.3, key = (window.GW.AWAY ? window.GW.AWAY.label : NM.town || 'home') + ':cv' + c.q + ',' + c.r, front = c.i === HANB.idx(0, HANB.USE[use] ? HANB.USE[use][1] : 1);
+            let bestJ = -1, bd = -2; for (let j = 0; j < 4; j++) { const a = lat + j * Math.PI / 2, dd = Math.cos(a) * cs + Math.sin(a) * sn; if (dd > bd) { bd = dd; bestJ = j; } }
+            for (let j = 0; j < 4; j++) {
+              const a = lat + j * Math.PI / 2, n = [Math.cos(a), Math.sin(a)], nb = LAND.at([cx0 + n[0] * w * 0.9, cy0 + n[1] * w * 0.9]);
+              if (nb.kind === 'civichall' && nb.cell.name === c.cell.name) continue;          // a face inside the building
+              const left = [n[1], -n[0]], door = front && j === bestJ;
+              const rect = (u, pw, Y, ph) => ({ c: [cx0 + n[0] * (w / 2 + 0.004) + left[0] * (w / 2 - u * w), cy0 + n[1] * (w / 2 + 0.004) + left[1] * (w / 2 - u * w)], wd: pw / 256 * w, ht: ph / 256 * sy, y0: base + (1 - (Y + ph) / 256) * sy, n });
+              for (let f = 0; f < 4; f++) for (let wi = 0; wi < 3; wi++) { if (door && f === 3 && wi === 1) continue; const r = rect((14 + wi * 82 + 29) / 256, 58, 16 + f * 60, 38);
+                if (r.y0 + r.ht > base + sy - 0.2) continue;
+                opens.push(Object.assign(r, { key: key + ':' + j + ':w' + f + wi, kind: 'window', house: key, use, civic: true, reach: r.y0 - heightAt(r.c) < 2.1 })); }
+              if (door) { const r = rect(0.5, 0, 0, 0), g0 = heightAt(r.c) - 0.02; opens.push(Object.assign(r, { key: key + ':' + j + ':d', kind: 'door', double: true, wd: 2.3, ht: 2.7, y0: Math.max(base, g0), house: key, use, civic: true, reach: true })); }
+            }
+          }
+          if (near && c.i === HANB.idx(0, HANB.USE[use] ? HANB.USE[use][1] : 1))
+            { let fa = lat, bd = -2; for (let j = 0; j < 4; j++) { const a = lat + j * Math.PI / 2, dd = Math.cos(a) * cs + Math.sin(a) * sn; if (dd > bd) { bd = dd; fa = a; } }   // on the face over the doors
+              nameBoard(g, c.cell.name, '#2a3a4a', cx0 + Math.cos(fa) * (w / 2 + 0.08), cy0 + Math.sin(fa) * (w / 2 + 0.08), h0 + 4.2, fa, 7, x0, y0); }
+          continue;
+        }
         const w = row ? 7.75 : 7.8, d = row ? 7.2 : 7.8, big = c.cell.kind === 'mat' || c.cell.kind !== k;
         const HR = big ? rng(Math.imul(c.m.path ? c.m.path[24] + 1 : 3, 9973) ^ SEED) : R;
         const H = k === 'stable' ? 4 : k === 'church' || c.church ? 13 + HR() * 4 : row ? 7 + R() * 3.2 : k === 'innhall' ? 7.5 : 6 + HR() * 9;
@@ -4332,6 +4867,19 @@ function buildCountry(scene, world) {
         walls.push({ x: cx0, y: cy0, h: h0 - 0.3, sx: d, sy: H + (h1 - h0) + 0.3, sz: w, rot: yaw, col });
         if (row || k === 'innhall' || k === 'stable') roofs.push({ x: cx0, y: cy0, h: h1 + H, sx: d + 0.3, sy: 3 + R() * 2.4, sz: w + 0.2, rot: yaw, col: ROOF[Math.floor(R() * ROOF.length)] });
         if (c.church && c.i === HANB.CENTRE) spires.push({ x: cx0, y: cy0, h: h1 + H, sx: 1, sy: 1, sz: 1, rot: 0 });
+        if (near && (row || k === 'innhall') && k !== 'garyhouse') {   // the door and windows painted on its front, where the real ones go (see openings.js)
+          const sy = H + (h1 - h0) + 0.3, base = h0 - 0.3, key = (window.GW.AWAY ? window.GW.AWAY.label : NM.town || 'home') + ':' + c.q + ',' + c.r;
+          const rect = (px, py, pw, ph) => { const lz = w / 2 - (px + pw / 2) / 256 * w, lx = d / 2 + 0.004; return { c: [cx0 + cs * lx + sn * lz, cy0 + sn * lx - cs * lz], wd: pw / 256 * w, ht: ph / 256 * sy, y0: base + (1 - (py + ph) / 256) * sy }; };
+          const dr = rect(46, 188, 48, 68), top = dr.y0 + dr.ht; dr.y0 = Math.max(dr.y0, heightAt(dr.c) - 0.02); dr.ht = top - dr.y0;
+          opens.push(Object.assign(dr, { key: key + ':d', kind: 'door', n: [cs, sn], house: key, use: shop ? use : null, reach: true }));
+          for (let f = 0; f < 3; f++) for (let wi = 0; wi < 2; wi++) { if (f === 2 && wi === 0) continue;
+            const r = rect(40 + wi * 120, 18 + f * 80, 56, 50); opens.push(Object.assign(r, { key: key + ':w' + f + wi, kind: 'window', n: [cs, sn], house: key, use: shop && f === 2 ? use : null, reach: r.y0 - heightAt(r.c) < 2.1 })); }
+        }
+        if (shop) {   // a shopfront: an awning in the trade's colour over the ground floor, and the name above it
+          const col = SHOPCOL[use] || '#6a4a3a', fx = cx0 + cs * (d / 2 + 0.55), fy = cy0 + sn * (d / 2 + 0.55);
+          awnings.push({ x: fx, y: fy, h: h0 + 2.9, sx: 1.1, sy: 0.12, sz: w * 0.86, rot: yaw, col });
+          if (near) nameBoard(g, c.cell.name, col, cx0 + cs * (d / 2 + 0.06), cy0 + sn * (d / 2 + 0.06), h0 + 3.6, yaw, 5.6, x0, y0);
+        }
         if (near) obst.push({ x: cx0, y: cy0, r: 0, poly: corners });
         continue;
       }
@@ -4365,6 +4913,7 @@ function buildCountry(scene, world) {
     inst(pineGeo, pineMat, pines, ([x, y, s, r, c]) => ({ x, y, h: heightAt([x, y]) + s * 1.6, sx: s, sy: s * 1.2, sz: s, rot: r, col: c || '#ffffff' }));
     inst(rockGeo, rockMat, rocks, ([x, y, s, c]) => ({ x, y, h: heightAt([x, y]) - s * 0.25, sx: s * 1.3, sy: s, sz: s, rot: x, col: c || '#ffffff' }));
     inst(deadGeo, deadMat, dead, ([x, y, s, r]) => ({ x, y, h: heightAt([x, y]) - 0.2, sx: s, sy: s, sz: s, rot: r }));
+    inst(wallGeo, civicMats, civics); inst(awningGeo, awningMat, awnings);
     inst(wallGeo, houseMats, walls); inst(gableGeo, roofMat, roofs); inst(spireGeo, spireMat, spires); inst(shedGeo, postMat, sheds);
     inst(lampPostGeo, lampPostMat, posts); inst(lampHeadGeo, lampHeadMat, posts);
     for (const [x, y, s] of rocks) if (s > 0.8 && near) obst.push({ x, y, r: s });
@@ -4378,7 +4927,7 @@ function buildCountry(scene, world) {
     if (sea) { const s = new THREE.Mesh(new THREE.PlaneGeometry(CH, CH), seaMat); s.rotation.x = -Math.PI / 2; s.position.set(CH / 2, 0, -CH / 2); g.add(s); }
     if (LAND.macro([x0 + CH / 2, y0 + CH / 2]).wild[2] > 0.2) { const wtr = new THREE.Mesh(new THREE.PlaneGeometry(CH, CH), mireMat); wtr.rotation.x = -Math.PI / 2; wtr.position.set(CH / 2, WATER, -CH / 2); g.add(wtr); }
     if (window.GW.PROPS) window.GW.PROPS.chunk({ g, cells, x0, y0, near, heightAt, obst, cellR, barren: BARREN, biome: c => BIOME_OF[c.wild], waterLevel });   // benches, bales, logs… (props.js)
-    g.userData = { obst, ground, cells, lod };
+    g.userData = { obst, ground, cells, lod, open: opens };
     return g;
   }
   // a farmstead: a timber-framed house with a thatched roof (plan x, y; drawn in the chunk at x0, y0)
@@ -4921,6 +5470,10 @@ function buildCountry(scene, world) {
     const pts = new THREE.Points(new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(pos, 3)), new THREE.PointsMaterial({ color: '#ffffff', size: 0.12, transparent: true, opacity: 0.9, depthWrite: false })); pts.visible = false; group.add(pts); return pts; })();
   /* ---------------- streaming ---------------- */
   const chunkXY = p => [Math.floor(p[0] / CH), Math.floor(p[1] / CH)];
+  // the doors and windows of the houses near p (see openings.js)
+  function openingsNear(p, r) { const [cx, cy] = chunkXY(p), out = [];
+    for (let j = cy - 1; j <= cy + 1; j++) for (let i = cx - 1; i <= cx + 1; i++) { const c = chunks.get(i + ',' + j); if (c && c.g && c.lod === 0 && c.g.userData.open) for (const o of c.g.userData.open) if (Math.hypot(o.c[0] - p[0], o.c[1] - p[1]) < r) out.push(o); }
+    return out; }
   function obstaclesNear(p) { const [cx, cy] = chunkXY(p), out = [];
     for (let j = cy - 1; j <= cy + 1; j++) for (let i = cx - 1; i <= cx + 1; i++) { const c = chunks.get(i + ',' + j); if (c && c.g && c.lod === 0) for (const o of c.g.userData.obst) out.push(o); }
     if (!window.GW.AWAY) out.push({ x: EX + 6, y: RY0 + 3.6, r: 0.15 }); return out; }
@@ -5011,8 +5564,10 @@ function buildCountry(scene, world) {
     }
     return p.slice();
   }
-  const api = { spawnGiant, spawnAnimal, hunt, owns, heightAt, waterAt, obstacles: obstaclesNear, zoneAt, update, creatures: () => creatures, pickables, mapDraw, roadY: () => RY0, group, sign, SPECIES, damage, lootable, startFight, drawPlate, env, titans: () => titans,
-    landing, ready: false, _buildChunk: buildChunk, setExclude(f) { exclude = f; }, clear(x, y, r) { clear.push([x, y, r]); }, blocked: p => { const c = LAND.at(p); return !owns(p) || c.cls === 'house' || c.cls === 'shed'; } };
+  const api = { spawnGiant, spawnAnimal, hunt, owns, heightAt, waterAt, obstacles: obstaclesNear, openingsNear, zoneAt, update, creatures: () => creatures, pickables, mapDraw, roadY: () => RY0, group, sign, SPECIES, damage, lootable, startFight, drawPlate, env, titans: () => titans,
+    landing, ready: false, _buildChunk: buildChunk, setExclude(f) { exclude = f; }, clear(x, y, r) { clear.push([x, y, r]); },
+    // level the land for something big: flat within r, easing back to the hills by r2; at the height of its centre, never under the sea
+    pad(x, y, r, r2) { const h = Math.max(1, macroH([x, y])); PADS.push({ x, y, r, r2, h }); return h; }, blocked: p => { const c = LAND.at(p); return !owns(p) || c.cls === 'house' || c.cls === 'shed'; } };
   return api;
 }
 // merge BufferGeometries (non-indexed position/normal/uv)
@@ -6208,20 +6763,29 @@ function buildStarships(o) {
     add(new THREE.BoxGeometry(30, 7, 14), new THREE.MeshLambertMaterial({ color: '#dfe2e6' }), 20, 3.5, -52); add(new THREE.BoxGeometry(29, 5, 0.3), new THREE.MeshPhongMaterial({ color: '#304a6a', shininess: 90, transparent: true, opacity: 0.8 }), 20, 3.8, -44.9);
     add(new THREE.CylinderGeometry(0.6, 0.9, 30, 10), hull, -5, 15, -55); const beacon = add(new THREE.SphereGeometry(1.2, 12, 10), new THREE.MeshBasicMaterial({ color: '#ff4040' }), -5, 30.5, -55);
     const lamp = new THREE.PointLight(0xa0d0ff, 1.2, 60, 1.5); lamp.position.set(0, 12, 20); g.add(lamp);
-    g.position.set(p[0], h, -p[1]); o.country.group.add(g); o.country.clear(p[0], p[1], 72);
+    g.position.set(p[0], h, -p[1]); o.country.group.add(g);
     return { g, beacon, x: p[0], y: p[1], door: [p[0] - 5, p[1] - 20], ramp: [p[0] - 5, p[1] - 22] };
   }
-  function port() { if (PORT !== null) return PORT; if (!civ) return (PORT = false) || null; const s = AWAY.spot, p = [s[0] + 60, s[1] + 40]; PORT = buildPort(p); return PORT; }
+  // the field is levelled before the land around it is built
+  const PORTAT = civ ? [AWAY.spot[0] + 60, AWAY.spot[1] + 40] : null;
+  if (PORTAT) { o.country.pad(PORTAT[0], PORTAT[1], 74, 140); o.country.clear(PORTAT[0], PORTAT[1], 76); }
+  function port() { if (PORT !== null) return PORT; if (!civ) return (PORT = false) || null; PORT = buildPort(PORTAT); return PORT; }
 
   /* ---------------- a voyage ---------------- */
   const V = { state: 'docked', t: 0, dur: 0, dest: null, events: [], alarm: 0, shake: 0, wurm: null, foes: [] };
   // where the ship can take you: the worlds of this star's neighbours, and a few further off (longer voyages)
+  // where the ship can go: the other worlds of this star, then worlds of stars ever farther off up the cosmic web
+  let DESTS = null;
   function destinations() {
-    const from = here.path, out = [];
-    for (const up of [3, 5, 7]) { const base = from.slice(0, Math.max(1, from.length - 9 - up)); const r = o.cosmos.worldsUnder(base, up === 3 ? 400 : 250);
-      for (const w of r.worlds) { if (!w.type || w.type === 'gasgiant' || w.path.join('.') === from.join('.') || out.some(q => q.path.join('.') === w.path.join('.'))) continue;
-        let same = 0; while (same < w.path.length && w.path[same] === from[same]) same++; w.far = from.length - same; w.port = starfaring(w); out.push(w); } }
-    return out.sort((a, b) => a.far - b.far || (b.port - a.port)).slice(0, 24);
+    if (DESTS) return DESTS;
+    const body = o.cosmos.bodyAt(here.path) || here.path, star = o.cosmos.starAt(body), out = [], key = w => w.path.join('.');
+    const add = w => { if (!w || !w.type || w.type === 'gasgiant' || key(w) === key({ path: body }) || out.some(q => key(q) === key(w))) return;
+      let same = 0; while (same < w.path.length && w.path[same] === body[same]) same++;
+      w.far = Math.max(0, (star ? star.length : body.length) - same); w.port = starfaring(w); out.push(w); };
+    if (star) o.cosmos.worldsUnder(star, 200).worlds.forEach(add);
+    for (const [up, n] of [[1, 4], [2, 4], [3, 4], [5, 3], [7, 3], [9, 2]]) { if (!star || star.length - up < 1) break;
+      for (let k = 0; k < n; k++) add(o.cosmos.random(star.slice(0, star.length - up))); }
+    return (DESTS = out.sort((a, b) => a.far - b.far || (b.port - a.port)).slice(0, 24));
   }
   function voyage(w) {
     V.state = 'underway'; V.t = 0; V.dest = w; V.dur = 50 + w.far * 14; V.foes = [];
@@ -6260,7 +6824,7 @@ function buildStarships(o) {
     o.say('sys', `The roar dies away. ${civ.ship.name} settles, and the ramp comes down onto ${w.name}.`);
     const lot = o.cosmos.landing(w.path); if (!lot) { o.say('sys', 'Nowhere to come down. The ship turns for home.'); V.state = 'docked'; return; }
     const spot = H.blockToPlan(...H.lotK(lot[25], H.CENTRE));
-    setTimeout(() => U.goAway({ path: lot, surf: w.path.length, spot, label: w.name, type: w.type, byShip: true, about: `${w.port ? 'You walk down the ramp into its spaceport.' : 'A shuttle sets you down on it.'}` }), 1500);
+    setTimeout(() => U.goAway({ path: lot, surf: w.path.length, spot, label: w.name, type: w.type, byShip: true, about: w.port ? `You walk down ${civ.ship.name}’s ramp into its spaceport, and ${civ.ship.name} lifts away for ${here.name}. Another ship stands on the field now.` : `${civ.ship.name} cannot land here: a shuttle sets you down, and the ship’s lights dwindle into the sky.` }), 1500);
   }
   /* ---------------- the helm: where to? ---------------- */
   const win = document.createElement('div'); win.id = 'helmwin'; win.className = 'hud frame win';
@@ -6270,7 +6834,7 @@ function buildStarships(o) {
   function helm() {
     if (V.state === 'underway') { o.say('sys', `Under way for ${V.dest.name}: ${Math.max(0, Math.round(V.dur - V.t))} seconds to go.`); return; }
     const ds = destinations(); win.querySelector('#helmWho').innerHTML = `${o.esc(civ.ship.name)}, a ${civ.ship.cls} of the ${o.esc(civ.people)}, at the spaceport of ${o.esc(here.name)}.`;
-    win.querySelector('#helmList').innerHTML = ds.map((w, i) => `<div><a href="#" data-dest="${i}">${w.port ? '🚀 ' : ''}${o.esc(w.name)}</a> <span style="color:var(--dim)">${o.esc({ earthlike: 'Earth-like world', rockyplanet: 'Rocky planet', moon: 'Moon' }[w.type] || w.type)}${w.star ? ' of ' + o.esc(w.star) : ''} · ${w.far <= 3 ? 'a neighbouring star' : w.far <= 6 ? 'across the star cloud' : 'far across the galaxy'} · ${Math.round(50 + w.far * 14)} s</span></div>`).join('') || '<p>No course the ship can lay from here.</p>';
+    win.querySelector('#helmList').innerHTML = ds.map((w, i) => `<div><a href="#" data-dest="${i}">${w.port ? '🚀 ' : ''}${o.esc(w.name)}</a> <span style="color:var(--dim)">${o.esc({ earthlike: 'Earth-like world', rockyplanet: 'Rocky planet', moon: 'Moon' }[w.type] || w.type)}${w.star ? ' of ' + o.esc(w.star) : ''} · ${w.far === 0 ? 'this star’s system' : w.far <= 2 ? 'a neighbouring star' : w.far <= 5 ? 'across the star cloud' : 'far across the galaxy'} · ${Math.round(50 + w.far * 14)} s</span></div>`).join('') || '<p>No course the ship can lay from here.</p>';
     win.querySelector('#helmList').onclick = ev => { const a = ev.target.closest('[data-dest]'); if (!a) return; ev.preventDefault(); o.closeWin('helmwin'); voyage(ds[+a.dataset.dest]); };
     o.openWin('helmwin');
   }
@@ -6777,7 +7341,13 @@ scene.fog = root.fog;                                             // (world.js k
 const country = GW.buildCountry(root, world);
 const shed = GW.buildShed(root), inShed = p => shed.inside(p);
 // the things that make places look lived in, and the small life about them (props.js); country.js asks it for each chunk
-GW.PROPS = GW.buildProps(root, { heightAt: p => country.heightAt(p), owns: p => country.owns(p), waterAt: p => country.waterAt(p), barren: () => !!(GW.AWAY && /rockyplanet|moon/.test(GW.AWAY.type || '')) });
+// doors and windows that open, on every house near you (openings.js)
+const openings = GW.buildOpenings(root, { sources: (p, r) => country.openingsNear(p, r).concat(AWAY ? [] : world.openings.filter(o => Math.hypot(o.c[0] - p[0], o.c[1] - p[1]) < r)),
+  openNow: use => { const U = window.HANB && HANB.USE[use]; if (!U) return true; const [a, b] = U[4], m = minute(); return b > a ? m >= a && m < b : m >= a || m < b; },
+  say: (k, t) => say(k, t), sound: k => sfx(k), env: () => ({ dark: lastDark, min: minute(), auth: (GW.PROPS && GW.PROPS.authorityOf(GW.LAND.at(P.p))) || 'town' }) });
+let lastDark = 0;
+const houseOpen = GW.AWAY ? null : GW.buildHouseOpenings(house, { sound: k => sfx(k) });
+GW.PROPS = GW.buildProps(root, { heightAt: p => country.heightAt(p), owns: p => country.owns(p), waterAt: p => country.waterAt(p), barren: () => !!(GW.AWAY && /rockyplanet|moon/.test(GW.AWAY.type || '')), clock: () => ({ min: minute(), day: worldDate().getUTCDay() }) });
 const dungeon = GW.buildDungeon(root, country, world), inDungeon = p => dungeon.inside(p);
 country.setExclude(p => inShed(p) || inDungeon(p));
 const allCreatures = () => country.creatures().concat(dungeon.creatures());
@@ -6809,12 +7379,13 @@ const inHouse = (k, p) => S3.pip(p, FC[k].outline);
 const roomAt = (k, p) => FC[k].rooms.find(r => S3.pip(p, r.poly));
 
 /* ================= the world clock ================= */
-const realMin = () => { const d = new Date(); return d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60; };
+const realMin = () => GW.siteTime().min;   // Automataville time (CET), the same in every browser
 const clock = { speed: saved.speed ?? 1, base: realMin() + (saved.clockDays || 0) * 1440, t0: performance.now() };
 // the world's time, unwrapped: minutes since this real day began (fast or backwards, it runs into other days)
 const clockAbs = () => clock.base + (performance.now() - clock.t0) / 60000 * clock.speed;
 const minute = () => ((clockAbs() % 1440) + 1440) % 1440;
-const worldDate = () => { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + Math.floor(clockAbs() / 1440)); return d; };   // the calendar moves with it: the seasons turn at 10000×
+// the calendar moves with it (the seasons turn at 10000×): midnight UTC of Automataville's date, carrying the town's offset from UTC that day
+const worldDate = () => { const t = GW.siteTime(), d = new Date(t.day + Math.floor(clockAbs() / 1440) * 864e5); d.tzOff = GW.siteTime(d.getTime() + 12 * 3600e3).off; return d; };   // the calendar moves with it: the seasons turn at 10000×
 const speedText = s => s === 0 ? 'stopped' : `${s < 0 ? '−' : ''}${Math.abs(s) >= 100 ? Math.round(Math.abs(s)).toLocaleString('en') : +Math.abs(s).toFixed(1)}×`;
 function setSpeed(s, quiet) { clock.base = clockAbs(); clock.t0 = performance.now(); clock.speed = s; if (s === 1 && !quiet) { clock.base = realMin(); } showClockWin(true);
   if (quiet) return; say('sys', s === 1 ? `Time in ${NAMES.town} runs with your own clock.` : s === 0 ? `Time in ${NAMES.town} stands still.` : s < 0 ? `Time in ${NAMES.town} runs backwards, ${speedText(-s)} as fast.` : `Time in ${NAMES.town} runs ${speedText(s)} as fast.`); save(); }
@@ -6867,6 +7438,10 @@ function pose(f, o) {                                // o: { x, y, h, yaw, walk 
   if (o.fight && o.walk == null) f.arms[1].rotation.x = -0.9;                                  // stick up, ready
   if (o.swing != null) f.arms[1].rotation.x = -2.6 + Math.sin(o.swing * Math.PI / 2) * 3.2;       // an overhead swing
   if (o.dead) { f.g.rotation.x = -Math.PI / 2 * 0.95; f.g.position.y = o.h + 0.2; } else f.g.rotation.x = 0;
+  // lying down (in bed): turn first, then tip back about the feet, flat on the back, the face up
+  f.g.rotation.order = o.lie ? 'YXZ' : 'XYZ';
+  if (o.lie) { f.g.rotation.x = -Math.PI / 2 * o.lie; f.g.position.y = o.h + o.lie * ((o.bedH || 0.5) + 0.14); f.legs[0].rotation.x = f.legs[1].rotation.x = 0; f.arms[0].rotation.x = f.arms[1].rotation.x = 0; }
+  if (f.duvet) f.duvet.visible = (o.lie || 0) > 0.95;
   f.head.rotation.y = o.walk != null ? 0 : (o.look || 0);
   f.body.position.y = o.walk != null ? Math.abs(Math.cos(o.walk)) * 0.03 : o.dance ? Math.abs(Math.sin(o.t * 8)) * 0.08 : 0;
 }
@@ -6930,12 +7505,25 @@ function movePlayer(dt, mv) {                       // mv: plan velocity [x, y] 
 function onFloor() { updateZone(true); if (quest.state === 'active' && FL[P.k].level === -2) questProgress('deep'); }
 
 /* ================= Gary ================= */
-const gary = { fig: body(LOOK_GARY), k: G, p: [2, 3], h: 0, yaw: 0, ti: -1, path: null, wi: 0, state: 'stay', place: null, walk: 0, sit: 0, fade: 1, blink: 0, bubble: null, bubbleT: 0, lookAtYou: 0, waveT: 0, said: 0 };
+const gary = { lie: 0, fig: body(LOOK_GARY), k: G, p: [2, 3], h: 0, yaw: 0, ti: -1, path: null, wi: 0, state: 'stay', place: null, walk: 0, sit: 0, fade: 1, blink: 0, bubble: null, bubbleT: 0, lookAtYou: 0, waveT: 0, said: 0 };
 gary.plate = tagSprite([{ text: 'Gary', color: '#40ff40', size: 34 }, { text: '<Shed Manager>', color: '#d8f0d8', size: 24, bold: false }]); gary.plate.position.y = 2.05; gary.fig.g.add(gary.plate);
 function garyTask() { const i = GW.taskAt(SCHED.list, minute()); return { i, e: SCHED.list[i] || null }; }
 function placeOf(e) { return (e && e.place) || deskPlace; }
 function nodeNear(k, p) { const F = nav.fl[k]; let c = F.cellOf(p); if (c < 0 || !F.ok[c]) c = F.nearest(p, 2); return c < 0 ? -1 : nav.off[k] + c; }
+// when Gary sleeps he gets into bed: under the duvet (from his feet to his shoulders: he's 1.6 m, the neck at 1.23), on his own side of a double bed, his head on the pillow
+{ const geo = new THREE.BoxGeometry(0.92, 1.34, 0.42, 10, 8, 3), v = geo.attributes.position;
+  // soft, not a box: the top falls away to the sides and the foot, as a duvet does over a body
+  for (let i = 0; i < v.count; i++) { const x = v.getX(i) / 0.46, y = v.getY(i) / 0.67, z = v.getZ(i);
+    if (z > -0.17) { const drop = 0.4 * x ** 4 + 0.25 * x * x + (y < -0.85 ? 0.6 * ((-y - 0.85) / 0.15) ** 2 : 0); v.setZ(i, -0.21 + (z + 0.21) * Math.max(0.12, 1 - drop)); } }
+  geo.computeVertexNormals();
+  const dv = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: '#e8e2d4' })); dv.position.set(0, 0.52, 0.06); dv.visible = false; gary.fig.g.add(dv); gary.fig.duvet = dv; }
+const sleepy = t => /\b(sleep|sleeps|asleep|nap|bed|bedtime|rest)\b/i.test(t || '');
+function bedSpot(b) {               // where his feet go so that his head lies on the pillow: the head is the end away from the foot (fv)
+  const side = b.w > 1.3 ? b.w / 4 : 0, sx = -b.fv[1] * side, sy = b.fv[0] * side, along = -(b.d / 2 - 0.12) + 1.6;
+  return [b.c[0] + b.fv[0] * along + sx, b.c[1] + b.fv[1] * along + sy];
+}
 function garyGoTo(pl, instant) {
+  if (gary.lie) { gary.lie = 0; if (gary.stand) gary.p = gary.stand.slice(); }     // out of bed first
   gary.place = pl; gary.sit = 0; gary.path = null;
   const goal = nodeNear(pl.k, pl.front);
   if (instant || goal < 0) { garyArrive(pl, true); return; }
@@ -6946,7 +7534,8 @@ function garyGoTo(pl, instant) {
 function garyArrive(pl, jump) {
   if (jump) { const F = nav.fl[pl.k], c = F.nearest(pl.front, 2); gary.k = pl.k; gary.p = c >= 0 ? F.at(c) : pl.front.slice(); gary.h = FL[pl.k].elev; }
   gary.path = null; gary.stand = gary.p.slice();
-  if (pl.seat) { gary.state = 'settle'; gary.t = 0; } else { gary.state = 'stay'; if (pl.look) gary.yaw = Math.atan2(pl.look[1] - gary.p[1], pl.look[0] - gary.p[0]); }
+  if (pl.bed && sleepy(garyTask().e && garyTask().e.task)) { gary.state = 'tobed'; gary.t = 0; }
+  else if (pl.seat) { gary.state = 'settle'; gary.t = 0; } else { gary.state = 'stay'; if (pl.look) gary.yaw = Math.atan2(pl.look[1] - gary.p[1], pl.look[0] - gary.p[0]); }
 }
 // tasks are whatever the schedule says ("Sauna", "Feed the koi"), so the lines quote them rather than conjugate them
 const SAYS = [t => `Next on my list: ${lc(t)}.`, t => `${t}. Mustn’t be late!`, t => `My schedule says: ${lc(t)}.`, t => `Right then. ${t}.`];
@@ -6976,6 +7565,9 @@ function garyUpdate(dt) {
       break;
     }
     case 'settle': { const s = gary.place.seat, t = Math.min(1, gary.sit + dt / 0.8); gary.sit = t; gary.p = [gary.stand[0] + (s.p[0] - gary.stand[0]) * t, gary.stand[1] + (s.p[1] - gary.stand[1]) * t]; gary.yaw += angDiff(gary.yaw, s.yaw) * Math.min(1, dt * 6); if (t >= 1) gary.state = 'sit'; break; }
+    case 'tobed': { const b = gary.place.bed, to = bedSpot(b), t = Math.min(1, gary.lie + dt / 1.6); gary.lie = t;
+      gary.p = [gary.stand[0] + (to[0] - gary.stand[0]) * t, gary.stand[1] + (to[1] - gary.stand[1]) * t]; gary.yaw += angDiff(gary.yaw, Math.atan2(b.fv[1], b.fv[0])) * Math.min(1, dt * 6);
+      if (t >= 1) { gary.state = 'asleep'; if (dist(gary.p, P.p) < 8) say('emote', 'Gary climbs into bed, pulls the duvet up, and is asleep almost at once.'); } break; }
     case 'blink': gary.blink += dt; gary.fade = Math.max(0, 1 - gary.blink / 0.8);
       if (gary.blink > 0.8 && !gary.jumped) { gary.jumped = true; if (dist(gary.p, P.p) < 15) say('emote', 'Gary flickers, like a picture with a bad connection, and is gone.'); garyArrive(gary.place, true); gary.state = 'blink'; }
       if (gary.jumped) { gary.fade = Math.min(1, (gary.blink - 0.8) / 0.8); if (gary.fade >= 1) { gary.jumped = false; garyArrive(gary.place); } }
@@ -6983,11 +7575,11 @@ function garyUpdate(dt) {
   }
   // he notices you when you're close and he isn't busy walking
   const near = gary.k === P.k && dist(gary.p, P.p) < 3.2;
-  if (near && gary.state !== 'walk' && gary.state !== 'blink') { const a = Math.atan2(P.p[1] - gary.p[1], P.p[0] - gary.p[0]); gary.lookAtYou = clamp(angDiff(gary.yaw, a), -0.9, 0.9); if (!gary.said || performance.now() - gary.said > 90000) { gary.said = performance.now(); garySay(greeting(), false); } }
+  if (near && gary.state !== 'walk' && gary.state !== 'blink' && !gary.lie) { const a = Math.atan2(P.p[1] - gary.p[1], P.p[0] - gary.p[0]); gary.lookAtYou = clamp(angDiff(gary.yaw, a), -0.9, 0.9); if (!gary.said || performance.now() - gary.said > 90000) { gary.said = performance.now(); garySay(greeting(), false); } }
   else gary.lookAtYou *= 0.9;
   if (gary.bubble && (gary.bubbleT -= dt) <= 0) { gary.fig.g.remove(gary.bubble); gary.bubble = null; }
   gary.waveT = Math.max(0, gary.waveT - dt);
-  pose(gary.fig, { x: gary.p[0], y: gary.p[1], h: gary.h, yaw: gary.yaw, walk: gary.state === 'walk' ? gary.walk : null, sit: gary.sit, seatH: gary.place && gary.place.seat ? gary.place.seat.h : 0.45, look: gary.lookAtYou, wave: gary.waveT > 0, t: performance.now() / 1000 });
+  pose(gary.fig, { lie: gary.lie, bedH: gary.place && gary.place.bed ? gary.place.bed.h : 0.5, x: gary.p[0], y: gary.p[1], h: gary.h, yaw: gary.yaw, walk: gary.state === 'walk' ? gary.walk : null, sit: gary.lie ? 0 : gary.sit, seatH: gary.place && gary.place.seat ? gary.place.seat.h : 0.45, look: gary.lookAtYou, wave: gary.waveT > 0, t: performance.now() / 1000 });
   gary.fig.g.traverse(o => { if (o.isMesh) { o.material.transparent = gary.fade < 1; o.material.opacity = gary.fade; } });
   gary.fig.g.visible = gary.fade > 0.02;
 }
@@ -7343,6 +7935,10 @@ function sfx(kind, pitch = 1, vol = 1) {
   if (kind === 'rattle') { for (let i = 0; i < 9; i++) setTimeout(() => { try { const o = AC.createOscillator(), gg = AC.createGain(), t2 = AC.currentTime; o.type = 'square'; o.frequency.value = 900 + Math.random() * 1400; o.connect(gg); gg.connect(OUT); gg.gain.setValueAtTime(0.03 * vol, t2); gg.gain.exponentialRampToValueAtTime(0.0001, t2 + 0.04); o.start(t2); o.stop(t2 + 0.05); } catch (e) { /* none */ } }, i * 45 + Math.random() * 40); return; }
   if (kind === 'groan') { const o = AC.createOscillator(); o.type = 'sawtooth'; o.frequency.setValueAtTime(110, t); o.frequency.linearRampToValueAtTime(75, t + 1.3); const bf = AC.createBiquadFilter(); bf.type = 'lowpass'; bf.frequency.value = 500; o.connect(bf); bf.connect(g); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.06 * vol, t + 0.3); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.4); o.start(t); o.stop(t + 1.5); return; }
   if (kind === 'wail') { const o = AC.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(700, t); o.frequency.linearRampToValueAtTime(1500, t + 0.5); o.frequency.linearRampToValueAtTime(900, t + 1.4); o.connect(g); g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.06 * vol, t + 0.2); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.5); o.start(t); o.stop(t + 1.6); noise(1.2, 2500, 2, 0.08 * vol); return; }
+  if (kind === 'door') {                             // a latch, then the hinges' creak, then the leaf settling
+    noise(0.05, 2200, 2, 0.25); const o = AC.createOscillator(), og = AC.createGain(); o.type = 'sawtooth'; o.frequency.setValueAtTime(190, t + 0.08); o.frequency.linearRampToValueAtTime(260, t + 0.45); o.frequency.linearRampToValueAtTime(170, t + 0.75);
+    const bp = AC.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 900; bp.Q.value = 6; o.connect(bp); bp.connect(og); og.connect(g); og.gain.setValueAtTime(0.0001, t); og.gain.linearRampToValueAtTime(0.05, t + 0.12); og.gain.linearRampToValueAtTime(0.0001, t + 0.8); o.start(t + 0.06); o.stop(t + 0.85); return; }
+  if (kind === 'window') { noise(0.04, 3000, 2, 0.2); setTimeout(() => { try { noise(0.08, 900, 1, 0.12); } catch (e) { /* */ } }, 220); return; }
   if (kind === 'roar') { noise(1.1, 180 * pitch, 0.7, 0.5 * vol); tone(110 * pitch, 55, 1.1, 'sawtooth', 0.09 * vol); return; }
   if (kind === 'swing') noise(0.18, 1400, 1.2, 0.15);
   else if (kind === 'hit') { noise(0.12, 300, 1, 0.35); tone(140, 60, 0.12, 'sine', 0.3); }
@@ -7520,6 +8116,10 @@ function nearestAction() {                     // F: whatever you're nearest to 
   if (cinema && !cinema.watching && PL.alive) { const seat = cinema.seatNear(P.k, P.p); if (seat) { const e = garyTask().e, night = GW.U.cur.gary && e && GW.FILMISH.test(e.task || '') && gary.k === cinema.k;
     opts.push({ d: dist(P.p, seat.p), label: night ? 'sit down and watch tonight’s film with Gary' : 'sit down and watch a film', go: () => sitCinema(seat) }); } }
   if (corpse) opts.push({ d: Math.hypot(corpse.x - P.p[0], corpse.y - P.p[1]), label: `loot the ${corpse.name}`, go: () => openLoot(corpse) });
+  if (P.k === G && !inDungeon(P.p)) { const op = openings.nearest(P.p); if (op) opts.push(op); }
+  if (houseOpen && !inDungeon(P.p) && !inShed(P.p)) { const op = houseOpen.nearest(P.p, P.k); if (op) opts.push(op); }
+  if (P.k === G && !inDungeon(P.p) && GW.PROPS.folkNear) { const fk = GW.PROPS.folkNear(P.p); if (fk) { const r = fk.role, what = r ? (/^a /.test(r[1]) ? r[1].split(',')[0].slice(2) : 'passer-by') : 'passer-by';
+    opts.push({ d: fk.d + 0.2, label: `ask the ${what} where they’re going`, go: () => { say('npc', fk.tell); fk.f.wait = Math.max(fk.f.wait, 2.5); } }); } }
   if (!opts.length) return null;
   opts.sort((a, b) => a.d - b.d);
   const a = opts[0], other = opts.find(o => o !== a && o.gary);
@@ -7917,6 +8517,8 @@ function frame() {
     if (cinema.watching) { cinema.camera(camera, toScene); you.g.visible = false; const st = cinema.status(); $('#nowShowing').textContent = st ? `${st.title}${st.year ? ' (' + st.year + ')' : ''} · F or Esc to stand up` : 'F or Esc to stand up'; } }
   const sky = world.update(minute(), new THREE.Vector3(P.p[0], P.h, -P.p[1]), worldDate());
   country.update(dt, P.p, now / 1000, sky.dark, PLAYER);
+  if (houseOpen) houseOpen.update(dt, [{ k: P.k, p: P.p }, { k: gary.k, p: gary.p }]);
+  lastDark = sky.dark; openings.update(dt, P.p, { dark: sky.dark, min: minute(), auth: GW.PROPS.authorityOf ? GW.PROPS.authorityOf(GW.LAND.at(P.p)) || 'town' : 'town', visible: frame.place === 'world' && P.k === G && !inDungeon(P.p) });
   if (frame.place === 'world') GW.PROPS.update(dt, P.p, now / 1000, sky.dark, P.p); GW.PROPS.group.visible = frame.place === 'world';
   dungeon.update(dt, P, now / 1000, PLAYER);
   remains.update(dt, now / 1000);
@@ -7959,7 +8561,7 @@ document.addEventListener('click', ev => {
 // the clock's window: a slider from 10000× backwards, through stopped, to 10000× forwards (logarithmic), and presets
 const toSpeed = v => v === 0 ? 0 : Math.sign(v) * Math.pow(10, (Math.abs(v) - 1) / 99 * 4), fromSpeed = s => s === 0 ? 0 : Math.sign(s) * (1 + Math.log10(Math.abs(s)) / 4 * 99);
 const nice = s => { if (s === 0) return 0; const a = Math.abs(s), p = Math.pow(10, Math.floor(Math.log10(a))), m = a / p, n = m < 1.5 ? 1 : m < 3.5 ? 2 : m < 7.5 ? 5 : 10; return Math.sign(s) * n * p; };
-function showClockWin(update) { const w = $('#clockwin'); if (!w || (update && w.style.display !== 'block')) return; $('#clockSlider').value = Math.round(fromSpeed(clock.speed)); $('#clockSpeed').textContent = speedText(clock.speed); $('#clockDate').textContent = worldDate().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }) + ', ' + GW.hhmm(minute()); }
+function showClockWin(update) { const w = $('#clockwin'); if (!w || (update && w.style.display !== 'block')) return; $('#clockSlider').value = Math.round(fromSpeed(clock.speed)); $('#clockSpeed').textContent = speedText(clock.speed); $('#clockDate').textContent = worldDate().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }) + ', ' + GW.hhmm(minute()) + (clock.speed === 1 ? ' · Automataville time, the same everywhere' : ' · your own time, until you go back to real time'); }
 $('#clock').onclick = () => { const w = $('#clockwin'); if (w.style.display === 'block') { closeWin('clockwin'); return; } openWin('clockwin'); showClockWin(); };
 $('#clockSlider').oninput = ev => { const v = +ev.target.value, s = nice(toSpeed(v)); setSpeed(s, true); $('#clockSpeed').textContent = speedText(s); };
 $('#clockSlider').onchange = ev => { const s = nice(toSpeed(+ev.target.value)); setSpeed(s); };
@@ -7976,7 +8578,7 @@ $('#start').onclick = () => { $('#title').style.display = 'none'; started = true
 if (quest.state === 'done') $('#pSub').textContent = 'Keeper of the Secret';
 renderQuests(); renderPlayer(); renderBag();
 if (saved.crypt != null && inDungeon(P.p)) { P.p = dungeon.enter(saved.crypt, false, saved.cryptId || 'last'); P.h = 0; }
-if (GW.U.arrive === 'away' && AWAY) { P.k = G; const pt = AWAY.byShip && starships.port(); P.p = pt ? [pt.ramp[0], pt.ramp[1] - 3] : country.landing(AWAY.spot); P.h = country.heightAt(P.p); P.ground = P.h; }
+if (GW.U.arrive === 'away' && AWAY) { P.k = G; P.p = country.landing(AWAY.spot); P.h = country.heightAt(P.p); P.ground = P.h; }
 if (GW.U.arrive === 'shed') { P.k = G; P.p = shed.spawn.slice(); P.p[1] += 1; P.h = 0; P.yaw = Math.PI / 2; cam.yaw = P.yaw; }
 if (quest.state !== 'done') $('#pSub').textContent = 'Visitor to ' + NAMES.town;
 $('#uni').textContent = GW.U.crumbs().join(' › ');
@@ -8001,11 +8603,13 @@ function sepulchreDoor() {
 }
 // the starfaring civilisations and their ships (starships.js)
 const starships = GW.buildStarships({ root, country, dungeon, cosmos, say, openWin, closeWin, esc, sound: k => sfx(k) });
+// come down by ship: step off at the foot of the ramp
+if (GW.U.arrive === 'away' && AWAY && AWAY.byShip) { const pt = starships.port(); if (pt) { P.p = [pt.ramp[0], pt.ramp[1] - 3]; P.h = country.heightAt(P.p); P.ground = P.h; } }
 cosmos.portOf = starships.starfaring;
 const aboard = () => inDungeon(P.p) && dungeon.crypt === 'ship';
 $('#cineBody').addEventListener('click', ev => { const t = ev.target.closest('[data-film]'); if (!t || !cinema) return; cinema.choose(t.dataset.film); closeWin('cinewin'); say('emote', 'The lights go down.'); });
 $('#snd').textContent = SND_ICON(sound.volume()); $('#snd').onclick = () => setVolume(sound.cycle());
-window.GARYWORLD = { starships, cosmos, AWAY, cinema, sitCinema, standCinema, sound, warp, warpText, warpOpen, remains, PL, PLAYER, pickUp, nearestAction, dungeon, goDungeon, world, country, P, gary, cam, clock, minute, setSpeed, nav, house, FC, useSchedule, quest, get started() { return started; }, start: () => $('#start').click(), interact, action, garyTask };
+window.GARYWORLD = { houseOpen, openings, starships, cosmos, AWAY, cinema, sitCinema, standCinema, sound, warp, warpText, warpOpen, remains, PL, PLAYER, pickUp, nearestAction, dungeon, goDungeon, world, country, P, gary, cam, clock, minute, setSpeed, nav, house, FC, useSchedule, quest, get started() { return started; }, start: () => $('#start').click(), interact, action, garyTask };
 })();
 </script>
 </body>
