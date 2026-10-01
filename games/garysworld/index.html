@@ -188,8 +188,8 @@ body.hit #view::after{content:"";position:fixed;inset:0;box-shadow:inset 0 0 120
     <tr><td><kbd>1</kbd>–<kbd>4</kbd></td><td>Attack · Stick Whack · Throw Stone · Bandage. <kbd>5</kbd>–<kbd>9</kbd> wave, sit, dance, follow Gary, his day. <kbd>B</kbd> your bag.</td></tr>
     <tr><td><kbd>Enter</kbd></td><td>chat. Gary answers when he is near. <code>/wave</code> <code>/sit</code> <code>/dance</code> <code>/follow</code></td></tr>
     <tr><td><kbd>N</kbd></td><td>sound: louder, softer, off (or <code>/sound 50</code>, <code>/sound off</code> in chat). Headphones bring out where things are.</td></tr>
-    <tr><td><kbd>C</kbd></td><td>the Cosmic Teleport: the universe board by board, the worlds under any star or galaxy, and landing on one (<code>/cosmic</code>, <code>/cosmic random</code>, <code>/cosmic home</code>).</td></tr>
-    <tr><td><kbd>U</kbd></td><td>warp, for testing: straight to any level of the Crypt, at its stair or by its boss (<code>/warp</code> in chat).</td></tr>
+    <tr><td><kbd>C</kbd></td><td>the Cosmic Teleport: the universe board by board, the worlds under any star or galaxy, and landing on one (<code>/cosmic</code>, <code>/cosmic random</code>, <code>/cosmic home</code>); 🚀 marks worlds with starships, and <code>/cosmic ship</code> (or 🚀 in the window) lands you at the foot of a random one's ramp.</td></tr>
+    <tr><td><kbd>U</kbd></td><td>warp, for testing: straight to any level of the Crypt, at its stair or by its boss (<code>/warp</code> in chat); on a world with starships, <code>/warp ship</code> to its ramp and <code>/warp bridge</code> aboard at the helm.</td></tr>
     <tr><td><kbd>T</kbd></td><td>teleport, for testing: a map of Rth to pick any place on it, or type an address or a jump in km (<code>/tp</code> in chat).</td></tr>
     <tr><td><kbd>G</kbd> <kbd>M</kbd> <kbd>?</kbd></td><td>Gary’s day · bigger minimap · this help. <kbd>Esc</kbd> closes windows.</td></tr>
   </table>
@@ -6623,7 +6623,7 @@ function buildCosmos(o) {
     return go(path);
   }
   function rng(s) { let a = s >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
-  function land(w) {
+  function land(w, extra) {
     if (w.type === 'gasgiant') { o.say('sys', `${w.name} is a gas giant: cloud all the way down, and nowhere to stand. Try one of its moons.`); return false; }
     const lot = landing(w.path, rng(w.path.reduce((a, b) => a * 61 + b, 7) >>> 0));
     if (!lot) { o.say('sys', `There's nowhere dry to stand on ${w.name}.`); return false; }
@@ -6632,7 +6632,7 @@ function buildCosmos(o) {
     const spot = H.blockToPlan(...H.lotK(lot[25], H.CENTRE)), names = [];
     for (let d = w.path.length; d < 25; d++) { const c = cellAt(lot.slice(0, d + 1)); if (c.name) names.push(c.name); }
     o.say('sys', `You speak the word of the stars, and the universe folds…`);
-    setTimeout(() => U.goAway({ path: lot, surf: w.path.length, spot, label: w.name, type: w.type, about: `${TYPE[w.type] || 'A world'}${w.star ? ' of ' + w.star : ''}${names.length ? ': ' + names.slice(-3).reverse().join(', ') : ''}.` }), 500);
+    setTimeout(() => U.goAway(Object.assign({ path: lot, surf: w.path.length, spot, label: w.name, type: w.type, about: `${TYPE[w.type] || 'A world'}${w.star ? ' of ' + w.star : ''}${names.length ? ': ' + names.slice(-3).reverse().join(', ') : ''}.` }, extra || {})), 500);
     return true;
   }
   // a random world: down from here through the cosmic web to a star, and one of its worlds you can stand on
@@ -6651,11 +6651,14 @@ function buildCosmos(o) {
     return null;
   }
 
+  // a random world with a starfaring people (and so a spaceport): you come down at the foot of its ship's ramp
+  function randomPort() { for (let k = 0; k < 500; k++) { const w = random([]); if (w && API.portOf && API.portOf(w)) return w; } return null; }
+  function landAtPort() { const w = randomPort(); if (!w) { o.say('sys', 'No starfaring world turned up. Try again.'); return false; } return land(w, { byShip: true }); }
   /* ---------------- the window ---------------- */
   const win = document.createElement('div'); win.id = 'coswin'; win.className = 'hud frame win';
   win.innerHTML = `<button class="x" data-close="coswin">✕</button><h2 class="title">Cosmic Teleport</h2><p id="cosCrumbs"></p>
     <div class="tpRow"><canvas id="cosMap" width="340" height="340"></canvas><div id="cosList"></div></div><p id="cosInfo"></p>
-    <p><button id="cosOut">▲ Out</button> <button id="cosIn">▼ Into it</button> <button id="cosFind">🔭 Find worlds here</button> <button id="cosRand">🎲 A random world</button> <button id="cosHome">Home to Gary</button></p>
+    <p><button id="cosOut">▲ Out</button> <button id="cosIn">▼ Into it</button> <button id="cosFind">🔭 Find worlds here</button> <button id="cosRand">🎲 A random world</button> <button id="cosShip">🚀 A world with starships</button> <button id="cosHome">Home to Gary</button></p>
     <p style="color:var(--dim);font-size:12px">The whole universe, one board at a time. Go down to a galaxy, an arm, a star; find the worlds under it, and land on one. Rocky planets, earth-like worlds and moons have ground to stand on; gas giants don't. In chat: <code>/cosmic</code>, <code>/cosmic random</code>, <code>/cosmic home</code>.</p>`;
   document.body.appendChild(win); win.querySelector('.x').onclick = () => o.closeWin('coswin');
   const $ = s => win.querySelector(s);
@@ -6694,13 +6697,14 @@ function buildCosmos(o) {
   $('#cosIn').onclick = () => { if (ST.sel >= 0) { ST.path = ST.path.concat([ST.sel]); ST.sel = -1; ST.worlds = null; draw(); } };
   $('#cosOut').onclick = () => { if (ST.path.length) { ST.sel = ST.path[ST.path.length - 1]; ST.path = ST.path.slice(0, -1); ST.worlds = null; draw(); } };
   $('#cosFind').onclick = () => { $('#cosList').innerHTML = '<span style="color:var(--dim)">Looking…</span>'; setTimeout(() => { ST.worlds = find(ST.sel >= 0 ? ST.path.concat([ST.sel]) : ST.path); draw(); }, 20); };
+  $('#cosShip').onclick = () => { o.closeWin('coswin'); landAtPort(); };
   $('#cosRand').onclick = () => { const w = random(ST.path); if (w) { o.closeWin('coswin'); land(w); } else o.say('sys', 'No world with ground to stand on turned up. Try again, or from somewhere else.'); };
   $('#cosHome').onclick = () => { o.closeWin('coswin'); o.home(); };
   win.addEventListener('click', ev => { const u = ev.target.closest('[data-cos-up]'), l = ev.target.closest('[data-cos-land]');
     if (u) { ev.preventDefault(); const d = +u.dataset.cosUp; ST.sel = d < ST.path.length ? ST.path[d] : -1; ST.path = ST.path.slice(0, d); ST.worlds = null; draw(); }
     if (l) { ev.preventDefault(); const w = ST.okWorlds[+l.dataset.cosLand]; if (w && land(w)) o.closeWin('coswin'); } });
   const API = { portOf: null };
-  return Object.assign(API, { open, random, land, worldsUnder, find, bodyType, bodyAt, starAt, landing: p => landing(p, Math.random), landingSeeded: (p, seed) => landing(p, rng(seed)) });
+  return Object.assign(API, { open, random, randomPort, landAtPort, land, worldsUnder, find, bodyType, bodyAt, starAt, landing: p => landing(p, Math.random), landingSeeded: (p, seed) => landing(p, rng(seed)) });
 }
 window.GW = window.GW || {}; window.GW.buildCosmos = buildCosmos;
 })();
@@ -8059,7 +8063,7 @@ function pick(x, y) {
 }
 function sendChat() {
   const inp = $('#chatIn'), t = inp.value.trim(); inp.value = ''; inp.style.display = 'none'; cv.focus(); if (!t) return;
-  if (t[0] === '/') { const c = t.slice(1).split(/\s+/)[0].toLowerCase(); if (['wave', 'sit', 'dance', 'follow', 'where'].includes(c)) action(c); else if (c === 'help') openWin('help'); else if (c === 'sound' || c === 'volume') { const a2 = t.replace(/^\/\S+\s*/, '').trim().toLowerCase(); setVolume(a2 === 'off' || a2 === 'mute' ? 0 : a2 === 'on' ? 0.8 : /^\d+$/.test(a2) ? +a2 / 100 : sound.cycle()); } else if (c === 'cosmic') { const a3 = t.replace(/^\/\S+\s*/, '').trim().toLowerCase(); if (a3 === 'home') toGary('You speak the word of passage'); else if (a3 === 'random') { const w = cosmos.random([]); if (w) cosmos.land(w); else say('sys', 'No world turned up. Try again.'); } else cosmos.open(); } else if (c === 'warp') { const arg = t.replace(/^\/\S+\s*/, ''); if (arg) warpText(arg); else warpOpen(); } else if (c === 'tp' || c === 'teleport') { const arg = t.replace(/^\/\S+\s*/, ''); if (arg) tpText(arg); else tpOpen(); } else say('sys', `Unknown command: ${t}`); return; }
+  if (t[0] === '/') { const c = t.slice(1).split(/\s+/)[0].toLowerCase(); if (['wave', 'sit', 'dance', 'follow', 'where'].includes(c)) action(c); else if (c === 'help') openWin('help'); else if (c === 'sound' || c === 'volume') { const a2 = t.replace(/^\/\S+\s*/, '').trim().toLowerCase(); setVolume(a2 === 'off' || a2 === 'mute' ? 0 : a2 === 'on' ? 0.8 : /^\d+$/.test(a2) ? +a2 / 100 : sound.cycle()); } else if (c === 'cosmic') { const a3 = t.replace(/^\/\S+\s*/, '').trim().toLowerCase(); if (a3 === 'home') toGary('You speak the word of passage'); else if (a3 === 'ship' || a3 === 'ships' || a3 === 'starship' || a3 === 'spaceport') cosmos.landAtPort(); else if (a3 === 'random') { const w = cosmos.random([]); if (w) cosmos.land(w); else say('sys', 'No world turned up. Try again.'); } else cosmos.open(); } else if (c === 'warp') { const arg = t.replace(/^\/\S+\s*/, ''); if (arg) warpText(arg); else warpOpen(); } else if (c === 'tp' || c === 'teleport') { const arg = t.replace(/^\/\S+\s*/, ''); if (arg) tpText(arg); else tpOpen(); } else say('sys', `Unknown command: ${t}`); return; }
   say('say', `[You] say: ${t}`);
   if (gary.k === P.k && dist(gary.p, P.p) < 12) setTimeout(() => garySay(reply(t)), 700 + Math.random() * 600);
 }
@@ -8219,6 +8223,16 @@ function warpText(t) {
   if (/^(\d{1,2}|level \d{1,2})$/.test(q)) { const n = +q.replace(/\D/g, '') - 1; if (n < 0 || n > 63) { say('sys', `There is no level ${n + 1}. The Crypt goes from 1 to 64.`); return false; } warp(n, boss); return true; }
   if (t.trim().length === 1 && dungeon.SLOTS.includes(t.trim())) { warp(dungeon.SLOTS.indexOf(t.trim()), boss); return true; }
   // places
+  // the starship of this world, if its people have one: its ramp, or its bridge
+  if (/^(ship|starship|spaceship|spaceport|port|ramp|bridge|helm|aboard|on board)$/.test(q)) {
+    const pt = AWAY && starships.port(), toBridge = /^(bridge|helm|aboard|on board)$/.test(q);
+    if (!pt) { say('sys', AWAY ? 'Nobody on this world builds starships. /cosmic ship takes you to a world that does.' : 'Rth has no starships. /cosmic ship takes you to a world that does.'); return true; }
+    if (toBridge) { if (!aboard()) goDungeon(0, false, true, 'ship'); const h = dungeon.ship && dungeon.ship.helm; if (h) { P.p = [h[0] - 1.5, h[1]]; P.yaw = cam.yaw = 0; } say('sys', `You speak the word of warping, and you are on the bridge of ${starships.civ.ship.name}. F at the helm sets a course.`); return true; }
+    if (aboard()) { if (starships.voyage.state === 'underway') { say('sys', 'The ship is under way: there is no ramp to stand at until it lands.'); return true; } leaveDungeon(); return true; }
+    if (inDungeon(P.p)) leaveDungeon();
+    P.k = G; P.p = [pt.ramp[0], pt.ramp[1] - 3]; P.h = country.heightAt(P.p); P.ground = P.h; P.vy = 0; P.flight = null; setTarget(null); updateZone(true); save();
+    say('sys', `You speak the word of warping, and the ramp of ${starships.civ.ship.name} comes down in front of you. F to board.`); return true;
+  }
   if (/^(chapel|crypt|the crypt|crypt of the last rung|last rung)$/.test(q) && !AWAY) { teleport([dungeon.chapel.p[0], dungeon.chapel.p[1] - 3], 'You speak the word of warping, and you are at the ruined chapel.'); return true; }
   if (/^(mausoleum|sepulchre door)$/.test(q)) { const sd = sepulchreDoor(); if (!sd) { say('sys', 'The Sepulchre is on Rth.'); return true; } teleport([sd.p[0], sd.p[1] + 6], 'You speak the word of warping, and a black mausoleum stands before you.'); return true; }
   if (/^(shady lane|the street|street|gary's street|front door)$/.test(q) && !AWAY) { teleport(HOME_SPOT, 'You speak the word of warping, and you are on Shady Lane.'); return true; }
