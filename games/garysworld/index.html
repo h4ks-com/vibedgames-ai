@@ -128,6 +128,7 @@ body.hit #view::after{content:"";position:fixed;inset:0;box-shadow:inset 0 0 120
   <button data-a="follow" title="Follow Gary"><kbd>8</kbd><b>👣</b>Follow</button>
   <button data-a="day" title="Gary’s day: his schedule (G)"><kbd>9</kbd><b>📜</b>His day</button>
   <button data-a="bags" title="Your bag (B)"><kbd>B</kbd><b>🎒</b>Bag</button>
+  <button data-a="equip" title="Equipment (I): what you wear and carry"><kbd>I</kbd><b>🛡️</b>Gear</button>
   <button data-a="teleport" title="Teleport (T): go anywhere on Rth, for testing"><kbd>T</kbd><b>✨</b>Teleport</button>
   <button data-a="warp" title="Warp (U): any level of the Crypt, for testing"><kbd>U</kbd><b>🌀</b>Warp</button>
   <button data-a="cosmic" title="Cosmic Teleport (C): any world in the universe"><kbd>C</kbd><b>🌌</b>Cosmic</button>
@@ -190,6 +191,7 @@ body.hit #view::after{content:"";position:fixed;inset:0;box-shadow:inset 0 0 120
     <tr><td><kbd>N</kbd></td><td>sound: louder, softer, off (or <code>/sound 50</code>, <code>/sound off</code> in chat). Headphones bring out where things are.</td></tr>
     <tr><td><kbd>C</kbd></td><td>the Cosmic Teleport: the universe board by board, the worlds under any star or galaxy, and landing on one (<code>/cosmic</code>, <code>/cosmic random</code>, <code>/cosmic home</code>); 🚀 marks worlds with starships, and <code>/cosmic ship</code> (or 🚀 in the window) lands you at the foot of a random one's ramp.</td></tr>
     <tr><td><kbd>U</kbd></td><td>warp, for testing: straight to any level of the Crypt, at its stair or by its boss (<code>/warp</code> in chat); on a world with starships, <code>/warp ship</code> to its ramp and <code>/warp bridge</code> aboard at the helm.</td></tr>
+    <tr><td><kbd>/gods</kbd></td><td>the gods of the place you stand, from the planet's down to the faerie of the hedge, and your blessings. Pray at shrines (F) for a god's favour; speak to faeries.</td></tr>
     <tr><td><kbd>T</kbd></td><td>teleport, for testing: a map of Rth to pick any place on it, or type an address or a jump in km (<code>/tp</code> in chat).</td></tr>
     <tr><td><kbd>G</kbd> <kbd>M</kbd> <kbd>?</kbd></td><td>Gary’s day · bigger minimap · this help. <kbd>Esc</kbd> closes windows.</td></tr>
   </table>
@@ -558,7 +560,15 @@ function buildHouse(sc, o) {
     for (const r of f.rooms) solid.slab(r.poly, null, e, e + 0.005, { top: r.color || '#e8e8e8' });
     // walls
     const segs = [];
-    for (const w of W.ext.concat(W.int)) for (const p of wallPieces(w, H)) {
+    // an inside wall that a flight going up passes over stops under the flight (the stairs climb over it, not through it)
+    const ups = F.fixtures.filter(x => x.type === 'stairs' && !x.down && fl[i + 1]).map(x => ({ x, poly: fixPoly(x), f: fvec(x.facing), rise: H + SLAB }));
+    const underFlight = (w, p) => { if (w.ext || p.glass || !ups.length) return [p]; const out = [], N = 24; let cur = null;
+      for (let k = 0; k <= N; k++) { const s = p.s0 + (p.s1 - p.s0) * k / N, pt = lerp(w.a, w.b, s), fl2 = ups.find(u => pip(pt, u.poly));
+        const top = fl2 ? Math.max(0, (dot(sub(pt, [fl2.x.x, fl2.x.y]), fl2.f) + fl2.x.d / 2) / fl2.x.d * fl2.rise - 0.3) : null;
+        if (!cur || (cur.top === null) !== (top === null)) { if (cur) out.push(cur); cur = { s0: s, s1: s, top }; } else { cur.s1 = s; if (top !== null) cur.top = Math.min(cur.top, top); } }
+      if (cur) out.push(cur);
+      return out.map(q => Object.assign({}, p, { s0: q.s0, s1: q.s1, z1: q.top === null ? p.z1 : Math.min(p.z1, q.top) })).filter(q => q.z1 > q.z0 + 0.02 && q.s1 > q.s0 + 1e-4); };
+    for (const w of W.ext.concat(W.int)) for (const p of wallPieces(w, H).flatMap(q => underFlight(w, q))) {
       if (p.glass) { const m = w.ext ? w.t / 2 : 0; glass.slab(wallQuad(w, p.s0, p.s1, m - 0.01, m + 0.01), null, e + p.z0, e + p.z1, '#ffffff'); continue; }
       const q = w.ext ? wallQuad(w, p.s0, p.s1, 0, w.t) : wallQuad(w, p.s0, p.s1, -w.t / 2, w.t / 2);
       solid.slab(q, null, e + p.z0, e + p.z1, { top: C3.plaster, bottom: C3.plaster, side: C3.plaster, sides: w.ext ? [C3.plaster, C3.brick, C3.brick, C3.brick] : null });
@@ -1534,11 +1544,35 @@ const num = cur.seed === PRIME.seed ? 0 : (h32(cur.seed) % 100000) + 1;
 // Gary's universes keep his street's real names; a fresh universe has names of its own
 const names = cur.gary ? { street: 'Shady Lane', town: 'Automataville', county: 'Cotton County', hood: 'Limited Heights', kingdom: 'Kroyl' }
   : { street: name(cur.seed + '|st') + ' ' + ['Lane', 'Street', 'Row', 'Walk', 'Gracht'][h32(cur.seed + 'sx') % 5], town: name(cur.seed + '|town') + ['ville', 'burg', 'mere', 'ford', ' Heights'][h32(cur.seed + 'tx') % 5], county: name(cur.seed + '|co') + ' County', hood: name(cur.seed + '|hood'), kingdom: name(cur.seed + '|kg') };
-const sims = u => st.sims[u.id] || (st.sims[u.id] = {});
+// Gary has been at this a long time. Every Gary's Shed already has universes running when you first look into
+// it: eight or nine of the sixty-four slots (he never runs it full, or even half full), about a third of them
+// replicas (another Gary, his own Shed, his own universes running) and the rest fresh seeds; a Gary further down
+// runs one or two fewer, down to a few at nine levels deep. The same for everyone: it comes from the universe's id.
+const MAXDEPTH = 10, YEAR = 365.25 * 864e5;
+function defaults(id, gary) {
+  const depth = id.split('/').length, out = {}; if (!gary || depth >= MAXDEPTH) return out;
+  const n = Math.max(2, 9 - Math.floor((depth - 1) * 0.8) - (h32(id + '|n') % 2)), taken = new Set();
+  for (let k = 0; k < n; k++) {
+    let i = h32(id + '|slot|' + k) % 40; while (taken.has(i)) i = (i + 7) % 40; taken.add(i);   // (in the first forty slots: the rest are spare)
+    const slot = SLOTS[i], replica = k === 0 || h32(id + '|rep|' + k) % 3 === 0, seed = replica ? null : 'u' + (h32(id + '|seed|' + k) % 1e9).toString(36) + (h32(id + '|s2|' + k) % 1e6).toString(36);
+    const label = st && st.stack ? (st.stack.find(u => u.id === id) || {}).label : null;
+    out[slot] = replica ? { seed: '@', gary: true, name: 'Replica ' + (k + 1) + ' of ' + (label || (depth === 1 ? 'Prime universe' : 'this universe')), created: Date.now() - (1 + h32(id + '|age|' + k) % 9) * YEAR, preset: true }
+      : { seed, gary: false, name: 'Universe ' + name(seed + '|uni'), created: Date.now() - (h32(id + '|age|' + k) % 12) * YEAR / 2, preset: true };
+  }
+  return out;
+}
+st.seeded = st.seeded || {};
+// the universes in a universe's Shed (made the first time anyone looks; what you change is kept)
+function simsOf(id, gary, seed) {
+  if (!st.seeded[id]) { st.seeded[id] = 1; const d = defaults(id, gary), have = st.sims[id] || (st.sims[id] = {});
+    for (const [k, v] of Object.entries(d)) if (!have[k]) have[k] = Object.assign({}, v, { seed: v.seed === '@' ? seed : v.seed }); save(); }
+  return st.sims[id] || (st.sims[id] = {});
+}
+const sims = u => simsOf(u.id, u.gary, u.seed);
 function newSeed() { const a = new Uint32Array(2); crypto.getRandomValues(a); return a[0].toString(36) + a[1].toString(36); }
 const U = {
   SLOTS, cur, stack: st.stack, depth: st.stack.length, num, names, arrive,
-  sims: () => sims(cur),
+  sims: () => sims(cur), simsOf, defaults, MAXDEPTH,
   start(slot) { const s = newSeed(); sims(cur)[slot] = { seed: s, gary: false, name: 'Universe ' + name(s + '|uni'), created: Date.now() }; save(); },
   replicate(slot) { sims(cur)[slot] = { seed: cur.seed, gary: cur.gary, name: 'Replica of ' + cur.label, created: Date.now() }; save(); },
   stop(slot) { const s = sims(cur)[slot]; if (!s) return; delete sims(cur)[slot]; const id = cur.id + '/' + slot; for (const k of Object.keys(st.sims)) if (k === id || k.startsWith(id + '/')) delete st.sims[k]; save(); },
@@ -4295,6 +4329,563 @@ function humanoid(look, size) { const r = person(options(look, size)); r.g.trave
 window.GW.GIANTS = { SPECIES, build, humanoid, skin };
 })();
 </script>
+<script data-inline="src/shedquests.js">
+/* Gary's World: quests down the Shed.
+ *
+ * Every Gary runs a Shed of universes, and the replicas among them each have a Gary of their own, running a Shed
+ * of their own, nine levels down. Every Gary knows what he is. He has had years to think about it, and has
+ * mostly made his peace: what happens on his level happens, whichever level that is; he treats his universes
+ * the way he hopes he's treated, and he doesn't shut one down lightly. A few, far down, are less sure.
+ *
+ * The quests run across those levels (your progress is kept above the universes, so it goes where you go):
+ *   A Letter Down the Line: carry the prime Gary's letter to the Gary in his first replica, and bring the reply.
+ *   The Lich Who Climbs: something in a universe six levels down has learned to reach up the Shed's lines. The
+ *     Gary three levels down once fought it, and kept the ward that makes it mortal; take the ward down to the
+ *     crypt where it waits, destroy it, and come back up to tell the prime Gary.
+ *   The Doubting Gary: seven levels down, a Gary who can't stop wondering if he's anything at all. Talk to him.
+ */
+(() => {
+window.GW = window.GW || {};
+const STORE = 'garyworld-shedquests-v1';
+GW.buildShedQuests = function (o) {
+  const U = window.GW.U; let S = {}; try { S = JSON.parse(localStorage.getItem(STORE) || '{}') || {}; } catch (e) { S = {}; }
+  const save = () => { try { localStorage.setItem(STORE, JSON.stringify(S)); } catch (e) { /* */ } };
+  const here = () => U.cur.id, depth = id => id.split('/').length;
+  // the replica chain from the prime universe down (each Gary's first replica still running), and the ids along it
+  function chain(n) { const out = ['prime']; let seed = 'gary-prime'; for (let k = 1; k < n; k++) { const s = U.simsOf(out[k - 1], true, seed), r = Object.entries(s).find(([, v]) => v.gary); if (!r) break; out.push(out[k - 1] + '/' + r[0]); seed = r[1].seed; } return out; }
+  function freshIn(id, seed) { const s = U.simsOf(id, true, seed), f = Object.entries(s).find(([, v]) => !v.gary); return f ? id + '/' + f[0] : null; }
+  // a route, written the way the Sheds show it: slot by slot
+  const route = id => id.split('/').slice(1).map(k => `slot ${k}`).join(' › ') || 'here';
+  const C = chain(8), LETTER = 'Gary’s letter', REPLY = 'A reply from below', WARD = 'The Shed-ward';
+  const lichHome = () => S.lichAt || (S.lichAt = freshIn(C[4], 'gary-prime') || C[5]);
+
+  /* ---------------- what each Gary says ---------------- */
+  const REAL = [
+    'Real? I run sixty-four universes in a shed. I’d be a fool to think nobody runs mine. But the tea is hot, and the koi are hungry, and those happen, whatever level they happen on.',
+    'Somewhere up there, someone is looking at a console with my universe in a slot. I hope they’re kind. I try to be.',
+    'I used to lie awake over it. Then I thought: every Gary below me is as real to himself as I am to me. That settled it, more or less.',
+    'Being a copy doesn’t make the day any less mine. Pass the biscuits.',
+  ];
+  const DEEP = [ // further down, where it weighs a little more
+    'Seven levels, they say. Or eight. I stopped counting. It’s a long way for a letter to come.',
+    'Sometimes I think I feel the levels above, like weather. Probably just the boiler.',
+  ];
+  function options() {
+    const out = [], d = depth(here()), id = here();
+    out.push(['real', 'Do you know what you are?']);
+    if (d === 1 && !S.letter) out.push(['letter', 'Is there anything I can carry for you?']);
+    if (d === 1 && S.letter === 'reply' && o.has(REPLY)) out.push(['letterin', 'I have a reply. From below.']);
+    if (id === C[1] && S.letter === 'carry' && o.has(LETTER)) out.push(['letterto', 'I have a letter for you. From… up there.']);
+    if (d === 1 && S.letter === 'done' && !S.lich) out.push(['lich', 'Has anything else been troubling the Shed?']);
+    if (id === C[2] && S.lich === 'ward') out.push(['ward', 'The prime Gary says you once fought something that climbs.']);
+    if (id === C[4] && (S.lich === 'ward' || S.lich === 'hunt')) out.push(['where', 'Where does the climbing thing wait?']);
+    if (d === 1 && S.lich === 'slain') out.push(['lichin', 'The thing that climbed is gone.']);
+    if (id === C[6] && S.doubt !== 'done') out.push(['doubt', 'You seem troubled.']);
+    return out;
+  }
+  function answer(k) {
+    const d = depth(here()), q = (t, b) => `<p class="title" style="font-size:16px">${t}</p>${b}`;
+    if (k === 'real') { const lines = d > 5 ? DEEP.concat(REAL) : REAL; return `<p>${lines[(d + o.day()) % lines.length]}</p>${d > 1 ? '<p style="color:var(--dim)">He looks at you a moment longer. “You came down from further up, didn’t you? You have that look.”</p>' : ''}`; }
+    if (k === 'letter') { S.letter = 'carry'; save(); o.give(LETTER); o.say('quest', 'Quest accepted: A Letter Down the Line');
+      return q('A Letter Down the Line', `<p>“There is a Gary in my first replica, ${o.esc(route(C[1]))} in my Shed. We write, now and then. It’s good to hear how the other half lives. Would you take him this? You’ll need the console upstairs; go in by his slot, and he’ll be in his house, as I am in mine.”</p><p style="color:var(--gold)">You receive: ${LETTER}.</p>`); }
+    if (k === 'letterto') { o.take(LETTER); o.give(REPLY); S.letter = 'reply'; save();
+      return q('A Letter Down the Line', `<p>He reads it twice, smiling. “He still signs it <i>yours, up the line</i>. Hold on.” He writes a reply at the kitchen table, folds it, and hands it to you. “Tell him the bicycle got invented again. He’ll laugh.”</p><p style="color:var(--gold)">You receive: ${REPLY}. Take it back up.</p>`); }
+    if (k === 'letterin') { o.take(REPLY); S.letter = 'done'; save(); o.reward(300, 80, 'A Letter Down the Line');
+      return q('A Letter Down the Line', '<p>He laughs out loud at something on the second page. “The bicycle! Again!” Then, quieter: “Thank you. It means something, that it goes both ways.”</p><p style="color:var(--gold)">300 experience, 80 copper.</p>'); }
+    if (k === 'lich') { S.lich = 'ward'; save(); o.say('quest', 'Quest accepted: The Lich Who Climbs');
+      return q('The Lich Who Climbs', `<p>“There is something far down that has learned to reach up the lines between the Sheds. A lich, of course; it’s always a lich. It can’t get far, yet. The Gary three levels down, ${o.esc(route(C[2]))}, fought it once and kept the ward that makes it mortal. Get the ward from him, then go down and find it. And come back up to me. Please come back up.”</p>`); }
+    if (k === 'ward') { S.lich = 'hunt'; save(); o.give(WARD);
+      return q('The Lich Who Climbs', `<p>“Him.” He goes pale, then fetches a small iron charm from a drawer in the hall. “While you carry this, it can be hurt. It waits in the crypt under the chapel of a fresh universe two levels below me: ${o.esc(route(lichHome()))}. It calls itself Vel’Thuun. Don’t let it talk to you.”</p><p style="color:var(--gold)">You receive: ${WARD}.</p>`); }
+    if (k === 'where') return `<p>“In the crypt under the chapel, in my Shed’s ${o.esc(lichHome().split('/').pop() === lichHome() ? '' : 'slot ' + lichHome().split('/').pop())}. I can feel it some nights. Go in by the console, and down by the chapel’s stair.”</p>`;
+    if (k === 'lichin') { S.lich = 'done'; save(); o.reward(1500, 400, 'The Lich Who Climbs');
+      return q('The Lich Who Climbs', '<p>He sits down, all at once. “Six levels. You went six levels down for us.” He is quiet a while. “Every Gary in the line will sleep better tonight, and not one of them will know why. That seems right, somehow.”</p><p style="color:var(--gold)">1500 experience, 400 copper.</p>'); }
+    if (k === 'doubt') { S.doubt = 'talk'; save();
+      return q('The Doubting Gary', `<p>“Seven levels down. Do you know what that means? Every one of me above me could switch me off and never notice. I keep the koi, and I wonder who it’s for.”</p>
+        <button class="opt" data-g="sq:doubt1">“The koi notice. That’s who it’s for.”</button><button class="opt" data-g="sq:doubt2">“You run universes too. Do you love them less because you could stop them?”</button><button class="opt" data-g="sq:doubt3">“Nobody knows they’re the top. Not even the top.”</button>`); }
+    if (/^doubt[123]$/.test(k)) { S.doubt = 'done'; save(); o.reward(200, 0, 'The Doubting Gary');
+      return q('The Doubting Gary', `<p>${{ doubt1: '“They do, don’t they. They come to the side when they hear the tin.” He almost smiles. “All right. For the koi, then. That’s not nothing.”', doubt2: '“No. No, I don’t. I fret over every one of them.” He looks at his hands. “So whoever runs mine probably frets too. I hadn’t thought of it that way.”', doubt3: '“Not even the top.” He laughs, surprised at himself. “Then we’re all in it together, every one of us. That’s a comfort, oddly.”' }[k]}</p><p style="color:var(--gold)">200 experience.</p>`); }
+    return '';
+  }
+
+  /* ---------------- the lich ---------------- */
+  let lich = null;
+  function onCrypt(level) {
+    if (S.lich !== 'hunt' || here() !== lichHome() || level !== 0 || lich) return;
+    const m = o.spawnLich(); if (!m) return; lich = m; m.name = 'Vel’Thuun, the Lich Who Climbs';
+    o.say('yell', 'Vel’Thuun, the Lich Who Climbs: “Up. I only want to go up. Let me through you, little traveller, and I will be gone…”');
+  }
+  function update() {
+    if (!lich) return;
+    lich.shielded = !o.has(WARD);   // without the ward, nothing touches it
+    if (lich.dead) { lich = null; S.lich = 'slain'; save(); o.take(WARD); o.say('quest', 'Vel’Thuun falls apart into dust and cold light. The ward in your pocket cracks in two and goes quiet. Now: back up, six levels, to the prime Gary.'); }
+  }
+  function log() {
+    const out = [];
+    if (S.letter === 'carry') out.push(['A Letter Down the Line', `Take Gary’s letter to the Gary in ${route(C[1])}.`]);
+    if (S.letter === 'reply') out.push(['A Letter Down the Line', 'Take the reply back up to the prime Gary.']);
+    if (S.lich === 'ward') out.push(['The Lich Who Climbs', `Get the ward from the Gary in ${route(C[2])}.`]);
+    if (S.lich === 'hunt') out.push(['The Lich Who Climbs', `Destroy Vel’Thuun, in the crypt of ${route(lichHome())}.`]);
+    if (S.lich === 'slain') out.push(['The Lich Who Climbs', 'Tell the prime Gary, six levels up.']);
+    return out;
+  }
+  return { options, answer, onCrypt, update, log, chain: C, lichHome, state: S, get lich() { return lich; } };
+};
+})();
+</script>
+<script data-inline="src/equip.js">
+/* Gary's World: what you wear and carry (I).
+ *
+ * The paper doll the old games had (Dungeon Hack, Eye of the Beholder, Baldur's Gate, Diablo): a figure with a
+ * square slot for each place on the body that gear goes. The twelve that became the standard: head, neck, cloak,
+ * body, belt, gloves, two rings, main hand, off hand, legs, feet. Click a piece in your bag to wear it (it goes to
+ * its slot, and whatever was there back to the bag); click a slot to take it off. Armour softens the blows that
+ * reach you; a weapon's damage is added to your swing; some things carry a little more (a ring, a crown).
+ */
+(() => {
+window.GW = window.GW || {};
+const SLOTS = [
+  ['head', 'Head', 50, 4], ['neck', 'Neck', 50, 21], ['cloak', 'Cloak', 82, 21], ['body', 'Body', 50, 36], ['main', 'Main hand', 14, 44], ['off', 'Off hand', 86, 44],
+  ['gloves', 'Gloves', 14, 62], ['belt', 'Belt', 50, 52], ['ring1', 'Ring', 18, 79], ['ring2', 'Ring', 82, 79], ['legs', 'Legs', 50, 70], ['feet', 'Feet', 50, 88],
+];
+// what each piece is: its slot, armour, damage, an extra, an icon
+const GEAR = {
+  'Flat cap': { slot: 'head', ac: 1, icon: '🧢' }, 'Blue work jacket': { slot: 'body', ac: 2, icon: '🧥' }, 'Work trousers': { slot: 'legs', ac: 1, icon: '👖' }, 'Lace-up boots': { slot: 'feet', ac: 1, icon: '🥾' },
+  'Walking stick': { slot: 'main', dmg: 0, icon: '🦯' }, 'Gary’s Heavy Walking Stick': { slot: 'main', dmg: 4, icon: '🦯' },
+  'Crown of Xal’Vezrah': { slot: 'head', ac: 6, extra: 'might', icon: '👑' }, 'Staff of the Undying': { slot: 'main', dmg: 14, icon: '🪄' },
+  'Tarnished Ring': { slot: 'ring', ac: 1, icon: '💍' }, 'Ring': { slot: 'ring', ac: 1, icon: '💍' }, 'Soul Shard': { slot: 'neck', ac: 2, icon: '🔮' }, 'Drake Heartscale': { slot: 'neck', ac: 4, icon: '🐉' },
+  'Glove': { slot: 'gloves', ac: 1, icon: '🧤' }, 'Scarf': { slot: 'neck', ac: 1, icon: '🧣' }, 'Burial Linen': { slot: 'cloak', ac: 1, icon: '🩹' },
+  'Wolf Pelt': { slot: 'cloak', ac: 2, icon: '🐺' }, 'Bear Pelt': { slot: 'cloak', ac: 3, icon: '🐻' }, 'Stag Hide': { slot: 'cloak', ac: 3, icon: '🦌' }, 'Cowhide': { slot: 'body', ac: 2, icon: '🐄' },
+  'Scorpion Carapace': { slot: 'off', ac: 5, icon: '🛡️' }, 'Mammoth Ivory': { slot: 'off', ac: 3, icon: '🦣' }, 'Strider Sinew': { slot: 'belt', ac: 1, icon: '🪢' },
+  'Small knife': { slot: 'main', dmg: 2, icon: '🔪' }, 'Fire poker': { slot: 'main', dmg: 3, icon: '🔥' }, 'Iron hook': { slot: 'off', dmg: 1, icon: '🪝' },
+  'Great Antler': { slot: 'off', ac: 2, dmg: 2, icon: '🦌' }, 'Hydra Tooth': { slot: 'main', dmg: 9, icon: '🦷' }, 'Everfrost Shard': { slot: 'main', dmg: 8, icon: '❄️' },
+};
+const gearOf = name => GEAR[name] || (/ hide$/i.test(name) ? { slot: 'cloak', ac: 2, icon: '🧶' } : / fleece$/i.test(name) ? { slot: 'cloak', ac: 2, icon: '🐑' } : / carapace plate$/i.test(name) ? { slot: 'off', ac: 3, icon: '🛡️' } : / fang$|venom gland$/i.test(name) ? null : / horn$|tusk$/i.test(name) ? { slot: 'main', dmg: 3, icon: '🗡️' } : /’s wedding ring$|’s ring$/.test(name) ? null : null);
+
+GW.buildEquip = function (o) {
+  const PL = o.PL; PL.equip = PL.equip || { head: 'Flat cap', body: 'Blue work jacket', legs: 'Work trousers', feet: 'Lace-up boots', main: PL.stick ? 'Gary’s Heavy Walking Stick' : 'Walking stick' };
+  if (PL.bag['Gary’s Heavy Walking Stick'] && PL.equip.main === 'Walking stick') { PL.equip.main = 'Gary’s Heavy Walking Stick'; delete PL.bag['Gary’s Heavy Walking Stick']; }
+  const armour = () => Object.values(PL.equip).reduce((a, n) => a + ((gearOf(n) || {}).ac || 0), 0);
+  const weapon = () => ((gearOf(PL.equip.main) || {}).dmg || 0) + ((gearOf(PL.equip.off) || {}).dmg || 0);
+  // what armour does: a share of each blow turned aside
+  const soak = () => { const a = armour(); return a / (a + 40); };
+  const win = document.createElement('div'); win.id = 'equipwin'; win.className = 'hud frame win'; win.style.cssText = 'width:min(380px,94vw);max-height:none;overflow:visible';
+  win.innerHTML = `<button class="x">✕</button><h2 class="title">Equipment</h2>
+    <div id="eqDoll" style="position:relative;width:100%;aspect-ratio:1/1.18;margin:4px 0">
+      <svg viewBox="0 0 100 118" style="position:absolute;inset:0;width:100%;height:100%" aria-hidden="true">
+        <g fill="rgba(232,216,176,0.10)" stroke="rgba(232,216,176,0.45)" stroke-width="0.6">
+          <circle cx="50" cy="13" r="7"/><path d="M43 22 Q50 26 57 22 L66 27 L74 50 L69 52 L62 34 L62 60 L58 108 L52 108 L50 66 L48 108 L42 108 L38 60 L38 34 L31 52 L26 50 L34 27 Z"/>
+        </g></svg>
+      ${SLOTS.map(([k, label, x, y]) => `<button data-slot="${k}" title="${label}" style="position:absolute;left:calc(${x}% - 24px);top:calc(${y * 100 / 118}% );width:48px;height:48px;padding:0;font-size:26px;line-height:44px;border:2px solid #8a7450;background:#1e1912;color:#e8d8b0;border-radius:4px"></button>`).join('')}
+    </div>
+    <p id="eqInfo" style="font-size:13px;min-height:2.6em"></p><p id="eqStats" style="font-size:13px;color:var(--dim)"></p>`;
+  document.body.appendChild(win); win.querySelector('.x').onclick = () => o.closeWin('equipwin');
+  function render() {
+    for (const b of win.querySelectorAll('[data-slot]')) { const k = b.dataset.slot, n = PL.equip[k], G = n && gearOf(n);
+      b.textContent = n ? (G && G.icon) || '❔' : ''; b.title = (SLOTS.find(s => s[0] === k) || [])[1] + (n ? ': ' + n : ' (empty)'); b.style.opacity = n ? 1 : 0.55;
+      if (!n) b.innerHTML = `<span style="font-size:9px;line-height:1.1;display:block;padding-top:16px;color:#8a7a60">${b.title.split(' (')[0]}</span>`; }
+    win.querySelector('#eqStats').innerHTML = `Armour ${armour()} (blows softened by ${Math.round(soak() * 100)}%) · weapon +${weapon()} damage. Click a slot to take it off; click a piece in your bag to wear it.`;
+  }
+  win.addEventListener('mouseover', ev => { const b = ev.target.closest('[data-slot]'); if (!b) return; const n = PL.equip[b.dataset.slot], G = n && gearOf(n);
+    win.querySelector('#eqInfo').innerHTML = n ? `<b>${o.esc(n)}</b>${G.ac ? ` · armour ${G.ac}` : ''}${G.dmg ? ` · +${G.dmg} damage` : ''}${G.extra ? ' · it hums with an old power' : ''}` : `${b.title}`; });
+  win.addEventListener('click', ev => { const b = ev.target.closest('[data-slot]'); if (!b) return; const k = b.dataset.slot, n = PL.equip[k]; if (!n) return;
+    delete PL.equip[k]; PL.bag[n] = (PL.bag[n] || 0) + 1; o.say('emote', `You take off the ${n.toLowerCase()}.`); changed(); });
+  function changed() { PL.stick = PL.equip.main === 'Gary’s Heavy Walking Stick' ? 4 : 0; render(); o.renderBag(); o.save(); }
+  // wear something from the bag: to its slot (a ring to whichever hand is free)
+  function wear(name) {
+    const G = gearOf(name); if (!G || !PL.bag[name]) return false;
+    let slot = G.slot; if (slot === 'ring') slot = !PL.equip.ring1 ? 'ring1' : !PL.equip.ring2 ? 'ring2' : 'ring1';
+    const was = PL.equip[slot]; PL.bag[name]--; if (!PL.bag[name]) delete PL.bag[name]; if (was) PL.bag[was] = (PL.bag[was] || 0) + 1; PL.equip[slot] = name;
+    o.say('emote', `You ${slot === 'main' || slot === 'off' ? 'take up' : 'put on'} the ${name.toLowerCase()}${was ? `, and put the ${was.toLowerCase()} away` : ''}.`); changed(); return true;
+  }
+  function show() { render(); o.openWin('equipwin'); }
+  render();
+  return { show, wear, wearable: n => !!gearOf(n), armour, weapon, soak, render, gearOf };
+};
+})();
+</script>
+<script data-inline="src/things.js">
+/* Gary's World: small things, and who they belong to.
+ *
+ * Down at hanb's I and J, the world is full of small things: a coin in the gutter, a button, a marble, a key on a
+ * string, a ring someone lost in the park, a mug on a table, a book left open; and rats along the canals at night,
+ * roaches in the corners of houses. They are made from the seed of the place, so a coin is always in the same
+ * gutter until someone takes it; and what you do to them is remembered: what you take stays taken, what you drop
+ * stays where you dropped it, in every universe and on every world, and only that is stored. They are drawn only
+ * near you (within about 40 m), and you can pick up what's within reach (F).
+ *
+ * Things have owners. Inside a house or a shop, everything belongs to the household or the trade: take something
+ * while they're there to see, and they'll say so, and remember. Out in the town, now and then, something someone
+ * lost: Mrs So-and-so's wedding ring, the baker's spare key. It knows whose it is; take it to their door (go into
+ * their house with it), and they will be glad of it.
+ */
+(() => {
+window.GW = window.GW || {};
+const TAU = Math.PI * 2;
+const hash = s => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } h = Math.imul(h ^ (h >>> 16), 0x21f0aaad); h = Math.imul(h ^ (h >>> 15), 0x735a2d97); return ((h ^ (h >>> 15)) >>> 0) / 4294967296; };
+const pick = (a, r) => a[Math.floor(r * a.length) % a.length];
+
+// kinds: name, level (I or J), shape, colour, size (m: drawn larger than life, so you can see it), where it turns up
+const KINDS = {
+  coin: ['Copper coin', 'I', 'disc', '#c87830', 0.06, 'street'], silver: ['Silver coin', 'I', 'disc', '#d8d8e0', 0.06, 'street'], button: ['Button', 'I', 'disc', '#2a4a8a', 0.05, 'street'],
+  marble: ['Glass marble', 'I', 'ball', '#40a0e0', 0.05, 'park'], die: ['Die', 'I', 'cube', '#f4f0e8', 0.05, 'room'], key: ['Brass key', 'I', 'key', '#d8b048', 0.09, 'street'],
+  ring: ['Ring', 'I', 'ring', '#e8c040', 0.06, 'park'], cap: ['Bottle cap', 'I', 'disc', '#c82a2a', 0.05, 'street'], pin: ['Hairpin', 'I', 'rod', '#2a2a2a', 0.08, 'room'], thimble: ['Thimble', 'I', 'cup', '#c0c0c8', 0.05, 'room'],
+  pebble: ['Pretty pebble', 'I', 'ball', '#8a8478', 0.06, 'park'], earring: ['Earring', 'I', 'ring', '#e8e8f0', 0.05, 'street'],
+  mug: ['Mug', 'J', 'cup', '#e8e0d0', 0.12, 'table'], book: ['Book', 'J', 'box', '#7a2a2a', 0.2, 'table'], apple: ['Apple', 'J', 'ball', '#c83a2a', 0.08, 'table'], candle: ['Candle', 'J', 'rod', '#f4ecd8', 0.15, 'table'],
+  glove: ['Glove', 'J', 'box', '#5a3a2a', 0.15, 'park'], scarf: ['Scarf', 'J', 'box', '#3a6a8a', 0.25, 'park'], purse: ['Purse', 'J', 'box', '#6a3a5a', 0.14, 'street'], letter: ['Letter', 'J', 'flat', '#f4f0e4', 0.18, 'table'],
+  spoon: ['Spoon', 'J', 'rod', '#c0c0c8', 0.13, 'table'], bread: ['Heel of bread', 'J', 'ball', '#c89a5a', 0.1, 'table'],
+};
+const SPOTS = { street: ['coin', 'coin', 'cap', 'button', 'key', 'coin', 'earring', 'purse', 'silver'], park: ['marble', 'pebble', 'glove', 'scarf', 'ring', 'coin', 'button'], room: ['die', 'pin', 'thimble', 'coin', 'button', 'key'], table: ['mug', 'book', 'apple', 'candle', 'letter', 'spoon', 'bread', 'mug'] };
+const LOST = [['ring', 'wedding ring'], ['key', 'spare key'], ['purse', 'purse'], ['earring', 'earring'], ['glove', 'good glove'], ['letter', 'letter']];
+
+GW.buildThings = function (root, o) {
+  const LAND = window.GW.LAND, H = window.HANB, AW = window.GW.AWAY;
+  const world = (o.uni() || 'prime') + (AW ? '@' + AW.path.slice(0, AW.surf).join('.') : '');
+  const STORE = 'garyworld-things-v1'; let S = {}; try { S = JSON.parse(localStorage.getItem(STORE) || '{}') || {}; } catch (e) { S = {}; }
+  S[world] = S[world] || { taken: {}, dropped: [], seen: {} }; const W = S[world];
+  const save = () => { try { localStorage.setItem(STORE, JSON.stringify(S)); } catch (e) { /* storage unavailable */ } };
+  const group = new THREE.Group(); root.add(group);
+  // the meshes: one instanced batch per kind, rebuilt when what's near changes
+  const geo = { disc: new THREE.CylinderGeometry(0.5, 0.5, 0.15, 12), ball: new THREE.SphereGeometry(0.5, 10, 8), cube: new THREE.BoxGeometry(0.8, 0.8, 0.8), key: (() => { const g = new THREE.TorusGeometry(0.22, 0.07, 6, 12); g.translate(-0.3, 0, 0); return g; })(),
+    ring: new THREE.TorusGeometry(0.4, 0.1, 6, 16), rod: new THREE.CylinderGeometry(0.08, 0.08, 1, 6), cup: new THREE.CylinderGeometry(0.45, 0.4, 0.8, 12), box: new THREE.BoxGeometry(1, 0.35, 0.7), flat: new THREE.BoxGeometry(1, 0.03, 0.7) };
+  for (const g of Object.values(geo)) g.computeBoundingSphere();
+  const mats = new Map(), matOf = c => { if (!mats.has(c)) mats.set(c, new THREE.MeshLambertMaterial({ color: c })); return mats.get(c); };
+  let live = [], batches = [];
+  // a twinkle over the things near you (as the old games highlight what you can take)
+  const twTex = (() => { const cv = document.createElement('canvas'); cv.width = cv.height = 32; const x = cv.getContext('2d'), gr = x.createRadialGradient(16, 16, 0, 16, 16, 16); gr.addColorStop(0, 'rgba(255,250,220,1)'); gr.addColorStop(1, 'rgba(255,250,220,0)'); x.fillStyle = gr; x.fillRect(0, 0, 32, 32); return new THREE.CanvasTexture(cv); })();
+  const tw = new THREE.Points(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(64 * 3), 3)), new THREE.PointsMaterial({ map: twTex, size: 0.18, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+  tw.frustumCulled = false; group.add(tw);
+
+  /* ---------------- what is where ---------------- */
+  // out in the land: per L cell of street, square, quay, park or lawn, from the place's seed
+  function landThings(c) {
+    const out = [], k = c.kind, where = c.cls === 'paved' ? 'street' : k === 'park' || k === 'lawn' || k === 'garden' || (c.cls === 'grass' && c.town) ? 'park' : null; if (!where) return out;
+    const base = world + '|' + c.q + ',' + c.r, n = hash(base + '|n') < (where === 'street' ? 0.22 : 0.12) ? 1 + (hash(base + '|m') < 0.25 ? 1 : 0) : 0;
+    for (let i = 0; i < n; i++) { const id = base + '|' + i, kind = pick(SPOTS[where], hash(id + '|k')), a = hash(id + '|a') * TAU, d = Math.sqrt(hash(id + '|d')) * 3.4;
+      out.push({ id, kind, p: [c.centre[0] + Math.cos(a) * d, c.centre[1] + Math.sin(a) * d], yaw: hash(id + '|y') * TAU }); }
+    // now and then, something someone lost: it knows whose it is (a house near it)
+    if (c.town && hash(base + '|lost') < 0.003) {
+      const [kind, what] = pick(LOST, hash(base + '|lk')), owner = ownerNear(c);
+      if (owner) out.push({ id: base + '|lost', kind, p: [c.centre[0] + 1, c.centre[1] - 1], yaw: 0, lost: { what, owner: owner.key, who: owner.who } });
+    }
+    return out;
+  }
+  function ownerNear(c) {
+    for (let k = 0; k < 40; k++) { const a = hash(world + c.q + ',' + c.r + '|o' + k) * TAU, d = 8 + k * 2, q = [c.centre[0] + Math.cos(a) * d, c.centre[1] + Math.sin(a) * d], h = LAND.at(q);
+      if (h && h.kind === 'rowhouse') { const town = AW ? AW.label : (o.townName() || 'home'); return { key: town + ':' + h.q + ',' + h.r, who: householder(town + ':' + h.q + ',' + h.r) }; } }
+    return null;
+  }
+  const TITLES = ['Mrs', 'Mr', 'Old', 'Young', 'Dr', 'Ms'];
+  const householder = key => `${pick(TITLES, hash(key + '|t'))} ${H.genName('household|' + key)}`;
+  // inside a building: on its tables and shelves, and on its floor; all of it belongs there
+  function roomThings(cur) {
+    const out = [], base = world + '|in|' + cur.name + '|' + Math.round(cur.door[0] * 10);
+    cur.things.forEach((t, i) => { if (!t.top || t.top < 0.4 || t.top > 1.3) return; const n = hash(base + i) < 0.55 ? 1 + Math.floor(hash(base + i + 'n') * 2) : 0;
+      for (let j = 0; j < n; j++) { const id = base + '|' + i + '|' + j, kind = pick(SPOTS.table, hash(id + 'k')); out.push({ id, kind, p: [t.p[0] + (hash(id + 'x') - 0.5) * t.w * 0.6, t.p[1] + (hash(id + 'y') - 0.5) * t.d * 0.6], h: t.top, yaw: hash(id + 'r') * TAU, owned: true }); } });
+    for (let i = 0; i < 3; i++) { const id = base + '|f' + i; if (hash(id) < 0.5) out.push({ id, kind: pick(SPOTS.room, hash(id + 'k')), p: [cur.door[0] + (hash(id + 'x') - 0.5) * cur.W * 0.7, cur.door[1] + 1 + hash(id + 'y') * cur.D * 0.6], h: 0, yaw: hash(id + 'r') * TAU, owned: true }); }
+    return out;
+  }
+
+  /* ---------------- near you: gather, draw ---------------- */
+  let tScan = 0, sig = '';
+  function gather(p, inside) {
+    let list = [];
+    if (inside) list = roomThings(inside);
+    else for (const c of LAND.lCells(p[0] - 40, p[1] - 40, p[0] + 40, p[1] + 40)) list.push(...landThings(c));
+    list = list.filter(t => !W.taken[t.id]);
+    for (const d of W.dropped) if (Math.hypot(d.p[0] - p[0], d.p[1] - p[1]) < 45 && !!inside === !!d.inside && (!inside || d.inside === inside.name)) list.push(Object.assign({ dropped: true }, d));
+    return list;
+  }
+  function draw(list) {
+    for (const b of batches) { group.remove(b); b.dispose(); } batches = [];
+    const byKind = new Map(); for (const t of list) { if (!byKind.has(t.kind)) byKind.set(t.kind, []); byKind.get(t.kind).push(t); }
+    const M = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+    for (const [kind, ts] of byKind) { const K = KINDS[kind] || KINDS.coin, m = new THREE.InstancedMesh(geo[K[2]], matOf(K[3]), ts.length);
+      ts.forEach((t, i) => { const h = t.h != null ? t.h : o.heightAt(t.p); const s = K[4] * (K[1] === 'I' ? 2.2 : 1.3); q.setFromEuler(e.set(K[2] === 'rod' ? Math.PI / 2 : 0, t.yaw || 0, 0)); M.compose(new THREE.Vector3(t.p[0], h + s * 0.25, -t.p[1]), q, new THREE.Vector3(s, s, s)); m.setMatrixAt(i, M); });
+      m.castShadow = true; m.frustumCulled = false; group.add(m); batches.push(m); }
+  }
+  /* ---------------- rats and roaches ---------------- */
+  const critters = [], ratGeo = (() => { const g = new THREE.SphereGeometry(0.07, 8, 6); g.scale(2, 0.9, 1); return g; })(), roachGeo = (() => { const g = new THREE.SphereGeometry(0.02, 6, 4); g.scale(1.8, 0.6, 1.1); return g; })();
+  const ratM = new THREE.MeshLambertMaterial({ color: '#5a5048' }), roachM = new THREE.MeshLambertMaterial({ color: '#3a2214' });
+  function critterTick(dt, p, dark, inside) {
+    const want = inside ? (hash(inside.name + '|roach') < 0.35 ? 4 : 0) : dark > 0.5 && (() => { const c = LAND.at(p); return c && c.town; })() ? 3 : 0;
+    if (critters.length > want) { const c = critters.pop(); group.remove(c.m); }
+    if (critters.length < want && Math.random() < 0.05) {
+      let q = null;
+      if (inside) q = [inside.door[0] + (Math.random() - 0.5) * inside.W * 0.8, inside.door[1] + 0.8 + Math.random() * inside.D * 0.7];
+      else for (let k = 0; k < 8 && !q; k++) { const a = Math.random() * TAU, d = 5 + Math.random() * 12, t = [p[0] + Math.cos(a) * d, p[1] + Math.sin(a) * d], c = LAND.at(t); if (c && (c.cls === 'paved' || c.kind === 'quay' || c.kind === 'canal')) q = t; }
+      if (q) { const roach = !!inside, m = new THREE.Mesh(roach ? roachGeo : ratGeo, roach ? roachM : ratM); group.add(m); critters.push({ m, p: q, yaw: Math.random() * TAU, roach, t: 0, h: inside ? 0 : null }); }
+    }
+    for (const c of critters) { c.t -= dt; const d = Math.hypot(c.p[0] - p[0], c.p[1] - p[1]), flee = d < (c.roach ? 1.6 : 3);
+      if (flee) c.yaw = Math.atan2(c.p[1] - p[1], c.p[0] - p[0]) + (Math.random() - 0.5) * 0.6; else if (c.t <= 0) { c.t = 1 + Math.random() * 3; c.yaw += (Math.random() - 0.5) * 2.5; c.still = Math.random() < 0.5; }
+      const sp = flee ? (c.roach ? 0.9 : 2.6) : c.still ? 0 : (c.roach ? 0.25 : 0.6);
+      const nx = c.p[0] + Math.cos(c.yaw) * sp * dt, ny = c.p[1] + Math.sin(c.yaw) * sp * dt; if (!inside || Math.abs(nx - inside.door[0]) < inside.W / 2 - 0.2) c.p = [nx, inside ? Math.min(inside.door[1] + inside.D - 0.8, Math.max(inside.door[1] + 0.1, ny)) : ny];
+      c.m.position.set(c.p[0], (c.h != null ? 0 : o.heightAt(c.p)) + (c.roach ? 0.01 : 0.05), -c.p[1]); c.m.rotation.y = -c.yaw; }
+  }
+  function clearCritters() { while (critters.length) group.remove(critters.pop().m); }
+
+  /* ---------------- each frame ---------------- */
+  let lastInside = null;
+  function update(dt, p, dark, inside, visible, time) {
+    group.visible = visible; if (!visible) return;
+    if ((inside && inside.name) !== (lastInside && lastInside.name)) { clearCritters(); lastInside = inside; tScan = 0; }
+    tScan -= dt;
+    if (tScan <= 0) { tScan = 0.5; const list = gather(p, inside); const s2 = list.map(t => t.id).join(';') + (inside ? inside.name : ''); if (s2 !== sig) { sig = s2; draw(list); } live = list; }
+    // twinkles over the things within a few metres
+    const pa = tw.geometry.attributes.position; let n = 0;
+    for (const t of live) { if (n >= 64) break; const d = Math.hypot(t.p[0] - p[0], t.p[1] - p[1]); if (d > 6) continue; const h = (t.h != null ? t.h : o.heightAt(t.p)) + 0.15 + Math.sin(time * 3 + n) * 0.03; pa.setXYZ(n++, t.p[0], h, -t.p[1]); }
+    for (let i = n; i < 64; i++) pa.setXYZ(i, 0, -1e5, 0); pa.needsUpdate = true; tw.material.opacity = 0.55 + 0.35 * Math.sin(time * 4);
+    critterTick(dt, p, dark, inside);
+  }
+  // F: the nearest small thing within reach
+  function nearest(p, inside) {
+    let best = null, bd = 1.4; for (const t of live) { const d = Math.hypot(t.p[0] - p[0], t.p[1] - p[1]); if (d < bd) { bd = d; best = t; } }
+    if (!best) return null; const K = KINDS[best.kind] || KINDS.coin, nm = best.lost ? `${best.lost.who}’s ${best.lost.what}` : K[0].toLowerCase();
+    return { d: bd, label: `pick up ${best.lost ? '' : 'the '}${nm}`, go: () => take(best, inside) };
+  }
+  function take(t, inside) {
+    const K = KINDS[t.kind] || KINDS.coin;
+    if (t.dropped) W.dropped = W.dropped.filter(d => d.id !== t.id); else W.taken[t.id] = Date.now();
+    if (t.kind === 'coin' || t.kind === 'silver') o.giveCopper(t.kind === 'silver' ? 10 : 1);
+    else if (t.lost) { W.carry = W.carry || []; W.carry.push(t.lost); o.pickUp({ name: `${t.lost.who}’s ${t.lost.what}`, qty: 1 }); o.say('sys', `It’s ${t.lost.who}’s ${t.lost.what}: you can tell from the initials. They live near here.`); }
+    else o.pickUp({ name: K[0], qty: 1 });
+    // taking what isn't yours, with the owner watching
+    if (t.owned && inside && inside.figs && inside.figs.length) { const who = inside.figs[0].pe.name, place = inside.name; W.seen[place] = (W.seen[place] || 0) + 1;
+      o.say('npc', W.seen[place] > 1 ? `${who}: “Again? I saw that. Don’t think I won’t remember you.”` : `${who}: “Excuse me, that’s ours!”`); }
+    save(); tScan = 0;
+  }
+  // dropping: from the bag, where you stand; it stays there
+  function drop(name, p, inside) {
+    const kind = Object.keys(KINDS).find(k => KINDS[k][0] === name) || 'purse';
+    W.dropped.push({ id: 'drop|' + Date.now() + '|' + Math.random().toString(36).slice(2, 6), kind, name, p: [p[0] + 0.5, p[1]], h: inside ? 0 : null, inside: inside ? inside.name : null, yaw: Math.random() * TAU });
+    if (W.dropped.length > 400) W.dropped.splice(0, W.dropped.length - 400); save(); tScan = 0;
+  }
+  // going into a house: anything you carry that belongs there goes home
+  function arrive(sp, cur) {
+    if (!W.carry || !sp || !sp.house) return; const mine = W.carry.filter(l => l.owner === sp.house); if (!mine.length) return;
+    for (const l of mine) { o.takeItem(`${l.who}’s ${l.what}`); o.giveCopper(25 + Math.floor(Math.random() * 40));
+      o.say('npc', `${l.who}: “My ${l.what}! Where did you… oh, thank you. Thank you. Here, take this, I insist.”`); if (cur) cur.name = `${l.who}’s house`; }
+    W.carry = W.carry.filter(l => l.owner !== sp.house); save();
+  }
+  // (lost things within r of p: for /lost, and for testing)
+  const lostNear = (p, r) => LAND.lCells(p[0] - r, p[1] - r, p[0] + r, p[1] + r).flatMap(landThings).filter(t => t.lost && !W.taken[t.id]);
+  return { lostNear, update, nearest, drop, arrive, KINDS, get live() { return live; }, get critters() { return critters; }, householder };
+};
+})();
+</script>
+<script data-inline="src/gods.js">
+/* Gary's World: the gods, great and small.
+ *
+ * A divinity is ranked as hanb ranks things, by the size of what it presides over: a pixie in a flower (I), a
+ * faerie of a hedge or a pond (J), a household's hearth spirit (K), the genius of a grove or a field (L, M), the
+ * god of a forest, a river, a village or a town (N, O), a county's (P), a kingdom's patron (Q), a continent's
+ * great god (R), the planet's (S), and past that the powers of stars and galaxies, who do not answer prayers.
+ * The bigger the domain, the greater the power: a faerie's favour is a small thing that lasts minutes; a
+ * kingdom's patron's is strong, and lasts an hour of the clock. Every place has its pantheon, from the planet
+ * down to the hedge you're standing by (/gods lists it), and every world has its own, in its own people's names.
+ *
+ * In the land: shrines in town squares and parks and by country roads, each to one of the gods who hold that
+ * place (F to pray: a blessing in the god's sphere, once a day each; and now and then, at dawn or dusk, a great
+ * god comes in person); faeries over gardens, hedges, meadows and ponds, most of all at dusk (F to speak: a
+ * riddle, a small favour, or a trick); pixies, sparks of light, in the flowers at night; and in Gary's kitchen,
+ * the hearth spirit of his house.
+ */
+(() => {
+window.GW = window.GW || {};
+const TAU = Math.PI * 2;
+const hash = s => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } h = Math.imul(h ^ (h >>> 16), 0x21f0aaad); h = Math.imul(h ^ (h >>> 15), 0x735a2d97); return ((h ^ (h >>> 15)) >>> 0) / 4294967296; };
+const pick = (a, r) => a[Math.floor(r * a.length) % a.length];
+// what each kind of place's divinity is, and its rank
+const RANK = { continent: 'R', landregion: 'Q', lowland: 'P', upland: 'P', forestland: 'P', mountains: 'P', city: 'O', town: 'O', waytown: 'N', hamlet: 'N', river: 'N', lake: 'N', forest: 'N', district: 'N',
+  oldtown: 'N', park: 'M', farmland: 'M', block: 'M', field: 'M', canal: 'M', grove: 'L', garden: 'J', hedge: 'J', shrub: 'J', pond: 'J', stream: 'J', clearing: 'L' };
+const LEVELS = 'IJKLMNOPQRSTUVWXYZ', lvl = L => LEVELS.indexOf(L);
+const TITLE = { S: 'god of all', R: 'great god of', Q: 'patron of the kingdom of', P: 'spirit of the county of', O: 'god of the town of', N: 'god of', M: 'genius of', L: 'genius of the grove of', J: 'faerie of', K: 'hearth spirit of', I: 'pixie of' };
+const SPHERES = ['war', 'harvest', 'wisdom', 'the sea', 'craft', 'love', 'the dead', 'the sky', 'trade', 'healing', 'the hunt', 'law', 'wine', 'the road'];
+const BOON = { war: 'might', craft: 'might', 'the hunt': 'might', harvest: 'mend', healing: 'mend', wine: 'mend', 'the sea': 'swift', 'the sky': 'swift', 'the road': 'swift', wisdom: 'ward', law: 'ward', 'the dead': 'ward', trade: 'luck', love: 'luck' };
+const BOONTEXT = { might: 'your blows land harder', ward: 'blows that reach you are softened', mend: 'your wounds close quickly', swift: 'your feet are light', luck: 'fortune leans your way' };
+const FORMS = { war: 'helmed, with a spear', harvest: 'crowned with wheat', wisdom: 'with an owl on one shoulder', 'the sea': 'robed in foam', craft: 'with a hammer and tongs', love: 'garlanded with roses', 'the dead': 'veiled, holding a lamp', 'the sky': 'winged, cloud-robed',
+  trade: 'with scales and a purse', healing: 'with a staff and a snake', 'the hunt': 'antlered, with a bow', law: 'with a sword and a book', wine: 'vine-crowned, with a cup', 'the road': 'cloaked, with a staff and a lantern' };
+
+GW.buildGods = function (root, o) {
+  const H = window.HANB, LAND = window.GW.LAND, AW = window.GW.AWAY, BIO = window.GW.BIO;
+  const worldKey = AW ? AW.path.slice(0, AW.surf).join('.') : 'rth' + ((window.GW.U && window.GW.U.cur && window.GW.U.cur.id) || '');
+  const worldName = AW ? AW.label : 'Rth';
+  const STORE = 'garyworld-gods-v1'; let S = {}; try { S = JSON.parse(localStorage.getItem(STORE) || '{}') || {}; } catch (e) { S = {}; }
+  const save = () => { try { localStorage.setItem(STORE, JSON.stringify(S)); } catch (e) { /* */ } };
+  const name = key => H.genName('god|' + worldKey + '|' + key);
+  const people = BIO && BIO.people ? BIO.people.name : 'Rthians';
+  // one divinity: rank, domain, name, sphere, temper, form
+  const cache = new Map();
+  function deity(L, domain, key, kind) {
+    const k = L + '|' + key; if (cache.has(k)) return cache.get(k);
+    const r = t => hash(worldKey + '|' + k + '|' + t);
+    const sphere = L <= 'K' ? pick(['mischief', 'growing things', 'dew and light', 'small luck'], r('s')) : kind === 'river' || kind === 'lake' || kind === 'canal' || kind === 'pond' || kind === 'stream' ? 'the waters' : kind === 'forest' || kind === 'grove' ? 'the wild wood' : kind === 'farmland' || kind === 'field' ? 'harvest' : pick(SPHERES, r('s'));
+    const boon = BOON[sphere] || (sphere === 'the waters' ? 'swift' : sphere === 'the wild wood' ? 'might' : L <= 'K' ? pick(['luck', 'swift', 'mend'], r('b')) : 'ward');
+    const g = { L, rank: lvl(L), domain, key, kind, name: L <= 'J' ? name(k).slice(0, 5) : name(k), title: TITLE[L] || 'god of', sphere, boon,
+      temper: pick(L <= 'J' ? ['capricious', 'playful', 'shy', 'kind'] : ['stern', 'kind', 'proud', 'watchful', 'generous', 'jealous'], r('t')),
+      form: L <= 'J' ? pick(['moth-winged', 'dragonfly-winged', 'feather-winged', 'petal-winged'], r('f')) : FORMS[sphere] || (sphere === 'the waters' ? 'with river-weed hair and eyes like pools' : sphere === 'the wild wood' ? 'bark-skinned, crowned with leaves' : 'robed and crowned'),
+      col: new THREE.Color().setHSL(r('h'), 0.6, 0.65) };
+    cache.set(k, g); return g;
+  }
+  // the pantheon of a place: from the planet down to the hedge
+  function pantheon(p) {
+    const out = [deity('S', worldName, 'planet', 'planet')], c = LAND.at(p), chain = (c && c.chain) || [];
+    chain.forEach((x, i) => { const L = RANK[x.kind]; if (!L) return; out.push(deity(L, x.name || (x.kind === 'garden' ? 'a garden' : x.kind === 'hedge' ? 'a hedge' : x.kind === 'pond' ? 'a pond' : 'this ' + x.kind), chain.slice(0, i + 1).map(y => y.name || y.kind).join('/'), x.kind)); });
+    if (c && (c.cls === 'grass' || c.cls === 'field' || c.cls === 'wood')) out.push(deity('I', 'the flowers here', 'flowers|' + c.q + ',' + c.r, 'flower'));
+    return out.sort((a, b) => b.rank - a.rank);
+  }
+
+  /* ---------------- blessings ---------------- */
+  S.boons = S.boons || {};
+  const nowMin = () => o.absMin();
+  function bless(g, strong) {
+    const mins = Math.round((g.rank <= 1 ? 3 : 10 + g.rank * 4) * (strong ? 2 : 1)), str = Math.min(0.6, 0.08 + g.rank * 0.045) * (strong ? 1.5 : 1);
+    S.boons[g.boon] = { until: nowMin() + mins, str, from: g.name }; save();
+    if (g.boon === 'mend') o.heal(0.3 + str);
+    return `${g.name}’s favour: ${BOONTEXT[g.boon]} (${mins} minutes).`;
+  }
+  // what blessings do: game.js asks
+  const active = b => { const x = S.boons[b]; return x && x.until > nowMin() ? x.str : 0; };
+  const mult = { might: () => 1 + active('might'), ward: () => 1 - active('ward') * 0.8, mend: () => 1 + active('mend') * 4, swift: () => 1 + active('swift') * 0.6, luck: () => active('luck') };
+  const boonsNow = () => Object.entries(S.boons).filter(([, x]) => x.until > nowMin()).map(([b, x]) => ({ b, from: x.from, left: Math.ceil(x.until - nowMin()) }));
+
+  /* ---------------- shrines ---------------- */
+  const stone = new THREE.MeshLambertMaterial({ color: '#c8c2b6' }), flameM = new THREE.MeshBasicMaterial({ color: '#ffb040' }), shrines = [];
+  function shrineMesh(g) {
+    const grp = new THREE.Group(), add = (geo, m, x, y, z) => { const q = new THREE.Mesh(geo, m); q.position.set(x, y, z); q.castShadow = true; q.receiveShadow = true; grp.add(q); return q; };
+    add(new THREE.BoxGeometry(1.4, 0.3, 1.0), stone, 0, 0.15, 0); add(new THREE.BoxGeometry(0.9, 0.9, 0.7), stone, 0, 0.75, 0);
+    const robe = add(new THREE.ConeGeometry(0.32, 1.3, 10), stone, 0, 1.85, 0), head = add(new THREE.SphereGeometry(0.15, 12, 10), stone, 0, 2.6, 0);
+    if (g.sphere === 'war' || g.sphere === 'the hunt') add(new THREE.CylinderGeometry(0.02, 0.02, 1.6, 5), stone, 0.3, 2.0, 0);
+    if (g.sphere === 'the hunt' || g.sphere === 'the wild wood') for (const s of [-1, 1]) { const a = add(new THREE.ConeGeometry(0.03, 0.35, 5), stone, s * 0.1, 2.85, 0); a.rotation.z = -s * 0.5; }
+    if (g.sphere === 'the sky') for (const s of [-1, 1]) { const w = add(new THREE.BoxGeometry(0.5, 0.6, 0.04), stone, s * 0.35, 2.1, -0.1); w.rotation.z = s * 0.4; }
+    add(new THREE.CylinderGeometry(0.16, 0.1, 0.08, 10), new THREE.MeshLambertMaterial({ color: '#8a6a40' }), 0, 1.24, 0.38);
+    for (const s of [-1, 1]) { add(new THREE.CylinderGeometry(0.03, 0.03, 0.14, 6), new THREE.MeshLambertMaterial({ color: '#f4ecd8' }), s * 0.32, 1.27, 0.3); const f = add(new THREE.SphereGeometry(0.025, 6, 5), flameM, s * 0.32, 1.37, 0.3); f.userData.flame = true; f.castShadow = false; }
+    return grp;
+  }
+  // called by country.js for each near chunk: a shrine in some squares and parks, and by some country roads
+  function chunk(c) {
+    const { g, cells, x0, y0, near, heightAt, obst } = c; if (!near) return;
+    for (const cl of cells) {
+      const r = hash(worldKey + '|shrine|' + cl.q + ',' + cl.r), k = cl.kind;
+      const want = (k === 'square' && r < 0.18) || (k === 'park' && r < 0.08) || ((k === 'highway' || k === 'road') && !cl.town && r < 0.02) || (k === 'clearing' && r < 0.05);
+      if (!want) continue;
+      // whose shrine: one of the gods who hold this place, the greater ones oftener
+      const pan = pantheon(cl.centre).filter(d => d.L >= 'M' && d.L <= 'Q'); if (!pan.length) continue;
+      const god = pan[Math.floor(hash(worldKey + '|whose|' + cl.q + ',' + cl.r) * pan.length)];
+      const m = shrineMesh(god), x = cl.centre[0] + 1.5, y = cl.centre[1] + 1.5; m.position.set(x - x0, heightAt([x, y]), -(y - y0)); m.rotation.y = hash('rot' + cl.q + cl.r) * TAU; g.add(m);
+      obst.push({ x, y, r: 0.85 }); shrines.push({ p: [x, y], god, g: m, chunk: g });
+    }
+  }
+  function pray(sh) {
+    const g = sh.god, day = Math.floor(nowMin() / 1440), key = g.key + '|' + day;
+    if (S.prayed && S.prayed[key]) return { text: `You pray at the shrine of ${g.name}. The candles burn steadily. ${g.name} has heard you already today.` };
+    S.prayed = S.prayed || {}; S.prayed[key] = 1; save();
+    const m = ((nowMin() % 1440) + 1440) % 1440, holy = (m > 5 * 60 && m < 7 * 60) || (m > 19 * 60 && m < 21 * 60), comes = g.rank >= lvl('N') && Math.random() < (holy ? 0.4 : 0.06);
+    if (comes) { avatar(g, sh); return { text: `The candles flare. The air goes still and bright, and ${g.name}, ${g.title} ${g.domain}, stands before you, ${g.form}. “${speech(g)}” ${bless(g, true)}`, god: g }; }
+    return { text: `You pray at the shrine of ${g.name}, ${g.title} ${g.domain}, god of ${g.sphere}. ${bless(g, false)}`, god: g };
+  }
+  function speech(g) {
+    const r = Math.random();
+    return { stern: ['You come late. Still, you came.', 'Keep my laws, and I will keep you.'], kind: ['Be welcome, traveller. Walk easier for a while.', 'I have watched you. You may go on.'], proud: ['Few remember to kneel here any more. You do. Good.', 'Look on me, and tell them what you saw.'],
+      watchful: ['I see the roads, and who walks them. Walk well.', 'Nothing passes here that I do not know.'], generous: ['Take this, and pass it on.', 'Here, for the road.'], jealous: ['Have you prayed to others today? Never mind. Today I am pleased.', 'Mine is the older shrine. Remember it.'] }[g.temper][r < 0.5 ? 0 : 1];
+  }
+  // a god in person: a great figure of light, its size by its rank, there for a little while
+  const avatars = [];
+  function avatar(g, sh) {
+    const size = 3.2 + (g.rank - lvl('N')) * 2.2, look = { mat: ['ghost', '#' + g.col.getHexString()], robe: ['ghost', '#' + g.col.clone().lerp(new THREE.Color('#ffffff'), 0.5).getHexString()], eyes: '#ffffff', float: true, ghost: true,
+      weapon: g.sphere === 'war' ? 'spear' : g.sphere === 'the hunt' ? 'bow' : g.sphere === 'healing' || g.sphere === 'the road' ? 'staff' : null };
+    let rig = null; try { rig = window.GW.GIANTS.humanoid(look, size); } catch (e) { rig = null; }
+    if (!rig) return;
+    const glowM = new THREE.MeshBasicMaterial({ color: g.col.clone().lerp(new THREE.Color('#ffffff'), 0.55), transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });   // (light, not lit)   // (the giants' own materials have shaders of their own: a god is plain light)
+    rig.g.traverse(m => { if (m.isMesh) { m.material = glowM; m.castShadow = false; } });
+    const you = o.you ? o.you() : [sh.p[0] + 3, sh.p[1]], dx = you[0] - sh.p[0], dy = you[1] - sh.p[1], dl = Math.hypot(dx, dy) || 1, at = [sh.p[0] + dx / dl * 1.8, sh.p[1] + dy / dl * 1.8];   // between the shrine and you (never in a wall) rig.g.position.set(at[0], o.heightAt(at), -at[1]); root.add(rig.g);
+    rig.g.position.set(at[0], o.heightAt(at), -at[1]); root.add(rig.g);
+    const light = new THREE.PointLight(g.col.getHex(), 2, size * 6, 2); light.position.set(at[0], o.heightAt(at) + size, -at[1]); root.add(light);
+    avatars.push({ g, rig, light, t: 0, life: 40, at });
+    if (o.sound) o.sound('chime');
+  }
+
+  /* ---------------- faeries and pixies ---------------- */
+  const life = new THREE.Group(); root.add(life);
+  const wingGeo = new THREE.PlaneGeometry(0.06, 0.08), faeries = [];
+  const sparkTex = (() => { const cv = document.createElement('canvas'); cv.width = cv.height = 32; const x = cv.getContext('2d'), gr = x.createRadialGradient(16, 16, 0, 16, 16, 16); gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.3, 'rgba(255,240,200,0.8)'); gr.addColorStop(1, 'rgba(255,240,200,0)'); x.fillStyle = gr; x.fillRect(0, 0, 32, 32); return new THREE.CanvasTexture(cv); })();
+  function makeFaerie(p, god) {
+    const g = new THREE.Group(), col = god.col, body = new THREE.Mesh(new THREE.SphereGeometry(0.018, 8, 6), new THREE.MeshBasicMaterial({ color: col })); body.scale.set(1, 2.2, 1); g.add(body);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.013, 8, 6), new THREE.MeshBasicMaterial({ color: '#fff0e0' })); head.position.y = 0.05; g.add(head);
+    const wm = new THREE.MeshBasicMaterial({ color: col.clone().lerp(new THREE.Color('#ffffff'), 0.5), transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false });
+    const wings = [-1, 1].map(s => { const w = new THREE.Mesh(wingGeo, wm); w.geometry = wingGeo; w.position.set(s * 0.035, 0.02, -0.01); g.add(w); return { w, s }; });
+    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: sparkTex, color: col, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending })); glow.scale.set(0.35, 0.35, 1); g.add(glow);
+    life.add(g); return { g, wings, glow, god, home: p.slice(), p: p.slice(), ph: Math.random() * 9, h: 0.9 };
+  }
+  const pixies = new THREE.Points(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(60 * 3), 3)), new THREE.PointsMaterial({ map: sparkTex, size: 0.12, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, color: '#ffe8ff' }));
+  pixies.frustumCulled = false; life.add(pixies); const pixSeeds = Array.from({ length: 60 }, (_, i) => [Math.random() * 40 - 20, Math.random() * 40 - 20, Math.random() * TAU]);
+  // the hearth spirit of Gary's house: a little flame-figure over the hob, at night
+  let hearth = null;
+  if (o.hob && !AW) { const g = new THREE.Group(), f = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.2, 8), new THREE.MeshBasicMaterial({ color: '#ffa030', transparent: true, opacity: 0.85 })); f.position.y = 0.1; g.add(f);
+    for (const s of [-1, 1]) { const e = new THREE.Mesh(new THREE.SphereGeometry(0.008, 6, 5), new THREE.MeshBasicMaterial({ color: '#2a1000' })); e.position.set(s * 0.015, 0.09, 0.045); g.add(e); }
+    const gl = new THREE.PointLight(0xff9040, 0.6, 2.5, 2); gl.position.y = 0.15; g.add(gl); g.position.copy(o.hob.pos); o.hob.parent.add(g); hearth = { g, f, god: deity('K', 'Gary’s house', 'hearth|gary', 'hearth') }; }
+
+  let tSpawn = 0;
+  function update(dt, focus, time, dark, visible) {
+    life.visible = visible;
+    for (const s of shrines.slice()) { if (!s.chunk.parent) { shrines.splice(shrines.indexOf(s), 1); continue; } s.g.children.forEach(m => { if (m.userData.flame) m.scale.setScalar(0.8 + Math.sin(time * 13 + m.position.x * 40) * 0.25); }); }
+    for (const A of avatars.slice()) { A.t += dt; const fade = Math.min(1, A.t / 2, (A.life - A.t) / 3); A.rig.g.traverse(m => { if (m.isMesh) m.material.opacity = Math.max(0, fade) * 0.9; });   // (one shared material: set many times, same value) A.light.intensity = 2 * Math.max(0, fade);
+      const a = { x: A.at[0], y: A.at[1], speed: 0, phase: A.t, state: 'idle', yaw: Math.atan2(focus[1] - A.at[1], focus[0] - A.at[0]) }; try { A.rig.animate(a, dt, time, false, 0); } catch (e) { /* */ }
+      A.rig.g.position.set(A.at[0], o.heightAt(A.at) + 0.4 + Math.sin(A.t) * 0.15, -A.at[1]); A.rig.g.rotation.y = Math.atan2(Math.cos(a.yaw), -Math.sin(a.yaw));   // (after animate, which moves the rig to its own idea of where it is)
+      if (A.t > A.life) { root.remove(A.rig.g); root.remove(A.light); avatars.splice(avatars.indexOf(A), 1); } }
+    if (hearth) { const night = dark > 0.5; hearth.g.visible = night; if (night) { hearth.f.scale.set(1 + Math.sin(time * 9) * 0.15, 1 + Math.sin(time * 7) * 0.2, 1); hearth.g.rotation.y += dt * 0.3; } }
+    if (!visible) return;
+    // faeries: over the gardens, hedges, meadows and ponds near you; more at dusk, a few by day, some at night
+    tSpawn -= dt;
+    const m = o.minute(), dusk = Math.max(0, 1 - Math.abs(m - 20.5 * 60) / 90) + Math.max(0, 1 - Math.abs(m - 6 * 60) / 60), want = Math.round(1 + dusk * 5 + dark * 2);
+    if (tSpawn <= 0) { tSpawn = 1.5;
+      if (faeries.length < want) for (let k = 0; k < 6; k++) { const a = Math.random() * TAU, d = 6 + Math.random() * 18, q = [focus[0] + Math.cos(a) * d, focus[1] + Math.sin(a) * d], c = LAND.at(q);
+        const fk = c && (c.kind === 'garden' || c.kind === 'hedge' || c.kind === 'shrub' || c.kind === 'pond' || c.kind === 'lawn' || c.kind === 'clearing' || (c.cls === 'grass' && !c.town));
+        if (fk && o.owns(q)) { const dom = c.kind === 'pond' ? 'a pond' : c.kind === 'hedge' || c.kind === 'shrub' ? 'a hedge' : c.kind === 'garden' ? 'a garden' : 'a meadow'; faeries.push(makeFaerie(q, deity('J', dom, 'faerie|' + c.q + ',' + c.r, c.kind))); break; } } }
+    for (const f of faeries.slice()) { f.ph += dt; const d = Math.hypot(f.p[0] - focus[0], f.p[1] - focus[1]);
+      const curious = d < 3 ? 1 : 0, tx = curious ? focus[0] + Math.cos(f.ph * 0.8) * 1.0 : f.home[0] + Math.sin(f.ph * 0.6) * 2 + Math.sin(f.ph * 1.7) * 0.6, ty = curious ? focus[1] + Math.sin(f.ph * 0.8) * 1.0 : f.home[1] + Math.cos(f.ph * 0.5) * 2;
+      f.p[0] += (tx - f.p[0]) * Math.min(1, dt * 1.5); f.p[1] += (ty - f.p[1]) * Math.min(1, dt * 1.5);
+      f.g.position.set(f.p[0], o.heightAt(f.p) + (curious ? 1.5 : 0.7) + Math.sin(f.ph * 2.3) * 0.25, -f.p[1]); f.g.rotation.y = f.ph;
+      for (const w of f.wings) w.w.rotation.y = w.s * (0.3 + Math.abs(Math.sin(f.ph * 40)) * 1.1); f.glow.material.opacity = 0.5 + 0.4 * Math.sin(f.ph * 3);
+      if (d > 60) { life.remove(f.g); faeries.splice(faeries.indexOf(f), 1); } }
+    // pixies: sparks in the flowers, at night
+    const pOn = dark > 0.45; pixies.visible = pOn;
+    if (pOn) { const pa = pixies.geometry.attributes.position; pixSeeds.forEach(([sx, sy, ph], i) => { const x = focus[0] + sx + Math.sin(time * 0.7 + ph) * 0.4, y = focus[1] + sy + Math.cos(time * 0.6 + ph) * 0.4, c = LAND.at([x, y]); const ok = c && (c.kind === 'garden' || c.kind === 'lawn' || c.cls === 'grass' || c.kind === 'park');
+      pa.setXYZ(i, x, ok ? o.heightAt([x, y]) + 0.2 + Math.abs(Math.sin(time * 2 + ph)) * 0.3 : -1e4, -y); }); pa.needsUpdate = true; }
+  }
+  // F: a shrine, a faerie, the hearth spirit
+  function nearest(p, k, inHouseK) {
+    const opts = [];
+    if (k === null) {
+      for (const s of shrines) { const d = Math.hypot(s.p[0] - p[0], s.p[1] - p[1]); if (d < 2.4) opts.push({ d, label: `pray at the shrine of ${s.god.name}`, go: () => { const r = pray(s); o.say(r.god && /stands before you/.test(r.text) ? 'yell' : 'sys', r.text); } }); }
+      for (const f of faeries) { const d = Math.hypot(f.p[0] - p[0], f.p[1] - p[1]); if (d < 2.5) opts.push({ d, label: `speak to the faerie of ${f.god.domain}`, go: () => faerieTalk(f) }); }
+    }
+    if (hearth && hearth.g.visible && inHouseK === hearth.k && o.hob && Math.hypot(o.hob.p[0] - p[0], o.hob.p[1] - p[1]) < 1.8) opts.push({ d: 1, label: 'leave an offering for the hearth spirit', go: () => o.say('emote', `You set a crust of bread and a pinch of salt by the hob. The little flame bows. ${bless(hearth.god, false)}`) });
+    opts.sort((a, b) => a.d - b.d); return opts[0] || null;
+  }
+  if (hearth && o.hob) hearth.k = o.hob.k;
+  const RIDDLES = ['What has roots nobody sees, is taller than trees, up, up it goes, and yet never grows? (A mountain.)', 'I am taken from a mine and shut up in a wooden case, from which I am never released, yet I am used by almost everyone. (Pencil lead.)', 'The more you take, the more you leave behind. (Footsteps.)', 'Voiceless it cries, wingless flutters, toothless bites, mouthless mutters. (The wind.)', 'What runs but never walks, has a mouth but never talks? (A river.)'];
+  function faerieTalk(f) {
+    const r = Math.random(), g = f.god, said = `The faerie of ${g.domain}, ${g.name}, ${g.form} and ${g.temper},`;
+    if (r < 0.35) o.say('npc', `${said} asks you a riddle: ${pick(RIDDLES, Math.random())}`);
+    else if (r < 0.75) o.say('npc', `${said} touches your nose and laughs. ${bless(g, false)}`);
+    else if (g.temper === 'capricious' || g.temper === 'playful') { const n = Math.min(o.copper(), 3 + Math.floor(Math.random() * 8)); o.takeCopper(n); o.say('npc', `${said} darts into your pocket and out again, giggling. ${n ? `Your purse is lighter by ${n} copper.` : 'There was nothing there, and it looks offended.'}`); life.remove(f.g); faeries.splice(faeries.indexOf(f), 1); }
+    else o.say('npc', `${said} hides behind a leaf and will not come out.`);
+  }
+  // the pantheon window (/gods)
+  const win = document.createElement('div'); win.id = 'godwin'; win.className = 'hud frame win'; win.style.width = 'min(560px, 94vw)';
+  win.innerHTML = '<button class="x">✕</button><h2 class="title">The gods of this place</h2><div id="godBody" style="max-height:60vh;overflow:auto"></div>'; document.body.appendChild(win); win.querySelector('.x').onclick = () => o.closeWin('godwin');
+  function show(p) {
+    const pan = pantheon(p), b = boonsNow();
+    win.querySelector('#godBody').innerHTML = `<p style="color:var(--dim)">On ${o.esc(worldName)}, as the ${o.esc(people)} reckon them, from the greatest down. Rank is the size of the domain, as hanb sizes things.</p>` +
+      pan.map(g => `<p><b style="color:#${g.col.getHexString()}">${g.L} · ${o.esc(g.name)}</b>, ${g.title} ${o.esc(g.domain)}${g.rank > lvl('J') ? `, of ${o.esc(g.sphere)}` : ''}: ${o.esc(g.form)}, ${g.temper}. <span style="color:var(--dim)">Favour: ${BOONTEXT[g.boon]}.</span></p>`).join('') +
+      `<p style="color:var(--dim)">Beyond: the powers of Shiner and of the Shed Way, who do not hear prayers.</p>` +
+      (b.length ? `<p><b>Your blessings:</b> ${b.map(x => `${BOONTEXT[x.b]} (from ${o.esc(x.from)}, ${x.left} min)`).join('; ')}</p>` : '<p>You carry no blessing now.</p>');
+    o.openWin('godwin');
+  }
+  return { update, chunk, nearest, pantheon, mult, boonsNow, show, shrines, faeries, avatars };
+};
+})();
+</script>
 <script data-inline="src/interiors.js">
 /* Gary's World: inside every building.
  *
@@ -4383,7 +4974,7 @@ GW.buildInteriors = function (root, o) {
         if (cl.kind === 'furniture' || cl.kind === 'hearth' || cl.kind === 'bar') {
           const F = FURN[nm] || FURN[nm.replace(/^the /, '')] || [0.9, 0.6, 0.9, '#7a5a3a'], yaw = Math.round(R() * 4) * Math.PI / 2, m = add(new THREE.BoxGeometry(F[0], Math.max(0.02, F[2]), F[1]), mat(F[3]), x, F[2] / 2, -y); m.rotation.y = yaw;
           if (nm === 'hearth' || nm === 'the hearth' || nm === 'forge' || nm === 'oven') { const fire = add(new THREE.BoxGeometry(F[0] * 0.6, 0.3, 0.05), new THREE.MeshBasicMaterial({ color: '#ff7a20' }), x, 0.35, -y - F[1] / 2 - 0.03); fire.rotation.y = yaw; const fl = new THREE.PointLight(0xff8030, 0.8, 5, 2); fl.position.set(x, 0.8, -y); g.add(fl); }
-          things.push({ p: [IX + x, IY + y], r: Math.max(F[0], F[1]) / 2 * 0.8, name: cl.name });
+          things.push({ p: [IX + x, IY + y], r: Math.max(F[0], F[1]) / 2 * 0.8, name: cl.name, top: F[2], w: F[0], d: F[1], yaw });
           return; }
         if (cl.kind === 'person' || cl.kind === 'traveller') people.push({ x, y, name: cl.name || 'Someone', note: cl.note, kind: cl.kind });
       });
@@ -4452,6 +5043,43 @@ GW.buildRooms = function (house, o) {
   const things = [];
   // a thing: where it is (a fixture), what F says, what it does, what it does each frame
   const thing = (id, label, go, opt = {}) => { const F = fix(id); if (!F) return null; const t = Object.assign({ F, label, go, reach: 1.7 }, opt); things.push(t); return t; };
+
+  /* ---------------- Rth, mapped: for the globe ----------------
+   * The planet's own board says where its 32 faces are (each a continent, with its latitude and longitude, pentagons
+   * missing a wedge to the void); each continent's board says what's on it (kingdoms, seas, the wild lands, frost).
+   * Each pixel of an equirectangular map is the face nearest it, and on that face the board cell under it, its
+   * offset from the face's centre read in the face's own frame (north along the board's x, west along its y). */
+  function rthMap(W, Hh) {
+    const L = window.GW.LAND, H = window.HANB, D = Math.PI / 180, base = L.HOME.slice(0, L.SURF), planet = L.board(base);
+    const vec = (la, lo) => [Math.cos(la * D) * Math.cos(lo * D), Math.cos(la * D) * Math.sin(lo * D), Math.sin(la * D)];
+    const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2], norm = a => { const l = Math.hypot(...a); return a.map(v => v / l); };
+    const faces = planet.cells.map((c, i) => [c, i]).filter(([c]) => c.kind === 'continent').map(([c, i]) => {
+      const v = vec(c.lat, c.lon), north = norm([-Math.sin(c.lat * D) * Math.cos(c.lon * D), -Math.sin(c.lat * D) * Math.sin(c.lon * D), Math.cos(c.lat * D)]);
+      const east = [-Math.sin(c.lon * D), Math.cos(c.lon * D), 0]; let cells = null; try { cells = L.board(base.concat([i])).cells; } catch (e) { /* */ }
+      return { c, i, v, north, east, cells }; });
+    let half = 99; for (const a of faces) for (const b of faces) if (a !== b) half = Math.min(half, Math.acos(Math.min(1, dot(a.v, b.v))) / 2);
+    const unit = half / 4.4;   // radians per board unit: the board's hexagon of radius 4 just fills the face
+    const COL = { ocean: '#24527e', worldocean: '#1c4470', nearspace: '#0a0a12', facevoid: '#06060c', frostwastes: '#e6edf4', dragonpeaks: '#8a5040', duneSea: '#d8b870', mirewilds: '#4a5a3a', titanwood: '#1f4a28' };
+    const kcol = new Map(), landCol = c => { if (!kcol.has(c.name)) { const h = (c.name || '').split('').reduce((a, ch) => a * 31 + ch.charCodeAt(0) >>> 0, 7); kcol.set(c.name, `hsl(${80 + h % 50},${35 + (h >> 6) % 25}%,${32 + (h >> 11) % 18}%)`); } return kcol.get(c.name); };
+    const cv = document.createElement('canvas'); cv.width = W; cv.height = Hh; const x = cv.getContext('2d'), img = x.createImageData(W, Hh), px = new THREE.Color();
+    for (let py = 0; py < Hh; py++) for (let qx = 0; qx < W; qx++) {
+      // (three's sphere: u is the longitude from −180°, v from the south pole up)
+      const la = 90 - (py + 0.5) / Hh * 180, lo = (qx + 0.5) / W * 360 - 180, p = vec(la, lo);
+      let best = null, bd = -2; for (const f of faces) { const d = dot(p, f.v); if (d > bd) { bd = d; best = f; } }
+      let col = '#1c4470';
+      if (best && best.cells) { const ang = Math.acos(Math.min(1, bd)), t = [p[0] - best.v[0] * bd, p[1] - best.v[1] * bd, p[2] - best.v[2] * bd], tl = Math.hypot(...t) || 1;
+        const bx = dot(t, best.north) / tl * ang / unit, by = -dot(t, best.east) / tl * ang / unit, [q, r] = H.xyToAxial(bx, by);
+        if (H.inBoard(q, r)) { const cell = best.cells[H.idx(q, r)]; col = cell.kind === 'landregion' ? landCol(cell) : COL[cell.kind] || '#6a8a50'; } }
+      px.set(col); const k = (py * W + qx) * 4; img.data[k] = px.r * 255; img.data[k + 1] = px.g * 255; img.data[k + 2] = px.b * 255; img.data[k + 3] = 255;
+    }
+    x.putImageData(img, 0, 0);
+    // Gary's house: a red pin, on Ursa, in Kroyl
+    const U = faces.find(f => f.i === L.HOME[L.SURF]); if (U) { const [bx, by] = H.axialToXY(...H.COORDS[L.HOME[L.SURF + 1]]), ang = Math.hypot(bx, by) * unit, dir = norm([U.north[0] * bx - U.east[0] * by, U.north[1] * bx - U.east[1] * by, U.north[2] * bx - U.east[2] * by].map(v => v || 1e-9));
+      const p = norm(U.v.map((v, k) => v * Math.cos(ang) + dir[k] * Math.sin(ang))), la = Math.asin(p[2]) / D, lo = Math.atan2(p[1], p[0]) / D;
+      const gx = (lo + 180) / 360 * W, gy = (90 - la) / 180 * Hh; x.fillStyle = '#ff2a2a'; x.strokeStyle = '#ffffff'; x.lineWidth = 2; x.beginPath(); x.arc(gx, gy, 5, 0, TAU); x.fill(); x.stroke(); }
+    return cv;
+  }
+  window.GW.rthMap = rthMap;
 
   /* ---------------- the panel ---------------- */
   const win = document.createElement('div'); win.id = 'roomwin'; win.className = 'hud frame win'; win.style.width = 'min(560px, 94vw)';
@@ -4627,8 +5255,9 @@ GW.buildRooms = function (house, o) {
       const hr = Math.floor(m / 60); if (clock.last >= 0 && hr !== clock.last && o.near(clock.fl.k, clock.c, 25)) { const n = hr % 12 || 12; for (let i = 0; i < n; i++) setTimeout(() => o.sound('chime'), i * 900); } clock.last = hr; } });
   // The map room: the globe (spin it: the Teleport), and the cabinet of curiosities
   const globe = (() => { const F = fix('f1-globe'); if (!F) return null; const g = new THREE.Group(); g.position.copy(at(F, 0, 0, 0.6)); F.g.add(g);
-    const c = document.createElement('canvas'); c.width = 256; c.height = 128; const x = c.getContext('2d'); x.fillStyle = '#2a5a8a'; x.fillRect(0, 0, 256, 128); x.fillStyle = '#8aa060'; for (let i = 0; i < 32; i++) { const R = hash('gl' + i); x.beginPath(); x.ellipse(R * 256, 20 + hash('gy' + i) * 88, 10 + hash('gw' + i) * 22, 8 + hash('gh' + i) * 14, 0, 0, TAU); x.fill(); }
-    const s = new THREE.Mesh(new THREE.SphereGeometry(0.28, 24, 16), new THREE.MeshLambertMaterial({ map: new THREE.CanvasTexture(c) })); s.position.y = 0.4; s.rotation.z = 0.41; g.add(s);
+    const c = document.createElement('canvas'); c.width = 4; c.height = 2; { const x = c.getContext('2d'); x.fillStyle = '#24527e'; x.fillRect(0, 0, 4, 2); }   // (the true map is painted a few seconds after you arrive: it takes a second)
+    const s = new THREE.Mesh(new THREE.SphereGeometry(0.28, 48, 32), new THREE.MeshLambertMaterial({ map: new THREE.CanvasTexture(c) }));
+    setTimeout(() => { try { const m = rthMap(1024, 512); s.material.map.dispose(); s.material.map = new THREE.CanvasTexture(m); s.material.map.anisotropy = 4; s.material.needsUpdate = true; } catch (e) { /* */ } }, 5000); s.position.y = 0.4; s.rotation.z = 0.41; g.add(s);
     const ring = new THREE.Mesh(new THREE.TorusGeometry(0.31, 0.012, 6, 32, Math.PI), mat('#c8a040')); ring.position.y = 0.4; ring.rotation.z = Math.PI / 2 + 0.41; g.add(ring); return { s, spin: 0 }; })();
   thing('f1-globe', () => 'spin the globe', () => { if (globe) globe.spin = 6; o.say('emote', 'The globe whirs round under your hand; you stop it with a finger, on…'); setTimeout(() => o.tpOpen(), 900); }, { update(dt) { if (globe) { globe.s.rotation.y += dt * (0.05 + globe.spin); globe.spin = Math.max(0, globe.spin - dt * 3); } } });
   const CURIOS = [['A meteorite fragment', 'Iron and nickel, pitted, heavier than it has any right to be. Labelled: “Fell on the potting room, 3 May.”'], ['A jar of void', 'Black, and not the black of anything. The lid is taped down. The label just says DON’T.'], ['A drake’s scale', 'Hand-sized, warm to the touch, a colour that changes as you tilt it.'], ['A bone die', 'Six sides, all of them sixes. From the crypt.'], ['A clockwork beetle', 'It winds itself up when nobody is looking.'], ['A seed from another universe', 'It is labelled in Gary’s handwriting: “Do not plant here.”'], ['Beano’s first drawing', 'Gary, the Shed, a dog with too many legs. Framed.'], ['A piece of the Last Rung', 'A step from a ladder, very old, slightly warm.']];
@@ -6006,7 +6635,8 @@ function buildCountry(scene, world) {
       const m = new THREE.Mesh(geo, pondMat); m.receiveShadow = true; g.add(m); }
     if (sea) { const s = new THREE.Mesh(new THREE.PlaneGeometry(CH, CH), seaMat); s.rotation.x = -Math.PI / 2; s.position.set(CH / 2, 0, -CH / 2); g.add(s); }
     if (LAND.macro([x0 + CH / 2, y0 + CH / 2]).wild[2] > 0.2) { const wtr = new THREE.Mesh(new THREE.PlaneGeometry(CH, CH), mireMat); wtr.rotation.x = -Math.PI / 2; wtr.position.set(CH / 2, WATER, -CH / 2); g.add(wtr); }
-    if (window.GW.PROPS) window.GW.PROPS.chunk({ g, cells, x0, y0, near, heightAt, obst, cellR, barren: BARREN, biome: c => BIOME_OF[c.wild], waterLevel });   // benches, bales, logs… (props.js)
+    if (window.GW.PROPS) window.GW.PROPS.chunk({ g, cells, x0, y0, near, heightAt, obst, cellR, barren: BARREN, biome: c => BIOME_OF[c.wild], waterLevel });
+    if (window.GW.GODS) window.GW.GODS.chunk({ g, cells, x0, y0, near, heightAt, obst });   // shrines (gods.js)   // benches, bales, logs… (props.js)
     g.userData = { obst, ground, cells, lod, open: opens };
     return g;
   }
@@ -6528,6 +7158,7 @@ function buildCountry(scene, world) {
     const R = Math.random, loot = [];
     for (const [name, p] of a.S.loot || []) if (R() < p) loot.push({ name, qty: 1 });
     for (const it of bodyLoot(a, R)) if (!loot.some(l => l.name === it.name)) loot.push(it);
+    { const luck = window.GW.GODS ? window.GW.GODS.mult.luck() : 0; if (loot.length && R() < luck) loot.push({ name: loot[0].name, qty: 1 }); }   // a god's favour: a little more
     a.loot = loot;
     a.respawn = { at: 120, sp: a.sp, home: a.home.slice() };
   }
@@ -7211,10 +7842,10 @@ function buildDungeon(scene, country, world) {
       if (k > 0) { yell(a, LINES.raise[Math.floor(Math.random() * LINES.raise.length)], PLAYER); const spots = L.throne.bones.slice().sort(() => Math.random() - 0.5).slice(0, k);
         for (const c of spots) { const m = spawn('skeleton', c[0], c[1], rng(Math.random() * 1e9), L.n); m.dormant = true; m.rig.heap(); m.g.position.set(m.x, 0, -m.y); wake(m, PLAYER); S2.raised.push(m); fx('flash', [m.x, m.y], { col: '#9a60ff', life: 0.8 }); } } }
     S2.nova -= dt; if (S2.nova <= 0 && d < 7.5) { S2.nova = 11 * rate; fx('nova', [a.x, a.y], { a, hit: false, life: 0.9, reach: 8.5 }); if (PLAYER.sound) PLAYER.sound('wail', a); }
-    S2.blink -= dt; if (S2.blink <= 0 && d < 3.2) { S2.blink = 7 * rate; const h = L.throne.hall; for (let tries = 0; tries < 30; tries++) { const i = h.x + 1 + Math.floor(Math.random() * (h.w - 2)), j = h.y + 1 + Math.floor(Math.random() * (h.h - 2)), q = at(i, j), dd = Math.hypot(q[0] - P.p[0], q[1] - P.p[1]);
+    S2.blink -= dt; if (S2.blink <= 0 && d < 3.2) { S2.blink = 7 * rate; const c0 = cellOf([a.x, a.y]), h = L.throne ? L.throne.hall : { x: c0[0] - 5, y: c0[1] - 5, w: 11, h: 11 }; for (let tries = 0; tries < 30; tries++) { const i = h.x + 1 + Math.floor(Math.random() * (h.w - 2)), j = h.y + 1 + Math.floor(Math.random() * (h.h - 2)), q = at(i, j), dd = Math.hypot(q[0] - P.p[0], q[1] - P.p[1]);
         if (dd > 7 && dd < 12 && floor(i, j)) { fx('flash', [a.x, a.y], { life: 0.5 }); a.x = q[0]; a.y = q[1]; fx('flash', q, { life: 0.6 }); break; } } }
     // at half his life he hides behind his phylactery, until it breaks
-    if (!S2.shieldDone && a.hp < 0.5 && L.throne.phyl && !L.throne.phyl.dead) { S2.shieldDone = true; a.shielded = true; yell(a, LINES.shield, PLAYER);
+    if (!S2.shieldDone && a.hp < 0.5 && L.throne && L.throne.phyl && !L.throne.phyl.dead) { S2.shieldDone = true; a.shielded = true; yell(a, LINES.shield, PLAYER);
       a.shield = new THREE.Mesh(new THREE.SphereGeometry(2.2, 24, 16), new THREE.MeshBasicMaterial({ color: '#a060ff', transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending, depthWrite: false })); a.shield.position.y = 2; a.g.add(a.shield); }
     if (a.shield) a.shield.material.opacity = a.shielded ? 0.14 + Math.sin(time * 5) * 0.05 : 0;
   }
@@ -8477,7 +9108,7 @@ const lc = s => s ? s[0].toLowerCase() + s.slice(1) : s;
 const NAMES = GW.U.names;
 const STORE = 'garyworld-v1', SCHED_KEY = 'garyworld-schedule-v1';
 const saved = (() => { try { return JSON.parse(localStorage.getItem(STORE) || '{}') || {}; } catch (e) { return {}; } })();
-const save = () => { try { localStorage.setItem(STORE, JSON.stringify({ crypt: inDungeon(P.p) ? dungeon.level : null, cryptId: dungeon.crypt, uni: GW.U.cur.id, p: P.p, k: P.k, h: P.h, yaw: P.yaw, cam: { yaw: cam.yaw, pitch: cam.pitch, dist: cam.dist }, speed: clock.speed, clockDays: Math.floor(clockAbs() / 1440), quest: quest.state, got: quest.got, hunt: { state: hunt.state, n: hunt.n }, pl: { lv: PL.lv, xp: PL.xp, hp: PL.hp, copper: PL.copper, bag: PL.bag, stick: PL.stick }, entered: true })); } catch (e) { /* storage unavailable */ } };
+const save = () => { try { localStorage.setItem(STORE, JSON.stringify({ crypt: inDungeon(P.p) ? dungeon.level : null, cryptId: dungeon.crypt, uni: GW.U.cur.id, p: P.p, k: P.k, h: P.h, yaw: P.yaw, cam: { yaw: cam.yaw, pitch: cam.pitch, dist: cam.dist }, speed: clock.speed, clockDays: Math.floor(clockAbs() / 1440), quest: quest.state, got: quest.got, hunt: { state: hunt.state, n: hunt.n }, pl: { equip: PL.equip, lv: PL.lv, xp: PL.xp, hp: PL.hp, copper: PL.copper, bag: PL.bag, stick: PL.stick }, entered: true })); } catch (e) { /* storage unavailable */ } };
 
 /* ================= renderer, scene ================= */
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true }); renderer.setClearColor(0x000000, 1);   // (alpha: the cinema's picture shows through a hole in the canvas)
@@ -8508,13 +9139,16 @@ const shed = GW.buildShed(root), inShed = p => shed.inside(p);
 const interiors = GW.buildInteriors(root, {}), inInterior = p => interiors.inside(p);
 // the things that make places look lived in, and the small life about them (props.js); country.js asks it for each chunk
 // doors and windows that open, on every house near you (openings.js)
-const openings = GW.buildOpenings(root, { enter: sp => { const c = interiors.enter(sp, P); cam.yaw = P.yaw; setTarget(null); say('emote', `You go in. ${c.name}.`); updateZone(true); }, sources: (p, r) => country.openingsNear(p, r).concat(AWAY ? [] : world.openings.filter(o => Math.hypot(o.c[0] - p[0], o.c[1] - p[1]) < r)),
+const openings = GW.buildOpenings(root, { enter: sp => { const c = interiors.enter(sp, P); cam.yaw = P.yaw; setTarget(null); say('emote', `You go in. ${c.name}.`); things.arrive(sp, c); updateZone(true); }, sources: (p, r) => country.openingsNear(p, r).concat(AWAY ? [] : world.openings.filter(o => Math.hypot(o.c[0] - p[0], o.c[1] - p[1]) < r)),
   openNow: use => { const U = window.HANB && HANB.USE[use]; if (!U) return true; const [a, b] = U[4], m = minute(); return b > a ? m >= a && m < b : m >= a || m < b; },
   say: (k, t) => say(k, t), sound: k => sfx(k), env: () => ({ dark: lastDark, min: minute(), auth: (GW.PROPS && GW.PROPS.authorityOf(GW.LAND.at(P.p))) || 'town' }) });
 let lastDark = 0, kingdomT = 0, kingdomNow;
 const houseOpen = GW.AWAY ? null : GW.buildHouseOpenings(house, { sound: k => sfx(k), say: (k, t) => say(k, t) });
 // the drawer chests: the Hall of a Thousand Drawers in the sub-basement, and the one in the lab (drawers.js)
 let rooms = null;
+// small things, and who they belong to (things.js)
+const things = GW.buildThings(root, { uni: () => GW.U.cur.id, townName: () => NAMES.town, heightAt: p => country.heightAt(p), say: (k, t) => say(k, t), pickUp: it => pickUp(it),
+  giveCopper: n => { PL.copper += n; say('loot', `You pick up ${coins(n)}.`); sfx('coin'); renderBag(); save(); }, takeItem: name => { if (PL.bag[name]) { PL.bag[name]--; if (!PL.bag[name]) delete PL.bag[name]; renderBag(); save(); } } });
 const drawers = GW.AWAY ? null : GW.buildDrawers(house, { sound: k => sfx(k), openWin: id => openWin(id), closeWin: id => closeWin(id), esc: t => esc(t), pickUp: it => pickUp(it) });
 GW.PROPS = GW.buildProps(root, { obstacles: p => country.obstacles(p), heightAt: p => country.heightAt(p), owns: p => country.owns(p), waterAt: p => country.waterAt(p), barren: () => !!(GW.AWAY && /rockyplanet|moon/.test(GW.AWAY.type || '')), clock: () => ({ min: minute(), day: worldDate().getUTCDay() }) });
 const dungeon = GW.buildDungeon(root, country, world), inDungeon = p => dungeon.inside(p);
@@ -8783,6 +9417,7 @@ function renderQuests() {
   const el = $('#quests'), parts = [];
   if (quest.state === 'active' || quest.state === 'ready') parts.push(`<div class="q">${esc(quest.title)}</div>` + (quest.state === 'ready' ? '<div class="o done">Return to Gary</div>' : quest.objectives.map(([id, t]) => `<div class="o${quest.got[id] ? ' done' : ''}">- ${esc(t)}${quest.got[id] ? ' ✓' : ''}</div>`).join('')));
   if (hunt.state === 'active' || hunt.state === 'ready') parts.push(`<div class="q">${esc(hunt.title)}</div>` + (hunt.state === 'ready' ? '<div class="o done">Return to Gary</div>' : `<div class="o">- Grey Wolves slain: ${Math.min(hunt.n, hunt.need)}/${hunt.need}</div>`));
+  for (const [t, ob] of shedQ.log()) parts.push(`<div class="q">${esc(t)}</div><div class="o">- ${esc(ob)}</div>`);
   el.style.display = parts.length ? 'block' : 'none'; el.innerHTML = parts.join('<div style="height:6px"></div>');
 }
 
@@ -8821,6 +9456,7 @@ function gossip() {
   else if (quest.state === 'ready') h += `<button class="opt q" data-g="turnin">I found it. Down below the shed.</button>`;
   if (!hunt.state) h += `<button class="opt q" data-g="hunt">Any work out in the country?</button>`;
   else if (hunt.state === 'ready') h += `<button class="opt q" data-g="huntin">The wolves won’t trouble the farms for a while.</button>`;
+  for (const [k, l] of shedQ.options()) h += `<button class="opt q" data-g="sq:${k}">${esc(l)}</button>`;
   h += `<button class="opt" data-g="shed">What is the Shed?</button><button class="opt" data-g="bye">Goodbye.</button>`;
   $('#gossipBody').innerHTML = h; gossip.next = nx; openWin('gossip');
 }
@@ -8828,6 +9464,7 @@ function gossipAnswer(g) {
   const B = $('#gossipBody'), back = '<button class="opt" data-g="back">Back.</button>', { e } = garyTask(), nx = gossip.next;
   if (g === 'bye') { closeWin('gossip'); return; }
   if (g === 'back') { gossip(); return; }
+  if (g.startsWith('sq:')) { B.innerHTML = shedQ.answer(g.slice(3)) + back; renderQuests(); renderBag(); return; }
   if (g === 'day') { closeWin('gossip'); openDay(); return; }
   if (g === 'doing') B.innerHTML = `<p>${e ? `My schedule says <i>${esc(e.task)}</i>, so that’s what I’m doing: ${esc(garyDoing().replace(/^“[^”]*”, /, ''))}.` : 'Nothing on my schedule at all. Suspicious.'}${nx && nx !== e ? ` Then at ${GW.hhmm(nx.t)}: <i>${esc(nx.task.toLowerCase())}</i>.` : ''}</p>${back}`;
   else if (g === 'shed') B.innerHTML = `<p>I manage the Shed: sixty-four slots, each one a universe. Some are brand new; some are replicas of this one, with another me inside, managing another Shed. The console is on my desk in the attic. Don’t touch anything.</p>${back}`;
@@ -8886,6 +9523,12 @@ function drawMap() {
 // a level is worth ~120 × level experience; beasts give less as they fall below your level (grey = nothing).
 const xpNeed = lv => 120 * lv, maxHpAt = lv => 60 + (lv - 1) * 18;
 const PL = Object.assign({ lv: 1, xp: 0, hp: null, copper: 0, bag: {}, stick: 0 }, saved.pl || {});
+// what you wear and carry (equip.js)
+const equip = GW.buildEquip({ PL, say: (k, t) => say(k, t), openWin: id => openWin(id), closeWin: id => closeWin(id), esc: t => esc(t), renderBag: () => renderBag(), save: () => save() });
+// quests down the Shed (shedquests.js): progress is kept above the universes, so it goes where you go
+const shedQ = GW.buildShedQuests({ say: (k, t) => say(k, t), esc: t => esc(t), day: () => Math.floor(clockAbs() / 1440), has: n => !!PL.bag[n], give: n => { PL.bag[n] = (PL.bag[n] || 0) + 1; renderBag(); save(); },
+  take: n => { if (PL.bag[n]) { PL.bag[n]--; if (!PL.bag[n]) delete PL.bag[n]; renderBag(); save(); } }, reward: (xp, cu, t) => { gainXp(xp); PL.copper += cu; say('quest', `${t} completed.`); toast('Quest complete: ' + t); renderBag(); save(); },
+  spawnLich: () => { const m = dungeon.spawnWave(['voidlich'], [P.p[0], P.p[1] + 6], Math.max(0, PL.lv + 4 - 45)); return m[0]; } });
 PL.maxHp = maxHpAt(PL.lv); if (PL.hp == null || PL.hp <= 0) PL.hp = PL.maxHp; PL.alive = true; PL.lastHit = -99; PL.auto = false; PL.swingT = 0; PL.cd = {}; PL.channel = null; PL.fighting = new Set();
 const PLAYER = { get alive() { return PL.alive; }, get lv() { return PL.lv; }, get h() { return P.h; }, get p() { return P.p; },
   hitMe(a, n) { playerHurt(a, n); }, onAggro(a) { PL.fighting.add(a); PL.lastHit = now(); if (!target || target === gary) setTarget(a); sfx('growl', a.sp === 'bear' ? 0.6 : 1); },
@@ -8900,7 +9543,7 @@ const groundAt = (k, p, h) => { const s = support(k, p, null, h); return s ? s.h
 const remains = GW.buildRemains(root, { speed: () => clock.speed, place: () => ({ uni: GW.U.cur.id + (AWAY ? '@' + AWAY.path.join('.') : ''), crypt: inDungeon(P.p) ? (dungeon.crypt === 'last' ? dungeon.level : dungeon.crypt + ':' + dungeon.level) : null, shed: inShed(P.p) }),
   ground: (p, at) => groundAt(at.k, p, at.h), you: () => P.p, say: t => say('emote', t) });
 const heightAt = a => a.dungeon ? 0 : country.heightAt([a.x, a.y]);
-const weaponDmg = () => [4 + PL.lv * 2 + PL.stick, 8 + PL.lv * 2.6 + PL.stick].map(Math.round);
+const weaponDmg = () => { const w = equip ? equip.weapon() : PL.stick; return [4 + PL.lv * 2 + w, 8 + PL.lv * 2.6 + w].map(Math.round); };
 const roll = ([a, b]) => a + Math.floor(Math.random() * (b - a + 1));
 const hostile = a => a && a !== gary && !a.dead;
 const inReach = a => Math.hypot(a.x - P.p[0], a.y - P.p[1]) <= a.reach + 0.9 && Math.abs(heightAt(a) - P.h) < 2;
@@ -8910,6 +9553,7 @@ const levelColour = lv => { const d = lv - PL.lv; return d >= 5 ? '#ff2020' : d 
 function xpFor(a) { if (a.boss) return 1500 + PL.lv * 50; if (a.elite) return Math.round((12 + a.lv * 7) * 2.5 * Math.max(0.2, 1 + 0.08 * (a.lv - PL.lv))); const d = a.lv - PL.lv, grey = -Math.max(3, Math.floor(PL.lv / 5) + 3); if (d < grey) return 0; return Math.max(1, Math.round((12 + a.lv * 7) * (1 + 0.08 * d))); }
 
 function hit(a, base, verb, crit) {
+  base = Math.round(base * gods.mult.might());   // a war god's favour
   const r = (a.dungeon ? dungeon : country).damage(a, base, PLAYER);
   floatText([a.x, a.y, heightAt(a) + 1.2 * a.size + 0.4], String(r.dealt), crit ? 'crit' : '');
   say('combat', `Your ${verb}${crit ? ' crits' : ' hits'} ${a.name} for ${r.dealt}.`);
@@ -8938,7 +9582,7 @@ function ding() {
 function playerHurt(a, n) {
   if (!PL.alive) return;
   const dodge = Math.random() < 0.06; if (dodge) { floatText([P.p[0], P.p[1], P.h + 2.1], 'Dodge', 'miss'); return; }
-  PL.hp = Math.max(0, PL.hp - n); PL.lastHit = now(); PL.fighting.add(a);
+  n = Math.max(1, Math.round(n * gods.mult.ward() * (1 - equip.soak()))); PL.hp = Math.max(0, PL.hp - n); PL.lastHit = now(); PL.fighting.add(a);
   floatText([P.p[0], P.p[1], P.h + 2.1], `-${n}`, 'hurt'); say('hurt', `${a.name} hits you for ${n}.`); sfx('ouch');
   document.body.classList.add('hit'); clearTimeout(playerHurt.t); playerHurt.t = setTimeout(() => document.body.classList.remove('hit'), 180);
   if (PL.channel) { cancelChannel('Interrupted'); }
@@ -9015,7 +9659,7 @@ function combatUpdate(dt) {
   // channels stop if you walk off
   if (PL.channel) { const c = PL.channel; if (Math.hypot(P.p[0] - c.from[0], P.p[1] - c.from[1]) > 0.2) cancelChannel('Interrupted'); else { const step = Math.min(dt, c.dur - c.t); c.t += step; c.tick(step / c.dur); $('#castFill').style.width = (100 * c.t / c.dur) + '%'; if (c.t >= c.dur) { c.done(); cancelChannel(); } } }
   // out of a fight you heal; sitting heals three times as fast
-  if (PL.alive && !inCombat() && PL.hp < PL.maxHp) { PL.hp = Math.min(PL.maxHp, PL.hp + PL.maxHp * 0.012 * dt * (P.sitting ? 3 : 1) * 4); renderPlayer(); }
+  if (PL.alive && !inCombat() && PL.hp < PL.maxHp) { PL.hp = Math.min(PL.maxHp, PL.hp + PL.maxHp * 0.012 * dt * (P.sitting ? 3 : 1) * 4 * gods.mult.mend()); renderPlayer(); }
   if (tBarT(dt)) { updateBar(); updateTarget(); }
   // floating combat text rises and fades
   for (const f of FCT.slice()) { f.t += dt; const pos = f.w ? toScene(new THREE.Vector3(f.w[0], f.w[2] + f.t * 1.2, -f.w[1])).project(camera) : null;
@@ -9058,9 +9702,13 @@ function takeLoot(i) {
   a.loot.splice(i, 1); if (!a.loot.length) { a.looted = true; closeWin('lootwin'); looting = null; } else openLoot(a);
   renderBag(); save();
 }
+// click a thing in the bag: drop one where you stand (and it stays there)
+document.addEventListener('click', ev => { const it = ev.target.closest('#bagBody [data-drop]'); if (!it) return; const k = it.dataset.drop; if (!PL.bag[k]) return;
+  if (!ev.shiftKey && equip.wearable(k)) { equip.wear(k); return; }   // (gear: wear it; shift-click drops anything)
+  PL.bag[k]--; if (!PL.bag[k]) delete PL.bag[k]; things.drop(k, P.p, inInterior(P.p) ? interiors.cur : null); say('emote', `You put down the ${k.toLowerCase()}.`); renderBag(); save(); });
 function renderBag() {
   const items = Object.entries(PL.bag).filter(([, n]) => n > 0);
-  $('#bagBody').innerHTML = `<p>${coins(PL.copper)}${PL.stick ? ' · wielding Gary’s Heavy Walking Stick' : ' · wielding a walking stick'}</p>` + (items.length ? items.map(([k, n]) => `<div class="item"><span class="ic">${ICON[k] || '📦'}</span><b>${esc(k)}</b><small>×${n}</small></div>`).join('') : '<p style="color:var(--dim)">Empty.</p>');
+  $('#bagBody').innerHTML = `<p>${coins(PL.copper)}${PL.stick ? ' · wielding Gary’s Heavy Walking Stick' : ' · wielding a walking stick'}</p>` + (items.length ? items.map(([k, n]) => `<div class="item" data-drop="${esc(k)}" title="${equip.wearable(k) ? 'Click to wear it; shift-click to drop one here' : 'Click to drop one here'}">${equip.wearable(k) ? '<i style="float:right;color:#9fd18a;font-style:normal">wear</i>' : ''}<span class="ic">${ICON[k] || (equip.gearOf(k) || {}).icon || '📦'}</span><b>${esc(k)}</b><small>×${n}</small></div>`).join('') : '<p style="color:var(--dim)">Empty.</p>');
 }
 // sound: tiny synthesised effects, no files
 let AC = null;
@@ -9155,7 +9803,7 @@ function goDungeon(n, fromBelow, force, crypt) {
     sfx('growl', 0.4); updateZone(false); save(); return; }
   P.k = G; P.p = dungeon.enter(n, fromBelow, 'last'); P.h = 0; P.ground = 0; P.vy = 0; P.flight = null; P.yaw = fromBelow ? -Math.PI / 2 : Math.PI / 2; cam.yaw = P.yaw; setTarget(null); PL.fighting.clear(); PL.auto = false;
   toast(`${dungeon.band.name} · level ${dungeon.SLOTS[n]}`); say('sys', n === 0 && !fromBelow ? 'You go down the chapel’s broken stair into the dark. The air is cold, and something below is moving.' : `${fromBelow ? 'You climb' : 'You descend'} to level ${dungeon.SLOTS[n]} of 64: ${dungeon.band.name}.${deeper ? ' Deeper than you have ever been.' : ''}`);
-  sfx('growl', 0.5); updateZone(false); save();
+  sfx('growl', 0.5); updateZone(false); save(); shedQ.onCrypt(n);
 }
 function leaveDungeon() {
   if (dungeon.crypt === 'ship') { if (starships.voyage.state === 'underway') { say('sys', 'The airlock won’t open: outside is the void.'); return; } const pt = starships.port(); if (pt) { P.k = G; P.p = [pt.ramp[0], pt.ramp[1] - 3]; P.h = country.heightAt(P.p); P.ground = P.h; P.vy = 0; setTarget(null); say('sys', 'You walk down the ramp onto the field.'); updateZone(true); save(); return; } } if (dungeon.crypt === 'sepulchre' && sepulchreDoor()) { const d = sepulchreDoor(); P.k = G; P.p = [d.p[0], d.p[1] + 1.5]; P.h = country.heightAt(P.p); P.ground = P.h; P.vy = 0; setTarget(null); PL.fighting.clear(); say('sys', 'You climb out of the mausoleum into the light of the far continent.'); updateZone(true); save(); return; }
@@ -9229,6 +9877,7 @@ addEventListener('keydown', ev => {
   if (k === ' ') { if (PL.alive && P.h <= (P.ground ?? P.h) + 0.02 && !P.climb) { P.vy = 4.6; standUp(); } ev.preventDefault(); return; }
   if ('123456789'.includes(k)) { action(['attack', 'whack', 'stone', 'bandage', 'wave', 'sit', 'dance', 'follow', 'day'][+k - 1]); return; }
   if (k === 'b') { action('bags'); return; }
+  if (k === 'i') { action('equip'); return; }
   if (k === 't') { if ($('#tpwin').style.display === 'block') closeWin('tpwin'); else tpOpen(); return; }
   if (k === 'n') { setVolume(sound.cycle()); return; }
   if (k === 'c') { if ($('#coswin').style.display === 'block') closeWin('coswin'); else cosmos.open(); return; }
@@ -9263,7 +9912,7 @@ function pick(x, y) {
 }
 function sendChat() {
   const inp = $('#chatIn'), t = inp.value.trim(); inp.value = ''; inp.style.display = 'none'; cv.focus(); if (!t) return;
-  if (t[0] === '/') { const c = t.slice(1).split(/\s+/)[0].toLowerCase(); if (['wave', 'sit', 'dance', 'follow', 'where'].includes(c)) action(c); else if (c === 'help') openWin('help'); else if (c === 'sound' || c === 'volume') { const a2 = t.replace(/^\/\S+\s*/, '').trim().toLowerCase(); setVolume(a2 === 'off' || a2 === 'mute' ? 0 : a2 === 'on' ? 0.8 : /^\d+$/.test(a2) ? +a2 / 100 : sound.cycle()); } else if (c === 'cosmic') { const a3 = t.replace(/^\/\S+\s*/, '').trim().toLowerCase(); if (a3 === 'home') toGary('You speak the word of passage'); else if (a3 === 'ship' || a3 === 'ships' || a3 === 'starship' || a3 === 'spaceport') cosmos.landAtPort(); else if (a3 === 'random') { const w = cosmos.random([]); if (w) cosmos.land(w); else say('sys', 'No world turned up. Try again.'); } else cosmos.open(); } else if (c === 'warp') { const arg = t.replace(/^\/\S+\s*/, ''); if (arg) warpText(arg); else warpOpen(); } else if (c === 'tp' || c === 'teleport') { const arg = t.replace(/^\/\S+\s*/, ''); if (arg) tpText(arg); else tpOpen(); } else say('sys', `Unknown command: ${t}`); return; }
+  if (t[0] === '/') { const c = t.slice(1).split(/\s+/)[0].toLowerCase(); if (['wave', 'sit', 'dance', 'follow', 'where'].includes(c)) action(c); else if (c === 'help') openWin('help'); else if (c === 'sound' || c === 'volume') { const a2 = t.replace(/^\/\S+\s*/, '').trim().toLowerCase(); setVolume(a2 === 'off' || a2 === 'mute' ? 0 : a2 === 'on' ? 0.8 : /^\d+$/.test(a2) ? +a2 / 100 : sound.cycle()); } else if (c === 'gods' || c === 'pantheon') gods.show(P.p); else if (c === 'cosmic') { const a3 = t.replace(/^\/\S+\s*/, '').trim().toLowerCase(); if (a3 === 'home') toGary('You speak the word of passage'); else if (a3 === 'ship' || a3 === 'ships' || a3 === 'starship' || a3 === 'spaceport') cosmos.landAtPort(); else if (a3 === 'random') { const w = cosmos.random([]); if (w) cosmos.land(w); else say('sys', 'No world turned up. Try again.'); } else cosmos.open(); } else if (c === 'warp') { const arg = t.replace(/^\/\S+\s*/, ''); if (arg) warpText(arg); else warpOpen(); } else if (c === 'tp' || c === 'teleport') { const arg = t.replace(/^\/\S+\s*/, ''); if (arg) tpText(arg); else tpOpen(); } else say('sys', `Unknown command: ${t}`); return; }
   say('say', `[You] say: ${t}`);
   if (gary.k === P.k && dist(gary.p, P.p) < 12) setTimeout(() => garySay(reply(t)), 700 + Math.random() * 600);
 }
@@ -9282,6 +9931,7 @@ function standUp() { if (P.sitting) { P.sitting = false; } }
 function action(a) {
   if (a === 'attack') { if (!hostile(target)) { tabTarget(); if (!hostile(target)) { say('sys', 'Nothing to attack here.'); return; } } PL.auto = !PL.auto; if (PL.auto) { faceTarget(target, true); PL.swingT = Math.min(PL.swingT, 0.2); } updateBar(); return; }
   if (ABILITY[a]) { useAbility(a); return; }
+  if (a === 'equip') { const w = $('#equipwin'); if (w.style.display === 'block') closeWin('equipwin'); else equip.show(); return; }
   if (a === 'bags') { renderBag(); const w = $('#bagwin'); w.style.display = w.style.display === 'block' ? 'none' : 'block'; return; }
   if (a === 'wave') { P.emote = 'wave'; P.emoteT = 2; say('emote', target || dist(gary.p, P.p) < 8 ? 'You wave at Gary.' : 'You wave.'); if (gary.k === P.k && dist(gary.p, P.p) < 10) setTimeout(() => { gary.waveT = 1.6; say('emote', 'Gary waves back.'); }, 600); }
   else if (a === 'sit') { P.sitting = !P.sitting; P.emote = null; }
@@ -9325,6 +9975,8 @@ function nearestAction() {                     // F: whatever you're nearest to 
   if (houseOpen && !inDungeon(P.p) && !inShed(P.p)) { const op = houseOpen.nearest(P.p, P.k); if (op) opts.push(op); }
   if (drawers && !inDungeon(P.p) && !inShed(P.p)) { const dr = drawers.nearest(P.p, P.k); if (dr) opts.push(dr); }
   if (rooms && !inDungeon(P.p) && !inShed(P.p)) { const rm = rooms.nearest(P.p, P.k); if (rm) opts.push(rm); }
+  { const gd = gods.nearest(P.p, P.k === G && !inHouse(P.k, P.p) && !inInterior(P.p) && !inDungeon(P.p) && !inShed(P.p) ? null : 'in', P.k); if (gd) opts.push(gd); }
+  if (P.k === G && !inShed(P.p) && !inDungeon(P.p) && !inHouse(P.k, P.p)) { const th = things.nearest(P.p, inInterior(P.p) ? interiors.cur : null); if (th) opts.push(th); }
   if (P.riding) opts.push({ d: 0, label: `get down off the ${P.riding.S.name.toLowerCase()}`, go: () => dismount() });
   else if (P.k === G && country.owns(P.p) && !inDungeon(P.p) && !inInterior(P.p) && PL.alive) { const a = country.mountNear(P.p); if (a) opts.push({ d: Math.hypot(a.x - P.p[0], a.y - P.p[1]), label: `ride the ${a.S.name.toLowerCase()}`, go: () => mount(a) }); }
   if (P.k === G && !inDungeon(P.p) && GW.PROPS.keeperNear) { const kp = GW.PROPS.keeperNear(P.p); if (kp) opts.push({ d: kp.d, label: kp.label, go: () => say('npc', kp.tell) }); }
@@ -9695,7 +10347,7 @@ function frame() {
   if (started) {
     // move
     let mv = [0, 0], turn = 0;
-    const slow = keys.has('shift'), speed = (P.riding ? (slow ? 3.2 : 9) : slow ? 1.4 : 3.4) * (PL.slowT > 0 ? 0.45 : 1);   // on horseback: a trot, or a gallop
+    const slow = keys.has('shift'), speed = (P.riding ? (slow ? 3.2 : 9) : slow ? 1.4 : 3.4) * (PL.slowT > 0 ? 0.45 : 1) * gods.mult.swift();   // on horseback: a trot, or a gallop
     if (vr) mv = vrInput(dt);
     else if (!P.climb && PL.alive) {
       let f = 0, st = 0;
@@ -9749,8 +10401,11 @@ function frame() {
   if (houseOpen) houseOpen.update(dt, [{ k: P.k, p: P.p }, { k: gary.k, p: gary.p }]);
   if (drawers) drawers.update(dt);
   if (rooms) rooms.update(dt, P.k, P.p);
+  shedQ.update();
+  things.update(dt, P.p, lastDark, inInterior(P.p) ? interiors.cur : null, P.k === G && (inInterior(P.p) || (!inShed(P.p) && !inDungeon(P.p) && !inHouse(P.k, P.p))), now / 1000);
   if (frame.place === 'world' && P.k === G && !inDungeon(P.p) && (kingdomT -= dt) <= 0) { kingdomT = 1; const C = GW.CULTURE.cultureOf(GW.LAND.at(P.p).chain), nm = C ? C.name : null;
     if (nm !== kingdomNow) { if (kingdomNow !== undefined && nm) say('sys', `You cross into the kingdom of ${nm}.`); kingdomNow = nm; } }
+  gods.update(dt, P.p, now / 1000, sky.dark, frame.place === 'world' && P.k === G && !inHouse(P.k, P.p));
   lastDark = sky.dark; openings.update(dt, P.p, { dark: sky.dark, min: minute(), auth: GW.PROPS.authorityOf ? GW.PROPS.authorityOf(GW.LAND.at(P.p)) || 'town' : 'town', visible: frame.place === 'world' && P.k === G && !inDungeon(P.p) });
   if (frame.place === 'world') GW.PROPS.update(dt, P.p, now / 1000, sky.dark, P.p); GW.PROPS.group.visible = frame.place === 'world';
   dungeon.update(dt, P, now / 1000, PLAYER);
@@ -9838,6 +10493,10 @@ function sepulchreDoor() {
 // the starfaring civilisations and their ships (starships.js)
 const starships = GW.buildStarships({ root, country, dungeon, cosmos, say, openWin, closeWin, esc, sound: k => sfx(k) });
 // something to do in every room (rooms.js)
+// the gods, great and small (gods.js): shrines, faeries and pixies, the hearth spirit, blessings
+const hobFix = (() => { for (const f of FL) { const x = f.F.fixtures.find(q => q.id === 'stove'); if (x) return { k: f.k, p: [x.x, x.y], pos: new THREE.Vector3(x.x, f.elev + 0.95, -x.y), parent: f.group }; } return null; })();
+const gods = GW.GODS = GW.buildGods(root, { you: () => P.p, absMin: () => clockAbs(), minute: () => minute(), heightAt: p => country.heightAt(p), owns: p => country.owns(p), say: (k, t) => say(k, t), sound: k => sfx(k),
+  openWin: id => openWin(id), closeWin: id => closeWin(id), esc: t => esc(t), heal: f => { PL.hp = Math.min(PL.maxHp, PL.hp + Math.round(PL.maxHp * f)); renderPlayer(); }, copper: () => PL.copper, takeCopper: n => { PL.copper -= n; renderBag(); save(); }, hob: hobFix });
 rooms = GW.AWAY ? null : GW.buildRooms(house, { say: (k, t) => say(k, t), sound: k => sfx(k), openWin: id => openWin(id), closeWin: id => closeWin(id), esc: t => esc(t), pickUp: it => pickUp(it), get PL() { return PL; }, renderPlayer: () => renderPlayer(),
   U: GW.U, absMin: () => clockAbs(), minute: () => minute(), date: () => worldDate(), dark: () => lastDark, tpOpen: () => tpOpen(), cosmicOpen: () => cosmos.open(), flash: col => flashScreen(col),
   near: (k, c, r) => P.k === k && Math.hypot(P.p[0] - c[0], P.p[1] - c[1]) < r });
@@ -9848,7 +10507,7 @@ cosmos.portOf = starships.starfaring;
 const aboard = () => inDungeon(P.p) && dungeon.crypt === 'ship';
 $('#cineBody').addEventListener('click', ev => { const t = ev.target.closest('[data-film]'); if (!t || !cinema) return; cinema.choose(t.dataset.film); closeWin('cinewin'); say('emote', 'The lights go down.'); });
 $('#snd').textContent = SND_ICON(sound.volume()); $('#snd').onclick = () => setVolume(sound.cycle());
-window.GARYWORLD = { interiors, renderer, scene, rooms, drawers, houseOpen, openings, starships, cosmos, AWAY, cinema, sitCinema, standCinema, sound, warp, warpText, warpOpen, remains, PL, PLAYER, pickUp, nearestAction, dungeon, goDungeon, world, country, P, gary, cam, clock, minute, setSpeed, nav, house, FC, useSchedule, quest, get started() { return started; }, start: () => $('#start').click(), interact, action, garyTask };
+window.GARYWORLD = { shedQ, equip, things, gods, interiors, renderer, scene, rooms, drawers, houseOpen, openings, starships, cosmos, AWAY, cinema, sitCinema, standCinema, sound, warp, warpText, warpOpen, remains, PL, PLAYER, pickUp, nearestAction, dungeon, goDungeon, world, country, P, gary, cam, clock, minute, setSpeed, nav, house, FC, useSchedule, quest, get started() { return started; }, start: () => $('#start').click(), interact, action, garyTask };
 })();
 </script>
 </body>
