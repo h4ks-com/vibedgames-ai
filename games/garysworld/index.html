@@ -7718,14 +7718,14 @@ function buildCountry(scene, world) {
   // whole chunks out of view, or past the fog, aren't drawn at all (their instanced meshes can't be culled one by one:
   // three culls an instanced mesh by its geometry's bounds, not its instances')
   const _fr = new THREE.Frustum(), _pm = new THREE.Matrix4(), _sph = new THREE.Sphere(), _v = new THREE.Vector3();
-  function cull(camera, far) {
+  function cull(camera, far, all) {   // all: by distance only (VR)
     camera.updateMatrixWorld(); group.updateMatrixWorld();   // (this frame's view, not last frame's)
     _pm.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse); _fr.setFromProjectionMatrix(_pm);
     const cp = camera.getWorldPosition(_v).clone();
     for (const [k, c] of chunks) { if (!c.g) continue; const g = c.g;
       if (!g.userData.bs) { const [i, j] = k.split(',').map(Number), x = (i + 0.5) * CH, y = (j + 0.5) * CH, h = heightAt([x, y]); g.userData.bs = { x, y, h }; }
       const b = g.userData.bs; _sph.center.set(b.x, b.h + 10, -b.y).applyMatrix4(group.matrixWorld); _sph.radius = CH * 0.75 + 40;   // (the floating origin moves the group)
-      g.visible = _sph.center.distanceTo(cp) - _sph.radius < far && _fr.intersectsSphere(_sph);
+      g.visible = _sph.center.distanceTo(cp) - _sph.radius < far && (all || _fr.intersectsSphere(_sph));
       if (c.tufts) c.tufts.visible = g.visible;
       // only chunks near you cast shadows (the sun's shadow reaches 30 m; further off, a shadow pass is a second draw of everything for nothing)
       const sh = g.visible && _sph.center.distanceTo(cp) < 95; if (g.userData.sh !== sh) { g.userData.sh = sh; g.traverse(m => { if (m.isMesh) { if (m.userData.cs === undefined) m.userData.cs = m.castShadow; m.castShadow = sh && m.userData.cs; } }); } }
@@ -9592,6 +9592,206 @@ function buildRemains(root, env) {
 window.GW = window.GW || {}; window.GW.buildRemains = buildRemains;
 })();
 </script>
+<script data-inline="src/vr.js">
+/* Gary's World — VR (WebXR), tuned for Meta Quest 3 but plain WebXR throughout.
+ *
+ *   GW.buildVR(o) → { active(), input(dt) → [dx, dy] walk, frame(dt), far(f) → draw distance, quality }
+ *
+ * o: { renderer, camera, rig, root, button, hooks }, hooks being the game's own:
+ *   P() the player · ground(p) floor height at plan point p, or null where you can't stand · clear(a, b) can you
+ *   walk straight from a to b · teleport(p, h) · interact() · action() what F would do, or null · talk(ray) true if
+ *   the ray picked someone to talk to · status() { time, zone, task, where } · log() the last lines said ·
+ *   say(kind, text) · turn(rad) · seat() how far above the ground you sit (riding), or 0 · start() / end()
+ *
+ * Seeing: the eye buffer at a chosen scale (sharper text, at a cost), fixed foveation (the edges of the lenses,
+ * which you can't see sharply anyway, drawn coarser), shadows and draw distance by quality. Three presets, kept
+ * between visits; Y on the left controller changes it (the eye-buffer size from the next time you go in).
+ * Moving: left stick walks the way you're looking, right stick turns (snap, or smooth: click it to change),
+ * right stick forward aims a teleport arc and letting go jumps there, with a blink. Hands: pinch and hold
+ * (the ray points where you'll land), let go to jump; a quick pinch acts.
+ * Doing: trigger or a quick pinch: talk to who you point at, or else do what F would. A does what F would.
+ * B brings the panel up big (the log), X hides or shows it. The panel rides on your left wrist.
+ */
+(function () {
+  'use strict';
+  const GW = window.GW = window.GW || {};
+  const QUAL = {
+    sharp:    { name: 'Sharp',    scale: 1.25, fov: 0.25, shadows: true,  far: 900 },
+    balanced: { name: 'Balanced', scale: 1.0,  fov: 0.5,  shadows: true,  far: 650 },
+    fast:     { name: 'Fast',     scale: 0.85, fov: 1.0,  shadows: false, far: 420 },
+  };
+  const ORDER = ['sharp', 'balanced', 'fast'], KEY = 'garyworld.vr';
+
+  GW.buildVR = function (o) {
+    const THREE = window.THREE, { renderer, camera, rig, root, hooks: H } = o;
+    let prefs = { q: 'balanced', smooth: false }; try { Object.assign(prefs, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch (e) { }
+    const keep = () => { try { localStorage.setItem(KEY, JSON.stringify(prefs)); } catch (e) { } };
+    let session = null, panelBig = false, panelOn = true, blink = 0, blinkTo = null, snapReady = true;
+    const Q = () => QUAL[prefs.q] || QUAL.balanced;
+
+    // ---- where things are: the scene's frame ↔ the plan (the world hangs from root, which the floating origin moves)
+    const toPlan = v => [v.x - root.position.x, -(v.z - root.position.z)];
+
+    // ---- controllers: a body in the hand, a laser from it; hands: a dot on each joint
+    const inputs = [0, 1].map(i => {
+      const ray = renderer.xr.getController(i), grip = renderer.xr.getControllerGrip(i), hand = renderer.xr.getHand(i);
+      rig.add(ray); rig.add(grip); rig.add(hand);
+      const lg = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]);
+      const laser = new THREE.Line(lg, new THREE.LineBasicMaterial({ color: 0xfff2c0, transparent: true, opacity: 0.55 })); laser.scale.z = 3; laser.visible = false; ray.add(laser);
+      const body = new THREE.Group(), dark = new THREE.MeshLambertMaterial({ color: '#2a2a2e' }), light = new THREE.MeshLambertMaterial({ color: '#d8d8dc' });
+      const h = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.03, 0.11), dark); h.position.set(0, -0.01, 0.03); body.add(h);
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.006, 6, 24), light); ring.rotation.x = Math.PI / 2.6; ring.position.set(0, 0.012, -0.035); body.add(ring);
+      grip.add(body); body.visible = false;
+      const dots = new THREE.InstancedMesh(new THREE.SphereGeometry(0.008, 6, 4), new THREE.MeshLambertMaterial({ color: '#f2c890' }), 25); dots.frustumCulled = false; dots.count = 0; hand.add(dots);
+      const I = { i, ray, grip, hand, laser, body, dots, src: null, kind: null, down: 0, aim: null, held: false };
+      ray.addEventListener('connected', e => { I.src = e.data; I.kind = e.data.hand ? 'hand' : 'controller'; body.visible = I.kind === 'controller'; laser.visible = true; });
+      ray.addEventListener('disconnected', () => { I.src = null; I.kind = null; body.visible = false; laser.visible = false; dots.count = 0; });
+      ray.addEventListener('selectstart', () => { I.held = true; I.down = 0; });
+      ray.addEventListener('selectend', () => { I.held = false; release(I); });
+      return I;
+    });
+    const raycaster = new THREE.Raycaster(), _m = new THREE.Matrix4(), _v = new THREE.Vector3(), _d = new THREE.Vector3();
+    const rayOf = I => { _m.identity().extractRotation(I.ray.matrixWorld); raycaster.ray.origin.setFromMatrixPosition(I.ray.matrixWorld); raycaster.ray.direction.set(0, 0, -1).applyMatrix4(_m); raycaster.far = 10; return raycaster; };
+
+    // ---- where a ray (straight, from a pinch or the trigger) or an arc (from the stick) comes down
+    const MAXJ = 12;
+    function landing(org, dir, arc) {
+      const P = H.P(), from = P.p, pts = []; let q = org.clone(), v = dir.clone().multiplyScalar(arc ? 7.5 : 1), hit = null;
+      for (let i = 0; i < (arc ? 60 : 150); i++) {
+        const dt = arc ? 0.04 : 0.1, n = q.clone().addScaledVector(v, dt); if (arc) v.y -= 9.8 * dt;
+        pts.push(n.clone()); const pp = toPlan(n), g = H.ground(pp);
+        if (g != null && n.y <= g + 0.02) { hit = { p: pp, h: g, at: new THREE.Vector3(n.x, g + 0.01, n.z) }; break; }
+        if (Math.hypot(pp[0] - from[0], pp[1] - from[1]) > MAXJ + 2) break; q = n;
+      }
+      if (hit) hit.ok = Math.hypot(hit.p[0] - from[0], hit.p[1] - from[1]) <= MAXJ && Math.abs(hit.h - P.h) < 3.5 && H.clear(from, hit.p);
+      return { hit, pts };
+    }
+    // what you see while aiming: the arc, and a ring where you'd land (green: you can; red: you can't)
+    const arcLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints(Array.from({ length: 150 }, () => new THREE.Vector3())), new THREE.LineBasicMaterial({ color: 0x9fe8ff }));
+    arcLine.frustumCulled = false; arcLine.visible = false; root.add(arcLine);
+    const mark = new THREE.Mesh(new THREE.RingGeometry(0.22, 0.3, 32), new THREE.MeshBasicMaterial({ color: 0x66ff99, side: THREE.DoubleSide, transparent: true, opacity: 0.85 }));
+    mark.rotation.x = -Math.PI / 2; mark.visible = false; root.add(mark);
+    function showAim(L) {
+      const a = arcLine.geometry.attributes.position, n = Math.min(L.pts.length, a.count);
+      for (let i = 0; i < a.count; i++) { const p = L.pts[Math.min(i, n - 1)] || _v.set(0, -1e4, 0); a.setXYZ(i, p.x - root.position.x, p.y, p.z - root.position.z); }   // (arcLine hangs from root)
+      a.needsUpdate = true; arcLine.visible = n > 1; arcLine.material.color.set(L.hit && L.hit.ok ? 0x9fe8ff : 0xff8a80);
+      mark.visible = !!L.hit; if (L.hit) { mark.position.set(L.hit.at.x - root.position.x, L.hit.at.y, L.hit.at.z - root.position.z); mark.material.color.set(L.hit.ok ? 0x66ff99 : 0xff5544); }
+    }
+    const hideAim = () => { arcLine.visible = false; mark.visible = false; };
+    // a jump: the world blinks out and back (moving your eyes without your body is easier on the stomach in the dark)
+    const veil = new THREE.Mesh(new THREE.SphereGeometry(0.3, 16, 8), new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide, transparent: true, opacity: 0, depthTest: false }));
+    veil.renderOrder = 999; veil.visible = false; camera.add(veil);
+    const jump = hit => { blink = 0.3; blinkTo = hit; };
+
+    // a quick pinch or trigger pull acts; a long one (pointing at the ground) jumps
+    function release(I) {
+      const aim = I.aim; I.aim = null; hideAim();
+      if (I.down < 0.35) { if (!H.talk(rayOf(I))) H.interact(); return; }
+      if (aim && aim.hit && aim.hit.ok) jump(aim.hit);
+    }
+
+    // ---- the panel on your left wrist
+    const pc = document.createElement('canvas'); pc.width = 1024; pc.height = 640;
+    const ptex = new THREE.CanvasTexture(pc), panel = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.125), new THREE.MeshBasicMaterial({ map: ptex, transparent: true, depthTest: true }));
+    panel.renderOrder = 10;
+    const wrap = (x, t, w) => { const out = []; let line = ''; for (const word of t.split(/\s+/)) { const tryL = line ? line + ' ' + word : word; if (x.measureText(tryL).width > w && line) { out.push(line); line = word; } else line = tryL; } if (line) out.push(line); return out; };
+    function drawPanel() {
+      const x = pc.getContext('2d'), s = H.status(), act = H.action(); x.clearRect(0, 0, 1024, 640);
+      x.fillStyle = 'rgba(14,11,8,0.88)'; x.beginPath(); x.roundRect ? x.roundRect(0, 0, 1024, 640, 36) : x.rect(0, 0, 1024, 640); x.fill();
+      x.fillStyle = '#ffd100'; x.font = 'bold 84px Georgia'; x.fillText(s.time, 36, 96);
+      x.fillStyle = '#e8dcc0'; x.font = 'italic 44px Georgia'; x.fillText((s.zone || '').slice(0, 30), 300, 90);
+      x.fillStyle = '#fff'; x.font = '38px Arial'; x.fillText(('Gary: ' + (s.task || '—')).slice(0, 46), 36, 160); x.fillStyle = '#bbb'; x.font = '32px Arial'; x.fillText((s.where || '').slice(0, 52), 36, 204);
+      x.fillStyle = act ? '#9fe8ff' : '#777'; x.font = 'bold 38px Arial'; x.fillText(act ? ('A / tap: ' + act).slice(0, 48) : 'Nothing to do here', 36, 262);
+      x.fillStyle = '#ccc'; x.font = '30px Arial'; let y = 318; const lines = H.log().slice(-(panelBig ? 9 : 5));
+      for (const L of lines) for (const w of wrap(x, L, 950)) { if (y > 600) break; x.fillText(w, 36, y); y += 38; }
+      x.fillStyle = '#888'; x.font = '26px Arial'; x.fillText(`${Q().name} · ${prefs.smooth ? 'smooth' : 'snap'} turn · X panel · Y detail · B big`, 36, 628);
+      ptex.needsUpdate = true;
+    }
+    // where it rides: above the left controller, or on the back of the left wrist
+    function placePanel() {
+      const L = inputs.find(I => I.src && I.src.handedness === 'left');
+      panel.visible = panelOn && !!L; if (!L) return;
+      if (L.kind === 'hand') { const w = L.hand.joints && L.hand.joints['wrist']; if (w && panel.parent !== w) { w.add(panel); panel.position.set(0, 0.035, 0.04); panel.rotation.set(-Math.PI / 2, 0, 0); } }
+      else if (panel.parent !== L.grip) { L.grip.add(panel); panel.position.set(0, 0.06, 0.02); panel.rotation.set(-0.75, 0, 0); }
+      panel.scale.setScalar(panelBig ? 1.8 : 1);
+    }
+
+    // ---- the buttons (xr-standard: 0 trigger, 1 grip, 3 stick click, 4 A/X, 5 B/Y), edge-triggered
+    const was = new Map();
+    const pressed = (src, b) => { const k = src.handedness + b, v = !!(src.gamepad.buttons[b] && src.gamepad.buttons[b].pressed), p = was.get(k); was.set(k, v); return v && !p; };
+
+    // ---- the quality, applied
+    function apply(first) {
+      const q = Q(); renderer.shadowMap.enabled = q.shadows;
+      if (first) renderer.xr.setFramebufferScaleFactor(q.scale);
+      const bl = session && session.renderState.baseLayer; if (bl && 'fixedFoveation' in bl) bl.fixedFoveation = q.fov;
+    }
+    function cycle() { prefs.q = ORDER[(ORDER.indexOf(prefs.q) + 1) % ORDER.length]; keep(); apply(false); H.say('sys', `VR detail: ${Q().name} (the sharpness of the picture changes the next time you go in).`); }
+
+    // ---- going in and out
+    async function setup() {
+      if (!navigator.xr || !o.button) return;
+      let ok = false; try { ok = await navigator.xr.isSessionSupported('immersive-vr'); } catch (e) { ok = false; }
+      if (!ok) return;
+      const b = o.button; b.style.display = 'block';
+      b.onclick = async () => {
+        if (session) { session.end(); return; }
+        try {
+          const s = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'] });
+          session = s; apply(true); renderer.xr.setReferenceSpaceType('local-floor'); await renderer.xr.setSession(s); apply(false);
+          if (s.updateTargetFrameRate && s.supportedFrameRates && [...s.supportedFrameRates].includes(90)) s.updateTargetFrameRate(prefs.q === 'sharp' ? 72 : 90).catch(() => { });   // (Quest 3: 90 Hz, or 72 to buy time for the sharp picture)
+          b.textContent = 'Leave VR'; H.start();
+          H.say('sys', 'In VR. Left stick walks; right stick turns, and pushed forward aims a jump. Trigger (or a quick pinch) talks or acts; hold it to point a jump. A acts, B shows the log, X hides the wrist panel, Y changes the detail.');
+          s.addEventListener('end', () => { session = null; b.textContent = 'Enter VR'; hideAim(); renderer.shadowMap.enabled = true; H.end(); });
+        } catch (e) { session = null; H.say('sys', 'Could not start VR: ' + e.message); }
+      };
+    }
+    setup();
+
+    let tPanel = 0;
+    return {
+      quality: () => Q(), _landing: landing, _panel: () => { drawPanel(); return pc.toDataURL(); },   // (for tests)
+      active: () => !!session,
+      far: f => session ? Math.min(f, Q().far) : f,
+      // the walk this frame, from the left stick, the way you're looking; the right stick turns and aims
+      input(dt) {
+        if (!session) return [0, 0];
+        let mv = [0, 0]; camera.getWorldDirection(_d); const yaw = Math.atan2(-_d.z, _d.x);
+        for (const I of inputs) {
+          const src = I.src, gp = src && src.gamepad; if (!gp) continue;
+          const ax = gp.axes.length >= 4 ? gp.axes[2] : 0, ay = gp.axes.length >= 4 ? gp.axes[3] : 0;
+          if (src.handedness === 'left') {
+            if (Math.hypot(ax, ay) > 0.15) { const f = -ay * 2.2, st = ax * 2.2; mv = [Math.cos(yaw) * f + Math.sin(yaw) * st, Math.sin(yaw) * f - Math.cos(yaw) * st]; }
+            if (pressed(src, 4)) panelOn = !panelOn; if (pressed(src, 5)) cycle();
+          } else if (src.handedness === 'right') {
+            if (prefs.smooth) { if (Math.abs(ax) > 0.2 && ay > -0.6) H.turn(-ax * 2.2 * dt); }
+            else { if (Math.abs(ax) > 0.7 && snapReady && ay > -0.6) { H.turn(-Math.sign(ax) * Math.PI / 6); snapReady = false; } if (Math.abs(ax) < 0.3) snapReady = true; }
+            // the stick forward: aim an arc; let go: jump
+            if (ay < -0.7) { const r = rayOf(I); I.stickAim = landing(r.ray.origin.clone(), r.ray.direction.clone(), true); showAim(I.stickAim); }
+            else if (I.stickAim && ay > -0.35) { const L = I.stickAim; I.stickAim = null; hideAim(); if (L.hit && L.hit.ok) jump(L.hit); }
+            if (pressed(src, 4)) H.interact(); if (pressed(src, 5)) panelBig = !panelBig;
+            if (pressed(src, 3)) { prefs.smooth = !prefs.smooth; keep(); H.say('sys', prefs.smooth ? 'Smooth turning.' : 'Snap turning.'); }
+          }
+        }
+        return mv;
+      },
+      // each frame: hands, lasers, aiming, the blink, the panel
+      frame(dt) {
+        if (!session) return;
+        for (const I of inputs) {
+          if (I.kind === 'hand' && I.hand.joints) { let n = 0; for (const j of Object.values(I.hand.joints)) { if (!j.visible || n >= 25) continue; _m.makeTranslation(j.position.x, j.position.y, j.position.z); I.dots.setMatrixAt(n++, _m); } I.dots.count = n; I.dots.instanceMatrix.needsUpdate = true; }
+          if (I.held) { I.down += dt; if (I.down > 0.35) { const r = rayOf(I); I.aim = landing(r.ray.origin.clone(), r.ray.direction.clone(), false); showAim(I.aim); } }
+          I.laser.scale.z = I.aim && I.aim.hit ? Math.max(0.2, rayOf(I).ray.origin.distanceTo(I.aim.hit.at)) : 2.5;   // (to where you'd land, while aiming)
+        }
+        if (blink > 0) { blink -= dt; veil.visible = true; const u = blink > 0.15 ? (0.3 - blink) / 0.15 : blink / 0.15; veil.material.opacity = Math.min(1, Math.max(0, u)); if (blinkTo && blink <= 0.15) { H.teleport(blinkTo.p, blinkTo.h); blinkTo = null; } if (blink <= 0) veil.visible = false; }
+        placePanel(); tPanel -= dt; if (tPanel <= 0 && panel.visible) { tPanel = 0.5; drawPanel(); }
+      },
+      // where your eyes go: the rig stands on your spot, turned your way (raised in the saddle)
+      place(P) { rig.position.set(P.p[0], P.h + H.seat(), -P.p[1]); rig.rotation.y = Math.atan2(-Math.cos(P.yaw), Math.sin(P.yaw)); },
+    };
+  };
+})();
+</script>
 <script data-inline="src/game.js">
 /* game.js: Gary's World. A third-person walk around Gary's house and street in the manner of a classic
    MMO: WASD and mouse camera, nameplates, a target frame, chat, a minimap, a quest, and WebXR for a
@@ -9743,6 +9943,7 @@ function pose(f, o) {                                // o: { x, y, h, yaw, walk 
   f.g.rotation.y = Math.atan2(Math.cos(o.yaw), -Math.sin(o.yaw)) + (o.dance ? o.t * 4 : 0);
   const sw = o.walk != null ? Math.sin(o.walk) * 0.6 : 0, sit = o.sit || 0;
   f.legs[0].rotation.x = -sit * Math.PI / 2 + sw; f.legs[1].rotation.x = -sit * Math.PI / 2 - sw;
+  f.legs[0].rotation.z = f.legs[1].rotation.z = 0;   // (legs together: riding spreads them, and every other pose closes them again)
   f.arms[0].rotation.x = -sw * 0.8 - sit * 0.5; f.arms[1].rotation.x = o.wave ? -2.7 + Math.sin(o.t * 12) * 0.35 : o.dance ? -2.2 + Math.sin(o.t * 8) : sw * 0.8 - sit * 0.5;
   if (o.dance) f.arms[0].rotation.x = -2.2 + Math.cos(o.t * 8);
   if (o.fight && o.walk == null) f.arms[1].rotation.x = -0.9;                                  // stick up, ready
@@ -10811,43 +11012,27 @@ function placeCamera(dt) {
   if (first) camera.lookAt(toScene(camTarget.clone().addScaledVector(camDir, -5))); else camera.lookAt(toScene(camTarget.clone()));   // (lookAt takes a point in the scene's frame)
 }
 
-/* ================= VR (WebXR) ================= */
-let vr = false, snapReady = true;
-const wrist = (() => { const c = document.createElement('canvas'); c.width = 512; c.height = 160; const tex = new THREE.CanvasTexture(c); const m = new THREE.Mesh(new THREE.PlaneGeometry(0.16, 0.05), new THREE.MeshBasicMaterial({ map: tex, transparent: true })); m.position.set(0, 0.04, 0.05); m.rotation.x = -0.9; return { c, tex, m }; })();
-function drawWrist() { const x = wrist.c.getContext('2d'); x.clearRect(0, 0, 512, 160); x.fillStyle = 'rgba(12,10,8,.85)'; x.fillRect(0, 0, 512, 160); x.fillStyle = '#ffd100'; x.font = 'bold 44px Georgia'; x.fillText(GW.hhmm(minute()), 16, 52); x.fillStyle = '#fff'; x.font = '28px Arial'; const { e } = garyTask(); x.fillText(('Gary: ' + (e ? e.task : '—')).slice(0, 34), 16, 100); x.fillStyle = '#ccc'; x.font = '24px Arial'; x.fillText((gary.k === P.k ? 'on this floor' : floorName(gary.k)).slice(0, 36), 16, 140); wrist.tex.needsUpdate = true; }
-const ctrl = [0, 1].map(i => { const c = renderer.xr.getController(i); rig.add(c); c.addEventListener('selectstart', () => vrSelect(c)); return c; });
-ctrl[0].add(wrist.m);
-function vrSelect(c) {
-  const m = new THREE.Matrix4().extractRotation(c.matrixWorld); ray.ray.origin.setFromMatrixPosition(c.matrixWorld); ray.ray.direction.set(0, 0, -1).applyMatrix4(m); ray.far = 8;
-  if (ray.intersectObject(gary.fig.g, true).length && dist(gary.p, P.p) < 6) { const { e } = garyTask(); garySay(`${greeting()} ${e ? 'Right now: ' + lc(e.task) + '.' : ''}`); gary.waveT = 1.2; return; }
-  interact();
-}
-async function setupVR() {
-  if (!navigator.xr) return;
-  let ok = false; try { ok = await navigator.xr.isSessionSupported('immersive-vr'); } catch (e) { ok = false; }
-  if (!ok) return;
-  const b = $('#vr'); b.style.display = 'block';
-  b.onclick = async () => {
-    if (vr) { renderer.xr.getSession().end(); return; }
-    try {
-      const s = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'] });
-      renderer.xr.setReferenceSpaceType('local-floor'); await renderer.xr.setSession(s); vr = true; b.textContent = 'Leave VR'; say('sys', 'In VR: left stick walks, right stick turns, trigger talks to Gary or climbs. Your watch shows the time and Gary’s task.');
-      s.addEventListener('end', () => { vr = false; b.textContent = 'Enter VR'; rig.position.set(0, 0, 0); rig.rotation.set(0, 0, 0); });
-    } catch (e) { say('sys', 'Could not start VR: ' + e.message); }
-  };
-}
-function vrInput(dt) {
-  const s = renderer.xr.getSession(); if (!s) return [0, 0];
-  let mv = [0, 0];
-  const hd = new THREE.Vector3(); camera.getWorldDirection(hd); const yaw = Math.atan2(-hd.z, hd.x);
-  for (const src of s.inputSources) {
-    const gp = src.gamepad; if (!gp || gp.axes.length < 4) continue;
-    const ax = gp.axes[2], ay = gp.axes[3];
-    if (src.handedness === 'left') { if (Math.hypot(ax, ay) > 0.15) { const f = -ay * 2.2, st = ax * 2.2; mv = [Math.cos(yaw) * f + Math.sin(yaw) * st, Math.sin(yaw) * f - Math.cos(yaw) * st]; } }
-    else if (src.handedness === 'right') { if (Math.abs(ax) > 0.7 && snapReady) { P.yaw -= Math.sign(ax) * 30 * DEG; snapReady = false; } if (Math.abs(ax) < 0.3) snapReady = true; }
-  }
-  return mv;
-}
+/* ================= VR (WebXR): vr.js ================= */
+let vr = false;
+// can you walk straight from a to b (a jump may not pass through a wall, or over somewhere you can't stand)
+function clearPath(a, b) { const n = Math.max(1, Math.ceil(dist(a, b) / 0.25));
+  for (let i = 1; i <= n; i++) { const q = [a[0] + (b[0] - a[0]) * i / n, a[1] + (b[1] - a[1]) * i / n]; if (!support(P.k, q, null, P.h)) return false; const r = pushOut(P.k, q, 0.25, null); if (dist(r, q) > 0.05) return false; }
+  return true; }
+const VR = GW.buildVR({ renderer, camera, rig, root, button: $('#vr'), hooks: {
+  P: () => P,
+  ground: p => { const s = support(P.k, p, null, P.h); return s ? s.h : null; },
+  clear: clearPath,
+  teleport(p, h) { const s = support(P.k, p, null, h), k0 = P.k; P.p = [p[0], p[1]]; P.h = s ? s.h : h; if (s) P.k = s.k; P.flight = s ? s.flight : null; P.ground = P.h; P.vy = 0; P.climb = null; P.follow = false; P.auto = false; P.sitting = false; if (P.k !== k0) onFloor(); else updateZone(); },
+  interact,
+  action: () => { const a = nearestAction(); return a ? a.label : null; },
+  talk(ray) { if (ray.intersectObject(gary.fig.g, true).length && dist(gary.p, P.p) < 6) { const { e } = garyTask(); garySay(`${greeting()} ${e ? 'Right now: ' + lc(e.task) + '.' : ''}`); gary.waveT = 1.2; return true; } return false; },
+  status: () => { const { e } = garyTask(); return { time: GW.hhmm(minute()), zone: updateZone.z || '', task: e ? e.task : '', where: gary.k === P.k ? 'Gary is on this floor' : 'Gary’s floor: ' + floorName(gary.k) }; },
+  log: () => [...$('#log').children].slice(-9).map(d => d.textContent),
+  say, turn: r => { P.yaw += r; },
+  seat: () => P.riding ? Math.max(0, (P.riding.back || 1.4) - 0.75) : 0,
+  start: () => { vr = true; },
+  end: () => { vr = false; rig.position.set(0, 0, 0); rig.rotation.set(0, 0, 0); you.g.visible = true; },
+} });
 
 /* ================= the loop ================= */
 let last = performance.now(), started = false, tSave = 0, tSlow = 0;
@@ -10858,7 +11043,7 @@ function frame() {
     // move
     let mv = [0, 0], turn = 0;
     const slow = keys.has('shift'), speed = (P.riding ? (slow ? 3.2 : 9) : slow ? 1.4 : 3.4) * (PL.slowT > 0 ? 0.45 : 1) * gods.mult.swift();   // on horseback: a trot, or a gallop
-    if (vr) mv = vrInput(dt);
+    if (vr) mv = VR.input(dt);
     else if (!P.climb && PL.alive) {
       let f = 0, st = 0;
       if (keys.has('w') || keys.has('arrowup') || P.auto || (mouse.l && mouse.r)) f += 1;
@@ -10889,12 +11074,12 @@ function frame() {
       for (const [i, l] of you.legs.entries()) { l.rotation.order = 'ZXY'; l.rotation.x = -0.35; l.rotation.z = (i ? 1 : -1) * Math.min(1.1, 0.35 + (a.S.wid || 0.5) * (a.size || 1) * 0.9); } } }
     combatUpdate(dt);
     // camera
-    if (vr) { you.g.visible = false; rig.position.set(P.p[0], P.h, -P.p[1]); rig.rotation.y = Math.atan2(-Math.cos(P.yaw), Math.sin(P.yaw)); }
+    if (vr) { you.g.visible = false; VR.place(P); VR.frame(dt); }
     else placeCamera(dt);
     if (!PL.alive) you.g.visible = false;                         // your body lies there as remains; you're a ghost
     const act = nearestAction(), pr = $('#prompt');
     if (act && !vr) { pr.innerHTML = `<kbd>F</kbd> ${esc(act.label)}${act.also ? ` <span style="color:var(--dim)">· ${esc(act.also)}</span>` : ''}`; pr.style.display = 'block'; } else pr.style.display = 'none';
-    tSlow -= dt; if (tSlow <= 0) { tSlow = 0.5; updateZone(); updateTarget(); $('#clock').textContent = `${GW.hhmm(minute())}${clock.speed !== 1 ? ' · ' + (clock.speed < 0 ? '⏪ ' : clock.speed === 0 ? '⏸ ' : '') + speedText(clock.speed) : ''}`; showClockWin(true); if ($('#daywin').style.display === 'block') renderDay(); if (vr) drawWrist(); }
+    tSlow -= dt; if (tSlow <= 0) { tSlow = 0.5; updateZone(); updateTarget(); $('#clock').textContent = `${GW.hhmm(minute())}${clock.speed !== 1 ? ' · ' + (clock.speed < 0 ? '⏪ ' : clock.speed === 0 ? '⏸ ' : '') + speedText(clock.speed) : ''}`; showClockWin(true); if ($('#daywin').style.display === 'block') renderDay(); }
     drawMap();
     tSave -= dt; if (tSave <= 0) { tSave = 5; save(); }
   }
@@ -10935,7 +11120,7 @@ function frame() {
   if (env.crypt) { /* set above */ }
   else if (env.k > 0) { scene.fog.color.lerp(env.fog.multiplyScalar(1 - 0.82 * sky.dark), 0.8 * env.k); scene.fog.near = 70 + 110 * env.k; scene.fog.far = 300 + 1200 * env.k; }
   else { const open = clamp((Math.hypot(Math.max(TB.x0 - P.p[0], 0, P.p[0] - TB.x1), Math.max(TB.y0 - P.p[1], 0, P.p[1] - TB.y1)) - 20) / 200, 0, 1); scene.fog.near = 70 + 80 * open; scene.fog.far = 300 + 320 * open; }
-  if (frame.place === 'world') country.cull(camera, scene.fog ? scene.fog.far + 60 : 2000);
+  if (frame.place === 'world') country.cull(camera, VR.far(scene.fog ? scene.fog.far + 60 : 2000), vr);   // (in VR, by distance only: a head turns faster than last frame's view)
   renderer.render(scene, camera);
   if (cinema) cinema.place(camera, cv, !!vr);
 }
@@ -10989,7 +11174,6 @@ P.ground = P.h; gary.ti = -1;
 renderer.setAnimationLoop(frame);
 $('#loadMsg').textContent = `${FL.length} floors, ${SCHED.list.length} tasks on Gary’s schedule. It is ${GW.hhmm(minute())} in ${NAMES.town}.`;
 $('#start').disabled = false;
-setupVR();
 // the cosmic teleport (src/cosmos.js): any world in the universe
 const cosmos = GW.buildCosmos({ openWin, closeWin, say, esc, home: () => toGary('You speak the word of passage') });
 // the Sepulchre of Xal'Vezrah: on the continent on the far side of Rth from Ursa, on dry ground (a lot found the way a cosmic landing finds one)
@@ -11020,7 +11204,7 @@ cosmos.portOf = starships.starfaring;
 const aboard = () => inDungeon(P.p) && dungeon.crypt === 'ship';
 $('#cineBody').addEventListener('click', ev => { const t = ev.target.closest('[data-film]'); if (!t || !cinema) return; cinema.choose(t.dataset.film); closeWin('cinewin'); say('emote', 'The lights go down.'); });
 $('#snd').textContent = SND_ICON(sound.volume()); $('#snd').onclick = () => setVolume(sound.cycle());
-window.GARYWORLD = { pushOut, inside, sync, shedQ, equip, things, gods, interiors, renderer, scene, rooms, drawers, houseOpen, openings, starships, cosmos, AWAY, cinema, sitCinema, standCinema, sound, warp, warpText, warpOpen, remains, PL, PLAYER, pickUp, nearestAction, dungeon, goDungeon, world, country, P, gary, cam, clock, minute, setSpeed, nav, house, FC, useSchedule, quest, get started() { return started; }, start: () => $('#start').click(), interact, action, garyTask };
+window.GARYWORLD = { VR, clearPath, support, pushOut, inside, sync, shedQ, equip, things, gods, interiors, renderer, scene, rooms, drawers, houseOpen, openings, starships, cosmos, AWAY, cinema, sitCinema, standCinema, sound, warp, warpText, warpOpen, remains, PL, PLAYER, pickUp, nearestAction, dungeon, goDungeon, world, country, P, gary, cam, clock, minute, setSpeed, nav, house, FC, useSchedule, quest, get started() { return started; }, start: () => $('#start').click(), interact, action, garyTask };
 })();
 </script>
 </body>
