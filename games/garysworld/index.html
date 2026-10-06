@@ -6215,6 +6215,9 @@ GW.buildWeapons = function (root, o) {
     play('bang', from, g.Kind === 'launcher' ? 0.8 : 1); flashAt(from, g.Kind === 'launcher' ? 0.5 : 0.3);
     if (g.Kind === 'launcher') { missiles.push({ kind: 'Rocket', P: from, V: dir.multiplyScalar(45), D: g, T: 0, mesh: addMesh(model('Rocket')) }); return true; }
     if (isGary) { shots.push(tracer(from, to)); o.garyStruck(); return true; }
+    // something (or someone) nearer in the line of fire takes the shot instead
+    { const h = pickRay(from, dir, d - 0.6); if (h && h.person) { shots.push(tracer(from, from.clone().addScaledVector(dir, h.t))); hitPerson(h.person, Math.round(g.Dmg * (0.85 + Math.random() * 0.3))); return true; }
+      if (h && h.a && h.a !== a) { shots.push(tracer(from, from.clone().addScaledVector(dir, h.t))); o.hit(h.a, Math.round(g.Dmg * (0.85 + Math.random() * 0.3)), 'shot', false); return true; } }
     // each pellet its own chance: surer close up, wider of the mark further off
     let dealt = 0, hits = 0, crit = false;
     for (let k = 0; k < g.Pellets; k++) {
@@ -6258,8 +6261,25 @@ GW.buildWeapons = function (root, o) {
       const q = from.clone().addScaledVector(dir, t), h = o.heightOf(a), s = a.size || 1;
       if (Math.hypot(q.x - c.x, q.z - c.z) < 0.45 + 0.55 * s && q.y > h - 0.2 && q.y < h + 1.8 * s) { best = a; bt = t; }
     }
-    return best ? { a: best, t: bt } : null;
+    for (const t of o.people ? o.people() : []) {   // (the townsfolk: a person in the way is hit as a beast would be)
+      const h = o.ground(t.p, o.you().h), c = at3(t.p, h + 1.0), tt = c.clone().sub(from).dot(dir); if (tt < 0 || tt > bt) continue;
+      const q = from.clone().addScaledVector(dir, tt); if (Math.hypot(q.x - c.x, q.z - c.z) < 0.4 && q.y > h - 0.1 && q.y < h + (t.child ? 1.3 : 1.8)) { best = { person: t }; bt = tt; }
+    }
+    return best ? (best.person ? { person: best.person, t: bt } : { a: best, t: bt }) : null;
   }
+  // a person struck: hurt (they run), or down (they fall, and lie where they fell)
+  function hitPerson(t, n) { const out = o.hurtPerson ? o.hurtPerson(t, n) : []; if (out && out.length) { adopt(out, false); o.say('combat', `You kill ${t.name}.`); } else o.say('combat', `You hit ${t.name} for ${n}.`); }
+  // with nothing targeted: a swing at whatever's before you, within reach; a gun fired straight ahead
+  function swingFree() {
+    const me = o.you(), fw = [Math.cos(me.yaw), Math.sin(me.yaw)], r = reach() + 0.4; o.swing && o.swing(); let best = null, bd = r;
+    const front = p => { const dx = p[0] - me.p[0], dy = p[1] - me.p[1], d = Math.hypot(dx, dy); return d < 1e-3 || (dx * fw[0] + dy * fw[1]) / d > 0.55 ? d : Infinity; };
+    for (const a of o.creatures()) { if (a.dead) continue; const d = front([a.x, a.y]) - 0.45 * (a.size || 1); if (d < bd) { bd = d; best = { a }; } }
+    for (const t of o.people ? o.people() : []) { const d = front(t.p); if (d < bd) { bd = d; best = { person: t }; } }
+    const dmg = Math.round(o.roll());
+    if (best && best.a) o.hit(best.a, dmg, 'swing', false); else if (best) setTimeout(() => hitPerson(best.person, dmg), 180);
+    return !!best;
+  }
+  function fireAhead() { const me = o.you(), pitch = o.pitch ? o.pitch() : 0; return fireRay(muzzle(), V3(Math.cos(me.yaw) * Math.cos(pitch), Math.sin(pitch), -Math.sin(me.yaw) * Math.cos(pitch)).normalize()); }
   function passesGary(from, dir, range) {
     const G = o.gary(); if (!G || !G.here) return false; const g = at3(G.p, G.h + 1.0), t = g.clone().sub(from).dot(dir);
     return t >= 0 && t <= range && from.clone().addScaledVector(dir, t).distanceTo(g) < 0.45;
@@ -6274,6 +6294,7 @@ GW.buildWeapons = function (root, o) {
     for (let k = 0; k < g.Pellets; k++) {
       const d = g.Pellets > 1 ? dir.clone().add(V3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).multiplyScalar(0.09)).normalize() : dir;
       const h = pickRay(muz, d, g.Range); shots.push(tracer(muz, muz.clone().addScaledVector(d, h ? Math.max(0.5, h.t) : g.Range)));
+      if (h && h.person) { hitPerson(h.person, Math.round(g.Dmg * (0.85 + Math.random() * 0.3))); continue; }
       if (h) { const c = Math.random() < 0.12, n = Math.round(g.Dmg * (0.85 + Math.random() * 0.3) * (c ? 2 : 1)), w = struck.get(h.a) || { n: 0, hits: 0, crit: false }; w.n += n; w.hits++; w.crit = w.crit || c; struck.set(h.a, w); }
       else if (!gary && passesGary(muz, d, g.Range)) gary = true;
     }
@@ -6448,7 +6469,7 @@ GW.buildWeapons = function (root, o) {
     for (const m of scorches) { const b = m.userData.b; m.material.opacity = Math.min(0.9, (b.until - day) / (b.r > 100 ? 14 : 4) * 1.5); }
   }
 
-  return { update, nearest, drop, dress, gun, held, reach, autoFire, fireAt, throwAt, arm, explode, fireRay, takeGrenade, throwVel,
+  return { update, nearest, drop, dress, gun, held, reach, autoFire, fireAt, throwAt, arm, explode, fireRay, swingFree, fireAhead, hitPerson, pickRay, takeGrenade, throwVel,
     unTake: name => { const B = o.bag(); B[name] = (B[name] || 0) + 1; o.bagChanged(); },   // (a grenade in your hand when you leave VR goes back in the bag)
     // one line for the wrist panel: what's in your hand, its rounds, the grenades and nukes you carry
     statusLine() { const d = held(), B = o.bag(), g = (B.Grenade || 0) + (B['Grenade nuke'] || 0);
@@ -7004,7 +7025,10 @@ GW.buildInside = function (root, o) {
   function nearest(p) { let best = null, bd = 2; for (const B of live.values()) for (const F of B.figs) { if (F.dead) continue; const d = Math.hypot(p[0] - F.p[0], p[1] - F.p[1]); if (d < bd) { bd = d; best = { F, B }; } } return best && { d: bd, label: `talk to ${best.F.pe.name.replace(/^The /, 'the ').replace(/^A /, 'a ')}`, who: best.F.pe, room: best.B }; }
   // a blast (weapons.js): the people in the buildings round c, within r, fall where they stand (and are made again with their building)
   function blast(c, r) { let n = 0; for (const B of live.values()) for (const F of B.figs) if (!F.dead && Math.hypot(F.p[0] - c[0], F.p[1] - c[1]) < r) { F.dead = true; n++; F.f.g.rotation.set(-Math.PI / 2 * 0.95, F.f.g.rotation.y, 0); F.f.g.position.y += 0.15; } return n; }
-  return { update, segsNear, circlesNear, nearest, blast, isLive: hk => live.has(hk), get here() { return here; }, get rooms() { return [...live.values()]; }, floorAt, levelOf, group, inB };
+  // the people indoors as things a weapon can hit: one blow or a shot and they fall where they stand
+  const people = () => { const out = []; for (const B of live.values()) for (const F of B.figs) if (!F.dead && F.p) out.push({ kind: 'inside', ref: F, p: F.p, name: F.name || 'someone' }); return out; };
+  function hurt(F) { if (F.dead) return 0; F.dead = true; F.f.g.rotation.set(-Math.PI / 2 * 0.95, F.f.g.rotation.y, 0); F.f.g.position.y += 0.15; return 1; }
+  return { update, segsNear, circlesNear, nearest, blast, people, hurt, isLive: hk => live.has(hk), get here() { return here; }, get rooms() { return [...live.values()]; }, floorAt, levelOf, group, inB };
 };
 })();
 </script>
@@ -8057,7 +8081,7 @@ function buildProps(root, o) {
     if (PP) window.GW.bioTools.nativise(f, PP);   // one of the people of this world (biosphere.js)
     f.g.traverse(m => { if (m.isMesh) m.castShadow = true; }); life.add(f.g); if (child) f.g.scale.multiplyScalar(0.72);
     let bike = null; if (cyclist) { bike = new THREE.Mesh(bikeGeo, MAT1); bike.castShadow = true; life.add(bike); }
-    return { f, bike, p: p.slice(), yaw: R() * TAU, goal: null, walk: R() * 9, speed: (cyclist ? 4.5 + R() * 1.5 : 1.1 + R() * 0.4) * (role && role.pace || 1), wait: R() * 1.5, cyclist, role, dest, stuck: 0, best: Infinity, fade: 1 };
+    return { f, bike, p: p.slice(), yaw: R() * TAU, goal: null, walk: R() * 9, speed: (cyclist ? 4.5 + R() * 1.5 : 1.1 + R() * 0.4) * (role && role.pace || 1), wait: R() * 1.5, cyclist, child: !!child, role, dest, stuck: 0, best: Infinity, fade: 1, hp: child ? 25 : 40, scared: 0 };
   }
 
   /* ---------------- who is out, and why ----------------
@@ -8237,6 +8261,8 @@ function buildProps(root, o) {
       c.m.position.set(c.p[0], o.heightAt(c.p), -c.p[1]); c.m.rotation.y = c.yaw; if (!near(c.p, 60) || barren) { life.remove(c.m); cats.splice(cats.indexOf(c), 1); } }
     // townsfolk: walk from one paved spot to another along the street; cyclists faster, on their bikes
     for (const f of folk.slice()) {
+      // frightened (they saw what you did, or were hurt): away from you, as fast as they can, nothing else on their minds
+      if (f.scared > 0) { f.scared -= dt; f.dest = null; f.going = false; f.wait = 0; const aw = Math.atan2(f.p[1] - P[1], f.p[0] - P[0]); f.goal = [f.p[0] + Math.cos(aw) * 30, f.p[1] + Math.sin(aw) * 30]; }
       const toDest = f.dest ? Math.hypot(f.dest.door[0] - f.p[0], f.dest.door[1] - f.p[1]) : Infinity;
       if (f.dest && toDest < 1.2) { f.going = true; }                                         // there: in they go
       if (f.going) { f.fade -= dt * 1.5; fadeFig(f); if (f.fade <= 0) { dropFolk(f); continue; } }
@@ -8252,7 +8278,7 @@ function buildProps(root, o) {
         f.goal = g2; f.wait = f.cyclist || f.dest ? 0 : 1 + R() * 5; } }
       let moving = false;
       if (f.goal && f.wait <= 0) { const want = Math.atan2(f.goal[1] - f.p[1], f.goal[0] - f.p[0]); f.yaw += Math.atan2(Math.sin(want - f.yaw), Math.cos(want - f.yaw)) * Math.min(1, dt * 5);
-        const dd = Math.hypot(P[0] - f.p[0], P[1] - f.p[1]), slowNear = dd < 1.5 ? 0.2 : 1; let nx = f.p[0] + Math.cos(f.yaw) * f.speed * dt * slowNear, ny = f.p[1] + Math.sin(f.yaw) * f.speed * dt * slowNear;
+        const dd = Math.hypot(P[0] - f.p[0], P[1] - f.p[1]), slowNear = f.scared > 0 ? (f.cyclist ? 7.5 : 3.8) / f.speed : dd < 1.5 ? 0.2 : 1; let nx = f.p[0] + Math.cos(f.yaw) * f.speed * dt * slowNear, ny = f.p[1] + Math.sin(f.yaw) * f.speed * dt * slowNear;
         // round the benches, stalls, bins and trees in the way (the same ones that stop you)
         if (o.obstacles) for (const ob of o.obstacles([nx, ny])) { if (ob.poly || ob.rect) continue; const ox = nx - ob.x, oy = ny - ob.y, d = Math.hypot(ox, oy), r = ob.r + (f.cyclist ? 0.5 : 0.3); if (d < r && d > 1e-4) { nx = ob.x + ox / d * r; ny = ob.y + oy / d * r; } }
         f.p[0] = nx; f.p[1] = ny; moving = true; f.walk += dt * f.speed * (f.cyclist ? 1.6 : 2.6); }
@@ -8278,7 +8304,18 @@ function buildProps(root, o) {
     for (const f of flies.slice()) if (hit(f.p)) { flies.splice(flies.indexOf(f), 1); life.remove(f.g); }   // (a butterfly is simply gone)
     return out;
   }
-  return { SAY, chunk, update, group: life, blast, folkNear, keeperNear, keepers, folk, roleWeights, authorityOf, counts: () => ({ ducks: ducks.length, pigeons: pigeons.length, butterflies: flies.length, cats: cats.length, folk: folk.length }) };
+  // the people out in the town as things a weapon can hit: hurt, they run; struck down, they fall (handed back, to lie where they
+  // fell); and everyone near who saw it runs from you
+  const people = () => folk.filter(f => !f.going && f.fade > 0.5).map(f => ({ kind: 'folk', ref: f, p: f.p, child: f.child, name: 'a passer-by' }));
+  function scare(p) { for (const g of folk) if (Math.hypot(g.p[0] - p[0], g.p[1] - p[1]) < 45) g.scared = 40 + Math.random() * 20; }
+  function hurt(f, n) {
+    if (!folk.includes(f)) return []; f.hp -= n; scare(f.p);
+    if (f.hp > 0) return [];
+    folk.splice(folk.indexOf(f), 1); life.remove(f.f.g); const out = [{ obj: f.f.g, p: f.p.slice(), h: 0, kind: 'person' }];
+    if (f.bike) { life.remove(f.bike); out.push({ obj: f.bike, p: f.p.slice(), h: 0, kind: 'thing' }); }
+    return out;
+  }
+  return { SAY, chunk, update, group: life, blast, people, hurt, scare, folkNear, keeperNear, keepers, folk, roleWeights, authorityOf, counts: () => ({ ducks: ducks.length, pigeons: pigeons.length, butterflies: flies.length, cats: cats.length, folk: folk.length }) };
 }
 window.GW = window.GW || {}; window.GW.buildProps = buildProps;
 })();
@@ -11967,6 +12004,9 @@ const arms = GW.buildWeapons(root, { world: syncWorld, country, day: () => clock
   hit: (a, n, verb, crit) => hit(a, n, verb, crit), strikeQuiet: (a, n) => strikeQuiet(a, n), hurtMe: (name, n) => blastHurt(name, n), gainXp: n => gainXp(n),
   gary: () => GW.U.cur.gary && !AWAY ? { p: gary.p, h: gary.h, here: gary.k === P.k && gary.fig.g.visible } : null, garyStruck: blast => garyStruck(blast ? 'blast' : 'shot'),
   say: (k, t) => say(k, t), floatText: (w, t, c) => floatText(w, t, c), swing: () => swing(), outOfAmmo: () => { PL.auto = false; updateBar(); },
+  people: () => [...(GW.PROPS && GW.PROPS.people ? GW.PROPS.people() : []), ...(GW.INSIDE && GW.INSIDE.people ? GW.INSIDE.people() : [])],
+  hurtPerson: (t, n) => { if (t.kind === 'folk') return GW.PROPS.hurt(t.ref, n); if (GW.INSIDE.hurt(t.ref) && GW.PROPS && GW.PROPS.scare) GW.PROPS.scare(t.p); return []; },
+  roll: () => roll(weaponDmg()), swing: () => swing(), pitch: () => 0,
   blastAround: (c, R) => ({ list: [...(GW.PROPS && GW.PROPS.blast ? GW.PROPS.blast(c, R) : []), ...things.blast(c, R), ...country.blastLife(c, R, performance.now() / 1000)], inside: GW.INSIDE ? GW.INSIDE.blast(c, R) : 0 }),
   audio: () => { sound.start(); const ctx = sound.ctx(); return ctx ? { ctx, out: sound.sfx() } : null; }, get voices() { return typeof voices !== 'undefined' ? voices : null; } });
 GW.WEAPONS = arms; arms.dev = { get P() { return P; }, get voices() { return voices; }, chat: t => { $("#chatIn").value = t; sendChat(); }, get wizard() { return wizard; }, get vr() { return VRH; }, get cam() { return cam; }, get PL() { return PL; }, get gary() { return gary; }, country, action: a => action(a), setTarget: a => setTarget(a), save: () => save(), creatures: () => allCreatures() };   // (for tests in headless Chrome)
@@ -12834,7 +12874,7 @@ function action(a) {
     P.yaw = Math.atan2(gary.p[1] - P.p[1], gary.p[0] - P.p[0]); arms.fireAt({ p: gary.p, h: gary.h }, true); return; }
   if (a === 'grenade') { if (PL.alive) arms.throwAt(hostile(target) ? target : null); return; }
   if (a === 'attack' && !hostile(target) && wizardStruck()) return;
-  if (a === 'attack') { if (!hostile(target)) { tabTarget(); if (!hostile(target)) { say('sys', 'Nothing to attack here.'); return; } } PL.auto = !PL.auto; if (PL.auto) { faceTarget(target, true); PL.swingT = Math.min(PL.swingT, 0.2); } updateBar(); return; }
+  if (a === 'attack') { if (!hostile(target)) { if (!PL.alive) return; if (arms.gun()) arms.fireAhead(); else arms.swingFree(); return; } /* (nothing targeted: at whatever's before you) */ PL.auto = !PL.auto; if (PL.auto) { faceTarget(target, true); PL.swingT = Math.min(PL.swingT, 0.2); } updateBar(); return; }
   if (ABILITY[a]) { useAbility(a); return; }
   if (a === 'equip') { const w = $('#equipwin'); if (w.style.display === 'block') closeWin('equipwin'); else equip.show(); return; }
   if (a === 'bags') { renderBag(); const w = $('#bagwin'); w.style.display = w.style.display === 'block' ? 'none' : 'block'; return; }
@@ -13300,6 +13340,8 @@ function vrStrike(tip, speed) {
   const a = allCreatures().find(c => !c.dead && Math.hypot(c.x - q[0], c.y - q[1]) < 0.45 + 0.55 * (c.size || 1) && tip.y > heightAt(c) - 0.2 && tip.y < heightAt(c) + 1.8 * (c.size || 1));
   if (a) { const crit = Math.random() < 0.1, force = clamp(speed / 4, 0.6, 1.5); sfx('swing'); hit(a, Math.round(roll(weaponDmg()) * force * (crit ? 2 : 1)), 'swing', crit); return true; }
   if (GW.U.cur.gary && !AWAY && gary.k === P.k && gary.fig.g.visible && Math.hypot(gary.p[0] - q[0], gary.p[1] - q[1]) < 0.45 && tip.y > gary.h && tip.y < gary.h + 2) { garyStruck('shot'); return true; }
+  for (const t of [...(GW.PROPS && GW.PROPS.people ? GW.PROPS.people() : []), ...(GW.INSIDE && GW.INSIDE.people ? GW.INSIDE.people() : [])]) {   // (a person)
+    const h = groundAt(P.k, t.p, P.h); if (Math.hypot(t.p[0] - q[0], t.p[1] - q[1]) < 0.4 && tip.y > h - 0.1 && tip.y < h + 1.8) { sfx('swing'); arms.hitPerson(t, Math.round(roll(weaponDmg()) * clamp(speed / 4, 0.6, 1.5))); return true; } }
   return false;
 }
 // the next weapon from your bag into your hand (what was there goes back in the bag)
