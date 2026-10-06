@@ -4846,7 +4846,9 @@ GW.buildThings = function (root, o) {
   }
   // (lost things within r of p: for /lost, and for testing)
   const lostNear = (p, r) => LAND.lCells(p[0] - r, p[1] - r, p[0] + r, p[1] + r).flatMap(landThings).filter(t => t.lost && !W.taken[t.id]);
-  return { gather, lostNear, update, nearest, drop, arrive, KINDS, get live() { return live; }, get critters() { return critters; }, householder };
+  // a blast (weapons.js): the rats and roaches within r of c, killed and handed back to lie where they were
+  function blast(c, r) { const out = []; for (const k of critters.slice()) if (Math.hypot(k.p[0] - c[0], k.p[1] - c[1]) < r) { critters.splice(critters.indexOf(k), 1); group.remove(k.m); out.push({ obj: k.m, p: k.p.slice(), h: 0, kind: 'small' }); } return out; }
+  return { gather, lostNear, update, nearest, blast, drop, arrive, KINDS, get live() { return live; }, get critters() { return critters; }, householder };
 };
 })();
 </script>
@@ -5300,11 +5302,40 @@ GW.buildWeapons = function (root, o) {
       if (o.outdoors(c)) { blasts.push({ uni: o.world(), x: c[0], y: c[1], r: R, until: o.day() + (R > 100 ? 14 : 4) }); saveBlasts(); o.country.rebuild(c, R); scorchSig = ''; }
       o.say('sys', killed > 0 ? `The flash, and then the sound. ${killed} creature${killed === 1 ? '' : 's'} gone.` : 'The flash, and then the sound.');
     }
+    const G = o.gary(); if (G && G.here && Math.hypot(G.p[0] - c[0], G.p[1] - c[1]) < R) o.garyStruck(true);
+    // and everyone and everything else alive inside it: the townsfolk, the people indoors, cats, ducks, pigeons, rats, the birds
+    // overhead, a titan (Gary only flickers; the wizard's ward holds)
+    const B = o.blastAround ? o.blastAround(c, R) : null;
+    if (B) { adopt(B.list, D.Nuclear);
+      if (D.Nuclear) { const people = B.list.filter(k => k.kind === 'person').length + (B.inside || 0), beasts = B.list.filter(k => k.kind === 'small' || k.kind === 'bird').length, titans = B.list.filter(k => k.titan).map(k => 'the ' + k.titan);
+        const what = [killed ? `${killed} creature${killed === 1 ? '' : 's'}` : '', people ? `${people} ${people === 1 ? 'person' : 'people'}` : '', beasts ? `${beasts} small beast${beasts === 1 ? '' : 's'} and bird${beasts === 1 ? '' : 's'}` : ''].filter(Boolean);
+        if (what.length || titans.length) o.say('sys', `Within ${R} m, nothing lives: ${what.join(', ')}${titans.length ? `${what.length ? '; and ' : ''}${titans.join(' and ')}, which falls` : ''}.`); } }
+    // and you, if you're still in it (last: what you see first is what it did)
     const dy = Math.max(0, Math.abs(me.h + 1 - at.y) - 2), dm = Math.hypot(Math.hypot(me.p[0] - c[0], me.p[1] - c[1]), dy);
     if (me.alive && dm < R) o.hurtMe(D.Nuclear ? 'The nuclear blast' : 'The blast', D.Nuclear ? 999999 : Math.round(D.BlastDmg * 0.5 * Math.pow(1 - dm / R, 0.6)));
     else if (xp) o.gainXp(xp);   // (what it killed is worth something, to whoever lives to see it)
-    const G = o.gary(); if (G && G.here && Math.hypot(G.p[0] - c[0], G.p[1] - c[1]) < R) o.garyStruck(true);
   }
+  // the dead the blast leaves (people, small beasts, birds): laid where they fell, birds falling first; a nuke's charred black.
+  // They lie a few minutes, or till you're far off
+  const corpses = [];
+  const char = m => { const c = m.clone(); if (c.color) c.color.multiplyScalar(0.15); if (c.emissive) c.emissive.setRGB(0, 0, 0); return c; };
+  function adopt(list, nuclear) {
+    for (const k of list) {
+      if (!k.obj) continue; const ob = k.obj, gnd = o.ground(k.p); group.add(ob);
+      if (nuclear) ob.traverse(m => { if (m.isMesh) { m.material = Array.isArray(m.material) ? m.material.map(char) : char(m.material); m.userData.charred = true; } });
+      const C = { obj: ob, p: k.p, gnd, h: gnd + (k.h || 0), vy: 0, kind: k.kind, t: 0, fall: k.kind === 'bird' && (k.h || 0) > 0.3 };
+      if (!C.fall) lay(C); corpses.push(C);
+    }
+    while (corpses.length > 300) bury(corpses.shift());
+  }
+  function lay(C) { const ob = C.obj;
+    if (C.kind === 'person') { ob.rotation.set(-Math.PI / 2 * 0.95, ob.rotation.y, 0); ob.position.y = C.gnd + 0.15; }
+    else { ob.rotation.set(0, ob.rotation.y, Math.PI / 2); ob.position.y = C.gnd + 0.05; } }
+  function bury(C) { group.remove(C.obj); C.obj.traverse(m => { if (m.isMesh && m.userData.charred) (Array.isArray(m.material) ? m.material : [m.material]).forEach(x => x.dispose()); }); }
+  function corpsesUpdate(dt) { const me = o.you();
+    for (let i = corpses.length - 1; i >= 0; i--) { const C = corpses[i]; C.t += dt;
+      if (C.fall) { C.vy -= 9.8 * dt; C.h += C.vy * dt; C.obj.position.y = C.h; C.obj.rotation.x += dt * 3; if (C.h <= C.gnd) { C.fall = false; lay(C); } }
+      if (C.t > 300 || Math.hypot(C.p[0] - me.p[0], C.p[1] - me.p[1]) > 600) { bury(C); corpses.splice(i, 1); } } }
   const flashEl = document.createElement('div'); flashEl.style.cssText = 'position:fixed;inset:0;background:#fffbea;opacity:0;pointer-events:none;z-index:40'; document.body.appendChild(flashEl);
   let flashT = 0, flashK = 0;
   const flash = k => { flashT = 2.5; flashK = k; };
@@ -5362,7 +5393,7 @@ GW.buildWeapons = function (root, o) {
   let tBack = 0;
   function update(dt, visible) {
     const me = o.you();
-    fireCd -= dt; rangeWarn -= dt; aimT -= dt;
+    fireCd -= dt; rangeWarn -= dt; aimT -= dt; corpsesUpdate(dt);
     // lying about: gathered twice a second, drawn near you
     lieGroup.visible = glints.visible = visible;
     if (visible && (tScan -= dt) <= 0) { tScan = 0.5; const list = gather(me.p), s2 = list.map(t => t.id).join(';'); if (s2 !== sig) { sig = s2; drawLying(list); } live = list; }
@@ -5924,7 +5955,7 @@ GW.buildInside = function (root, o) {
     // the one you're in: its light on, and its name
     const now = [...live.values()].find(B => inB(B, p)) || null;
     if (now !== here) { if (here) here.lamp.intensity = 0; here = now; if (here) { here.lamp.intensity = 2.2; if (o.onEnter) o.onEnter(here); } if (o.onChange) o.onChange(); }
-    for (const B of live.values()) for (const F of B.figs) { const dx = p[0] - F.p[0], dy = p[1] - F.p[1]; if (Math.hypot(dx, dy) < 4 && here === B) { const want = Math.atan2(dy, dx) - B.yaw; F.f.g.rotation.y += (Math.atan2(Math.cos(want), -Math.sin(want)) - F.f.g.rotation.y) * Math.min(1, dt * 3); } }
+    for (const B of live.values()) for (const F of B.figs) { if (F.dead) continue; const dx = p[0] - F.p[0], dy = p[1] - F.p[1]; if (Math.hypot(dx, dy) < 4 && here === B) { const want = Math.atan2(dy, dx) - B.yaw; F.f.g.rotation.y += (Math.atan2(Math.cos(want), -Math.sin(want)) - F.f.g.rotation.y) * Math.min(1, dt * 3); } }
   }
   // collisions near p: wall segments, and furniture as circles
   // which floor someone at height h is on
@@ -5944,8 +5975,10 @@ GW.buildInside = function (root, o) {
     return B.lvls[k];
   }
   // the people: F to talk
-  function nearest(p) { let best = null, bd = 2; for (const B of live.values()) for (const F of B.figs) { const d = Math.hypot(p[0] - F.p[0], p[1] - F.p[1]); if (d < bd) { bd = d; best = { F, B }; } } return best && { d: bd, label: `talk to ${best.F.pe.name.replace(/^The /, 'the ').replace(/^A /, 'a ')}`, who: best.F.pe, room: best.B }; }
-  return { update, segsNear, circlesNear, nearest, isLive: hk => live.has(hk), get here() { return here; }, get rooms() { return [...live.values()]; }, floorAt, levelOf, group, inB };
+  function nearest(p) { let best = null, bd = 2; for (const B of live.values()) for (const F of B.figs) { if (F.dead) continue; const d = Math.hypot(p[0] - F.p[0], p[1] - F.p[1]); if (d < bd) { bd = d; best = { F, B }; } } return best && { d: bd, label: `talk to ${best.F.pe.name.replace(/^The /, 'the ').replace(/^A /, 'a ')}`, who: best.F.pe, room: best.B }; }
+  // a blast (weapons.js): the people in the buildings round c, within r, fall where they stand (and are made again with their building)
+  function blast(c, r) { let n = 0; for (const B of live.values()) for (const F of B.figs) if (!F.dead && Math.hypot(F.p[0] - c[0], F.p[1] - c[1]) < r) { F.dead = true; n++; F.f.g.rotation.set(-Math.PI / 2 * 0.95, F.f.g.rotation.y, 0); F.f.g.position.y += 0.15; } return n; }
+  return { update, segsNear, circlesNear, nearest, blast, isLive: hk => live.has(hk), get here() { return here; }, get rooms() { return [...live.values()]; }, floorAt, levelOf, group, inB };
 };
 })();
 </script>
@@ -7209,7 +7242,17 @@ function buildProps(root, o) {
   }
   // the nearest person in the street, and what they're about (for F)
   const folkNear = (p, r = 2.5) => { let best = null, bd = r; for (const f of folk) { const d = Math.hypot(f.p[0] - p[0], f.p[1] - p[1]); if (d < bd && !f.going) { bd = d; best = f; } } return best ? { d: bd, role: best.role, dest: best.dest, tell: folkTell(best), f: best } : null; };
-  return { SAY, chunk, update, group: life, folkNear, keeperNear, keepers, folk, roleWeights, authorityOf, counts: () => ({ ducks: ducks.length, pigeons: pigeons.length, butterflies: flies.length, cats: cats.length, folk: folk.length }) };
+  // a blast (weapons.js): everyone and everything alive within r of c is killed; they're taken off our lists and handed back, to lie where they fell
+  function blast(c, r) {
+    const out = [], hit = p => Math.hypot(p[0] - c[0], p[1] - c[1]) < r, take = (list, x, kind, obj, h) => { list.splice(list.indexOf(x), 1); life.remove(obj); out.push({ obj, p: x.p.slice(), h: h || 0, kind }); };
+    for (const f of folk.slice()) if (hit(f.p)) { take(folk, f, 'person', f.f.g); if (f.bike) { life.remove(f.bike); out.push({ obj: f.bike, p: f.p.slice(), h: 0, kind: 'thing' }); } }
+    for (const d of ducks.slice()) if (hit(d.p)) take(ducks, d, 'small', d.m);
+    for (const b of pigeons.slice()) if (hit(b.p)) take(pigeons, b, 'bird', b.m, b.h);
+    for (const k of cats.slice()) if (hit(k.p)) take(cats, k, 'small', k.m);
+    for (const f of flies.slice()) if (hit(f.p)) { flies.splice(flies.indexOf(f), 1); life.remove(f.g); }   // (a butterfly is simply gone)
+    return out;
+  }
+  return { SAY, chunk, update, group: life, blast, folkNear, keeperNear, keepers, folk, roleWeights, authorityOf, counts: () => ({ ducks: ducks.length, pigeons: pigeons.length, butterflies: flies.length, cats: cats.length, folk: folk.length }) };
 }
 window.GW = window.GW || {}; window.GW.buildProps = buildProps;
 })();
@@ -8292,12 +8335,25 @@ function buildCountry(scene, world) {
 
   /* ---------------- titans: too big to fight, going about their business on the horizon ---------------- */
   const titans = [];
+  // a blast (weapons.js): the birds within r of c fall out of the sky (handed back, to lie where they land); a titan inside it dies where it
+  // is, lies there a while, and its land has no other for a good while after
+  const titanQuiet = {};
+  function blastLife(c, r, time) {
+    const out = [], hit = (x, y) => Math.hypot(x - c[0], y - c[1]) < r;
+    for (const b of birds.slice()) { const x = b.g.position.x, y = -b.g.position.z; if (hit(x, y)) { birds.splice(birds.indexOf(b), 1); group.remove(b.g); out.push({ obj: b.g, p: [x, y], h: b.g.position.y - heightAt([x, y]), kind: 'bird' }); } }
+    birdQuietT = 90;
+    for (const t of titans) if (!t.dead && hit(t.x, t.y)) { t.dead = true; t.deadT = 0; titanQuiet[t.S.biome] = time + 900; out.push({ titan: t.S.name }); }
+    return out;
+  }
+  let birdQuietT = 0;
   function updateTitans(dt, focus, time) {
     if (!window.GW.GIANTS || wildK(focus) < 0.3) { for (const t of titans.splice(0)) group.remove(t.g); return; }
     const G = window.GW.GIANTS.SPECIES;
     for (const b of BIOMES) {
       const sp = Object.keys(G).find(k => G[k].biome === b && G[k].titan); if (!sp) continue;
       let t = titans.find(q => q.sp === sp);
+      if (t && t.dead) { t.deadT += dt; if (t.rig.dying) t.rig.dying(t, dt, time, t.ground); if (t.deadT > 240 || Math.hypot(t.x - focus[0], t.y - focus[1]) > 1500) { group.remove(t.g); titans.splice(titans.indexOf(t), 1); } continue; }   // (dead: it falls, and lies)
+      if (!t && (titanQuiet[b] || 0) > time) continue;   // (a land whose titan was killed has none for a while)
       // near a land of its kind, it's somewhere on your horizon
       let best = null, bw = 0.35; for (let k = 0; k < 12; k++) { const a = k / 12 * TAU, q = [focus[0] + Math.cos(a) * 500, focus[1] + Math.sin(a) * 500]; const w = biomeW(q[0], q[1])[BIOMES.indexOf(b)]; if (w > bw) { bw = w; best = q; } }
       if (!t && best) { const rig = window.GW.GIANTS.build(sp); group.add(rig.g); t = { sp, S: G[sp], rig, g: rig.g, x: best[0], y: best[1], yaw: Math.random() * TAU, phase: 0, id: Math.random() * 100, cx: best[0], cy: best[1], ground: q => heightAt([q[0], q[1]]) }; titans.push(t); }
@@ -8415,7 +8471,7 @@ function buildCountry(scene, world) {
     }
     // birds circle above the nearest fields
     const here = LAND.at(focus), open = !here.town && !inRect(focus, 40) && here.cls !== 'water';
-    if (birds.length < 7 && open && !BARREN) birds.push(makeBird(rng(birds.length + 3)));
+    birdQuietT -= dt; if (birds.length < 7 && open && !BARREN && birdQuietT <= 0) birds.push(makeBird(rng(birds.length + 3)));
     birds.forEach((b, i) => { if (!b.c || Math.hypot(b.c[0] - focus[0], b.c[1] - focus[1]) > 90) b.c = [focus[0] + 20 + i * 7, focus[1] + (i % 2 ? 25 : -25)];
       const a = time * b.w + b.ph, x = b.c[0] + Math.cos(a) * b.r, y = b.c[1] + Math.sin(a) * b.r, h = heightAt(b.c) + b.h + Math.sin(time * 0.7 + i) * 1.5;
       b.g.position.set(x, h, -y); b.g.rotation.y = a + (b.w > 0 ? Math.PI / 2 : -Math.PI / 2); const flap = Math.sin(time * 9 + i) * 0.6 * (Math.sin(time * 0.5 + i) > -0.3 ? 1 : 0.1); for (const w of b.wings) w.p.rotation.x = w.s * flap; b.g.visible = open; });
@@ -8465,7 +8521,7 @@ function buildCountry(scene, world) {
     }
     return p.slice();
   }
-  const api = { buildingsNear, setLive, mats: () => ({ house: houseMats, civic: civicMats, culture: cultureMats }), mountNear, backOf, rideable, cull, spawnAlienAt, spawnGiant, spawnAnimal, hunt, owns, heightAt, waterAt, obstacles: obstaclesNear, openingsNear, zoneAt, update, creatures: () => creatures, pickables, mapDraw, roadY: () => RY0, group, sign, SPECIES, damage, lootable, startFight, drawPlate, env, titans: () => titans,
+  const api = { buildingsNear, setLive, mats: () => ({ house: houseMats, civic: civicMats, culture: cultureMats }), mountNear, backOf, rideable, cull, spawnAlienAt, spawnGiant, spawnAnimal, hunt, owns, heightAt, waterAt, obstacles: obstaclesNear, openingsNear, zoneAt, update, creatures: () => creatures, pickables, mapDraw, roadY: () => RY0, group, sign, SPECIES, damage, lootable, startFight, drawPlate, env, titans: () => titans, blastLife,
     landing, ready: false, _buildChunk: buildChunk, setExclude(f) { exclude = f; }, clear(x, y, r) { clear.push([x, y, r]); },
     // a blast's ground (weapons.js): what's burnt, and the chunks round c made again (their animals kept), to burn or to grow back
     setBlasted(f) { blasted = f; }, rebuild(c, r) { for (const [k, ch] of chunks) { const [i, j] = k.split(',').map(Number); if (Math.abs((i + 0.5) * CH - c[0]) < r + CH && Math.abs((j + 0.5) * CH - c[1]) < r + CH) ch.lod = -1; } },
@@ -10884,6 +10940,7 @@ const arms = GW.buildWeapons(root, { world: syncWorld, country, day: () => clock
   hit: (a, n, verb, crit) => hit(a, n, verb, crit), strikeQuiet: (a, n) => strikeQuiet(a, n), hurtMe: (name, n) => blastHurt(name, n), gainXp: n => gainXp(n),
   gary: () => GW.U.cur.gary && !AWAY ? { p: gary.p, h: gary.h, here: gary.k === P.k && gary.fig.g.visible } : null, garyStruck: blast => garyStruck(blast ? 'blast' : 'shot'),
   say: (k, t) => say(k, t), floatText: (w, t, c) => floatText(w, t, c), swing: () => swing(), outOfAmmo: () => { PL.auto = false; updateBar(); },
+  blastAround: (c, R) => ({ list: [...(GW.PROPS && GW.PROPS.blast ? GW.PROPS.blast(c, R) : []), ...things.blast(c, R), ...country.blastLife(c, R, performance.now() / 1000)], inside: GW.INSIDE ? GW.INSIDE.blast(c, R) : 0 }),
   audio: () => { sound.start(); const ctx = sound.ctx(); return ctx ? { ctx, out: sound.sfx() } : null; }, get voices() { return typeof voices !== 'undefined' ? voices : null; } });
 GW.WEAPONS = arms; arms.dev = { get P() { return P; }, get voices() { return voices; }, chat: t => { $("#chatIn").value = t; sendChat(); }, get wizard() { return wizard; }, get vr() { return VRH; }, get cam() { return cam; }, get PL() { return PL; }, get gary() { return gary; }, country, action: a => action(a), setTarget: a => setTarget(a), save: () => save(), creatures: () => allCreatures() };   // (for tests in headless Chrome)
 // buildings you walk into (inside.js): the boxes near you become the buildings themselves
@@ -12325,7 +12382,7 @@ function frame() {
   if (frame.place === 'world') GW.PROPS.update(dt, P.p, now / 1000, sky.dark, P.p); GW.PROPS.group.visible = frame.place === 'world';
   dungeon.update(dt, P, now / 1000, PLAYER);
   remains.update(dt, now / 1000);
-  if (frame.place === 'world' && (frame.titanT = (frame.titanT ?? 20) - dt) <= 0) { frame.titanT = 25 + Math.random() * 35; const ts = country.titans(); if (ts.length) voices.creature(ts[Math.floor(Math.random() * ts.length)], 'call', heightAt); }   // (a titan, far off, now and then)
+  if (frame.place === 'world' && (frame.titanT = (frame.titanT ?? 20) - dt) <= 0) { frame.titanT = 25 + Math.random() * 35; const ts = country.titans().filter(t => !t.dead); if (ts.length) voices.creature(ts[Math.floor(Math.random() * ts.length)], 'call', heightAt); }   // (a titan, far off, now and then)
   arms.update(dt, P.k === G && frame.place === 'world' && !inHouse(P.k, P.p));
   if (aboard()) { starships.update(dt, P); const V = starships.voyage; if (V.shake > 0) { camera.position.x += (Math.random() - 0.5) * 0.06 * V.shake; camera.position.y += (Math.random() - 0.5) * 0.06 * V.shake; } }
   if (AWAY && !inDungeon(P.p)) starships.port();
