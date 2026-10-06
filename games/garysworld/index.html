@@ -164,6 +164,7 @@ body.hit #view::after{content:"";position:fixed;inset:0;box-shadow:inset 0 0 120
   <div class="tpRow"><canvas id="tpMap" width="340" height="340"></canvas><div id="tpList"></div></div>
   <p id="tpInfo"></p>
   <p><button id="tpOut">▲ Out</button> <button id="tpIn">▼ Into it</button> <button id="tpGo">✨ Teleport there</button> <button id="tpHome">Home</button> <button id="tpRand">Anywhere</button></p>
+  <p>The Wild: <button data-tp-wild="0">Dragon Peaks</button> <button data-tp-wild="1">Dune Sea</button> <button data-tp-wild="2">Mires</button> <button data-tp-wild="3">Titanwood</button> <button data-tp-wild="4">Frost Wastes</button></p>
   <p><input id="tpAddr" placeholder="address, or a jump in km: 12, -3" spellcheck="false"> <button id="tpAddrGo">Go</button></p>
   <p style="color:var(--dim);font-size:12px">An address is a cell’s path from the continent down, one character a level: the first picks Rth’s face (continents, 1,773 km), the eighth a 7.8 m cell. A jump is in km to the right and up on the minimap. In chat: <code>/tp home</code>, <code>/tp 12, -3</code>, <code>/tp random</code>.</p>
 </div>
@@ -501,6 +502,44 @@ function mats() {
   return MAT;
 }
 
+// a bookcase, or a whole wall of shelves: sides and back, uprights every 90 cm or so (a long run is bays), a shelf about
+// every 32 cm, and on each one books spine out: cloth bindings of every colour, thick and thin, tall and short, a gap
+// now and then, here and there a few lying flat in a pile. The same books every time (seeded by the piece's id).
+// tint: one colour for the lot (the planner's element view), or null for the books' own
+const BOOK_COLS = ['#7a2a24', '#2a3a6a', '#2a5a3a', '#8a6a2a', '#4a2a4a', '#c8b890', '#2a2a2a', '#6a3a1a', '#3a5a6a', '#8a8070', '#a04a2a', '#1e3a2a', '#5a1a1a', '#d8cfb8', '#3a2a1e'];
+function shelvesOfBooks(box, x, w2, d2, wood, tint) {
+  const h = x.h || LEGO_H[x.type] || 1.9, t = 0.025, plinth = 0.08;
+  let seed = 2166136261; for (const ch of String(x.id || x.name || 'shelf')) { seed ^= ch.charCodeAt(0); seed = Math.imul(seed, 16777619); }
+  const R = () => { seed = (seed + 0x6D2B79F5) >>> 0; let q = seed; q = Math.imul(q ^ (q >>> 15), q | 1); q ^= q + Math.imul(q ^ (q >>> 7), q | 61); return ((q ^ (q >>> 14)) >>> 0) / 4294967296; };
+  box(-w2, w2, -d2, -d2 + 0.015, 0, h, wood);                                          // the back
+  box(-w2, -w2 + t, -d2, d2, 0, h, wood); box(w2 - t, w2, -d2, d2, 0, h, wood);         // the sides
+  const bays = Math.max(1, Math.round(x.w / 0.9)), bw = x.w / bays;
+  for (let i = 1; i < bays; i++) { const u = -w2 + i * bw; box(u - t / 2, u + t / 2, -d2, d2, 0, h, wood); }
+  const n = x.type === 'lowshelf' ? 2 : Math.max(3, Math.round(h / 0.32)), gap = (h - plinth) / n;
+  box(-w2, w2, -d2, d2, 0, plinth, wood);
+  for (let k = 1; k <= n; k++) { const z = plinth + k * gap; box(-w2, w2, -d2, d2, z - t, z, wood); }
+  const front = d2 - 0.015, deep = Math.max(0.08, x.d - 0.05);
+  for (let k = 0; k < n; k++) {
+    const z0 = plinth + k * gap, room = gap - t - 0.015;
+    for (let b = 0; b < bays; b++) {
+      let u = -w2 + b * bw + (b === 0 ? t : t / 2) + 0.005; const end = -w2 + (b + 1) * bw - (b === bays - 1 ? t : t / 2) - 0.005;
+      while (u < end) {
+        const r = R();
+        if (r < 0.035) { u += 0.04 + R() * 0.1; continue; }                                   // a gap
+        if (r < 0.06 && end - u > 0.26) {                                                     // a pile lying flat
+          const lw = 0.2 + R() * 0.06, k2 = 2 + Math.floor(R() * 4); let z = z0;
+          for (let i = 0; i < k2 && z < z0 + room - 0.05; i++) { const th = 0.025 + R() * 0.025, off = (R() - 0.5) * 0.02; box(u + off, u + lw + off, front - deep * (0.8 + R() * 0.2), front, z, z + th, tint || BOOK_COLS[Math.floor(R() * BOOK_COLS.length)]); z += th; }
+          u += lw + 0.01; continue;
+        }
+        const bt = 0.018 + R() * R() * 0.05, bh = Math.min(room, 0.16 + R() * 0.13), bd = deep * (0.7 + R() * 0.3);
+        if (u + bt > end) break;
+        box(u, u + bt, front - bd, front, z0, z0 + bh, tint || BOOK_COLS[Math.floor(R() * BOOK_COLS.length)]);
+        u += bt + 0.0015;
+      }
+    }
+  }
+}
+
 function furnish(m, x, H, elev, colorBy) {
   const c = [x.x, x.y], f = fvec(x.facing), r = mul(rvec(x.facing), x.mirror ? -1 : 1), w2 = x.w / 2, d2 = x.d / 2;
   const P = (u, v) => add(add(c, mul(r, u)), mul(f, v));
@@ -539,6 +578,7 @@ function furnish(m, x, H, elev, colorBy) {
     case 'chimney': all(0, H, E ? el : C3.plaster); break;
     case 'walltv': all(1.0, 1.6, K('dark')); break;
     case 'wallshelf': all(1.3, 1.34, K('wood')); all(1.56, 1.6, K('wood')); break;
+    case 'bookshelf': case 'lowshelf': shelvesOfBooks(box, x, w2, d2, K('wood'), E ? el : null); break;
     case 'mirror': all(0.9, 1.9, E ? el : '#cfe3ea'); break;
     case 'heater': all(0.15, 0.75, K('white')); break;
     case 'fountain': all(0, 0.8, K('dark')); all(0.8, 0.9, K('water')); break;
@@ -3649,7 +3689,8 @@ function buildWorld(scene, house) {
     return { hk: h.key, shady: true, cx, cy, yaw, d: h.yb - h.ya, w: h.x1 - h.x0, base: 0, sy: h.H, h1: 0, sh: h.sh, st: h.st, col: h.col, outer: [true, true, true, true], door: true, doorX: h.door.x, ww: h.door.ww, name: 'A house on Shady Lane' }; };
   const housesNear = (p, r) => AWAY ? [] : HOUSES.filter(h => Math.hypot((h.x0 + h.x1) / 2 - p[0], (h.ya + h.yb) / 2 - p[1]) < r).map(shady);
   const setHouseLive = (key, on) => { const h = HOUSES.find(q => q.key === key); if (h) for (const m of h.covers) m.visible = !on; };
-  return { housesNear, setHouseLive, openings: OPENS, beano: beano && UN.cur.gary ? [beano.x, FAR + 1.6] : null, away: !!AWAY, clear: AWAY ? [] : [[X0 - 22, FAR - 48, 14], [X0 - 20, BACK + 50, 34]], setIndoor(v) { state.indoor = v; }, setDim(v) { state.dim = v; }, group: g, walls, groundAt, zoneAt, exit: { x: X1, road: (CAN0 + 0.4) / 2, y0: CAN0, y1: 0.4 }, canal: AWAY ? null : { y: (CAN0 + CAN1) / 2, x0: X0, x1: X1 }, mapShapes: shapes, update, state, lot: { x0: LX0, x1: LX1 }, bounds: AWAY ? { x0: FAR_OFF, x1: FAR_OFF + 1, y0: FAR_OFF, y1: FAR_OFF + 1 } : { x0: X0, x1: X1, y0: FAR, y1: BACK + ALLEY }, streetName: UN.names.street };
+  return { housesNear, setHouseLive, openings: OPENS, beano: beano && UN.cur.gary ? [beano.x, FAR + 1.6] : null, away: !!AWAY, clear: AWAY ? [] : [[X0 - 22, FAR - 48, 14], [X0 - 20, BACK + 50, 34]], setIndoor(v) { state.indoor = v; }, setSkyless(v) { sky.visible = !v; },   // (aboard a starship, down a crypt: no sky; through the bridge window, the void)
+     setDim(v) { state.dim = v; }, group: g, walls, groundAt, zoneAt, exit: { x: X1, road: (CAN0 + 0.4) / 2, y0: CAN0, y1: 0.4 }, canal: AWAY ? null : { y: (CAN0 + CAN1) / 2, x0: X0, x1: X1 }, mapShapes: shapes, update, state, lot: { x0: LX0, x1: LX1 }, bounds: AWAY ? { x0: FAR_OFF, x1: FAR_OFF + 1, y0: FAR_OFF, y1: FAR_OFF + 1 } : { x0: X0, x1: X1, y0: FAR, y1: BACK + ALLEY }, streetName: UN.names.street };
 }
 
 window.GW = window.GW || {};
@@ -5051,7 +5092,11 @@ GW.buildWeapons = function (root, o) {
     for (let i = 0; i < n; i++) { const t = i / ctx.sampleRate; s = (s * 16807) % 2147483647; a += ((s / 2147483647) * 2 - 1 - a) * low; d[i] = a * Math.exp(-t * decay) * (t < 0.004 ? t / 0.004 : 1); peak = Math.max(peak, Math.abs(d[i])); }
     for (let i = 0; i < n; i++) d[i] /= peak; return b;
   }
+  // (the guns, blasts, clicks and pins: src/voices.js's, if it's there; else a noise of our own)
+  const GUN_SOUND = { Revolver: 'gun.revolver', Shotgun: 'gun.shotgun', 'Hunting rifle': 'gun.rifle', 'Assault rifle': 'gun.auto', 'Rocket launcher': 'rocket' };
   function play(kind, from, vol = 1) {
+    if (o.voices) { const g = gun(), name = kind === 'bang' ? GUN_SOUND[g && g.Name] || 'gun.pistol' : kind === 'boom' ? 'explosion' : kind;
+      o.voices.play(name, from ? [from.x, -from.z, from.y] : null, kind === 'nuke' ? vol * 3 : kind === 'boom' ? vol * 1.6 : vol, kind === 'nuke' ? 40000 : kind === 'boom' ? 2500 : 400, kind === 'nuke' || kind === 'boom'); return; }
     const A = o.audio(); if (!A) return; const { ctx, out } = A;
     if (!BUF.bang) { BUF.bang = noiseBuf(ctx, 0.35, 14, 0.6); BUF.boom = noiseBuf(ctx, 1.6, 2.6, 0.08); BUF.nuke = noiseBuf(ctx, 7, 0.55, 0.03); }
     const me = o.you(), d = from ? Math.hypot(from.x - me.p[0], -from.z - me.p[1], from.y - me.h) : 0, far = kind === 'nuke' ? 30000 : kind === 'boom' ? 1500 : 400;
@@ -9422,6 +9467,225 @@ function buildSound() {
 window.GW = window.GW || {}; window.GW.buildSound = buildSound;
 })();
 </script>
+<script data-inline="src/voices.js">
+/* Gary's World: voices, blows and blasts (a port of the StereoKit build's Render/Synth.cs and Play/Sfx.cs).
+ *
+ * sound.js makes the beds, the footsteps and the small sounds live with WebAudio; these are the ones that want more
+ * shaping than live nodes give, so they're rendered once into buffers (on the spot, from seeds: no recordings) and
+ * played through sound.js's echo: the voices of what lives here, each family with a call (when it comes for you), a
+ * strike and a death (wolves, bears, boars, deer, cows, horses, sheep, mammoths; the Wild's giants, worms, drakes and
+ * dragons, rocs, scorpions, striders and wyrms; bones that rattle, corpses that groan, shades that wail, a lich's
+ * whisper, the void's dread); blows on flesh, on bone, on something huge, and a hard one; each gun; rockets; blasts
+ * and the nuke, heard after their flash. A voice is a source (a band-limited sawtooth, a glottal pulse's harmonics)
+ * through a mouth (formant filters); the rest is noise, glided filters, struck partials and a small room.
+ *
+ *   GW.buildVoices(o) → { play(name, at, vol, reach, late), voiceOf(a), reachOf(a), creature(a, what), names, render(name) }
+ *   o: { ctx() → AudioContext or null, out() → the node to play into, ear() → { p: [x, y], h, right: [x, y] } }
+ */
+(() => {
+window.GW = window.GW || {};
+const SR = 48000;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+// everything that makes the sounds, in one function with nothing from outside, so a Worker can run it from its source
+// (the making then never stops the game: an explosion takes a good half-second to make)
+function core() {
+const SR = 48000;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v)), smooth = u => { u = clamp(u, 0, 1); return u * u * (3 - 2 * u); };
+
+/* ================= the building blocks ================= */
+function Synth(seed) {
+  let a = seed >>> 0;
+  const U = () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const S = { U: (lo = 0, hi = 1) => lo + (hi - lo) * U(), N: () => U() * 2 - 1 };
+  S.white = sec => { const x = buf(sec); for (let i = 0; i < x.length; i++) x[i] = S.N(); return x; };
+  S.pink = sec => { const x = buf(sec); let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+    for (let i = 0; i < x.length; i++) { const w = S.N(); b0 = 0.99886 * b0 + w * 0.0555179; b1 = 0.99332 * b1 + w * 0.0750759; b2 = 0.969 * b2 + w * 0.153852; b3 = 0.8665 * b3 + w * 0.3104856; b4 = 0.55 * b4 + w * 0.5329522; b5 = -0.7616 * b5 - w * 0.016898; x[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362) * 0.11; b6 = w * 0.115926; }
+    return x; };
+  S.brown = sec => { const x = buf(sec); let l = 0; for (let i = 0; i < x.length; i++) { l = (l + 0.02 * S.N()) / 1.02; x[i] = l * 3.5; } return x; };
+  S.grains = (sec, perSec, ms, density) => { const x = buf(sec), g = Math.max(2, Math.floor(ms / 1000 * SR));
+    for (let i = 0; i < x.length; i++) { if (U() >= perSec * (density ? density(i / SR) : 1) / SR) continue; const amp = S.U(0.3, 1); for (let k = 0; k < g && i + k < x.length; k++) x[i + k] += S.N() * amp * Math.exp(-5 * k / g); }
+    return x; };
+  // a voice's source: a band-limited saw at f0(t), jitter and shimmer cycle to cycle; breath above 1 kHz beside it
+  S.glottal = (sec, f0, jitter = 0.02, breath = 0.15) => { const x = buf(sec); let ph = 0, j = 1, sh = 1;
+    for (let i = 0; i < x.length; i++) { const dt = clamp(f0(i / SR) * j, 1, SR * 0.4) / SR; x[i] = (2 * ph - 1 - blep(ph, dt)) * sh; ph += dt; if (ph >= 1) { ph -= 1; j = 1 + S.N() * jitter; sh = 1 + S.N() * jitter * 2; } }
+    if (breath > 0) { const b = high(S.white(sec), 1000); for (let i = 0; i < x.length; i++) x[i] = x[i] * (1 - breath * 0.5) + b[i] * breath * 0.35; }
+    return x; };
+  return S;
+}
+const buf = sec => new Float32Array(Math.max(1, Math.floor(sec * SR)));
+const blep = (t, dt) => t < dt ? (t /= dt, t + t - t * t - 1) : t > 1 - dt ? (t = (t - 1) / dt, t * t + t + t + 1) : 0;
+// an RBJ biquad in place; f may be a number or a function of time (worked out every 16 samples)
+function filter(x, type, f, q = 0.707) {
+  let b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, x1 = 0, x2 = 0, y1 = 0, y2 = 0; const fq = typeof f === 'function' ? f : () => f;
+  for (let i = 0; i < x.length; i++) {
+    if ((i & 15) === 0) { const w = 2 * Math.PI * clamp(fq(i / SR), 10, SR * 0.45) / SR, cs = Math.cos(w), al = Math.sin(w) / (2 * q); let a0;
+      if (type === 'low') { b0 = (1 - cs) / 2; b1 = 1 - cs; b2 = b0; } else if (type === 'high') { b0 = (1 + cs) / 2; b1 = -(1 + cs); b2 = b0; } else { b0 = al; b1 = 0; b2 = -al; }
+      a0 = 1 + al; a1 = -2 * cs / a0; a2 = (1 - al) / a0; b0 /= a0; b1 /= a0; b2 /= a0; }
+    const y = b0 * x[i] + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2; x2 = x1; x1 = x[i]; y2 = y1; y1 = y; x[i] = y;
+  }
+  return x;
+}
+const low = (x, f, q) => filter(x, 'low', f, q), high = (x, f, q) => filter(x, 'high', f, q), band = (x, f, q) => filter(x, 'band', f, q);
+function formants(src, fs, shift) { const o = new Float32Array(src.length);
+  for (const [f, q, g] of fs) { const b = filter(src.slice(), 'band', shift ? t => f * shift(t) : f, q); for (let i = 0; i < o.length; i++) o[i] += b[i] * g; }
+  return o; }
+function osc(sec, f, wave = 'sine') { const x = buf(sec); let ph = 0; const fq = typeof f === 'function' ? f : () => f;
+  for (let i = 0; i < x.length; i++) { const dt = clamp(fq(i / SR), 0, SR * 0.45) / SR; x[i] = wave === 'saw' ? 2 * ph - 1 - blep(ph, dt) : Math.sin(2 * Math.PI * ph); ph += dt; if (ph >= 1) ph -= 1; }
+  return x; }
+function partials(sec, f, ps) { const x = buf(sec); for (const [r, g, d] of ps) { const w = 2 * Math.PI * f * r / SR; for (let i = 0; i < x.length; i++) x[i] += Math.sin(w * i) * g * Math.exp(-i / SR / d); } return x; }
+const env = (x, e) => { for (let i = 0; i < x.length; i++) x[i] *= e(i / SR); return x; };
+const AD = (a, d) => t => t < a ? t / a : Math.exp(-(t - a) / d);
+const AHR = (a, h, r) => t => t < a ? smooth(t / a) : t < a + h ? 1 : Math.max(0, 1 - smooth((t - a - h) / r));
+const gain = (x, g) => { for (let i = 0; i < x.length; i++) x[i] *= g; return x; };
+const drive = (x, k) => { const n = Math.tanh(k); for (let i = 0; i < x.length; i++) x[i] = Math.tanh(x[i] * k) / n; return x; };
+// laid together: [sound, gain, start in s]...
+function mix(...parts) { const n = Math.max(...parts.map(([x, , at]) => Math.floor(at * SR) + x.length)), o = new Float32Array(n);
+  for (const [x, g, at] of parts) { const o0 = Math.floor(at * SR); for (let i = 0; i < x.length; i++) o[o0 + i] += x[i] * g; } return o; }
+// a room: four damped combs and two all-passes (Freeverb's shape); its tail runs on `tail` s
+function room(dry, size = 1, damp = 0.4, fb = 0.8, wet = 0.3, tail = 1) {
+  const x = new Float32Array(dry.length + Math.floor(tail * SR)); x.set(dry); const o = new Float32Array(x.length);
+  for (const d0 of [1557, 1617, 1491, 1422]) { const d = Math.floor(d0 * size), b = new Float32Array(d); let k = 0, lp = 0;
+    for (let i = 0; i < x.length; i++) { const y = b[k]; lp = y * (1 - damp) + lp * damp; b[k] = x[i] + lp * fb; k = (k + 1) % d; o[i] += y * 0.25; } }
+  for (const a0 of [225, 556]) { const d = Math.floor(a0 * size), b = new Float32Array(d); let k = 0;
+    for (let i = 0; i < o.length; i++) { const bb = b[k], y = -o[i] + bb; b[k] = o[i] + bb * 0.5; k = (k + 1) % d; o[i] = y; } }
+  for (let i = 0; i < x.length; i++) o[i] = x[i] * (1 - wet * 0.5) + o[i] * wet;
+  return o;
+}
+function finish(x) { let m = 1e-9; for (let i = 0; i < x.length; i++) { if (!isFinite(x[i])) x[i] = 0; m = Math.max(m, Math.abs(x[i])); }
+  gain(x, 0.9 / m); const a = Math.floor(0.0005 * SR), b = Math.floor(0.01 * SR); for (let i = 0; i < a; i++) x[i] *= i / a; for (let i = 0; i < b; i++) x[x.length - 1 - i] *= i / b; return x; }
+
+/* ================= the makings ================= */
+const thump = (s, f0, f1, d) => env(osc(d * 6, t => f1 + (f0 - f1) * Math.exp(-t / (d * 0.6))), AD(0.001, d));
+const clack = (s, f) => env(band(s.white(0.06), f * s.U(0.9, 1.1), 12), AD(0, 0.012));
+const growl = (s, dur, f0, fm, trem) => low(env(formants(s.glottal(dur, t => f0 * (1 + 0.1 * Math.sin(t * 7)), 0.08, 0.4), fm), t => AHR(0.08, dur * 0.6, dur * 0.3)(t) * (0.55 + 0.45 * Math.abs(Math.sin(t * trem * Math.PI)))), 4000);
+const bark = (s, dur, f0, f1, fm) => low(env(formants(s.glottal(dur, t => f0 + (f1 - f0) * t / dur, 0.03, 0.2), fm), AD(0.01, dur * 0.4)), 6000);
+const roar = (s, dur, f0, fm, k) => low(drive(env(formants(s.glottal(dur, f0, 0.06, 0.35), fm, t => 0.8 + 0.3 * Math.sin(Math.PI * Math.min(1, t / dur))), AHR(0.08, dur * 0.55, dur * 0.35)), k), 3500);
+const moo = (s, dur, f0) => env(formants(s.glottal(dur, t => f0 + 15 * Math.sin(Math.PI * t / dur), 0.02, 0.1), [[400, 4, 1], [800, 5, 0.5], [2200, 6, 0.15]], t => 0.6 + 0.4 * smooth(t / (dur * 0.4))), AHR(0.15, dur * 0.5, dur * 0.35));
+const trumpet = (s, dur, k) => drive(env(formants(osc(dur, t => k * (350 + 170 * Math.sin(Math.PI * t / dur)) * (1 + 0.03 * Math.sin(t * 35)), 'saw'), [[600, 3, 1], [1200, 4, 0.7], [2400, 5, 0.4]]), AHR(0.1, dur * 0.55, dur * 0.3)), 2);
+const dragon = (s, dur, k) => drive(room(mix(
+  [formants(s.glottal(dur, t => k * (38 + 17 * Math.sin(Math.PI * t / dur)), 0.12, 0.7), [[300, 3, 1], [650, 3, 0.7], [1500, 4, 0.4]], t => 0.8 + 0.4 * Math.sin(Math.PI * Math.min(1, t / dur))), 1, 0],
+  [env(band(s.white(dur), 3000, 0.5), AHR(dur * 0.2, dur * 0.4, dur * 0.4)), 0.1, 0], [env(osc(dur, 30 * k), AHR(0.2, dur * 0.5, dur * 0.3)), 0.5, 0]), 1.5, 0.5, 0.8, 0.35, 2.5), 2.5);
+const worm = (s, dur, k) => mix([env(low(s.brown(dur), 120 * k), AHR(dur * 0.2, dur * 0.5, dur * 0.3)), 1.4, 0], [env(band(s.pink(dur), 1800, 0.5), AHR(dur * 0.3, dur * 0.4, dur * 0.3)), 0.35, 0], [env(osc(dur, 28 * k), AHR(dur * 0.2, dur * 0.5, dur * 0.3)), 0.6, 0]);
+const hiss = (s, dur) => env(band(s.white(dur), 4500, 0.8), AHR(0.05, dur * 0.5, dur * 0.4));
+const groan = (s, dur, f0) => low(env(formants(s.glottal(dur, t => f0 * (1 + 0.15 * Math.sin(t * 3.1)), 0.06, 0.35), [[550, 4, 1], [850, 5, 0.6], [2300, 7, 0.2]], t => 0.75 + 0.3 * Math.sin(t * 1.7)), AHR(0.15, dur * 0.5, dur * 0.35)), 3500);
+const wail = (s, dur, f0, f1) => room(env(formants(s.glottal(dur, t => (f0 + (f1 - f0) * Math.sin(Math.PI * 0.5 * t / dur)) * (1 + 0.03 * Math.sin(t * 38)), 0.02, 0.3), [[800, 4, 1], [2600, 6, 0.5]]), AHR(0.3, dur * 0.4, dur * 0.4)), 1.4, 0.4, 0.85, 0.5, 2);
+function lich(s, dur) {
+  const whisper = env(formants(s.pink(dur), [[700, 6, 1], [1200, 7, 0.7], [2600, 8, 0.4]], t => 0.8 + 0.3 * Math.sin(t * 9) * Math.sin(t * 4.3)), t => AHR(0.2, dur * 0.6, dur * 0.3)(t) * (0.5 + 0.5 * Math.abs(Math.sin(t * 5.5))));
+  return room(mix([whisper, 1, 0], [env(mix([osc(dur, 55), 0.4, 0], [osc(dur, 82.9), 0.3, 0], [osc(dur, 109.4), 0.25, 0]), AHR(0.4, dur * 0.5, dur * 0.4)), 0.6, 0]), 1.5, 0.5, 0.85, 0.5, 2.5);
+}
+function gun(s, bodyF, body, tail, lo) {
+  const dry = mix([env(high(s.white(0.02), 2500), AD(0, 0.003)), 1, 0], [env(low(s.pink(0.3), bodyF), AD(0.0005, body)), 0.9, 0], [thump(s, 120 * lo, 55, 0.06), 0.8, 0],
+    [env(low(s.brown(tail), 700), AD(0.01, tail / 3)), 0.4, 0.01], [env(band(s.white(0.02), 4000, 8), AD(0, 0.004)), 0.3, 0]);
+  return drive(room(dry, 1.3, 0.45, 0.78, 0.35, tail), 1.3);
+}
+
+/* ================= the catalogue ================= */
+const CAT = {};
+const def = (name, n, make) => { CAT[name] = { n, make }; };
+const voice = (fam, call, hit, die) => { def(`v.${fam}.call`, 2, call); def(`v.${fam}.hit`, 2, hit); def(`v.${fam}.die`, 1, die); };
+const UH = [[640, 5, 1], [1190, 6, 0.5], [2390, 8, 0.25]];
+def('hit.flesh', 4, s => mix([thump(s, 115, 45, 0.05), 1, 0], [env(low(s.pink(0.08), 1800), AD(0.001, 0.025)), 0.8, 0], [env(high(s.white(0.02), 3000), AD(0, 0.005)), 0.4, 0]));
+def('hit.bone', 4, s => mix([thump(s, 140, 70, 0.03), 0.6, 0], [clack(s, 1700), 1, 0], [clack(s, 2300), 0.7, s.U(0.015, 0.03)], [clack(s, 1400), 0.5, s.U(0.04, 0.06)]));
+def('hit.big', 3, s => room(mix([thump(s, 70, 28, 0.14), 1, 0], [env(low(s.brown(0.4), 500), AD(0.002, 0.09)), 0.9, 0]), 0.8, 0.5, 0.7, 0.15, 0.4));
+def('hit.crit', 3, s => mix([thump(s, 120, 40, 0.07), 1, 0], [env(low(s.pink(0.1), 2500), AD(0.001, 0.03)), 0.9, 0], [partials(0.6, s.U(1100, 1400), [[1, 0.5, 0.25], [2.76, 0.35, 0.15], [5.4, 0.2, 0.08]]), 0.35, 0.005]));
+def('hurt', 4, s => { const f = s.U(120, 150); return mix([low(env(formants(s.glottal(0.3, t => f - 45 * t, 0.02, 0.15), UH), AD(0.015, 0.08)), 4000), 1, 0], [thump(s, 100, 50, 0.04), 0.5, 0]); });
+def('gun.pistol', 3, s => gun(s, 1800, 0.045, 0.8, 1.0));
+def('gun.revolver', 3, s => gun(s, 1500, 0.06, 1.0, 1.1));
+def('gun.shotgun', 3, s => mix([gun(s, 1100, 0.09, 1.4, 1.3), 1, 0], [thump(s, 70, 32, 0.12), 0.8, 0]));
+def('gun.rifle', 3, s => mix([gun(s, 2400, 0.05, 1.8, 1.4), 1, 0], [env(high(s.white(0.01), 5000), AD(0, 0.002)), 0.8, 0]));
+def('gun.auto', 4, s => gun(s, 2000, 0.04, 0.35, 1.0));
+def('click', 3, s => mix([env(band(s.white(0.02), 3500, 6), AD(0, 0.003)), 1, 0], [env(band(s.white(0.02), 2200, 6), AD(0, 0.004)), 0.6, 0.03]));
+def('pin', 2, s => mix([partials(0.3, s.U(2300, 2600), [[1, 0.6, 0.15], [2.7, 0.3, 0.06]]), 1, 0], [env(band(s.white(0.06), 5000, 2), AD(0, 0.02)), 0.3, 0]));
+def('rocket', 2, s => mix([env(band(s.white(1.2), t => 800 + 1700 * smooth(t / 0.4), 0.7), AHR(0.02, 0.5, 0.6)), 1, 0], [thump(s, 90, 40, 0.08), 0.7, 0]));
+def('explosion', 3, s => drive(room(mix([thump(s, 55, 24, 0.35), 1, 0], [env(low(s.brown(2.0), t => 2000 * Math.exp(-t * 3) + 250), AD(0.002, 0.5)), 1.2, 0],
+  [band(s.grains(2.2, 300, 6, t => Math.exp(-t * 1.6)), 2000, 0.6), 0.35, 0.02]), 1.6, 0.5, 0.82, 0.35, 2.2), 1.5));
+def('nuke', 1, s => drive(room(mix([env(low(s.white(0.2), 4000), AD(0, 0.04)), 0.7, 0], [env(low(s.brown(8), 90), AHR(0.25, 3.0, 4.5)), 1.6, 0],
+  [env(osc(8, t => 22 - 6 * t / 8), AHR(0.1, 3.5, 4)), 1.0, 0], [env(low(s.brown(8), t => 600 * Math.exp(-t * 0.6) + 120), t => AHR(0.3, 2.5, 5)(t) * (0.7 + 0.3 * Math.sin(t * 2.3) * Math.sin(t * 0.9))), 1.0, 0]), 2.0, 0.6, 0.85, 0.45, 3), 2));
+voice('wolf', s => growl(s, 1.0, 75, [[500, 3, 1], [1100, 4, 0.6], [2400, 6, 0.3]], 22), s => bark(s, 0.25, 220, 160, [[800, 4, 1], [1500, 5, 0.6], [2800, 6, 0.3]]), s => bark(s, 0.45, 900, 380, [[1000, 4, 1], [2200, 5, 0.5]]));
+def('v.wolf.howl', 2, s => room(env(formants(s.glottal(2.8, t => (t < 0.7 ? 330 + 230 * smooth(t / 0.7) : 560 - 180 * smooth((t - 0.7) / 2)) * (1 + 0.02 * Math.sin(t * 31)), 0.01, 0.06), [[400, 5, 1], [800, 6, 0.3]]), AHR(0.4, 1.6, 0.8)), 1.2, 0.4, 0.82, 0.35, 2));
+voice('bear', s => roar(s, 1.4, t => 70 + 25 * Math.sin(Math.PI * t / 1.4), [[480, 3, 1], [850, 4, 0.6], [2300, 6, 0.25]], 2), s => roar(s, 0.45, () => 85, [[480, 3, 1], [850, 4, 0.6]], 2), s => roar(s, 1.0, t => 80 - 35 * t, [[450, 3, 1], [800, 4, 0.5]], 1.5));
+voice('boar', s => mix([bark(s, 0.12, 95, 85, [[400, 3, 1], [1000, 4, 0.5]]), 1, 0], [bark(s, 0.12, 100, 90, [[400, 3, 1], [1000, 4, 0.5]]), 0.9, 0.2], [bark(s, 0.14, 92, 80, [[400, 3, 1], [1000, 4, 0.5]]), 0.8, 0.42]),
+  s => drive(bark(s, 0.4, 900, 1200, [[1500, 3, 1], [3000, 4, 0.5]]), 2), s => drive(bark(s, 0.7, 1100, 500, [[1500, 3, 1], [3000, 4, 0.5]]), 2));
+voice('deer', s => bark(s, 0.25, 380, 300, [[900, 4, 1], [2000, 5, 0.5]]), s => bark(s, 0.2, 450, 380, [[900, 4, 1], [2000, 5, 0.5]]), s => bark(s, 0.6, 500, 260, [[900, 4, 1], [2000, 5, 0.5]]));
+voice('cow', s => moo(s, 1.5, 105), s => moo(s, 0.5, 115), s => moo(s, 1.6, 90));
+voice('horse', s => env(formants(s.glottal(1.1, t => (650 + 250 * Math.sin(Math.PI * t / 1.1) - 150 * t) * (1 + 0.05 * Math.sin(t * 57)), 0.03, 0.15), [[1100, 4, 1], [2300, 5, 0.5]]), AHR(0.05, 0.7, 0.35)),
+  s => env(low(s.white(0.35), 1500), AHR(0.02, 0.1, 0.2)), s => env(formants(s.glottal(1.0, t => 700 - 300 * t, 0.04, 0.2), [[1100, 4, 1], [2300, 5, 0.5]]), AHR(0.05, 0.5, 0.4)));
+voice('sheep', s => env(formants(s.glottal(0.8, t => 300 * (1 + 0.04 * Math.sin(t * 50)), 0.03, 0.2), [[700, 4, 1], [1700, 5, 0.6]]), t => AHR(0.05, 0.5, 0.25)(t) * (0.75 + 0.25 * Math.sin(t * 50))),
+  s => bark(s, 0.25, 330, 300, [[700, 4, 1], [1700, 5, 0.6]]), s => bark(s, 0.7, 320, 220, [[700, 4, 1], [1700, 5, 0.6]]));
+voice('trumpet', s => trumpet(s, 1.6, 1), s => trumpet(s, 0.6, 1.1), s => trumpet(s, 1.8, 0.7));
+voice('giant', s => room(roar(s, 2.0, t => 48 + 14 * Math.sin(Math.PI * t / 2), [[350, 3, 1], [700, 4, 0.6], [1800, 5, 0.25]], 2.5), 1.3, 0.5, 0.75, 0.2, 1),
+  s => roar(s, 0.5, () => 60, [[350, 3, 1], [700, 4, 0.6]], 2), s => mix([roar(s, 2.5, t => 55 - 18 * t / 2.5, [[330, 3, 1], [650, 4, 0.5]], 2), 1, 0], [thump(s, 50, 22, 0.3), 1, 2.2]));
+voice('dragon', s => dragon(s, 3.5, 1), s => dragon(s, 1.2, 1.15), s => dragon(s, 3.0, 0.75));
+voice('screech', s => drive(env(formants(s.glottal(1.2, t => 1400 + 500 * Math.sin(Math.PI * t / 1.2), 0.1, 0.3), [[2500, 3, 1], [4500, 4, 0.6]]), AHR(0.05, 0.7, 0.4)), 1.5),
+  s => drive(env(formants(s.glottal(0.35, () => 1800, 0.1, 0.3), [[2500, 3, 1], [4500, 4, 0.6]]), AHR(0.02, 0.15, 0.15)), 1.5), s => env(formants(s.glottal(1.2, t => 1700 - 900 * t, 0.1, 0.3), [[2500, 3, 1], [4500, 4, 0.6]]), AHR(0.05, 0.5, 0.6)));
+voice('worm', s => worm(s, 3.0, 1), s => worm(s, 1.2, 1.3), s => worm(s, 3.5, 0.7));
+voice('wyrm', s => mix([hiss(s, 1.2), 1, 0], [growl(s, 1.2, 60, [[400, 3, 1], [900, 4, 0.5]], 15), 0.7, 0]), s => hiss(s, 0.5), s => mix([hiss(s, 1.6), 0.8, 0], [growl(s, 1.6, 50, [[400, 3, 1], [900, 4, 0.5]], 8), 0.8, 0]));
+voice('clicks', s => mix([band(s.grains(1.0, 30, 1.5), 3500, 3), 1, 0], [env(band(s.white(1.0), 6000, 1), AHR(0.1, 0.6, 0.3)), 0.15, 0]), s => band(s.grains(0.4, 70, 1.5), 3500, 3), s => band(s.grains(1.4, 25, 2, t => Math.exp(-t * 1.5)), 3000, 3));
+voice('bellow', s => drive(env(formants(s.glottal(1.6, t => 90 - 20 * t / 1.6, 0.03, 0.3), [[500, 3, 1], [900, 4, 0.6], [2000, 5, 0.2]]), AHR(0.1, 1.0, 0.5)), 1.8),
+  s => drive(env(formants(s.glottal(0.5, () => 95, 0.03, 0.3), [[500, 3, 1], [900, 4, 0.6]]), AHR(0.05, 0.25, 0.2)), 1.8), s => env(formants(s.glottal(1.8, t => 85 - 35 * t / 1.8, 0.04, 0.35), [[500, 3, 1], [900, 4, 0.6]]), AHR(0.1, 1.0, 0.7)));
+voice('rattle', s => band(s.grains(0.8, 40, 3), 1800, 6), s => mix([clack(s, 1800), 1, 0], [clack(s, 2200), 0.8, 0.03], [clack(s, 1500), 0.6, 0.07]), s => mix([band(s.grains(1.0, 120, 3, t => Math.exp(-t * 2.5)), 1700, 5), 1, 0], [thump(s, 90, 45, 0.06), 0.6, 0.5]));
+voice('groan', s => groan(s, 1.6, s.U(75, 95)), s => groan(s, 0.5, s.U(90, 105)), s => groan(s, 2.0, s.U(70, 80)));
+voice('wail', s => wail(s, 2.2, 600, 900), s => wail(s, 0.5, 1100, 1300), s => wail(s, 2.4, 700, 300));
+voice('dread', s => drive(mix([roar(s, 1.4, t => 65 + 15 * Math.sin(Math.PI * t / 1.4), [[420, 3, 1], [800, 4, 0.6], [2200, 6, 0.3]], 3), 1, 0], [hiss(s, 1.4), 0.3, 0]), 1.5),
+  s => roar(s, 0.45, () => 75, [[420, 3, 1], [800, 4, 0.6]], 3), s => roar(s, 1.6, t => 70 - 30 * t, [[420, 3, 1], [800, 4, 0.6]], 2.5));
+voice('lich', s => lich(s, 2.5), s => lich(s, 0.8), s => lich(s, 3.5));
+function render(name) { const D = CAT[name]; let h = 2166136261; for (const ch of name) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
+  return Array.from({ length: D.n }, (_, i) => finish(D.make(Synth((h >>> 0) % 1000000 * 7 + i)))); }
+return { names: Object.keys(CAT), render };
+}
+const CORE = core();
+// the order to make them in: what's heard first and most (blows, your grunt, the guns, the beasts of the land) before the rest
+const FIRST = /^(hit\.|hurt|gun\.|click|pin|v\.(wolf|bear|boar|deer|cow|horse|sheep)\.)/;
+
+/* ================= who sounds like what ================= */
+const UNDEAD_VOICE = { skeleton: 'rattle', zombie: 'groan', ghoul: 'groan', drowned: 'groan', banshee: 'wail', wraith: 'wail', shade: 'wail', lich: 'lich', archlich: 'lich', voidlich: 'lich', imp: 'screech', wurmling: 'worm', phylactery: null, throne: null };
+const WILD_VOICE = { roc: 'screech', scorpion: 'clicks', boggiant: 'giant', frostgiant: 'giant', woodgiant: 'giant', foresttitan: 'giant', greatstag: 'bellow', dunestrider: 'bellow', duneworm: 'worm', mireworm: 'worm', sandworm: 'worm', leviathan: 'worm', firedrake: 'dragon', dragon: 'dragon', hydra: 'wyrm', mosswyrm: 'wyrm', icewyrm: 'wyrm', frostmammoth: 'trumpet' };
+const ANIMAL_VOICE = { wolf: 'wolf', bear: 'bear', boar: 'boar', deer: 'deer', cow: 'cow', horse: 'horse', sheep: 'sheep', mammoth: 'trumpet' };
+const wildKey = a => { const SP = GW.GIANTS && GW.GIANTS.SPECIES; if (!SP || !a.S) return null; if (SP[a.sp] && a.rig) return a.sp; const e = Object.entries(SP).find(([, v]) => v.name === a.S.name); return e ? e[0] : null; };
+function voiceOf(a) {
+  if (!a) return null;
+  if (a.dungeon) return a.sp in UNDEAD_VOICE ? UNDEAD_VOICE[a.sp] : 'dread';
+  const w = wildKey(a); if (w) return WILD_VOICE[w] || 'giant';
+  return ANIMAL_VOICE[a.sp] || null;
+}
+function reachOf(a) { const w = wildKey(a), G = w && GW.GIANTS.SPECIES[w]; return G ? (G.size === 'N' ? 2500 : G.size === 'M' ? 900 : 400) : a.boss ? 120 : 80; }
+
+GW.buildVoices = function (o) {
+  const made = {}, bufs = {}, order = CORE.names.filter(n => FIRST.test(n)).concat(CORE.names.filter(n => !FIRST.test(n)));
+  // made in a Worker as soon as the page is up (here, one at a time in idle moments, if Workers can't be had)
+  let worker = null;
+  try {
+    worker = new Worker(URL.createObjectURL(new Blob([`const C = (${core.toString()})(); onmessage = e => { for (const n of e.data) { const v = C.render(n); postMessage({ n, v }, v.map(x => x.buffer)); } };`], { type: 'text/javascript' })));
+    worker.onmessage = e => { made[e.data.n] = e.data.v; }; worker.onerror = () => { worker = null; idle(); }; worker.postMessage(order);
+  } catch (e) { worker = null; }
+  function idle() { const name = order.find(n => !made[n]); if (!name) return; made[name] = CORE.render(name); (window.requestIdleCallback || (f => setTimeout(f, 30)))(idle); }
+  if (!worker) idle();
+  function render(name) { return made[name] || (made[name] = CORE.render(name)); }   // (now, if it's wanted before it's made: for tests)
+  function buffers(name) { if (bufs[name]) return bufs[name]; const ctx = o.ctx(), v = made[name]; if (!ctx || !v) return null;   // (not made yet: not heard this once)
+    return bufs[name] = v.map(x => { const b = ctx.createBuffer(1, x.length, SR); b.copyToChannel(x, 0); return b; }); }
+  // play one at a place in the world (plan x, y, height), as loud as it carries from there (reach m) and from the side it's on;
+  // late: after the time sound takes to get here (a blast's after its flash)
+  function play(name, at, vol = 1, reach = 80, late = false) {
+    if (!CORE.names.includes(name)) return; const ctx = o.ctx(), out = o.out(); if (!ctx || !out) return; const B = buffers(name); if (!B) return;
+    let g = vol, pan = 0, delay = 0;
+    if (at) { const e = o.ear(), dx = at[0] - e.p[0], dy = at[1] - e.p[1], d = Math.hypot(dx, dy, (at[2] ?? e.h) - e.h);
+      if (d > reach) return; g *= Math.pow(1 - d / reach, 2) / (1 + d / 25); pan = d > 0.5 ? clamp((dx * e.right[0] + dy * e.right[1]) / Math.hypot(dx, dy), -1, 1) * 0.8 : 0; if (late) delay = Math.min(12, d / 343); }
+    if (g < 0.003) return;
+    const src = ctx.createBufferSource(); src.buffer = B[Math.floor(Math.random() * B.length)];
+    const gn = ctx.createGain(); gn.gain.value = Math.min(3, g); src.connect(gn);
+    if (ctx.createStereoPanner) { const p = ctx.createStereoPanner(); p.pan.value = pan; gn.connect(p); p.connect(out); } else gn.connect(out);
+    src.start(ctx.currentTime + delay);
+  }
+  // a creature's voice: its call, its strike, its death (where its head is)
+  function creature(a, what, heightOf) {
+    const v = voiceOf(a); if (!v) return; const name = `v.${v}.${what}`, big = !!wildKey(a);
+    play(name, [a.x, a.y, (heightOf ? heightOf(a) : 0) + (big ? Math.min(30, (a.S.len || 10) * 0.4) + (a.alt || 0) : 0.8 * (a.size || 1))], big ? 2.5 : 1, reachOf(a));
+  }
+  return { play, creature, voiceOf, reachOf, render, names: CORE.names, get ready() { return order.filter(n => made[n]).length; } };
+};
+})();
+</script>
 <script data-inline="src/cosmos.js">
 /* cosmos.js: the cosmic teleport. A map of the whole universe, one hanb board at a time: the cosmic web, galaxy
    groups, galaxies, arms, star clouds, stars. Under any of them it finds the worlds you could stand on (planets
@@ -10620,8 +10884,8 @@ const arms = GW.buildWeapons(root, { world: syncWorld, country, day: () => clock
   hit: (a, n, verb, crit) => hit(a, n, verb, crit), strikeQuiet: (a, n) => strikeQuiet(a, n), hurtMe: (name, n) => blastHurt(name, n), gainXp: n => gainXp(n),
   gary: () => GW.U.cur.gary && !AWAY ? { p: gary.p, h: gary.h, here: gary.k === P.k && gary.fig.g.visible } : null, garyStruck: blast => garyStruck(blast ? 'blast' : 'shot'),
   say: (k, t) => say(k, t), floatText: (w, t, c) => floatText(w, t, c), swing: () => swing(), outOfAmmo: () => { PL.auto = false; updateBar(); },
-  audio: () => { sound.start(); const ctx = sound.ctx(); return ctx ? { ctx, out: sound.sfx() } : null; } });
-GW.WEAPONS = arms; arms.dev = { get P() { return P; }, get vr() { return VRH; }, get cam() { return cam; }, get PL() { return PL; }, get gary() { return gary; }, country, action: a => action(a), setTarget: a => setTarget(a), save: () => save(), creatures: () => allCreatures() };   // (for tests in headless Chrome)
+  audio: () => { sound.start(); const ctx = sound.ctx(); return ctx ? { ctx, out: sound.sfx() } : null; }, get voices() { return typeof voices !== 'undefined' ? voices : null; } });
+GW.WEAPONS = arms; arms.dev = { get P() { return P; }, get voices() { return voices; }, chat: t => { $("#chatIn").value = t; sendChat(); }, get wizard() { return wizard; }, get vr() { return VRH; }, get cam() { return cam; }, get PL() { return PL; }, get gary() { return gary; }, country, action: a => action(a), setTarget: a => setTarget(a), save: () => save(), creatures: () => allCreatures() };   // (for tests in headless Chrome)
 // buildings you walk into (inside.js): the boxes near you become the buildings themselves
 const inside = GW.INSIDE = GW.buildInside(root, { mats: () => country.mats(), near: (p, r) => country.buildingsNear(p, r).concat(world.housesNear(p, r)), setLive: (hk, on) => /^sl:/.test(hk) ? world.setHouseLive(hk, on) : country.setLive(hk, on),
   onEnter: room => { things.arrive({ house: room.key }, room); updateZone.z = null; updateZone(true); }, onChange: () => {} });
@@ -11022,9 +11286,10 @@ const shedQ = GW.buildShedQuests({ say: (k, t) => say(k, t), esc: t => esc(t), d
   spawnLich: () => { const m = dungeon.spawnWave(['voidlich'], [P.p[0], P.p[1] + 6], Math.max(0, PL.lv + 4 - 45)); return m[0]; } });
 PL.maxHp = maxHpAt(PL.lv); if (PL.hp == null || PL.hp <= 0) PL.hp = PL.maxHp; PL.alive = true; PL.lastHit = -99; PL.auto = false; PL.swingT = 0; PL.cd = {}; PL.channel = null; PL.fighting = new Set();
 const PLAYER = { get alive() { return PL.alive; }, get lv() { return PL.lv; }, get h() { return P.h; }, get p() { return P.p; },
-  hitMe(a, n) { playerHurt(a, n); }, onAggro(a) { PL.fighting.add(a); PL.lastHit = now(); if (!target || target === gary) setTarget(a); sfx('growl', a.sp === 'bear' ? 0.6 : 1); },
+  hitMe(a, n) { beastVoice(a, 'hit', 1.5); playerHurt(a, n); }, onAggro(a) { PL.fighting.add(a); PL.lastHit = now(); if (!target || target === gary) setTarget(a); if (voices.voiceOf(a)) beastVoice(a, 'call', 8); else sfx('growl', a.sp === 'bear' ? 0.6 : 1); },
   saw(a, text) { if (Math.hypot(a.x - P.p[0], a.y - P.p[1]) < 45) say('combat', text); },
-  sound(kind, a) { const d = Math.hypot(a.x - P.p[0], a.y - P.p[1]); if (d < 90) sfx(kind, a.sp === 'bear' ? 0.8 : 1, Math.max(0.08, 1 - d / 90)); },
+  sound(kind, a) { if (kind === 'howl') { voices.play('v.wolf.howl', [a.x, a.y, heightAt(a) + 0.8], 1.2, 700); return; } if (voices.voiceOf(a)) { beastVoice(a, 'call', 4); return; }
+    const d = Math.hypot(a.x - P.p[0], a.y - P.p[1]); if (d < 90) sfx(kind, a.sp === 'bear' ? 0.8 : 1, Math.max(0.08, 1 - d / 90)); },
   yell(name, text) { say('yell', `${name} yells: “${text}”`); },
   slow(t) { if (!PL.slowT || PL.slowT <= 0) floatText(null, 'Slowed', 'miss'); PL.slowT = Math.max(PL.slowT || 0, t); },
   onEvade(a) { PL.fighting.delete(a); floatText([a.x, a.y, heightAt(a) + 1.4], 'Evade', 'miss'); } };
@@ -11048,12 +11313,12 @@ function hit(a, base, verb, crit) {
   const r = (a.dungeon ? dungeon : country).damage(a, base, PLAYER);
   floatText([a.x, a.y, heightAt(a) + 1.2 * a.size + 0.4], String(r.dealt), crit ? 'crit' : '');
   say('combat', `Your ${verb}${crit ? ' crits' : ' hits'} ${a.name} for ${r.dealt}.`);
-  sfx(crit ? 'crit' : 'hit');
+  voices.play(a.dungeon && /^(skeleton|deathknight|lich|archlich|voidlich)$/.test(a.sp) ? 'hit.bone' : a.rig && !a.dungeon ? 'hit.big' : crit ? 'hit.crit' : 'hit.flesh', [a.x, a.y, heightAt(a) + 0.8 * (a.size || 1)], 1, 60);
   if (r.killed) killed(a); else if (a.S.temper !== 'prey') PL.fighting.add(a);
   PL.lastHit = now(); updateTarget();
 }
 function killed(a) {
-  PL.fighting.delete(a); say('combat', `${a.name} dies.`);
+  PL.fighting.delete(a); say('combat', `${a.name} dies.`); beastVoice(a, 'die', 0);
   const xp = xpFor(a); if (xp) { gainXp(xp); floatText([a.x, a.y, heightAt(a) + 2], `+${xp} XP`, 'xp'); say('xp', `${a.name} dies, you gain ${xp} experience.`); }
   if (a.sp === 'wolf') questKill('wolf');
   if (target === a) { PL.auto = false; updateBar(); }
@@ -11074,7 +11339,7 @@ function playerHurt(a, n) {
   if (!PL.alive) return;
   const dodge = Math.random() < 0.06; if (dodge) { floatText([P.p[0], P.p[1], P.h + 2.1], 'Dodge', 'miss'); return; }
   n = Math.max(1, Math.round(n * gods.mult.ward() * (1 - equip.soak()))); PL.hp = Math.max(0, PL.hp - n); PL.lastHit = now(); PL.fighting.add(a);
-  floatText([P.p[0], P.p[1], P.h + 2.1], `-${n}`, 'hurt'); say('hurt', `${a.name} hits you for ${n}.`); sfx('ouch');
+  floatText([P.p[0], P.p[1], P.h + 2.1], `-${n}`, 'hurt'); say('hurt', `${a.name} hits you for ${n}.`); voices.play('hurt', null, 0.7);
   document.body.classList.add('hit'); clearTimeout(playerHurt.t); playerHurt.t = setTimeout(() => document.body.classList.remove('hit'), 180);
   if (PL.channel) { cancelChannel('Interrupted'); }
   if (P.sitting) P.sitting = false;
@@ -11086,7 +11351,7 @@ function playerHurt(a, n) {
 function blastHurt(name, n) {
   if (!PL.alive) return;
   n = Math.max(1, Math.round(n * gods.mult.ward() * (1 - equip.soak()))); PL.hp = Math.max(0, PL.hp - n); PL.lastHit = now();
-  floatText([P.p[0], P.p[1], P.h + 2.1], `-${n}`, 'hurt'); say('hurt', `${name} hits you for ${n}.`); sfx('ouch');
+  floatText([P.p[0], P.p[1], P.h + 2.1], `-${n}`, 'hurt'); say('hurt', `${name} hits you for ${n}.`); voices.play('hurt', null, 0.7);
   document.body.classList.add('hit'); clearTimeout(playerHurt.t); playerHurt.t = setTimeout(() => document.body.classList.remove('hit'), 180);
   if (PL.channel) cancelChannel('Interrupted'); if (P.sitting) P.sitting = false; renderPlayer();
   if (PL.hp <= 0) die();
@@ -11245,6 +11510,11 @@ function renderBag() {
 let AC = null;
 // the sound of the world: beds, creatures, echoes, footsteps (src/sound.js); these effects share its echo
 const sound = GW.buildSound();
+// voices, blows and blasts, rendered once and played through the same echo (src/voices.js)
+const voices = GW.buildVoices({ ctx: () => { sound.start(); return sound.ctx(); }, out: () => sound.sfx(),
+  ear: () => { camera.getWorldDirection(camFwd); const fx = camFwd.x, fy = -camFwd.z, n = Math.hypot(fx, fy) || 1; return { p: P.p, h: P.h + 1.6, right: [fy / n, -fx / n] }; } });
+const voiceT = new WeakMap();   // (when each beast last said something: not every frame of a fight)
+function beastVoice(a, what, gap) { if (what !== 'die') { const t = voiceT.get(a) || -99; if (now() - t < gap) return; } voiceT.set(a, now()); voices.creature(a, what, heightAt); }
 const SND_ICON = v => v <= 0 ? '🔇' : v < 0.4 ? '🔈' : v < 0.8 ? '🔉' : '🔊';
 function setVolume(v) { sound.start(); v = sound.volume(v); $('#snd').textContent = SND_ICON(v); toast(v ? `Sound ${Math.round(v * 100)}%` : 'Sound off'); }
 function surfaceAt() {                                  // what your feet are on
@@ -11485,7 +11755,8 @@ function action(a) {
 function nearestAction() {                     // F: whatever you're nearest to — Gary, or a ladder
   if (P.climb) return null;
   const opts = [];
-  if (gary.k === P.k && gary.fig.g.visible) { const d = dist(gary.p, P.p); if (d < 3.5) opts.push({ d: d + 0.3, label: 'talk to Gary', go: gossip, gary: true }); }
+  if (gary.k === P.k && gary.fig.g.visible) { const d = dist(gary.p, P.p), facing = d > 0.01 && Math.cos(Math.atan2(gary.p[1] - P.p[1], gary.p[0] - P.p[0]) - P.yaw) > 0.7;
+    if (d < 3.5) opts.push({ d: d < 2 && facing ? 0.01 : d + 0.3, label: 'talk to Gary', go: gossip, gary: true }); }   // (close by and facing him, he comes before anything of his room's)
   if (P.k === G && GW.WIZARD) for (const w of GW.WIZARD.action(P) || []) opts.push(w);   // the wizard's tower: its rune circles, and him
   for (const l of ladders) {
     if (P.k === l.k) { const d = dist(P.p, l.rung); if (d < 1.2) opts.push({ d, label: 'climb up the ladder', go: () => climb(l, true) }); }
@@ -11582,6 +11853,8 @@ function warpSepulchre(n, toLich) {
 // mausoleum, Shady Lane, the towns and counties on Gary's way, the continents of Rth, or an address
 const polyArea = P2 => { let a = 0; for (let i = 0, j = P2.length - 1; i < P2.length; j = i++) a += (P2[j][0] + P2[i][0]) * (P2[j][1] - P2[i][1]); return Math.abs(a / 2); };
 const norm = t => t.toLowerCase().replace(/[’'`]/g, "'").replace(/[^a-z0-9' -]/g, ' ').replace(/\s+/g, ' ').trim();
+// a room as said in a sentence: "the kitchen & tea bar", but "Gary's workroom" (a name keeps its capital, and needs no "the")
+function roomPhrase(n) { const ws = n.split(' '), own = /^[A-Z][\w-]*['’]s$/.test(ws[0]); return (own ? '' : 'the ') + ws.map(w => /^[A-Z][\w-]*['’]s$/.test(w) ? w : w.toLowerCase()).join(' '); }
 function warpToRoom(k, poly, label) {
   const c = poly.reduce((a, q) => [a[0] + q[0] / poly.length, a[1] + q[1] / poly.length], [0, 0]), node = nodeNear(k, c), p = node >= 0 ? nav.pos(node) : c;
   if (inDungeon(P.p) || inShed(P.p)) { /* the house is at home: just go */ }
@@ -11601,6 +11874,48 @@ function warpStep(dz) {
   P.k = k2; P.p = [p[0], p[1]]; P.h = FL[k2].elev; P.ground = P.h; P.vy = 0; P.flight = null; P.climb = null; setTarget(null); updateZone.z = null; updateZone(true); onFloor();
   flashWarp(`You speak the word of warping, and you are ${dz > 0 ? 'up' : 'down'} on the ${lc(FL[k2].name)}.`); return true;
 }
+// the Wild's five lands, by name (the warp, the teleport's box): the nearest patch of each (on Rth as the hanb world makes
+// it, where the StereoKit build's --wild-find found them; in another universe looked for on a 20 km grid, a little each
+// frame so nothing stops), then on into it, a kilometre at a time, till it's the Wild all round: its beasts come out of
+// its chunks round you, and its titan walks the horizon
+const WILD_KEYS = ['dragonpeaks', 'duneSea', 'mirewilds', 'titanwood', 'frostwastes'], WILD_BIOME = ['peaks', 'dunes', 'mire', 'titanwood', 'frost'];
+const WILD_NAMES = ['the Dragon Peaks', 'the Dune Sea', 'the Mires', 'Titanwood', 'the Frost Wastes'];
+const PRIME_WILD = { mirewilds: [-50000, 80000], titanwood: [150000, 240000], duneSea: [310000, -360000], frostwastes: [530000, -10000], dragonpeaks: [-520000, -550000] };
+const wildSpots = {}; let wildLooking = false;
+// which land a name means: 0..4, -1 for the Wild itself (the nearest), null for none
+function wildOf(q) {
+  const i = [/^(dragon ?peaks|the dragon peaks|peaks|dragons?)$/, /^(dune ?sea|the dune sea|dunes|sands|desert)$/, /^(mires?|the mires|mire ?wilds|swamps?|bogs?)$/, /^(titan ?wood|great ?woods?)$/, /^(frost ?wastes|the frost wastes|frost|ice|tundra)$/].findIndex(r => r.test(q));
+  return i >= 0 ? i : /^(the )?wilds?$/.test(q) ? -1 : null;
+}
+function goWild(bi, how) {
+  if (AWAY) { say('sys', 'The Wild is on Rth.'); return; }
+  findWild(bi, (spot, b) => {
+    if (!spot) { say('sys', `The word finds nowhere ${bi < 0 ? 'wild' : 'like ' + WILD_NAMES[bi]} in this universe.`); return; }
+    const kinds = Object.values(GW.GIANTS.SPECIES).filter(k => k.biome === WILD_BIOME[b]), titan = kinds.find(k => k.size === 'N');
+    teleport(spot, `${how}, and the world opens out: the Wild, ${WILD_NAMES[b]}. ${kinds.filter(k => k.size !== 'N').map(k => k.name + 's').join(', ')} roam here${titan ? `; on the horizon, the ${titan.name}` : ''}. Keep your head.`);
+  });
+}
+function findWild(bi, done) {
+  const key = GW.U.num + ':' + bi; if (wildSpots[key]) { done(...wildSpots[key]); return; }
+  const is = (q, b) => { const c = LAND.at(q); return !!c && c.cls !== 'water' && (b < 0 ? !!c.wild : c.wild === WILD_KEYS[b]); };
+  const deepen = (p, b) => {   // on in, away from home, to where the Wild is strongest
+    const n = Math.hypot(p[0], p[1]) || 1, dir = [p[0] / n, p[1] / n]; let best = p, bw = LAND.macro(p).wild[b];
+    for (let k = 1; k <= 30 && bw < 0.95; k++) { const q = [p[0] + dir[0] * k * 1000, p[1] + dir[1] * k * 1000], w = LAND.macro(q).wild[b]; if (w > bw && is(q, b)) { bw = w; best = q; } }
+    wildSpots[key] = [best, b]; done(best, b);
+  };
+  if (GW.U.num === 0) {   // (Rth as it is: where they are is known)
+    const b = bi >= 0 ? bi : WILD_KEYS.map((k, i) => [i, dist(P.p, PRIME_WILD[k])]).sort((a, c) => a[1] - c[1])[0][0];
+    deepen(PRIME_WILD[WILD_KEYS[b]], b); return;
+  }
+  if (wildLooking) { say('sys', 'The word is still looking.'); return; }
+  wildLooking = true; say('sys', 'The word reaches out across the world, looking…');
+  const pts = function* () { for (let r = 0; r <= 40; r++) for (let j = -r; j <= r; j++) for (let i = -r; i <= r; i++) if (Math.max(Math.abs(i), Math.abs(j)) === r) yield [i * 20000, j * 20000]; }();
+  (function step() {
+    for (let n = 0; n < 40; n++) { const it = pts.next(); if (it.done) { wildLooking = false; done(null); return; }
+      if (is(it.value, bi)) { wildLooking = false; deepen(it.value, bi >= 0 ? bi : GW.LAND.WILD[LAND.at(it.value).wild]); return; } }
+    setTimeout(step, 0);
+  })();
+}
 function warpText(t) {
   t = t.trim(); if (!t) return false; const w = norm(t);
   const boss = /^boss\s+/.test(w), q = w.replace(/^boss\s+/, '').replace(/^(the|to)\s+/, '');
@@ -11610,6 +11925,7 @@ function warpText(t) {
   if (/^(down|downstairs|lower|below)$/.test(q)) return warpStep(-1);
   // people
   if (/^(gary|home)$/.test(q)) { toGary('You speak the word of warping'); return true; }
+  { const bi = wildOf(q); if (bi != null) { goWild(bi, 'You speak the word of warping'); return true; } }   // (the Wild's lands)
   if (/^(tower|wizard|mage tower)$/.test(q)) { const w = wizard.at; if (!w) { say('sys', 'The wizard’s tower is on Rth.'); return true; } teleport([w.rune[0], w.rune[1] - 4], `You speak the word of warping, and the wind is suddenly cold and high: before you, ${wizard.name}’s tower goes up and up into the clouds of ${w.continent}.`); return true; }
   if (/^(lich|archlich|xal'?vezrah|xal'?vezrah the undying|the undying|throne)$/.test(q)) { warpSepulchre(8, true); return true; }
   if (/^beano/.test(q)) { if (AWAY || !world.beano) { say('sys', 'Beano lives on Shady Lane, in Gary’s universes.'); return true; }
@@ -11642,9 +11958,9 @@ function warpText(t) {
     const ALIAS = { lab: 'workroom', laboratory: 'workroom', cellar: 'basement', 'sub basement': 'sub-basement', upstairs: 'first floor', 'ground': 'ground floor', loft: 'attic', 'bedroom': "gary's bedroom", shed: 'potting', 'server room': 'server vault', koi: 'koi grotto', pond: 'koi grotto', 'grow room': 'hydroponic', 'star study': 'map room', telescope: 'roof greenhouse' };
     const want = ALIAS[q] || q;
     // a room by its exact name, then a floor, then a room whose name has the word in it
-    for (let k = 0; k < FL.length; k++) for (const r of FC[k].rooms) if (norm(r.name) === want) { warpToRoom(k, r.poly, `the ${r.name.toLowerCase()} (${lc(FL[k].name)})`); return true; }
+    for (let k = 0; k < FL.length; k++) for (const r of FC[k].rooms) if (norm(r.name) === want) { warpToRoom(k, r.poly, `${roomPhrase(r.name)} (${lc(FL[k].name)})`); return true; }
     for (let k = 0; k < FL.length; k++) if (norm(FL[k].name) === want || norm(FL[k].name).replace(/ floor$/, '') === want) { const big = FC[k].rooms.filter(r => !/stair/i.test(r.name)).sort((a, b) => polyArea(b.poly) - polyArea(a.poly))[0]; if (big) { warpToRoom(k, big.poly, `the ${lc(FL[k].name)}`); return true; } }
-    for (let k = 0; k < FL.length; k++) for (const r of FC[k].rooms) if (norm(r.name).includes(want) || want.includes(norm(r.name))) { warpToRoom(k, r.poly, `the ${r.name.toLowerCase()} (${lc(FL[k].name)})`); return true; }
+    for (let k = 0; k < FL.length; k++) for (const r of FC[k].rooms) if (norm(r.name).includes(want) || want.includes(norm(r.name))) { warpToRoom(k, r.poly, `${roomPhrase(r.name)} (${lc(FL[k].name)})`); return true; }
   }
   // the places on Gary's way (continent, kingdom, county, town, neighbourhood), and Rth's continents
   for (let d = LAND.SURF; d < 25; d++) { const c = LAND.cellOf(LAND.GARY.slice(0, d + 1)); if (c && c.name && norm(c.name) === q) { teleport(LAND.GARY.slice(0, d + 1), `You speak the word of warping, and you are in ${c.name}.`); return true; } }
@@ -11665,7 +11981,7 @@ $('#warpOut').onclick = () => { if (inDungeon(P.p)) leaveDungeon(); closeWin('wa
 // T opens a map of the hanb world, one board at a time: Rth's face, a continent, a kingdom, a county, a town… down
 // to a street's 7.8 m cells. Pick a cell and you go to the middle of it (or the nearest dry ground that isn't a house).
 // Or type an address (a cell's path from the continent down, as the map shows it), or a jump in kilometres.
-const LAND = GW.LAND, HOME_SPOT = [1.4, 0.9];
+const LAND = GW.LAND, HOME_SPOT = house.front ? [house.front.p[0], house.front.p[1] - 1.8] : [1.4, 0.9];   // (on the street before Gary's door, where you first stand)
 const TP = { path: null, sel: -1, pts: null, hover: -1 };
 const km = m => m >= 1e6 ? (m / 1000).toLocaleString('en', { maximumFractionDigits: 0 }) + ' km' : m >= 1000 ? (m / 1000).toFixed(m >= 1e4 ? 0 : 1) + ' km' : m.toFixed(m >= 10 ? 0 : 1) + ' m';
 const kindLabel = c => (LAND.K[c.kind] || {}).label || c.kind;
@@ -11798,6 +12114,7 @@ function garyDoingText() { const e = garyTask().e; return e && e.task ? `busy wi
 function tpText(t) {
   t = t.trim(); if (!t) return false;
   if (/^(home|gary)$/i.test(t)) { toGary('You speak the word of passage'); return true; }
+  { const bi = wildOf(t.toLowerCase().replace(/\s+/g, ' ')); if (bi != null) { goWild(bi, 'You speak the word of passage'); return true; } }   // (the Wild's lands)
   if (/^(lich|xal.?vezrah)$/i.test(t)) { warpSepulchre(8, true); return true; }
   if (/^sepulchre$/i.test(t)) { const sd = sepulchreDoor(); if (!sd) { say('sys', 'The Sepulchre is on Rth.'); return true; } teleport([sd.p[0], sd.p[1] + 6], 'You speak the word of passage, and the air turns cold. Before you, on the far side of the world, stands a black mausoleum.'); return true; }
   if (/^random$/i.test(t)) { tpRandom(); return true; }
@@ -11830,6 +12147,7 @@ $('#tpHome').onclick = () => { toGary('You speak the word of passage'); closeWin
 $('#tpRand').onclick = () => { tpRandom(); closeWin('tpwin'); };
 $('#tpAddr').onkeydown = ev => { if (ev.key === 'Enter' && tpText(ev.target.value)) closeWin('tpwin'); ev.stopPropagation(); };
 $('#tpAddrGo').onclick = () => { if (tpText($('#tpAddr').value)) closeWin('tpwin'); };
+$('#tpwin').addEventListener('click', ev => { const wb = ev.target.closest('[data-tp-wild]'); if (wb) { closeWin('tpwin'); goWild(+wb.dataset.tpWild, 'You speak the word of passage'); return; } });   // (the Wild's lands)
 $('#tpwin').addEventListener('click', ev => { const u = ev.target.closest('[data-tp-up]'), s = ev.target.closest('[data-tp-sel]');
   if (u) { ev.preventDefault(); const k = +u.dataset.tpUp; TP.sel = k < TP.path.length ? TP.path[k] : -1; TP.path = TP.path.slice(0, Math.max(LAND.SURF, k)); if (k === LAND.SURF) TP.sel = -1; tpDraw(); }
   if (s) { ev.preventDefault(); TP.sel = +s.dataset.tpSel; tpDraw(); } });
@@ -11962,7 +12280,7 @@ function frame() {
   }
   else { pose(you, { x: P.p[0], y: P.p[1], h: P.h, yaw: P.yaw, t: now / 1000 }); placeCamera(dt); }
   const nowShed = P.k === G && inShed(P.p), nowDeep = P.k === G && inDungeon(P.p), nowIn = P.k === G && inInterior(P.p), place = nowShed ? 'shed' : nowDeep ? 'crypt' : nowIn ? 'inside' : 'world';
-  if (place !== frame.place) { frame.place = place; shed.group.visible = nowShed; dungeon.group.visible = nowDeep; house.root.visible = world.group.visible = place === 'world' && !AWAY; country.group.visible = place === 'world'; world.setIndoor(place === 'crypt' || place === 'inside'); interiors.group.visible = nowIn; }
+  if (place !== frame.place) { frame.place = place; shed.group.visible = nowShed; dungeon.group.visible = nowDeep; house.root.visible = world.group.visible = place === 'world' && !AWAY; country.group.visible = place === 'world'; world.setIndoor(place === 'crypt' || place === 'inside'); world.setSkyless(place === 'crypt'); interiors.group.visible = nowIn; }
   if (nowShed) shed.update(now / 1000, GW.U.sims());
   if (GW.U.cur.gary && !AWAY) garyUpdate(dt); else gary.fig.g.visible = false;
   if (cinema) { const e = GW.U.cur.gary ? garyTask().e : null, gp = gary.place;
@@ -11986,6 +12304,7 @@ function frame() {
   if (frame.place === 'world') GW.PROPS.update(dt, P.p, now / 1000, sky.dark, P.p); GW.PROPS.group.visible = frame.place === 'world';
   dungeon.update(dt, P, now / 1000, PLAYER);
   remains.update(dt, now / 1000);
+  if (frame.place === 'world' && (frame.titanT = (frame.titanT ?? 20) - dt) <= 0) { frame.titanT = 25 + Math.random() * 35; const ts = country.titans(); if (ts.length) voices.creature(ts[Math.floor(Math.random() * ts.length)], 'call', heightAt); }   // (a titan, far off, now and then)
   arms.update(dt, P.k === G && frame.place === 'world' && !inHouse(P.k, P.p));
   if (aboard()) { starships.update(dt, P); const V = starships.voyage; if (V.shake > 0) { camera.position.x += (Math.random() - 0.5) * 0.06 * V.shake; camera.position.y += (Math.random() - 0.5) * 0.06 * V.shake; } }
   if (AWAY && !inDungeon(P.p)) starships.port();
