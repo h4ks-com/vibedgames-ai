@@ -3690,7 +3690,7 @@ function buildWorld(scene, house) {
     return { hk: h.key, shady: true, cx, cy, yaw, d: h.yb - h.ya, w: h.x1 - h.x0, base: 0, sy: h.H, h1: 0, sh: h.sh, st: h.st, col: h.col, outer: [true, true, true, true], door: true, doorX: h.door.x, ww: h.door.ww, name: 'A house on Shady Lane' }; };
   const housesNear = (p, r) => AWAY ? [] : HOUSES.filter(h => Math.hypot((h.x0 + h.x1) / 2 - p[0], (h.ya + h.yb) / 2 - p[1]) < r).map(shady);
   const setHouseLive = (key, on) => { const h = HOUSES.find(q => q.key === key); if (h) for (const m of h.covers) m.visible = !on; };
-  return { housesNear, setHouseLive, openings: OPENS, beano: beano && UN.cur.gary ? [beano.x, FAR + 1.6] : null, away: !!AWAY, clear: AWAY ? [] : [[X0 - 22, FAR - 48, 14], [X0 - 20, BACK + 50, 34]], setIndoor(v) { state.indoor = v; }, setSkyless(v) { sky.visible = !v; },   // (aboard a starship, down a crypt: no sky; through the bridge window, the void)
+  return { houses: () => AWAY ? [] : HOUSES, housesNear, setHouseLive, openings: OPENS, beano: beano && UN.cur.gary ? [beano.x, FAR + 1.6] : null, away: !!AWAY, clear: AWAY ? [] : [[X0 - 22, FAR - 48, 14], [X0 - 20, BACK + 50, 34]], setIndoor(v) { state.indoor = v; }, setSkyless(v) { sky.visible = !v; },   // (aboard a starship, down a crypt: no sky; through the bridge window, the void)
      setDim(v) { state.dim = v; }, group: g, walls, groundAt, zoneAt, exit: { x: X1, road: (CAN0 + 0.4) / 2, y0: CAN0, y1: 0.4 }, canal: AWAY ? null : { y: (CAN0 + CAN1) / 2, x0: X0, x1: X1 }, mapShapes: shapes, update, state, lot: { x0: LX0, x1: LX1 }, bounds: AWAY ? { x0: FAR_OFF, x1: FAR_OFF + 1, y0: FAR_OFF, y1: FAR_OFF + 1 } : { x0: X0, x1: X1, y0: FAR, y1: BACK + ALLEY }, streetName: UN.names.street };
 }
 
@@ -6276,7 +6276,7 @@ GW.buildWeapons = function (root, o) {
     return best ? (best.person ? { person: best.person, t: bt } : { a: best, t: bt }) : null;
   }
   // a person struck: hurt (they run), or down (they fall, and lie where they fell)
-  function hitPerson(t, n) { const out = o.hurtPerson ? o.hurtPerson(t, n) : []; if (out && out.length) { adopt(out, false); o.say('combat', `You kill ${t.name}.`); } else o.say('combat', `You hit ${t.name} for ${n}.`); }
+  function hitPerson(t, n) { if (o.floatText) o.floatText([t.p[0], t.p[1], o.ground(t.p, o.you().h) + 2.1], `-${n}`, ''); const out = o.hurtPerson ? o.hurtPerson(t, n) : []; if (out && out.length) { adopt(out, false); o.say('combat', `You kill ${t.name}.`); } else o.say('combat', `You hit ${t.name} for ${n}.`); }
   // with nothing targeted: a swing at whatever's before you, within reach; a gun fired straight ahead
   function swingFree() {
     const me = o.you(), fw = [Math.cos(me.yaw), Math.sin(me.yaw)], r = reach() + 0.4; o.swing && o.swing(); let best = null, bd = r;
@@ -6325,8 +6325,8 @@ GW.buildWeapons = function (root, o) {
     if (m.kind === 'Rocket') {
       m.P.addScaledVector(m.V, dt); const q = plan(m.P);
       const hit = o.creatures().find(a => !a.dead && Math.hypot(a.x - q[0], a.y - q[1]) < 0.5 + 0.6 * (a.size || 1) && m.P.y < o.heightOf(a) + 1.8 * (a.size || 1) + 0.3 && m.P.y > o.heightOf(a) - 0.3);
-      const g = o.ground(q, m.P.y);
-      if (hit || m.P.y <= g + 0.05 || m.T * 45 > m.D.Range) { explode(m.P, m.D, 'rocket'); return true; }
+      const g = o.ground(q, m.P.y), person = !hit && (o.people ? o.people() : []).some(t => { const h = o.ground(t.p, m.P.y); return Math.hypot(t.p[0] - q[0], t.p[1] - q[1]) < 0.45 && m.P.y > h - 0.2 && m.P.y < h + (t.child ? 1.4 : 1.9); });   // (a person in its way: it bursts on them)
+      if (hit || person || m.P.y <= g + 0.05 || m.T * 45 > m.D.Range) { explode(m.P, m.D, 'rocket'); return true; }
       if (Math.random() < 0.6) booms.push(boom(prev, 0.35, false, true));   // (its trail)
       m.mesh.position.copy(m.P); m.mesh.quaternion.setFromUnitVectors(FWD, m.V.clone().normalize());   // (its nose, −z, along its flight)
       return false;
@@ -6360,7 +6360,7 @@ GW.buildWeapons = function (root, o) {
     const G = o.gary(); if (G && G.here && Math.hypot(G.p[0] - c[0], G.p[1] - c[1]) < R) o.garyStruck(true);
     // and everyone and everything else alive inside it: the townsfolk, the people indoors, cats, ducks, pigeons, rats, the birds
     // overhead, a titan (Gary only flickers; the wizard's ward holds)
-    const B = o.blastAround ? o.blastAround(c, R) : null;
+    const B = o.blastAround ? o.blastAround(c, R, D.Nuclear && D.Name !== 'Grenade nuke') : null;   /* (a grenade nuke is thrown, and seen, as any grenade is) */
     if (B) { adopt(B.list, D.Nuclear);
       if (D.Nuclear) { const people = B.list.filter(k => k.kind === 'person').length + (B.inside || 0), beasts = B.list.filter(k => k.kind === 'small' || k.kind === 'bird').length, titans = B.list.filter(k => k.titan).map(k => 'the ' + k.titan);
         const what = [killed ? `${killed} creature${killed === 1 ? '' : 's'}` : '', people ? `${people} ${people === 1 ? 'person' : 'people'}` : '', beasts ? `${beasts} small beast${beasts === 1 ? '' : 's'} and bird${beasts === 1 ? '' : 's'}` : ''].filter(Boolean);
@@ -6446,9 +6446,21 @@ GW.buildWeapons = function (root, o) {
 
   /* ---------------- each frame ---------------- */
   let tBack = 0;
+  // the ground a nuke burned stays deadly while it's burned (the fallout): whoever comes onto it later, whenever they come —
+  // townsfolk, the police, people indoors, beasts, birds — sickens and dies there (as they lie: not charred)
+  let falloutT = 0;
+  function fallout() {
+    const me = o.you(), day = o.day();
+    for (const b of blasts) {
+      if (b.uni !== o.world() || day >= b.until || Math.hypot(me.p[0] - b.x, me.p[1] - b.y) > b.r + 400) continue;
+      for (const a of o.creatures().slice()) if (!a.dead && Math.hypot(a.x - b.x, a.y - b.y) < b.r) o.strikeQuiet(a, 999999);
+      const B = o.blastAround ? o.blastAround([b.x, b.y], b.r, true) : null; if (B && B.list.length) adopt(B.list, false);
+    }
+  }
   function update(dt, visible) {
     const me = o.you();
     fireCd -= dt; rangeWarn -= dt; aimT -= dt; corpsesUpdate(dt);
+    if ((falloutT -= dt) <= 0) { falloutT = 0.5; fallout(); }
     // lying about: gathered twice a second, drawn near you
     lieGroup.visible = glints.visible = visible;
     if (visible && (tScan -= dt) <= 0) { tScan = 0.5; const list = gather(me.p), s2 = list.map(t => t.id).join(';'); if (s2 !== sig) { sig = s2; drawLying(list); } live = list; }
@@ -6498,7 +6510,7 @@ GW.buildWeapons = function (root, o) {
  * a hamlet, not the open country) and the police come. One star: a couple of constables on foot with truncheons. Two
  * and up they're armed, and they shoot; more of them, nearer, surer, the more stars; four and five is armed response with
  * rifles (only a city has the force for five, a town four, a market town three). Killing an officer is worse than
- * killing anyone else; a nuclear weapon over a town brings everyone. Out of their sight long enough (they search where
+ * killing anyone else; a nuclear device set down and set off brings nobody (they've no way of knowing whose it was); a grenade nuke is thrown, and seen, as any grenade is. Out of their sight long enough (they search where
  * they last saw you, and the stars flash while they do) the stars go, one at a time; beyond the town, sooner. Die, and
  * it's over. Officers are people to a weapon: they can be hurt, and they fall.
  */
@@ -6521,8 +6533,7 @@ GW.buildPolice = function (root, o) {
     const s = stars(); if (s > was) { o.say('sys', was === 0 ? `You're wanted by ${forceName(crimeForce)}.` : `Wanted: ${s} star${s > 1 ? 's' : ''}.`); spawnT = Math.min(spawnT, was === 0 ? 6 : 2); }
     render();
   }
-  const hurtSomeone = (p, killed) => crime(p, killed ? 1.35 : 0.35, killed ? 1 : 0.8);
-  function atrocity(p) { if (!forceAt(p)) return; crimeForce = 'city'; heat = 5; unseen = 0; lastSeen = p.slice(); o.say('sys', 'Every police force in the land is looking for you.'); render(); }
+  const hurtSomeone = (p, killed) => crime(p, killed ? 1 : 0.35, killed ? 1 : 0.8);   // (a killing: a star)
   function leaveAll() { for (const c of cops) c.leaving = true; }
   function reset() { heat = 0; crimeForce = null; for (const c of cops) group.remove(c.f.g); cops.length = 0; render(); }
 
@@ -6532,22 +6543,23 @@ GW.buildPolice = function (root, o) {
     const back = yaw + Math.PI;
     for (let i = 0; i < 12; i++) {
       const a = back + (R() - 0.5) * 2.6, d = 45 + R() * 30, p = [you[0] + Math.cos(a) * d, you[1] + Math.sin(a) * d];
-      if (!o.standable(p)) continue;
+      if (!o.standable(p) || (GW.SOLIDS && GW.SOLIDS.inside(p, 0.4))) continue;
       const s = stars(), armed = s >= 2, rifle = s >= 4, f = NP.figure(rifle ? ARMED : CONSTABLE);
       f.g.traverse(m => { if (m.isMesh) m.castShadow = true; }); group.add(f.g);
       const gun = new THREE.Mesh(gunGeo, gunMat); gun.scale.set(1, 1, rifle ? 0.7 : armed ? 0.2 : 0.45); f.g.add(gun);
       const flash = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6), flashMat); flash.visible = false; f.g.add(flash);
-      cops.push({ f, gun, flash, p, yaw: a + Math.PI, walk: 0, fade: 0, cool: 1 + R() * 2, shoot: 0, flashT: 0, hp: rifle ? 110 : 70, armed, rifle, leaving: false, moving: false });
+      cops.push({ f, gun, flash, p, yaw: a + Math.PI, walk: 0, fade: 0, cool: 1 + R() * 2, shoot: 0, flashT: 0, hp: rifle ? 80 : armed ? 55 : 45, armed, rifle, leaving: false, moving: false });
       return;
     }
   }
+  function walk(c, want, step) { c.st = c.st || { side: 1, head: c.yaw }; if (!GW.SOLIDS) { c.st.head = want; return [c.p[0] + Math.cos(want) * step, c.p[1] + Math.sin(want) * step]; } return GW.SOLIDS.walk(c.p, want, step, 0.3, c.st); }
   function turn(a, b, k) { let d = (b - a) % TAU; if (d > Math.PI) d -= TAU; if (d < -Math.PI) d += TAU; return a + Math.max(-k, Math.min(k, d)); }
 
   function update(dt, you, alive) {
     t += dt; const me = you.p;
     if (!alive && stars() > 0) { heat = 0; crimeForce = null; leaveAll(); render(); }
     let seen = false;
-    for (const c of cops) { if (c.leaving) continue; const d = dist(c.p, me); if (d < 8 || (d < 45 && Math.cos(Math.atan2(me[1] - c.p[1], me[0] - c.p[0]) - c.yaw) > 0.2)) seen = true; }
+    for (const c of cops) { if (c.leaving || you.hidden) continue; const d = dist(c.p, me);   /* (indoors, out of their sight: they wait where they last saw you) */ if (d < 8 || (d < 45 && Math.cos(Math.atan2(me[1] - c.p[1], me[0] - c.p[0]) - c.yaw) > 0.2)) seen = true; }
     const s0 = stars();
     if (s0 > 0) {
       if (seen) { unseen = 0; lastSeen = me.slice(); } else unseen += dt;
@@ -6564,14 +6576,14 @@ GW.buildPolice = function (root, o) {
     const me = you.p; c.flashT = Math.max(0, c.flashT - dt);
     if (c.leaving || !alive) {
       c.fade -= dt * 0.25; const ax = c.p[0] - me[0], ay = c.p[1] - me[1], al = Math.hypot(ax, ay);
-      if (al > 0.1) { c.yaw = Math.atan2(ay, ax); c.p[0] += ax / al * 1.4 * dt; c.p[1] += ay / al * 1.4 * dt; c.walk += dt * 6; c.moving = true; }
+      if (al > 0.1) { c.p = walk(c, Math.atan2(ay, ax), 1.4 * dt); c.yaw = turn(c.yaw, c.st.head, dt * 5); c.walk += dt * 6; c.moving = true; }
       if (c.fade <= 0 || al > 120) { group.remove(c.f.g); cops.splice(cops.indexOf(c), 1); return; }
     } else {
       c.fade = Math.min(1, c.fade + dt);
       const goal = unseen < 3 ? me : lastSeen, tx = goal[0] - c.p[0], ty = goal[1] - c.p[1], d = Math.hypot(tx, ty), dYou = dist(c.p, me), s = stars();
-      const canShoot = c.armed && dYou < (c.rifle ? 45 : 30) && unseen < 3, swing = !c.armed && dYou < 1.6;
+      const canShoot = c.armed && dYou < (c.rifle ? 45 : 30) && unseen < 3 && !you.hidden, swing = !c.armed && dYou < 1.6 && !you.hidden;
       const stop = c.armed ? (c.rifle ? 18 : 10) : 1.1, speed = s >= 3 ? 6.2 : 5.2;
-      if (d > stop) { c.yaw = turn(c.yaw, Math.atan2(ty, tx), dt * 5); c.p[0] += Math.cos(c.yaw) * speed * dt; c.p[1] += Math.sin(c.yaw) * speed * dt; c.walk += dt * speed * 2.2; c.moving = true; }
+      if (d > stop) { c.p = walk(c, Math.atan2(ty, tx), speed * dt); c.yaw = turn(c.yaw, c.st.head, dt * 8); c.walk += dt * speed * 2.2; c.moving = true; }   // (round the buildings, never through: solids.js)
       else { c.moving = false; c.yaw = turn(c.yaw, Math.atan2(me[1] - c.p[1], me[0] - c.p[0]), dt * 6); if (unseen >= 3) c.yaw += Math.sin(t * 0.7 + c.hp) * dt; }
       if (c.fade >= 1) {
         c.cool -= dt;
@@ -6624,7 +6636,70 @@ GW.buildPolice = function (root, o) {
   }
   // a blast: the officers inside it fall
   function blast(c, r) { const out = []; for (const k of cops.slice()) if (dist(k.p, c) < r) { cops.splice(cops.indexOf(k), 1); k.gun.visible = k.flash.visible = false; group.remove(k.f.g); out.push({ obj: k.f.g, p: k.p.slice(), h: 0, kind: 'person' }); } return out; }
-  return { update, crime, blast, hurtSomeone, atrocity, reset, people, hurt, forceAt, get stars() { return stars(); }, get searching() { return searching(); }, get officers() { return cops.map(c => c.p.slice()); } };
+  return { update, crime, blast, hurtSomeone, reset, people, hurt, forceAt, get stars() { return stars(); }, get searching() { return searching(); }, get officers() { return cops.map(c => c.p.slice()); } };
+};
+</script>
+<script data-inline="src/solids.js">
+/* Gary's World: what nobody walks through — the buildings (a port of the StereoKit build's World/Solids.cs).
+ *
+ * Townsfolk, the police, animals and the Wild's monsters all step through here, and none of them steps into a building or
+ * through a wall; they go round, and into one only by the door they're making for. Near you the country's own footprints
+ * are loaded (each building's outline; farmsteads; sheds, rocks and the like as rings), and those are used; further off,
+ * where only the land's cells are known, a cell with a house or a shed on it is solid. On Shady Lane: its houses and Gary's.
+ *   walk(p, want, step, r, st, door): a step toward heading `want`; blocked, the nearest heading that's clear, keeping to one
+ *   side of what's in the way (st.side), so a wall is followed round its corner, not bounced off. st.head: the way it went.
+ */
+'use strict';
+GW.buildSolids = function (o) {
+  const pip = (pt, q) => { let ins = false; for (let i = 0, j = q.length - 1; i < q.length; j = i++) if ((q[i][1] > pt[1]) !== (q[j][1] > pt[1]) && pt[0] < (q[j][0] - q[i][0]) * (pt[1] - q[i][1]) / (q[j][1] - q[i][1]) + q[i][0]) ins = !ins; return ins; };
+  const segD = (p, a, b) => { const abx = b[0] - a[0], aby = b[1] - a[1], l2 = abx * abx + aby * aby, t = l2 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * abx + (p[1] - a[1]) * aby) / l2)) : 0; return Math.hypot(p[0] - a[0] - abx * t, p[1] - a[1] - aby * t); };
+  const polyEdgeD = (p, q) => { let d = Infinity; for (let i = 0; i < q.length; i++) d = Math.min(d, segD(p, q[i], q[(i + 1) % q.length])); return d; };
+  const cellSolid = p => { const c = o.landAt(p); return !!c && (c.cls === 'house' || c.cls === 'shed'); };
+  let near = [], exact = false;
+  function gather(p) { exact = o.exactAt(p); near = exact ? o.obstacles(p) : []; }
+  // how far into something solid p is (0: it isn't), out to its nearest edge
+  function depth(p, r) {
+    let best = 0;
+    if (!o.owns(p)) {   // Shady Lane: its houses, and Gary's
+      for (const h of o.houses()) { const y0 = Math.min(h.ya, h.yb) - r, y1 = Math.max(h.ya, h.yb) + r; if (p[0] > h.x0 - r && p[0] < h.x1 + r && p[1] > y0 && p[1] < y1) best = Math.max(best, Math.min(p[0] - h.x0 + r, h.x1 + r - p[0], p[1] - y0, y1 - p[1])); }
+      if (o.inGary(p)) best = Math.max(best, 0.5);
+      return best;
+    }
+    if (exact) {
+      for (const ob of near) {
+        if (ob.poly) { if (Math.hypot(p[0] - ob.x, p[1] - ob.y) > 20) continue; const e = polyEdgeD(p, ob.poly); if (pip(p, ob.poly)) best = Math.max(best, e + r); else if (e < r) best = Math.max(best, r - e); }
+        else if (ob.rect) { const [x0, x1, y0, y1] = ob.rect; if (p[0] > x0 - r && p[0] < x1 + r && p[1] > y0 - r && p[1] < y1 + r) best = Math.max(best, Math.min(p[0] - x0 + r, x1 + r - p[0], p[1] - y0 + r, y1 + r - p[1])); }
+        else if (ob.r >= 1.2) { const d = Math.hypot(p[0] - ob.x, p[1] - ob.y); if (d < ob.r + r) best = Math.max(best, ob.r + r - d); }   // (a shed, a big rock)
+      }
+      return best;
+    }
+    if (cellSolid(p)) { const c = o.landAt(p); best = Math.max(0.01, 4 - Math.hypot(p[0] - c.centre[0], p[1] - c.centre[1])); }
+    else if (r > 0.6) for (let i = 0; i < 6; i++) { const a = i * Math.PI / 3; if (cellSolid([p[0] + Math.cos(a) * r, p[1] + Math.sin(a) * r])) { best = 0.01; break; } }
+    return best;
+  }
+  function can(a, b, r, door) {
+    if (door && Math.hypot(b[0] - door[0], b[1] - door[1]) < 1.6 && Math.hypot(b[0] - door[0], b[1] - door[1]) < Math.hypot(a[0] - door[0], a[1] - door[1])) return true;   // (on the way in at the door)
+    const db = depth(b, r); return !(db > 0 && db >= depth(a, r) - 1e-6);   // (into a building, or further in: no; one inside by mischance may only make for the way out)
+  }
+  const api = {
+    off: false,
+    inside(p, r = 0.3) { if (api.off) return false; gather(p); return depth(p, r) > 0; },
+    canStep(a, b, r = 0.3, door = null) { if (api.off) return true; gather(a); return can(a, b, r, door); },
+    walk(p, want, step, r, st, door = null) {
+      if (step <= 0) return p;
+      if (api.off) { st.head = want; return [p[0] + Math.cos(want) * step, p[1] + Math.sin(want) * step]; }
+      if (!st.side) st.side = 1; gather(p);
+      for (const k of [0, 0.35, 0.7, 1.05, 1.4, 1.75, 2.1, 2.6, 3.0])
+        for (let s = 0; s < (k === 0 ? 1 : 2); s++) {
+          const a = want + k * (s === 0 ? st.side : -st.side), q = [p[0] + Math.cos(a) * step, p[1] + Math.sin(a) * step];
+          if (!can(p, q, r, door)) continue;
+          if (k > 0 && s === 1) st.side = -st.side;   // (keep going round that way)
+          st.head = a; return q;
+        }
+      st.side = -st.side; return p;
+    },
+  };
+  return api;
 };
 </script>
 <script data-inline="src/gods.js">
@@ -8213,7 +8288,7 @@ function buildProps(root, o) {
   const fireflies = new THREE.Points(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(80 * 3), 3)), new THREE.PointsMaterial({ map: fireTex, size: 0.25, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, color: '#e8ff90' }));
   fireflies.frustumCulled = false; life.add(fireflies); const ffSeeds = Array.from({ length: 80 }, () => [Math.random() * 60 - 30, Math.random() * 60 - 30, Math.random() * TAU, 0.5 + Math.random()]);
   const LAND = window.GW.LAND, at = p => { try { return LAND.at(p); } catch (e) { return { cls: 'grass' }; } };
-  function findNear(focus, test, r0, r1, tries = 30) { for (let i = 0; i < tries; i++) { const a = Math.random() * TAU, d = r0 + Math.random() * (r1 - r0), p = [focus[0] + Math.cos(a) * d, focus[1] + Math.sin(a) * d]; if (o.owns(p) && test(at(p), p)) return p; } return null; }
+  function findNear(focus, test, r0, r1, tries = 30) { for (let i = 0; i < tries; i++) { const a = Math.random() * TAU, d = r0 + Math.random() * (r1 - r0), p = [focus[0] + Math.cos(a) * d, focus[1] + Math.sin(a) * d]; if (o.owns(p) && test(at(p), p) && !(window.GW.SOLIDS && window.GW.SOLIDS.inside(p, 0.4))) return p; } return null; }
   // townsfolk: minifigures walking the paved ground of a town, some on bicycles
   const NP = window.NPCs, folk = [], SHIRTS = ['#1e5aa8', '#b40000', '#237841', '#f2cd37', '#a0a5a9', '#ff698f', '#fe8a18', '#6c6e68', '#1b2a34', '#dfeef1'], LEGS = ['#1b2a34', '#6c6e68', '#582a12', '#1e5aa8', '#a0a5a9'], HAIR = ['#1b2a34', '#582a12', '#958a73', '#f2cd37', '#6c6e68', '#b40000'];
   const bikeGeo = merge(bikeParts(0, 0, 0, '#2a4a8a'));
@@ -8225,7 +8300,7 @@ function buildProps(root, o) {
     if (PP) window.GW.bioTools.nativise(f, PP);   // one of the people of this world (biosphere.js)
     f.g.traverse(m => { if (m.isMesh) m.castShadow = true; }); life.add(f.g); if (child) f.g.scale.multiplyScalar(0.72);
     let bike = null; if (cyclist) { bike = new THREE.Mesh(bikeGeo, MAT1); bike.castShadow = true; life.add(bike); }
-    return { f, bike, p: p.slice(), yaw: R() * TAU, goal: null, walk: R() * 9, speed: (cyclist ? 4.5 + R() * 1.5 : 1.1 + R() * 0.4) * (role && role.pace || 1), wait: R() * 1.5, cyclist, child: !!child, role, dest, stuck: 0, best: Infinity, fade: 1, hp: child ? 25 : 40, scared: 0 };
+    return { f, bike, p: p.slice(), yaw: R() * TAU, goal: null, walk: R() * 9, speed: (cyclist ? 4.5 + R() * 1.5 : 1.1 + R() * 0.4) * (role && role.pace || 1), wait: R() * 1.5, cyclist, child: !!child, role, dest, stuck: 0, best: Infinity, fade: 1, hp: child ? 25 : 40, scared: 0, boxed: 0 };
   }
 
   /* ---------------- who is out, and why ----------------
@@ -8400,7 +8475,7 @@ function buildProps(root, o) {
       pa.setXYZ(i, x, o.heightAt([x, y]) + 0.6 + Math.sin(time * sp + ph) * 0.4, -y); }); pa.needsUpdate = true; fireflies.material.opacity = 0.5 + 0.5 * Math.sin(time * 3); }
     // cats: sit and watch you; stroll off now and then
     for (const c of cats.slice()) { c.t -= dt; if (c.t <= 0) { c.t = 4 + R() * 8; c.walk = R() < 0.3; c.yaw = R() * TAU; }
-      if (c.walk) { const np = [c.p[0] + Math.cos(c.yaw) * 0.6 * dt, c.p[1] + Math.sin(c.yaw) * 0.6 * dt]; if (paved(at(np))) c.p = np; else c.walk = false; }
+      if (c.walk) { const np = [c.p[0] + Math.cos(c.yaw) * 0.6 * dt, c.p[1] + Math.sin(c.yaw) * 0.6 * dt]; if (paved(at(np)) && (!window.GW.SOLIDS || window.GW.SOLIDS.canStep(c.p, np, 0.2))) c.p = np; else c.walk = false; }
       else c.yaw += Math.atan2(Math.sin(Math.atan2(focus[1] - c.p[1], focus[0] - c.p[0]) - c.yaw), Math.cos(Math.atan2(focus[1] - c.p[1], focus[0] - c.p[0]) - c.yaw)) * Math.min(1, dt) * (near(c.p, 8) ? 1 : 0);
       c.m.position.set(c.p[0], o.heightAt(c.p), -c.p[1]); c.m.rotation.y = c.yaw; if (!near(c.p, 60) || barren) { life.remove(c.m); cats.splice(cats.indexOf(c), 1); } }
     // townsfolk: walk from one paved spot to another along the street; cyclists faster, on their bikes
@@ -8421,11 +8496,15 @@ function buildProps(root, o) {
         if (!g2) g2 = findNear(f.p, (c, p) => paved(c) && clear(p), 5, f.cyclist ? 40 : 20, 10);
         f.goal = g2; f.wait = f.cyclist || f.dest ? 0 : 1 + R() * 5; } }
       let moving = false;
-      if (f.goal && f.wait <= 0) { const want = Math.atan2(f.goal[1] - f.p[1], f.goal[0] - f.p[0]); f.yaw += Math.atan2(Math.sin(want - f.yaw), Math.cos(want - f.yaw)) * Math.min(1, dt * 5);
-        const dd = Math.hypot(P[0] - f.p[0], P[1] - f.p[1]), slowNear = f.scared > 0 ? (f.cyclist ? 7.5 : 3.8) / f.speed : dd < 1.5 ? 0.2 : 1; let nx = f.p[0] + Math.cos(f.yaw) * f.speed * dt * slowNear, ny = f.p[1] + Math.sin(f.yaw) * f.speed * dt * slowNear;
+      if (f.goal && f.wait <= 0) { const want = Math.atan2(f.goal[1] - f.p[1], f.goal[0] - f.p[0]), SO = window.GW.SOLIDS;
+        const dd = Math.hypot(P[0] - f.p[0], P[1] - f.p[1]), slowNear = f.scared > 0 ? (f.cyclist ? 7.5 : 3.8) / f.speed : dd < 1.5 ? 0.2 : 1;
+        // round the buildings, never through them; in only by the door they're making for (solids.js)
+        f.st = f.st || { side: 1, head: f.yaw }; const door = f.dest && !f.scared ? f.dest.door : null, w = SO ? SO.walk(f.p, want, f.speed * dt * slowNear, f.cyclist ? 0.5 : 0.3, f.st, door) : [f.p[0] + Math.cos(want) * f.speed * dt * slowNear, f.p[1] + Math.sin(want) * f.speed * dt * slowNear];
+        if (w[0] === f.p[0] && w[1] === f.p[1] && ++f.boxed > 40) { f.goal = null; f.boxed = 0; }   // (boxed in: somewhere else)
+        f.yaw += Math.atan2(Math.sin((SO ? f.st.head : want) - f.yaw), Math.cos((SO ? f.st.head : want) - f.yaw)) * Math.min(1, dt * 6); let nx = w[0], ny = w[1];
         // round the benches, stalls, bins and trees in the way (the same ones that stop you)
         if (o.obstacles) for (const ob of o.obstacles([nx, ny])) { if (ob.poly || ob.rect) continue; const ox = nx - ob.x, oy = ny - ob.y, d = Math.hypot(ox, oy), r = ob.r + (f.cyclist ? 0.5 : 0.3); if (d < r && d > 1e-4) { nx = ob.x + ox / d * r; ny = ob.y + oy / d * r; } }
-        f.p[0] = nx; f.p[1] = ny; moving = true; f.walk += dt * f.speed * (f.cyclist ? 1.6 : 2.6); }
+        if (!SO || SO.canStep(f.p, [nx, ny], 0.3, door)) { f.p[0] = nx; f.p[1] = ny; } else { f.p[0] = w[0]; f.p[1] = w[1]; } /* (not pushed into a wall by a bench) */ moving = true; f.walk += dt * f.speed * (f.cyclist ? 1.6 : 2.6); }
       const h = o.heightAt(f.p), fg = f.f;
       fg.g.position.set(f.p[0], h + (f.cyclist ? 0.42 : 0), -f.p[1]); fg.g.rotation.y = Math.atan2(Math.cos(f.yaw), -Math.sin(f.yaw));
       const sw = moving ? Math.sin(f.walk) * (f.cyclist ? 0.9 : 0.6) : 0;
@@ -9240,13 +9319,24 @@ function buildCountry(scene, world) {
   // its own size; a step that would end inside one is slid round it, or refused (null). Only the truly huge walk through.
   const _pip = (pt, q) => { let ins = false; for (let i = 0, j = q.length - 1; i < q.length; j = i++) if ((q[i][1] > pt[1]) !== (q[j][1] > pt[1]) && pt[0] < (q[j][0] - q[i][0]) * (pt[1] - q[i][1]) / (q[j][1] - q[i][1]) + q[i][0]) ins = !ins; return ins; };
   function around(a, nx, ny) {
-    const len = a.S.len || 1, body = Math.min(3, (a.rig ? len * 0.22 : len * 0.32) * (a.size || 1));
-    if (len >= 40) return [nx, ny];
+    const len = a.S.len || 1, body = Math.min(3, (a.rig ? len * 0.22 : len * 0.32) * (a.size || 1)), S2 = window.GW.SOLIDS;
+    if (len >= 40) return !S2 || S2.canStep([a.x, a.y], [nx, ny], 4) ? [nx, ny] : null;   // (the truly huge step over the trees, but not through a town)
     for (const o of obstaclesNear([nx, ny])) {
       if (o.rect) { const [x0, x1, y0, y1] = o.rect; if (nx > x0 - body && nx < x1 + body && ny > y0 - body && ny < y1 + body) return null; continue; }
       if (o.poly) { if (Math.hypot(nx - o.x, ny - o.y) < 12 && _pip([nx, ny], o.poly)) return null; continue; }
       const ox = nx - o.x, oy = ny - o.y, d = Math.hypot(ox, oy), r = o.r + body; if (d < r) { if (d < 1e-4) return null; nx = o.x + ox / d * r; ny = o.y + oy / d * r; } }
-    return [nx, ny];
+    return !S2 || S2.canStep([a.x, a.y], [nx, ny], body) ? [nx, ny] : null;   // (no building walked through, ever: solids.js)
+  }
+  // a step along its heading; something in the way, the nearest way round it (keeping to one side, so a wall is followed
+  // round its corner), turned to face the way it goes; ok(q): may it stand there (out of town, out of the water…)
+  function step(a, heading, dist, dt, ok) {
+    const S2 = window.GW.SOLIDS, len = a.S.len || 1, body = Math.min(3, (a.rig ? len * 0.22 : len * 0.32) * (a.size || 1));
+    if (dist < 0 || !S2) { const q = around(a, a.x + Math.cos(heading) * dist, a.y + Math.sin(heading) * dist); if (q && ok(q)) { a.x = q[0]; a.y = q[1]; return true; } return false; }
+    a.st = a.st || { side: 1, head: heading }; const head0 = a.st.head, w = S2.walk([a.x, a.y], heading, dist, Math.min(body, 4), a.st);
+    const q = w[0] === a.x && w[1] === a.y ? null : around(a, w[0], w[1]);
+    if (!q || !ok(q)) { a.st.head = head0; a.st.side = -a.st.side; return false; }
+    a.x = q[0]; a.y = q[1]; if (Math.abs(wrapA(a.st.head - heading)) > 0.05) a.yaw += wrapA(a.st.head - a.yaw) * Math.min(1, dt * 6);
+    return true;
   }
   function think(a, dt, you, P, dark, time) {
     if (a.rig) { const f = a.foe && !a.combat ? a.foe : null; a.tx = f ? f.x : you[0]; a.ty = f ? f.y : you[1]; }      // what it watches, and flies down to
@@ -9282,7 +9372,7 @@ function buildCountry(scene, world) {
             if (dYou <= a.reach + 0.3 && a.swingT <= 0 && Math.abs(wrapA(toYou - a.yaw)) < 0.8) { a.swingT = S.swing || 2; hitYou(1); if (a.sp === 'wolf') a.back = 0.45 + Math.random() * 0.3; } }
         }
         a.speed += (want - a.speed) * Math.min(1, dt * (a.charge ? 3 : 5));
-        if (Math.abs(a.speed) > 0.02) { const q = around(a, a.x + Math.cos(a.yaw) * a.speed * dt, a.y + Math.sin(a.yaw) * a.speed * dt); if (q && owns(q) && !inRect(q, 3)) { a.x = q[0]; a.y = q[1]; } }
+        if (Math.abs(a.speed) > 0.02) { step(a, a.yaw, a.speed * dt, dt, q => owns(q) && !inRect(q, 3)); }
         return;
       }
     }
@@ -9301,7 +9391,7 @@ function buildCountry(scene, world) {
         a.speed += (want - a.speed) * Math.min(1, dt * 4);
         if (fd <= a.reach + 0.4 && a.swingT <= 0 && Math.abs(dd) < 0.9) { beastHit(a, b, P); a.charge = false; }
       }
-      if (a.foe && Math.abs(a.speed) > 0.02) { const q = around(a, a.x + Math.cos(a.yaw) * a.speed * dt, a.y + Math.sin(a.yaw) * a.speed * dt), c = q && LAND.at(q); if (q && owns(q) && !inRect(q, 3) && c.cls !== 'house' && (bigOne(a) || c.cls !== 'water')) { a.x = q[0]; a.y = q[1]; } }
+      if (a.foe && Math.abs(a.speed) > 0.02) step(a, a.yaw, a.speed * dt, dt, q => { const c = LAND.at(q); return owns(q) && !inRect(q, 3) && c.cls !== 'house' && (bigOne(a) || c.cls !== 'water'); });
       if (a.foe) return;
     }
     // the hunted run from whatever is after them
@@ -9350,12 +9440,9 @@ function buildCountry(scene, world) {
     }
     a.speed += (want - a.speed) * Math.min(1, dt * 3);
     if (a.speed > 0.02) {
-      let nx = a.x + Math.cos(a.yaw) * a.speed * dt, ny = a.y + Math.sin(a.yaw) * a.speed * dt;
-      { const q = around(a, nx, ny); if (q) { nx = q[0]; ny = q[1]; } else { nx = a.x; ny = a.y; a.yaw += 1.5; } }
-      // animals keep out of town, out of houses, and (small ones) out of deep water
-      const c = LAND.at([nx, ny]);
-      if (!owns([nx, ny]) || inRect([nx, ny], 3) || c.cls === 'house' || c.cls === 'shed' || (!a.rig && !a.elite && !a.boss && c.cls === 'water')) { nx = a.x; ny = a.y; a.yaw += 1.5; if (a.state === 'walk') a.goal = a.home.slice(); }
-      a.x = nx; a.y = ny;
+      // animals keep out of town, out of houses, and (small ones) out of deep water; round what's in the way
+      const okHere = q => { const c = LAND.at(q); return owns(q) && !inRect(q, 3) && c.cls !== 'house' && c.cls !== 'shed' && !(!a.rig && !a.elite && !a.boss && c.cls === 'water'); };
+      if (!step(a, a.yaw, a.speed * dt, dt, okHere)) { a.yaw += 1.5 * dt * 4; if (a.state === 'walk' && !okHere([a.x + Math.cos(a.yaw) * 2, a.y + Math.sin(a.yaw) * 2])) a.goal = a.home.slice(); }
     }
   }
   // how it moves. Gaits as the animals have them: a four-beat walk, a trot on the diagonals, a rotary gallop,
@@ -9578,7 +9665,7 @@ function buildCountry(scene, world) {
       if (t.rig.fly) { const a = time * 0.05 + t.id; t.x = t.cx + Math.cos(a) * 520; t.y = t.cy + Math.sin(a) * 520; t.yaw = a + Math.PI / 2; t.alt = 260 + Math.sin(time * 0.1) * 40; t.g.position.set(t.x, gh + t.alt, -t.y); t.g.rotation.set(0, t.yaw, Math.sin(time * 0.2) * 0.2); }
       else if (t.rig.serpent) { const v = L * 0.02; t.yaw += Math.sin(time * 0.05 + t.id) * dt * 0.1; t.x += Math.cos(t.yaw) * v * dt; t.y += Math.sin(t.yaw) * v * dt;
         t.surface = gh; t.arc = t.S.burrow ? Math.sin(time * 0.25 + t.id) * L * 0.09 - L * 0.02 : L * 0.01 + Math.sin(time * 0.6) * L * 0.004; }
-      else { const v = L * 0.012; t.yaw += Math.sin(time * 0.03 + t.id) * dt * 0.05; t.x += Math.cos(t.yaw) * v * dt; t.y += Math.sin(t.yaw) * v * dt; t.phase += dt * 0.35; t.g.position.set(t.x, gh, -t.y); t.g.rotation.set(0, t.yaw, 0); }
+      else { const v = L * 0.012; t.yaw += Math.sin(time * 0.03 + t.id) * dt * 0.05; { const nq = [t.x + Math.cos(t.yaw) * v * dt, t.y + Math.sin(t.yaw) * v * dt]; if (window.GW.SOLIDS && window.GW.SOLIDS.inside(nq, 4)) t.yaw += dt * 0.5; else { t.x = nq[0]; t.y = nq[1]; } }   /* (a titan walks round a town's buildings, never through) */ t.phase += dt * 0.35; t.g.position.set(t.x, gh, -t.y); t.g.rotation.set(0, t.yaw, 0); }
       t.speed = t.rig.fly ? 0 : t.rig.serpent ? L * 0.02 : L * 0.012; t.rig.animate(t, dt, time, true, 0.3);
     }
   }
@@ -9729,7 +9816,7 @@ function buildCountry(scene, world) {
     }
     return p.slice();
   }
-  const api = { buildingsNear, setLive, mats: () => ({ house: houseMats, civic: civicMats, culture: cultureMats }), mountNear, backOf, rideable, cull, spawnAlienAt, spawnGiant, spawnAnimal, hunt, owns, heightAt, waterAt, obstacles: obstaclesNear, openingsNear, zoneAt, update, creatures: () => creatures, pickables, mapDraw, roadY: () => RY0, group, sign, SPECIES, damage, lootable, startFight, drawPlate, env, titans: () => titans, blastLife,
+  const api = { exactAt: p => { const [cx, cy] = chunkXY(p), c = chunks.get(cx + ',' + cy); return !!(c && c.g && c.lod === 0); }, buildingsNear, setLive, mats: () => ({ house: houseMats, civic: civicMats, culture: cultureMats }), mountNear, backOf, rideable, cull, spawnAlienAt, spawnGiant, spawnAnimal, hunt, owns, heightAt, waterAt, obstacles: obstaclesNear, openingsNear, zoneAt, update, creatures: () => creatures, pickables, mapDraw, roadY: () => RY0, group, sign, SPECIES, damage, lootable, startFight, drawPlate, env, titans: () => titans, blastLife,
     landing, ready: false, _buildChunk: buildChunk, setExclude(f) { exclude = f; }, clear(x, y, r) { clear.push([x, y, r]); },
     // a blast's ground (weapons.js): what's burnt, and the chunks round c made again (their animals kept), to burn or to grow back
     setBlasted(f) { blasted = f; }, rebuild(c, r) { for (const [k, ch] of chunks) { const [i, j] = k.split(',').map(Number); if (Math.abs((i + 0.5) * CH - c[0]) < r + CH && Math.abs((j + 0.5) * CH - c[1]) < r + CH) ch.lod = -1; } },
@@ -12121,6 +12208,8 @@ root.add(house.root);
 const world = GW.buildWorld(root, house);
 scene.fog = root.fog;                                             // (world.js keeps the fog's colour with the sky)
 const country = GW.buildCountry(root, world);
+// what nobody walks through (solids.js): the buildings, near and far; Shady Lane's houses and Gary's
+GW.SOLIDS = GW.buildSolids({ exactAt: p => country.exactAt(p), obstacles: p => country.obstacles(p), landAt: p => GW.LAND.at(p), houses: () => world.houses(), owns: p => country.owns(p), inGary: p => inHouse(G, p) });
 const shed = GW.buildShed(root), inShed = p => shed.inside(p);
 // inside other buildings (interiors.js): built off the world when you go in
 const interiors = GW.buildInteriors(root, {}), inInterior = p => interiors.inside(p);
@@ -12155,8 +12244,8 @@ const arms = GW.buildWeapons(root, { world: syncWorld, country, day: () => clock
     if (GW.INSIDE.hurt(t.ref)) { if (GW.PROPS && GW.PROPS.scare) GW.PROPS.scare(t.p); if (GW.POLICE) GW.POLICE.hurtSomeone(t.p, true); } return [];
   },
   roll: () => roll(weaponDmg()), swing: () => swing(), pitch: () => 0,
-  blastAround: (c, R) => { const folkDead = GW.PROPS && GW.PROPS.blast ? GW.PROPS.blast(c, R) : [], inDead = GW.INSIDE ? GW.INSIDE.blast(c, R) : 0;
-    if (GW.POLICE) { if (R >= 300) GW.POLICE.atrocity([c[0], c[1]]); else if (folkDead.some(x => x.kind === 'person') || inDead) GW.POLICE.hurtSomeone([c[0], c[1]], true); }   // (the police: src/police.js)
+  blastAround: (c, R, nuclear) => { const folkDead = GW.PROPS && GW.PROPS.blast ? GW.PROPS.blast(c, R) : [], inDead = GW.INSIDE ? GW.INSIDE.blast(c, R) : 0;
+    const killedN = folkDead.filter(x => x.kind === 'person').length + (inDead || 0); if (GW.POLICE && !nuclear && killedN) GW.POLICE.crime([c[0], c[1]], Math.min(5, killedN), 1);   /* (a star a death, as far as the force goes) */   // (a grenade in a crowd is seen; a nuclear device, nobody knows whose: src/police.js)
     return { list: [...folkDead, ...(GW.POLICE ? GW.POLICE.blast(c, R) : []), ...things.blast(c, R), ...country.blastLife(c, R, performance.now() / 1000)], inside: inDead }; },
   audio: () => { sound.start(); const ctx = sound.ctx(); return ctx ? { ctx, out: sound.sfx() } : null; }, get voices() { return typeof voices !== 'undefined' ? voices : null; } });
 GW.WEAPONS = arms; arms.dev = { get P() { return P; }, get voices() { return voices; }, chat: t => { $("#chatIn").value = t; sendChat(); }, get wizard() { return wizard; }, get vr() { return VRH; }, get cam() { return cam; }, get PL() { return PL; }, get gary() { return gary; }, country, action: a => action(a), setTarget: a => setTarget(a), save: () => save(), creatures: () => allCreatures() };   // (for tests in headless Chrome)
@@ -13607,7 +13696,7 @@ function frame() {
   dungeon.update(dt, P, now / 1000, PLAYER);
   remains.update(dt, now / 1000);
   if (frame.place === 'world' && (frame.titanT = (frame.titanT ?? 20) - dt) <= 0) { frame.titanT = 25 + Math.random() * 35; const ts = country.titans().filter(t => !t.dead); if (ts.length) voices.creature(ts[Math.floor(Math.random() * ts.length)], 'call', heightAt); }   // (a titan, far off, now and then)
-  arms.update(dt, P.k === G && frame.place === 'world' && !inHouse(P.k, P.p)); if (frame.place === 'world') police.update(dt, { p: P.p, yaw: P.yaw, h: P.h }, PL.alive);
+  arms.update(dt, P.k === G && frame.place === 'world' && !inHouse(P.k, P.p)); if (frame.place === 'world') police.update(dt, { p: P.p, yaw: P.yaw, h: P.h, hidden: inHouse(P.k, P.p) || inInterior(P.p) || P.k !== G }, PL.alive);
   if (aboard()) { starships.update(dt, P); const V = starships.voyage; if (V.shake > 0) { camera.position.x += (Math.random() - 0.5) * 0.06 * V.shake; camera.position.y += (Math.random() - 0.5) * 0.06 * V.shake; } }
   if (AWAY && !inDungeon(P.p)) starships.port();
   if (started) { camera.getWorldDirection(camFwd); const world2 = frame.place === 'world';
