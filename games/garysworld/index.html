@@ -6917,18 +6917,57 @@ GW.buildCars = function (root, o) {
     g.traverse(m => { if (m.isMesh) { m.castShadow = true; m.receiveShadow = false; } });   // (its own shadow on itself only blotches the paint)
     // lit at night: a lamp's own glow (the heads also throw light, for the car you drive)
     const hl = M.head.clone(), tl = M.tail.clone(); g.traverse(m => { if (m.material === M.head) m.material = hl; else if (m.material === M.tail) m.material = tl; });
-    return { g, wheels, bar, hl, tl, K };
+    return { g, wheels, bar, hl, tl, K, body };
+  }
+  // each kind built once and merged, by material, into a handful of meshes every car of that kind shares (a car from ~120
+  // draw calls to ~12); its paint, glass, trim (by vertex colour, matt and shiny), lamps, a wheel's tyre and its turning rim
+  const TRIM_L = new THREE.MeshLambertMaterial({ vertexColors: true }), TRIM_S = new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 110, specular: 0x888888 });
+  const HEAD = new THREE.MeshPhongMaterial({ color: 0xf4f2e8, emissive: 0x000000, shininess: 100 }), TAIL = new THREE.MeshPhongMaterial({ color: 0x8a0a0a, emissive: 0x000000, shininess: 80 });
+  const paints = new Map(), templates = new Map();
+  const paintOf = col => { if (!paints.has(col)) paints.set(col, paint(col)); return paints.get(col); };
+  function merge(parts, colour) {   // parts: [{ mesh, m (its matrix in the frame it's merged into) }]
+    const P = [], N = [], C = [], nm = new THREE.Matrix3();
+    for (const { mesh, m } of parts) {
+      const g = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone(); g.applyMatrix4(m); if (!g.attributes.normal) g.computeVertexNormals();
+      const pa = g.attributes.position.array, na = g.attributes.normal.array, col = colour && mesh.material.color ? mesh.material.color : null;
+      for (let i = 0; i < pa.length; i++) { P.push(pa[i]); N.push(na[i]); }
+      if (colour) for (let i = 0; i < pa.length / 3; i++) C.push(col.r, col.g, col.b);
+      g.dispose();
+    }
+    const out = new THREE.BufferGeometry(); out.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); out.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3)); if (colour) out.setAttribute('color', new THREE.Float32BufferAttribute(C, 3)); out.computeBoundingSphere(); return out;
+  }
+  function template(kind) {
+    if (templates.has(kind)) return templates.get(kind);
+    const B = build(kind, '#ffffff'); B.g.updateMatrixWorld(true);
+    const skip = new Set(); for (const w of B.wheels) w.w.traverse(m => skip.add(m)); if (B.bar) B.bar.traverse(m => skip.add(m));
+    const bins = { paint: [], glass: [], head: [], tail: [], trimL: [], trimS: [] };
+    B.g.traverse(m => { if (!m.isMesh || skip.has(m)) return; const mt = m.material, e = { mesh: m, m: m.matrixWorld.clone() };
+      if (mt === B.body) bins.paint.push(e); else if (mt === M.glass) bins.glass.push(e); else if (mt === B.hl) bins.head.push(e); else if (mt === B.tl) bins.tail.push(e); else if (mt.isMeshPhongMaterial) bins.trimS.push(e); else bins.trimL.push(e); });
+    const T = { K: B.K, paint: merge(bins.paint), glass: merge(bins.glass), head: merge(bins.head), tail: merge(bins.tail), trimL: merge(bins.trimL, true), trimS: merge(bins.trimS, true), wheels: B.wheels.map(w => ({ pos: w.w.position.clone(), front: w.front })) };
+    const w0 = B.wheels[0].w; w0.updateMatrixWorld(true); const inv = new THREE.Matrix4().copy(w0.matrixWorld).invert(), tyre = [], spin = [];
+    w0.traverse(m => { if (!m.isMesh) return; const e = { mesh: m, m: inv.clone().multiply(m.matrixWorld) }; let inSpin = false; for (let q = m; q && q !== w0; q = q.parent) if (q === w0.userData.spin) inSpin = true; (inSpin ? spin : tyre).push(e); });
+    T.tyre = merge(tyre, true); T.rim = merge(spin, true);
+    if (B.bar) { B.bar.updateMatrixWorld(true); const bi = new THREE.Matrix4().copy(B.bar.matrixWorld).invert(), base = [], lb = B.bar.userData.lb, lr = B.bar.userData.lr; T.barPos = B.bar.position.clone(); T.barB = merge([{ mesh: lb, m: bi.clone().multiply(lb.matrixWorld) }], false); T.barR = merge([{ mesh: lr, m: bi.clone().multiply(lr.matrixWorld) }], false); B.bar.traverse(m => { if (m.isMesh && m !== lb && m !== lr) base.push({ mesh: m, m: bi.clone().multiply(m.matrixWorld) }); }); T.barBase = merge(base, true); }
+    B.g.traverse(m => { if (m.isMesh) m.geometry.dispose(); });
+    templates.set(kind, T); return T;
+  }
+  function instance(kind, col) {
+    const T = template(kind), g = new THREE.Group(), add = (geo, mat, shadow) => { const m = new THREE.Mesh(geo, mat); m.castShadow = !!shadow; g.add(m); return m; };
+    add(T.paint, paintOf(col), true); add(T.glass, M.glass); add(T.trimL, TRIM_L); add(T.trimS, TRIM_S); add(T.head, HEAD); add(T.tail, TAIL);
+    const wheels = T.wheels.map(w => { const wg = new THREE.Group(); wg.position.copy(w.pos); const ty = new THREE.Mesh(T.tyre, TRIM_L); wg.add(ty); const sp = new THREE.Group(); sp.add(new THREE.Mesh(T.rim, TRIM_S)); wg.add(sp); wg.userData.spin = sp; wg.userData.tyre = ty; g.add(wg); return { w: wg, front: w.front }; });
+    let bar = null; if (T.barB) { bar = new THREE.Group(); bar.position.copy(T.barPos); bar.add(new THREE.Mesh(T.barBase, TRIM_L)); const lb = new THREE.Mesh(T.barB, M.blue), lr = new THREE.Mesh(T.barR, M.red); bar.add(lb, lr); bar.userData = { lb, lr }; g.add(bar); }
+    return { g, wheels, bar, K: T.K };
   }
 
   /* ---------------- the cars ---------------- */
   const cars = [], taken = new Set();   // (taken: the parked ones that have been moved, by their spot's key: not put back there)
-  const R0 = 140;
+  const R0 = 110; let litNow = -1;
   function make(kind, col, p, yaw, how) {
-    const B = build(kind, col); group.add(B.g);
-    const c = Object.assign(B, { kind, col, p: p.slice(), yaw, v: 0, vs: 0, steer: 0, spin: 0, how, driver: null, hp: 100, key: null, path: null, lane: 1, wait: 0, honk: 0, lit: -1 });
+    const B = instance(kind, col); group.add(B.g);
+    const c = Object.assign(B, { kind, col, p: p.slice(), yaw, v: 0, vs: 0, steer: 0, spin: 0, how, driver: null, hp: 100, key: null, path: null, lane: 1, wait: 0, honk: 0 });
     place(c); cars.push(c); return c;
   }
-  function remove(c) { group.remove(c.g); c.g.traverse(m => { if (m.isMesh) m.geometry.dispose(); }); cars.splice(cars.indexOf(c), 1); }
+  function remove(c) { group.remove(c.g); cars.splice(cars.indexOf(c), 1); }   // (its meshes are its kind's, shared: nothing to free)
   function place(c) { c.g.position.set(c.p[0], o.ground(c.p), -c.p[1]); c.g.rotation.set(0, c.yaw, 0); const g = o.ground(c.p), gf = o.ground([c.p[0] + Math.cos(c.yaw) * 1.4, c.p[1] + Math.sin(c.yaw) * 1.4]), gs = o.ground([c.p[0] + Math.sin(c.yaw) * 0.8, c.p[1] - Math.cos(c.yaw) * 0.8]); c.g.rotateZ(Math.atan2(gf - g, 1.4)); c.g.rotateX(-Math.atan2(gs - g, 0.8)); }
   const isRoad = cell => !!cell && (cell.kind === 'road' || cell.kind === 'street' || cell.kind === 'highway');
   // a road cell's way: along it, from its road neighbours
@@ -6942,7 +6981,7 @@ GW.buildCars = function (root, o) {
   function parkNear(me) {
     const cells = GW.LAND.lCells(me[0] - R0, me[1] - R0, me[0] + R0, me[1] + R0);
     for (const c of cells) {
-      if (!isRoad(c) || !c.town || cars.length > 40 || !o.owns(c.centre)) continue;   /* (not on Shady Lane's own little street) */ const key = c.q + ',' + c.r; if (taken.has(key) || cars.some(x => x.key === key)) continue;
+      if (!isRoad(c) || !c.town || cars.length > 28 || !o.owns(c.centre)) continue;   /* (not on Shady Lane's own little street) */ const key = c.q + ',' + c.r; if (taken.has(key) || cars.some(x => x.key === key)) continue;
       if (Math.hypot(c.centre[0] - me[0], c.centre[1] - me[1]) > R0 - 10 || hash(c.q, c.r, 7) > 0.22) continue;
       const a = roadDir(c); if (a == null) continue; const side = hash(c.q, c.r, 9) < 0.5 ? 1 : -1, nrm = [Math.sin(a) * side, -Math.cos(a) * side];
       const p = [c.centre[0] + nrm[0] * 2.9, c.centre[1] + nrm[1] * 2.9]; if ((GW.SOLIDS && GW.SOLIDS.inside(p, 1)) || !o.owns(p)) continue;
@@ -7004,7 +7043,8 @@ GW.buildCars = function (root, o) {
     let yawRate = c.v / K.wb * Math.tan(c.steer); if (inp.hand && Math.abs(c.v) > 6) yawRate *= 1.7;
     c.vs += -yawRate * c.v * 0.05 * dt * (inp.hand ? 3 : 1); c.vs *= Math.exp(-dt * (inp.hand ? 1.2 : 7));   // (the slide: it goes on a little sideways, and grips again)
     const yaw2 = c.yaw + yawRate * dt, p2 = [c.p[0] + (Math.cos(yaw2) * c.v + Math.sin(yaw2) * c.vs) * dt, c.p[1] + (Math.sin(yaw2) * c.v - Math.cos(yaw2) * c.vs) * dt];
-    if (blocked(c, p2, yaw2)) {   // a wall, a tree, a house: a bump, and back off it
+    const stuckNow = blocked(c, c.p, c.yaw);   // (already against something, it may always drive off it)
+    if (!stuckNow && blocked(c, p2, yaw2)) {   // a wall, a tree, a house: a bump, and back off it
       const hit = Math.abs(c.v); if (hit > 4) { o.sound && o.sound('crash', c.p, Math.min(1.5, hit / 15)); c.hp = Math.max(0, c.hp - hit * 1.2); o.shake && o.shake(Math.min(1, hit / 20)); if (hit > 14) o.hurtMe && o.hurtMe('The crash', Math.round((hit - 14) * 2.5)); }
       c.v *= -0.25; c.vs = 0; if (!blocked(c, c.p, yaw2)) c.yaw = yaw2;
     } else { c.p = p2; c.yaw = yaw2; }
@@ -7020,7 +7060,14 @@ GW.buildCars = function (root, o) {
     if (c.driver && c.how === 'traffic') { o.thrownOut && o.thrownOut(c); if (c.driverFig) { c.g.remove(c.driverFig.g); c.driverFig = null; } c.driver = null; }
     if (c.key) taken.add(c.key); c.how = 'yours'; c.v = 0; mine = c; return c;
   }
-  function leave() { const c = mine; if (!c) return null; mine = null; c.how = 'left'; c.v = 0; c.vs = 0; const s = [-Math.sin(c.yaw), Math.cos(c.yaw)]; return [c.p[0] + s[0] * (c.K.W / 2 + 0.6) + Math.cos(c.yaw) * 0.4, c.p[1] + s[1] * (c.K.W / 2 + 0.6) + Math.sin(c.yaw) * 0.4]; }
+  // out of it: by the driver's door, else the other, else behind it (wherever you can stand); a moving car rolls on without you
+  function leave() {
+    const c = mine; if (!c) return null; mine = null; c.how = 'left'; c.vs = 0; c.steer = 0;
+    const s = [-Math.sin(c.yaw), Math.cos(c.yaw)], f = [Math.cos(c.yaw), Math.sin(c.yaw)];
+    for (const q of [[c.p[0] + s[0] * (c.K.W / 2 + 0.6) + f[0] * 0.4, c.p[1] + s[1] * (c.K.W / 2 + 0.6) + f[1] * 0.4], [c.p[0] - s[0] * (c.K.W / 2 + 0.6) + f[0] * 0.4, c.p[1] - s[1] * (c.K.W / 2 + 0.6) + f[1] * 0.4], [c.p[0] - f[0] * (c.K.L / 2 + 0.7), c.p[1] - f[1] * (c.K.L / 2 + 0.7)]])
+      if (!o.solid(q)) return q;
+    return [c.p[0] + s[0] * (c.K.W / 2 + 0.6), c.p[1] + s[1] * (c.K.W / 2 + 0.6)];
+  }
   // a car near you, and its driver's door (the left: they drive on the right)
   function doorNear(p) { let best = null, bd = 2.2; for (const c of cars) { if (c === mine || Math.abs(c.v) > 3) continue; const s = [-Math.sin(c.yaw), Math.cos(c.yaw)], door = [c.p[0] + s[0] * (c.K.W / 2 + 0.3) + Math.cos(c.yaw) * 0.3, c.p[1] + s[1] * (c.K.W / 2 + 0.3) + Math.sin(c.yaw) * 0.3], d = Math.hypot(door[0] - p[0], door[1] - p[1]); if (d < bd) { bd = d; best = c; } } return best ? { c: best, d: bd } : null; }
 
@@ -7028,20 +7075,24 @@ GW.buildCars = function (root, o) {
     if ((parkT -= dt) <= 0) { parkT = 2; parkNear(me); }
     if ((trafT -= dt) <= 0) { trafT = 1.5; trafficNear(me); }
     if (mine) steerMine(dt, inp);
+    { const on = dark > 0.35 ? 1 : 0; if (on !== litNow) { litNow = on; HEAD.emissive.setHex(on ? 0xfff6d0 : 0); TAIL.emissive.setHex(on ? 0x500000 : 0); } }   // (lamps lit at nightfall: every car's at once)
     for (const c of cars.slice()) {
       if (c !== mine && Math.hypot(c.p[0] - me[0], c.p[1] - me[1]) > R0 + 30) { remove(c); continue; }
       if (c.how === 'traffic') drive(c, dt, me, people);
+      else if (c !== mine && Math.abs(c.v) > 0.05) {   // left rolling: it runs on and slows, and stops at what it meets
+        c.v -= Math.sign(c.v) * Math.min(Math.abs(c.v), 2.5 * dt); const p2 = [c.p[0] + Math.cos(c.yaw) * c.v * dt, c.p[1] + Math.sin(c.yaw) * c.v * dt];
+        if (blocked(c, p2, c.yaw) && !blocked(c, c.p, c.yaw)) c.v = 0; else c.p = p2; runDown(c, dt, people, beasts, true);
+      }
       runDown(c, dt, people, beasts, c === mine);   /* (traffic stops for whoever's ahead: only the car you drive runs anyone down) */
       // the wheels: turning with the road, the front pair steering
       c.spin += c.v * dt / c.K.r; for (const w of c.wheels) { w.w.userData.spin.rotation.z = -c.spin; w.w.userData.tyre.rotation.y = -c.spin; w.w.rotation.y = w.front ? c.steer : 0; }
       // lamps at night; a police car's lights turning
-      const on = dark > 0.35 || c.how === 'yours' && dark > 0.2 ? 1 : 0; if (on !== c.lit) { c.lit = on; c.hl.emissive.setHex(on ? 0xfff6d0 : 0); c.tl.emissive.setHex(on ? 0x500000 : 0); }
       if (c.bar && (c.how === 'yours' || c.how === 'police')) { const t = performance.now() / 1000, ph = Math.floor(t * 6) % 2; c.bar.userData.lb.visible = ph === 0; c.bar.userData.lr.visible = ph === 1; }
       if (c.how !== 'parked') place(c);
     }
     return mine;
   }
-  return { update, enter, leave, doorNear, get mine() { return mine; }, list: cars, make, KINDS, footprint, remove, build };
+  return { update, enter, leave, doorNear, get mine() { return mine; }, list: cars, make, KINDS, footprint, remove, build, instance };
 };
 </script>
 <script data-inline="src/gods.js">
@@ -12606,7 +12657,7 @@ const cars = GW.CARS = GW.buildCars(root, { ground: p => outsideGround(p), solid
   hitPerson: (t, n) => arms.hitPerson(t, n), hitBeast: (a, n) => hit(a, n, 'run down', false), hurtMe: (name, n) => blastHurt(name, n),
   thrownOut: c => { say('emote', 'You haul the driver out and take the wheel.'); if (GW.POLICE) GW.POLICE.hurtSomeone(c.p.slice(), false); if (GW.PROPS && GW.PROPS.scare) GW.PROPS.scare(c.p); } });
 function getIn(c) { if (P.riding || P.vehicle) return; P.car = cars.enter(c); cam.dist = Math.max(cam.dist, 8); P.sitting = false; engineOn(true); say('emote', 'W to go, S to brake and reverse, A and D to steer, Space the handbrake; F to get out.'); }
-function getOut(quiet) { const q = cars.leave(); P.car = null; engineOn(false); if (q && standable(G, q)) P.p = q; if (!quiet) say('emote', 'You get out.'); }
+function getOut(quiet) { const moving = P.car && Math.abs(P.car.v) > 3, q = cars.leave(); P.car = null; engineOn(false); if (q && standable(G, q)) P.p = q; if (!quiet) say('emote', moving ? 'You throw yourself out, and the car rolls on.' : 'You get out.'); }
 // the engine's note, rising with the revs; a horn
 let engine = null;
 function engineOn(on) { const A = sound.ctx && sound.ctx(); if (on && A && !engine) { sound.start(); const os = A.createOscillator(), os2 = A.createOscillator(), lp = A.createBiquadFilter(), g = A.createGain(); os.type = 'sawtooth'; os2.type = 'square'; lp.type = 'lowpass'; lp.frequency.value = 600; g.gain.value = 0.0; os.connect(lp); os2.connect(lp); lp.connect(g); g.connect(sound.sfx()); os.start(); os2.start(); engine = { os, os2, g, lp }; }
