@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>FirePilot — mobile Firecracker control</title>
+<style>
+:root{--bg:#0e1116;--card:#171c24;--card2:#1e242e;--tx:#e6ebf2;--dim:#8b96a5;--ac:#ff8c42;--ok:#3ecf6e;--warn:#f5b642;--err:#f2555a;--stop:#8b96a5;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--tx);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  padding-bottom:calc(24px + env(safe-area-inset-bottom))}
+header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:10px;padding:12px 16px;
+  background:rgba(14,17,22,.85);backdrop-filter:blur(10px);border-bottom:1px solid #232a35;
+  padding-top:calc(12px + env(safe-area-inset-top))}
+header h1{font-size:19px;font-weight:700;letter-spacing:.3px}
+header .sp{flex:1}
+.pill{font-size:12px;padding:4px 10px;border-radius:99px;border:1px solid #2a323f;color:var(--dim);white-space:nowrap}
+.pill.live{color:var(--ok);border-color:var(--ok)}
+.pill.demo{color:var(--warn);border-color:var(--warn)}
+.pill.off{color:var(--err);border-color:var(--err)}
+.iconbtn{background:var(--card2);border:1px solid #2a323f;color:var(--tx);border-radius:10px;
+  min-width:42px;min-height:42px;font-size:18px;cursor:pointer}
+main{max-width:760px;margin:0 auto;padding:14px 14px 0;display:grid;gap:12px}
+.card{background:var(--card);border:1px solid #232a35;border-radius:14px;padding:14px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.stat{background:var(--card);border:1px solid #232a35;border-radius:12px;padding:10px 6px;text-align:center}
+.stat b{display:block;font-size:20px}
+.stat span{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}
+.toolbar{display:flex;gap:8px}
+.btn{flex:1;min-height:46px;border-radius:12px;border:1px solid #2a323f;background:var(--card2);
+  color:var(--tx);font-size:15px;font-weight:600;cursor:pointer;padding:0 14px}
+.btn:active{transform:scale(.98)}
+.btn.primary{background:var(--ac);border-color:var(--ac);color:#1a1005}
+.btn.danger{color:var(--err);border-color:#5a2b2e}
+.btn.mini{flex:0 0 auto;min-height:38px;font-size:13px;padding:0 12px;border-radius:9px}
+.vm{display:grid;gap:10px}
+.vm .top{display:flex;align-items:center;gap:10px}
+.vm .name{font-weight:700;font-size:17px;word-break:break-all}
+.badge{font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px;text-transform:uppercase;letter-spacing:.5px}
+.badge.Running{background:rgba(62,207,110,.15);color:var(--ok)}
+.badge.Paused{background:rgba(245,182,66,.15);color:var(--warn)}
+.badge.Starting{background:rgba(139,150,165,.15);color:var(--dim)}
+.badge.Stopped,.badge.Error{background:rgba(139,150,165,.15);color:var(--dim)}
+.badge.Error{color:var(--err)}
+.meta{color:var(--dim);font-size:13px;display:flex;gap:14px;flex-wrap:wrap}
+.acts{display:flex;gap:8px;flex-wrap:wrap}
+.acts .btn{flex:0 1 auto;min-height:42px}
+label{display:block;font-size:12px;color:var(--dim);margin:10px 0 4px;text-transform:uppercase;letter-spacing:.5px}
+input{width:100%;min-height:46px;background:#0b0e12;border:1px solid #2a323f;border-radius:10px;
+  color:var(--tx);font-size:16px;padding:0 12px}
+input:focus{outline:none;border-color:var(--ac)}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+pre{background:#0b0e12;border:1px solid #232a35;border-radius:10px;padding:10px;font-size:12px;
+  overflow:auto;max-height:220px;white-space:pre-wrap;word-break:break-word}
+#proxycode{max-height:420px;white-space:pre;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px}
+details summary{cursor:pointer;font-weight:600;color:var(--ac);padding:4px 0}
+details .inner{margin-top:10px;display:grid;gap:10px}
+ol{padding-left:20px;color:var(--dim);font-size:14px;display:grid;gap:6px}
+code{background:#0b0e12;border:1px solid #232a35;border-radius:6px;padding:1px 6px;font-size:13px;color:#ffd9b8}
+.note{font-size:13px;color:var(--warn)}
+.hidden{display:none}
+dialog{background:var(--card);color:var(--tx);border:1px solid #2a323f;border-radius:16px;
+  width:min(92vw,420px);padding:18px}
+dialog::backdrop{background:rgba(0,0,0,.6)}
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);
+  background:var(--card2);border:1px solid #2a323f;color:var(--tx);border-radius:99px;padding:10px 18px;
+  font-size:14px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:9;white-space:nowrap;max-width:90vw}
+.toast.on{opacity:1}
+@media(min-width:700px){.vms{display:grid;grid-template-columns:1fr 1fr;gap:12px}}
+@media(max-width:420px){.stats{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<header>
+  <h1>🔥 FirePilot</h1>
+  <div class="sp"></div>
+  <div id="pill" class="pill demo">demo</div>
+  <button class="iconbtn" id="btnGear" title="settings">⚙︎</button>
+</header>
+
+<main>
+  <section id="settings" class="card hidden">
+    <label for="url">Proxy URL</label>
+    <input id="url" inputmode="url" placeholder="http://192.168.1.50:8090">
+    <label for="token">Token (optional)</label>
+    <input id="token" placeholder="FCPILOT_TOKEN value">
+    <div class="toolbar" style="margin-top:12px">
+      <button class="btn primary" id="btnConnect">Save &amp; connect</button>
+      <button class="btn" id="btnDemo">Demo mode</button>
+    </div>
+  </section>
+
+  <section class="stats">
+    <div class="stat"><b id="stTotal">0</b><span>VMs</span></div>
+    <div class="stat"><b id="stRun">0</b><span>running</span></div>
+    <div class="stat"><b id="stPause">0</b><span>paused</span></div>
+    <div class="stat"><b id="stMem">0</b><span>MB alloc</span></div>
+  </section>
+
+  <section class="toolbar">
+    <button class="btn primary" id="btnNew">＋ New VM</button>
+    <button class="btn" id="btnRefresh">↻ Refresh</button>
+  </section>
+
+  <section class="vms" id="vmlist"></section>
+
+  <section class="card">
+    <div class="vm top" style="justify-content:space-between;align-items:center">
+      <strong>Console</strong>
+      <button class="btn mini" id="btnClear">clear</button>
+    </div>
+    <pre id="log"></pre>
+  </section>
+
+  <details class="card">
+    <summary>⚙ Setup — run this proxy on the Firecracker host</summary>
+    <div class="inner">
+      <ol>
+        <li>Save the script below as <code>firepilot_proxy.py</code> on the Linux box that runs Firecracker (needs <code>/dev/kvm</code>).</li>
+        <li>Run it as root (it spawns <code>firecracker</code> processes):<br><code>sudo FCPILOT_TOKEN=yoursecret python3 firepilot_proxy.py</code></li>
+        <li>Put kernel + rootfs paths that exist on that host (e.g. from the official <code>spec.ccfc.min</code> S3 bucket).</li>
+        <li>Tap ⚙︎ up top, enter <code>http://&lt;host-ip&gt;:8090</code> and your token, hit Connect.</li>
+      </ol>
+      <div class="note">⚠ Mixed content: this page is https, your proxy is http — mobile browsers may block the call. Fix: save this page to the device and open it from disk, or put the proxy behind a TLS reverse proxy.</div>
+      <button class="btn mini" id="btnCopy">📋 Copy proxy script</button>
+      <pre id="proxycode"></pre>
+    </div>
+  </details>
+</main>
+
+<dialog id="dlg">
+  <form id="frmNew">
+    <strong style="font-size:17px">Boot a new microVM</strong>
+    <label for="nName">Name</label><input id="nName" placeholder="web-test">
+    <div class="row2">
+      <div><label for="nVcpu">vCPUs</label><input id="nVcpu" inputmode="numeric" value="1"></div>
+      <div><label for="nMem">RAM (MiB)</label><input id="nMem" inputmode="numeric" value="256"></div>
+    </div>
+    <label for="nKernel">Kernel path on host</label><input id="nKernel" placeholder="/srv/fc/vmlinux-6.1" required>
+    <label for="nRootfs">Rootfs path on host</label><input id="nRootfs" placeholder="/srv/fc/alpine.ext4" required>
+    <label for="nArgs">Boot args</label><input id="nArgs" value="console=ttyS0 reboot=k panic=1 pci=off">
+    <div class="toolbar" style="margin-top:14px">
+      <button type="button" class="btn" id="btnCancel">Cancel</button>
+      <button type="submit" class="btn primary">Boot it</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast"></div>
+
+<script type="text/plain" id="proxysrc">
+#!/usr/bin/env python3
+# firepilot_proxy.py - tiny HTTP bridge to local Firecracker API sockets.
+# Run on the firecracker host:  sudo python3 firepilot_proxy.py
+# Env: FCPILOT_TOKEN=<secret> (optional), FCPILOT_PORT=8090
+import json, os, signal, subprocess, time, http.client, socket, threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+HOST = "0.0.0.0"
+PORT = int(os.environ.get("FCPILOT_PORT", "8090"))
+STATE = "/var/lib/firepilot/state.json"
+SOCKS = "/var/lib/firepilot"
+LOCK = threading.Lock()
+
+def load():
+    try:
+        with open(STATE) as f: return json.load(f)
+    except Exception: return {}
+
+def save(d):
+    os.makedirs(SOCKS, exist_ok=True)
+    with open(STATE, "w") as f: json.dump(d, f)
+
+def fc(sock, method, path, body=None):
+    c = http.client.HTTPConnection("localhost", timeout=5)
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(5); s.connect(sock); c.sock = s
+    data = json.dumps(body) if body is not None else None
+    c.request(method, path, data, {"Content-Type": "application/json"})
+    r = c.getresponse(); raw = r.read()
+    try: raw = json.loads(raw or b"{}")
+    except Exception: pass
+    c.close()
+    return r.status, raw
+
+def boot(vm):
+    cfg = {
+      "boot-source": {"kernel_image_path": vm["kernel"],
+                      "boot_args": vm.get("args", "console=ttyS0 reboot=k panic=1 pci=off")},
+      "drives": [{"drive_id": "rootfs", "path_on_host": vm["rootfs"],
+                  "is_root_device": True, "is_read_only": False}],
+      "machine-config": {"vcpu_count": int(vm["vcpu"]), "mem_size_mib": int(vm["mem"])},
+    }
+    cfgp = SOCKS + "/" + vm["id"] + ".json"
+    sockp = SOCKS + "/" + vm["id"] + ".sock"
+    with open(cfgp, "w") as f: json.dump(cfg, f)
+    if os.path.exists(sockp): os.unlink(sockp)
+    p = subprocess.Popen(["firecracker", "--api-sock", sockp, "--config-file", cfgp],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         preexec_fn=os.setsid)
+    vm["pid"] = p.pid; vm["started"] = time.time(); vm["state"] = "Starting"
+    for _ in range(50):
+        if os.path.exists(sockp):
+            try:
+                st, info = fc(sockp, "GET", "/")
+                vm["state"] = info.get("state", "Running"); return
+            except Exception:
+                time.sleep(0.2)
+        time.sleep(0.2)
+    vm["state"] = "Error"
+    save(load())
+
+class H(BaseHTTPRequestHandler):
+    def _send(self, code, obj):
+        b = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(b)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Authorization,Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS")
+        self.end_headers(); self.wfile.write(b)
+
+    def do_OPTIONS(self): self._send(204, {})
+
+    def _auth(self):
+        tok = os.environ.get("FCPILOT_TOKEN", "")
+        if tok and self.headers.get("Authorization") != "Bearer " + tok:
+            self._send(401, {"error": "bad token"}); return False
+        return True
+
+    def do_GET(self):
+        if not self._auth(): return
+        with LOCK:
+            vms = load()
+            if self.path == "/api/vms":
+                for v in vms.values():
+                    try:
+                        st, info = fc(SOCKS + "/" + v["id"] + ".sock", "GET", "/")
+                        v["state"] = info.get("state", v.get("state", "?"))
+                    except Exception:
+                        v["state"] = "Stopped"
+                save(vms); self._send(200, list(vms.values()))
+            else:
+                self._send(404, {"error": "not found"})
+
+    def do_POST(self):
+        if not self._auth(): return
+        n = int(self.headers.get("Content-Length", 0) or 0)
+        try: body = json.loads(self.rfile.read(n) or b"{}")
+        except Exception: body = {}
+        with LOCK:
+            vms = load()
+            if self.path == "/api/vms":
+                vid = "vm%d" % (int(time.time() * 1000) % 1000000)
+                vm = {"id": vid, "name": body.get("name") or vid,
+                      "kernel": body.get("kernel", ""), "rootfs": body.get("rootfs", ""),
+                      "vcpu": body.get("vcpu", 1), "mem": body.get("mem", 256),
+                      "args": body.get("args", ""), "state": "Starting", "started": 0}
+                vms[vid] = vm; save(vms)
+                threading.Thread(target=boot, args=(vm,), daemon=True).start()
+                self._send(200, vm)
+                return
+            parts = self.path.strip("/").split("/")
+            if len(parts) == 4 and parts[0] == "api" and parts[1] == "vms" and parts[3] == "action":
+                vm = vms.get(parts[2])
+                if not vm:
+                    self._send(404, {"error": "no such vm"}); return
+                act = body.get("action")
+                sockp = SOCKS + "/" + vm["id"] + ".sock"
+                if act == "stop":
+                    pid = vm.get("pid")
+                    if pid:
+                        try: os.killpg(os.getpgid(pid), signal.SIGTERM)
+                        except Exception: pass
+                    vm["state"] = "Stopped"; save(vms); self._send(200, vm); return
+                if act == "start" and vm.get("state") in ("Stopped", "Error"):
+                    vm["state"] = "Starting"; save(vms)
+                    threading.Thread(target=boot, args=(vm,), daemon=True).start()
+                    self._send(200, vm); return
+                m = {"start": "InstanceStart", "pause": "Pause", "resume": "Resume"}.get(act)
+                if not m:
+                    self._send(400, {"error": "bad action"}); return
+                try:
+                    fc(sockp, "PUT", "/actions", {"action_type": m})
+                    st, info = fc(sockp, "GET", "/")
+                    vm["state"] = info.get("state", "Running"); save(vms)
+                    self._send(200, vm)
+                except Exception as e:
+                    self._send(500, {"error": str(e)})
+            else:
+                self._send(404, {"error": "not found"})
+
+    def do_DELETE(self):
+        if not self._auth(): return
+        with LOCK:
+            vms = load()
+            vid = self.path.strip("/").split("/")[-1]
+            vm = vms.pop(vid, None)
+            if not vm:
+                self._send(404, {"error": "no such vm"}); return
+            pid = vm.get("pid")
+            if pid:
+                try: os.killpg(os.getpgid(pid), signal.SIGKILL)
+                except Exception: pass
+            save(vms); self._send(200, {"ok": True})
+
+    def log_message(self, *a): pass
+
+if __name__ == "__main__":
+    os.makedirs(SOCKS, exist_ok=True)
+    print("firepilot proxy listening on %s:%d" % (HOST, PORT))
+    ThreadingHTTPServer((HOST, PORT), H).serve_forever()
+</script>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+let cfg = JSON.parse(localStorage.getItem("firepilot") || '{"url":"","token":""}');
+let demo = true, vms = [], busy = {};
+
+function log(m){ const t = new Date().toTimeString().slice(0,8);
+  const el = $("#log"); el.textContent += "[" + t + "] " + m + "\n"; el.scrollTop = 1e9; }
+function toast(m){ const t = $("#toast"); t.textContent = m; t.classList.add("on");
+  clearTimeout(t._h); t._h = setTimeout(()=>t.classList.remove("on"), 2200); }
+function setPill(cls, txt){ const p = $("#pill"); p.className = "pill " + cls; p.textContent = txt; }
+function saveCfg(){ localStorage.setItem("firepilot", JSON.stringify(cfg)); }
+function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+async function api(path, opts = {}){
+  const h = Object.assign({"Content-Type":"application/json"}, opts.headers || {});
+  if (cfg.token) h["Authorization"] = "Bearer " + cfg.token;
+  const r = await fetch(cfg.url.replace(/\/+$/,"") + path, Object.assign({}, opts, {headers:h}));
+  const j = await r.json().catch(()=>({}));
+  if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+  return j;
+}
+
+function fakeInit(){
+  vms = [
+    {id:"d1", name:"web-test",  state:"Running", vcpu:2, mem:256, started: Date.now()-842000},
+    {id:"d2", name:"ci-runner", state:"Paused",  vcpu:4, mem:512, started: Date.now()-3610000},
+    {id:"d3", name:"scratch",   state:"Stopped", vcpu:1, mem:128, started:0}
+  ];
+}
+
+async function refresh(){
+  if (demo) { render(); return; }
+  try {
+    vms = await api("/api/vms");
+    setPill("live", "● live"); render();
+  } catch(e){
+    demo = true; fakeInit();
+    setPill("demo", "demo");
+    log("proxy unreachable (" + e.message + ") — switched to demo mode");
+    render();
+  }
+}
+
+function uptime(v){
+  if (!v.started || v.state !== "Running") return "—";
+  const s = Math.max(0, Math.floor((Date.now()-v.started)/1000));
+  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60);
+  return h ? h+"h "+m+"m" : (m ? m+"m "+(s%60)+"s" : s+"s");
+}
+
+function render(){
+  const list = $("#vmlist");
+  list.innerHTML = vms.map(v => {
+    const acts = [];
+    if (v.state === "Running")  acts.push(["pause","⏸ Pause",""],["stop","⏹ Stop","danger"]);
+    if (v.state === "Paused")   acts.push(["resume","▶ Resume",""],["stop","⏹ Stop","danger"]);
+    if (v.state === "Stopped" || v.state === "Error") acts.push(["start","▶ Start",""]);
+    if (v.state === "Starting") acts.push(["","Starting…",""]);
+    acts.push(["__del","🗑","danger"]);
+    return '<div class="card vm">' +
+      '<div class="top"><span class="name">' + esc(v.name) + '</span>' +
+      '<span class="badge ' + esc(v.state) + '">' + esc(v.state) + '</span></div>' +
+      '<div class="meta"><span>' + esc(v.vcpu) + ' vCPU</span><span>' + esc(v.mem) + ' MiB</span>' +
+      '<span>up ' + uptime(v) + '</span></div>' +
+      '<div class="acts">' + acts.map(a =>
+        '<button class="btn ' + a[2] + '" data-id="' + esc(v.id) + '" data-act="' + a[0] + '"' +
+        (a[0] === "" ? " disabled" : "") + '>' + a[1] + '</button>').join("") +
+      '</div></div>';
+  }).join("") || '<div class="card" style="color:var(--dim)">No VMs yet — tap “＋ New VM”.</div>';
+
+  $("#stTotal").textContent = vms.length;
+  $("#stRun").textContent = vms.filter(v=>v.state==="Running").length;
+  $("#stPause").textContent = vms.filter(v=>v.state==="Paused").length;
+  $("#stMem").textContent = vms.filter(v=>v.state==="Running"||v.state==="Paused")
+    .reduce((a,v)=>a+(+v.mem||0),0);
+}
+
+async function act(id, a){
+  if (busy[id]) return;
+  busy[id] = true;
+  const v = vms.find(x=>x.id===id);
+  try {
+    if (demo){
+      await new Promise(r=>setTimeout(r, 600));
+      if (v){
+        if (a==="pause") v.state="Paused";
+        else if (a==="resume"||a==="start") { v.state="Running"; if(!v.started) v.started=Date.now(); }
+        else if (a==="stop") { v.state="Stopped"; v.started=0; }
+        else if (a==="__del") vms = vms.filter(x=>x.id!==id);
+      }
+    } else {
+      if (a==="__del") await api("/api/vms/"+id, {method:"DELETE"});
+      else await api("/api/vms/"+id+"/action", {method:"POST", body: JSON.stringify({action:a})});
+      await refresh();
+    }
+    if (v && a!=="__del") log(v.name + ": " + a + " ok");
+    if (a==="__del") log("vm deleted");
+    render();
+  } catch(e){ log("action failed: " + e.message); toast("✗ " + e.message); }
+  busy[id] = false;
+}
+
+$("#vmlist").addEventListener("click", e => {
+  const b = e.target.closest("button[data-act]"); if (!b || b.disabled) return;
+  const a = b.dataset.act;
+  if (a === "stop" || a === "__del" && !confirm("Remove this VM?")) { if (a==="stop" && !confirm("Stop this VM?")) return; }
+  act(b.dataset.id, a);
+});
+
+$("#btnGear").onclick = () => { $("#url").value = cfg.url; $("#token").value = cfg.token; $("#settings").classList.toggle("hidden"); };
+$("#btnConnect").onclick = () => {
+  cfg.url = $("#url").value.trim(); cfg.token = $("#token").value.trim(); saveCfg();
+  if (!cfg.url){ demo = true; fakeInit(); setPill("demo","demo"); render(); return; }
+  demo = false; refresh().then(()=>toast(demo ? "proxy unreachable" : "connected ✓"));
+  $("#settings").classList.add("hidden");
+};
+$("#btnDemo").onclick = () => { demo = true; fakeInit(); setPill("demo","demo"); $("#settings").classList.add("hidden"); render(); };
+$("#btnRefresh").onclick = () => refresh();
+$("#btnClear").onclick = () => { $("#log").textContent = ""; };
+$("#btnCopy").onclick = async () => {
+  try { await navigator.clipboard.writeText($("#proxysrc").textContent.trim()); toast("proxy script copied ✓"); }
+  catch(e){ toast("copy failed — select the text manually"); }
+};
+$("#btnNew").onclick = () => $("#dlg").showModal();
+$("#btnCancel").onclick = () => $("#dlg").close();
+$("#frmNew").onsubmit = async e => {
+  e.preventDefault();
+  const body = { name: $("#nName").value.trim() || undefined,
+    vcpu: +$("#nVcpu").value || 1, mem: +$("#nMem").value || 256,
+    kernel: $("#nKernel").value.trim(), rootfs: $("#nRootfs").value.trim(),
+    args: $("#nArgs").value.trim() };
+  $("#dlg").close();
+  try {
+    if (demo){
+      vms.push({id:"d"+Date.now(), name: body.name || ("vm"+(vms.length+1)),
+        state:"Running", vcpu:body.vcpu, mem:body.mem, started:Date.now()});
+      log("demo: booted " + (body.name||"vm"));
+    } else {
+      await api("/api/vms", {method:"POST", body: JSON.stringify(body)});
+      log("booting " + (body.name||"vm") + "…");
+      setTimeout(refresh, 1500);
+    }
+    render();
+  } catch(err){ log("boot failed: " + err.message); toast("✗ " + err.message); }
+};
+
+document.getElementById("proxycode").textContent =
+  document.getElementById("proxysrc").textContent.trim();
+
+if (cfg.url){ $("#url").value = cfg.url; $("#token").value = cfg.token; demo = false; }
+else fakeInit();
+refresh();
+setInterval(()=>{ if (document.visibilityState === "visible") refresh(); }, 4000);
+</script>
+</body>
+</html>
