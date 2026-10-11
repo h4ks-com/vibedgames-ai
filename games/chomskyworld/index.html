@@ -1,0 +1,445 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Hangar Strut - Outdoor Park</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#9fd8ff;font-family:sans-serif;touch-action:none;user-select:none;-webkit-user-select:none}
+canvas{display:block}
+#status{position:fixed;top:10px;left:10px;color:#fff;background:rgba(0,0,0,.45);padding:6px 10px;border-radius:6px;font-size:13px;pointer-events:none}
+#bubble{position:fixed;left:50%;top:18%;transform:translateX(-50%);max-width:80%;background:rgba(255,255,255,.95);padding:12px 16px;border-radius:12px;font-size:16px;display:none;text-align:center;box-shadow:0 4px 12px rgba(0,0,0,.3)}
+#joy{position:fixed;left:calc(env(safe-area-inset-left,0px) + 24px);bottom:calc(env(safe-area-inset-bottom,0px) + 24px);width:120px;height:120px;border-radius:50%;background:rgba(255,255,255,.18);border:2px solid rgba(255,255,255,.5);display:none}
+#knob{position:absolute;width:50px;height:50px;border-radius:50%;background:rgba(255,255,255,.65);left:35px;top:35px}
+.btn{position:fixed;right:calc(env(safe-area-inset-right,0px) + 16px);min-width:84px;padding:12px 10px;border:none;border-radius:10px;background:rgba(0,0,0,.5);color:#fff;font-weight:bold;font-size:15px;display:none}
+#bj{bottom:calc(env(safe-area-inset-bottom,0px) + 20px)}
+#bd{bottom:calc(env(safe-area-inset-bottom,0px) + 80px)}
+#br{bottom:calc(env(safe-area-inset-bottom,0px) + 140px)}
+#bt{bottom:calc(env(safe-area-inset-bottom,0px) + 200px);background:rgba(200,60,40,.8)}
+</style>
+<script type="importmap">
+{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"}}
+</script>
+</head>
+<body>
+<div id="status">Loading...</div>
+<div id="bubble"></div>
+<div id="joy"><div id="knob"></div></div>
+<button class="btn" id="bj">JUMP</button>
+<button class="btn" id="bd">DANCE</button>
+<button class="btn" id="br">RUN</button>
+<button class="btn" id="bt">TALK</button>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import { clone as cloneSkel } from 'three/addons/utils/SkeletonUtils.js';
+
+const PROF_URL = 'https://s3-api.t3ks.com/workflows/character/2026-09-27/a-history-professor-in-a-tweed-jacket-194707.glb';
+const PLAYER_URL = 'https://s3-api.t3ks.com/workflows/character/2026-10-07/a-gloriously-flamboyant-over-the-top-proud-humanoid-in-a-da-161214.glb';
+
+const LINES = [
+  'Your sequence diagram is a context-free grammar in disguise. Repent.',
+  'Unrestricted grammars halt on nothing and recognize everything.',
+  'Regular expressions cannot count the sins of your lifelines, my child.',
+  'Every activation bar is a stack push. Every return, a pop. Mark it.',
+  'Chomsky wept when he saw the first UML diagram. Type 2, at best.'
+];
+const PROF_ACTIONS = ['Adjust Spectacles', 'Write On Blackboard', 'Unroll Scroll', 'Dust Off Artifact'];
+
+const statusEl = document.getElementById('status');
+const bubble = document.getElementById('bubble');
+const joy = document.getElementById('joy');
+const knob = document.getElementById('knob');
+const bj = document.getElementById('bj');
+const bd = document.getElementById('bd');
+const br = document.getElementById('br');
+const bt = document.getElementById('bt');
+
+// ---------- renderer / scene ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x9fd8ff);
+scene.fog = new THREE.Fog(0x9fd8ff, 40, 150);
+
+const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 400);
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x406030, 1.2));
+const sun = new THREE.DirectionalLight(0xffffff, 1.5);
+sun.position.set(30, 50, 20);
+scene.add(sun);
+
+// Ground plane at exactly y = 0
+const ground = new THREE.Mesh(
+  new THREE.CircleGeometry(120, 64),
+  new THREE.MeshStandardMaterial({ color: 0x4f9a3a })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = 0;
+scene.add(ground);
+
+const sunDisc = new THREE.Mesh(new THREE.SphereGeometry(6, 16, 16), new THREE.MeshBasicMaterial({ color: 0xfff3a0 }));
+sunDisc.position.set(90, 80, -90);
+scene.add(sunDisc);
+
+// Trees and rocks, keeping the spawn clearing empty
+let seed = 7;
+const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+for (let i = 0; i < 60; i++) {
+  const a = rnd() * Math.PI * 2, r = 14 + rnd() * 60;
+  const x = Math.cos(a) * r, z = Math.sin(a) * r;
+  if (rnd() < 0.6) {
+    const t = new THREE.Group();
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.45, 2.5, 8), new THREE.MeshStandardMaterial({ color: 0x6b4a2b }));
+    trunk.position.y = 1.25;
+    const top = new THREE.Mesh(new THREE.ConeGeometry(2.2, 4.5, 8), new THREE.MeshStandardMaterial({ color: 0x2d7a33 }));
+    top.position.y = 4.2;
+    t.add(trunk, top);
+    t.position.set(x, 0, z);
+    scene.add(t);
+  } else {
+    const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.8 + rnd() * 0.8), new THREE.MeshStandardMaterial({ color: 0x8a8a8a, flatShading: true }));
+    rock.position.set(x, 0.4, z);
+    rock.rotation.set(rnd(), rnd(), rnd());
+    scene.add(rock);
+  }
+}
+// Six stone pillars near spawn
+for (let i = 0; i < 6; i++) {
+  const a = (i / 6) * Math.PI * 2;
+  const p = new THREE.Mesh(new THREE.BoxGeometry(0.8, 3, 0.8), new THREE.MeshStandardMaterial({ color: 0xbfb8a8 }));
+  p.position.set(Math.cos(a) * 7, 1.5, Math.sin(a) * 7);
+  scene.add(p);
+}
+
+// ---------- animation rig helper ----------
+class Rig {
+  constructor(root, clips) {
+    this.root = root;
+    this.mixer = new THREE.AnimationMixer(root);
+    this.clips = clips;
+    this.cur = null;
+    this.onFinished = null;
+    this.mixer.addEventListener('finished', (e) => {
+      if (e.action === this.cur && this.onFinished) this.onFinished();
+    });
+  }
+  find(name) {
+    const key = name.toLowerCase();
+    const c = this.clips.find((c) => c.name.toLowerCase().includes(key));
+    return c ? this.mixer.clipAction(c) : null;
+  }
+  play(name, loop = true) {
+    const a = this.find(name);
+    if (!a || a === this.cur) return;
+    a.reset();
+    a.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
+    a.clampWhenFinished = !loop;
+    if (this.cur) this.cur.fadeOut(0.2);
+    a.fadeIn(0.2).play();
+    this.cur = a;
+  }
+  update(dt) { this.mixer.update(dt); }
+}
+
+// Put the model's feet on y = 0, measured while the Idle pose is applied
+// (the bind pose alone gives the wrong bounds, which sank the models underground).
+function seatOnGround(model, rig) {
+  model.position.y = 0;
+  rig.play('Idle', true);
+  rig.mixer.update(0);
+  model.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(model, true);
+  model.position.y = -box.min.y;
+  model.updateMatrixWorld(true);
+}
+
+const loader = new GLTFLoader();
+loader.setMeshoptDecoder(MeshoptDecoder);
+const loadGLB = (url) => new Promise((res, rej) => loader.load(url, res, undefined, rej));
+
+// ---------- player ----------
+const player = new THREE.Group();
+scene.add(player);
+let playerRig = null;
+let vy = 0, onGround = true, jumpAnimTimer = 0;
+let dancing = false, running = false;
+
+// ---------- professors ----------
+const profs = [];
+const PROF_SPOTS = [[9, 6], [-11, 5], [-6, -12], [12, -10], [0, 18]];
+
+// ---------- input ----------
+const keys = {};
+addEventListener('keydown', (e) => {
+  const k = e.key.toLowerCase();
+  keys[k] = true;
+  if ([' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) e.preventDefault();
+  if (k === ' ') jump();
+  if (k === 'e') dance();
+  if (k === 'f') talk();
+  if (k === 'shift') running = true;
+});
+addEventListener('keyup', (e) => {
+  const k = e.key.toLowerCase();
+  keys[k] = false;
+  if (k === 'shift') running = false;
+});
+
+let yaw = 0, pitch = 0.35, dist = 6;
+let joyId = null, joyVec = { x: 0, y: 0 }, joyCenter = { x: 0, y: 0 };
+let lookId = null, lookLast = { x: 0, y: 0 };
+let pinchD = null;
+
+const isCoarse = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+if (isCoarse) {
+  joy.style.display = 'block';
+  bj.style.display = bd.style.display = br.style.display = 'block';
+}
+
+function setKnob(dx, dy) {
+  const r = 60;
+  const len = Math.hypot(dx, dy);
+  const s = len > r ? r / len : 1;
+  const kx = dx * s, ky = dy * s;
+  knob.style.left = 35 + kx + 'px';
+  knob.style.top = 35 + ky + 'px';
+  joyVec = { x: kx / r, y: ky / r };
+}
+function resetJoy() {
+  joyId = null;
+  joyVec = { x: 0, y: 0 };
+  knob.style.left = '35px';
+  knob.style.top = '35px';
+}
+
+addEventListener('touchstart', (e) => {
+  for (const t of e.changedTouches) {
+    const rect = joy.getBoundingClientRect();
+    const inJoy = isCoarse && t.clientX >= rect.left - 20 && t.clientX <= rect.right + 20 && t.clientY >= rect.top - 20 && t.clientY <= rect.bottom + 20;
+    if (inJoy && joyId === null) {
+      joyId = t.identifier;
+      joyCenter = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      setKnob(t.clientX - joyCenter.x, t.clientY - joyCenter.y);
+    } else if (!inJoy && lookId === null && !e.target.classList?.contains('btn')) {
+      lookId = t.identifier;
+      lookLast = { x: t.clientX, y: t.clientY };
+    }
+  }
+}, { passive: true });
+
+addEventListener('touchmove', (e) => {
+  for (const t of e.changedTouches) {
+    if (t.identifier === joyId) setKnob(t.clientX - joyCenter.x, t.clientY - joyCenter.y);
+    else if (t.identifier === lookId) {
+      yaw -= (t.clientX - lookLast.x) * 0.008;
+      pitch = Math.min(1.3, Math.max(0.05, pitch + (t.clientY - lookLast.y) * 0.005));
+      lookLast = { x: t.clientX, y: t.clientY };
+    }
+  }
+  if (e.touches.length >= 2) {
+    const a = e.touches[0], b = e.touches[1];
+    const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+    if (pinchD) dist = Math.min(14, Math.max(2, dist * (pinchD / d)));
+    pinchD = d;
+  }
+}, { passive: true });
+
+addEventListener('touchend', (e) => {
+  for (const t of e.changedTouches) {
+    if (t.identifier === joyId) resetJoy();
+    if (t.identifier === lookId) lookId = null;
+  }
+  if (e.touches.length < 2) pinchD = null;
+});
+
+addEventListener('wheel', (e) => { dist = Math.min(14, Math.max(2, dist + e.deltaY * 0.01)); }, { passive: true });
+
+let mouseDrag = false;
+renderer.domElement.addEventListener('mousedown', () => mouseDrag = true);
+addEventListener('mouseup', () => mouseDrag = false);
+addEventListener('mousemove', (e) => {
+  if (!mouseDrag) return;
+  yaw -= e.movementX * 0.005;
+  pitch = Math.min(1.3, Math.max(0.05, pitch + e.movementY * 0.004));
+});
+
+function jump() {
+  if (!onGround) return;
+  vy = 6.5;
+  onGround = false;
+  dancing = false;
+  jumpAnimTimer = 0;
+}
+function dance() {
+  if (!onGround) return;
+  dancing = !dancing;
+}
+function nearestProf() {
+  let best = null, bd2 = 3.5 * 3.5;
+  for (const p of profs) {
+    const dx = p.group.position.x - player.position.x;
+    const dz = p.group.position.z - player.position.z;
+    const d2 = dx * dx + dz * dz;
+    if (d2 < bd2) { bd2 = d2; best = p; }
+  }
+  return best;
+}
+let bubbleTimer = 0;
+function talk() {
+  const p = nearestProf();
+  if (!p) return;
+  const act = PROF_ACTIONS[Math.floor(Math.random() * PROF_ACTIONS.length)];
+  p.rig.play(act, false);
+  p.busyUntil = performance.now() + 4000;
+  bubble.textContent = 'Professor: "' + LINES[Math.floor(Math.random() * LINES.length)] + '"';
+  bubble.style.display = 'block';
+  bubbleTimer = performance.now() + 5000;
+}
+bj.addEventListener('click', jump);
+bd.addEventListener('click', dance);
+br.addEventListener('click', () => { running = !running; br.textContent = running ? 'RUN: ON' : 'RUN'; });
+bt.addEventListener('click', talk);
+['bj','bd','br','bt'].forEach((id) => document.getElementById(id).addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true }));
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ---------- update loop ----------
+const clock = new THREE.Clock();
+const tmpFwd = new THREE.Vector3(), tmpRight = new THREE.Vector3();
+const moveDir = new THREE.Vector3();
+
+function update(dt) {
+  let fwdIn = 0, rightIn = 0;
+  if (keys['w'] || keys['arrowup']) fwdIn += 1;
+  if (keys['s'] || keys['arrowdown']) fwdIn -= 1;
+  if (keys['d'] || keys['arrowright']) rightIn += 1;
+  if (keys['a'] || keys['arrowleft']) rightIn -= 1;
+  rightIn += joyVec.x;
+  fwdIn += -joyVec.y;
+  const mag = Math.hypot(rightIn, fwdIn);
+  if (mag > 1) { rightIn /= mag; fwdIn /= mag; }
+
+  tmpFwd.set(-Math.sin(yaw), 0, -Math.cos(yaw));
+  tmpRight.set(Math.cos(yaw), 0, -Math.sin(yaw));
+  moveDir.set(0, 0, 0).addScaledVector(tmpRight, rightIn).addScaledVector(tmpFwd, fwdIn);
+  const moving = moveDir.lengthSq() > 0.0001;
+
+  if (moving) {
+    dancing = false;
+    const speed = running ? 5 : 2.2;
+    moveDir.normalize();
+    player.position.addScaledVector(moveDir, speed * dt);
+    const targetRot = Math.atan2(moveDir.x, moveDir.z);
+    let dr = targetRot - player.rotation.y;
+    dr = Math.atan2(Math.sin(dr), Math.cos(dr));
+    player.rotation.y += dr * Math.min(1, dt * 12);
+  }
+
+  const r = Math.hypot(player.position.x, player.position.z);
+  if (r > 110) { player.position.x *= 110 / r; player.position.z *= 110 / r; }
+
+  // vertical motion: ground at y = 0
+  if (!onGround) {
+    vy -= 16 * dt;
+    player.position.y += vy * dt;
+    jumpAnimTimer += dt;
+    if (player.position.y <= 0) {
+      player.position.y = 0;
+      vy = 0;
+      onGround = true;
+      playerRig.play('Jump Land', false);
+    }
+  }
+
+  if (!onGround) {
+    if (jumpAnimTimer < 0.15) playerRig.play('Jump Start', false);
+    else playerRig.play('Jump Air', true);
+  } else if (playerRig.cur && playerRig.cur.getClip().name.toLowerCase().includes('land') && playerRig.cur.isRunning()) {
+    // let landing finish
+  } else if (dancing && !moving) {
+    playerRig.play('Dance', true);
+  } else if (moving) {
+    playerRig.play(running ? 'Run' : 'Walk', true);
+  } else {
+    playerRig.play('Idle', true);
+  }
+  playerRig.update(dt);
+
+  const now = performance.now();
+  for (const p of profs) {
+    if (now > p.busyUntil && now > p.nextAct) {
+      const act = PROF_ACTIONS[Math.floor(Math.random() * PROF_ACTIONS.length)];
+      p.rig.play(act, false);
+      p.busyUntil = now + 3500;
+      p.nextAct = now + 6000 + Math.random() * 6000;
+    }
+    p.rig.onFinished = () => p.rig.play('Idle', true);
+    if (now > p.busyUntil) p.rig.play('Idle', true);
+    p.rig.update(dt);
+  }
+
+  const near = nearestProf();
+  bt.style.display = near && isCoarse ? 'block' : 'none';
+  if (bubble.style.display === 'block' && now > bubbleTimer) bubble.style.display = 'none';
+
+  // camera orbits the player and stays above the ground plane
+  const target = new THREE.Vector3(player.position.x, player.position.y + 1.3, player.position.z);
+  const off = new THREE.Vector3(
+    Math.sin(yaw) * Math.cos(pitch),
+    Math.sin(pitch),
+    Math.cos(yaw) * Math.cos(pitch)
+  ).multiplyScalar(dist);
+  camera.position.copy(target).add(off);
+  if (camera.position.y < 0.4) camera.position.y = 0.4;
+  camera.lookAt(target);
+
+  statusEl.textContent = (onGround ? '' : 'Airborne - ') + (moving ? (running ? 'Running' : 'Walking') : dancing ? 'Dancing' : 'Standing');
+}
+
+function frame() {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  update(dt);
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+// ---------- load assets ----------
+(async () => {
+  try {
+    statusEl.textContent = 'Loading characters...';
+    const [playerGltf, profGltf] = await Promise.all([loadGLB(PLAYER_URL), loadGLB(PROF_URL)]);
+
+    const pModel = playerGltf.scene;
+    player.add(pModel);
+    playerRig = new Rig(pModel, playerGltf.animations);
+    seatOnGround(pModel, playerRig);
+
+    PROF_SPOTS.forEach(([x, z], i) => {
+      const model = cloneSkel(profGltf.scene);
+      const group = new THREE.Group();
+      group.add(model);
+      group.position.set(x, 0, z);
+      group.rotation.y = Math.atan2(-x, -z);
+      scene.add(group);
+      const rig = new Rig(model, profGltf.animations);
+      seatOnGround(model, rig);
+      profs.push({ group, rig, busyUntil: 0, nextAct: performance.now() + 3000 + i * 1000 });
+    });
+
+    window.__dbg = { player, profs: profs.map(p => p.group), ground };
+    statusEl.textContent = 'Ready';
+    requestAnimationFrame(frame);
+  } catch (err) {
+    statusEl.textContent = 'Load failed: ' + err.message;
+    console.error(err);
+  }
+})();
+</script>
+</body></html>
