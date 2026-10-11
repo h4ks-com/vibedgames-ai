@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>P2P Chess (WebRTC)</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#1e1e24;color:#eee;margin:0;padding:12px;display:flex;flex-direction:column;align-items:center;gap:10px}
+h1{font-size:1.3rem;margin:4px}
+#board{display:grid;grid-template-columns:repeat(8,1fr);width:min(92vw,480px);aspect-ratio:1;border:4px solid #555}
+.sq{position:relative;display:flex;align-items:center;justify-content:center;font-size:min(9vw,44px);line-height:1;cursor:pointer;user-select:none}
+.light{background:#f0d9b5}.dark{background:#b58863}
+.sel{background:#f6f669 !important}
+.last{background:#cdd26a !important}
+.hint::after{content:"";position:absolute;width:28%;height:28%;border-radius:50%;background:rgba(0,0,0,.25);pointer-events:none}
+.piece{color:#fff;text-shadow:0 0 2px #000,0 0 2px #000}
+.piece.b{color:#111;text-shadow:0 0 2px #fff}
+#status{min-height:1.4em;text-align:center}
+#info{font-size:.95rem;text-align:center}
+.row{display:flex;gap:6px;flex-wrap:wrap;justify-content:center}
+input,button{font-size:1rem;padding:6px 10px;border-radius:6px;border:1px solid #666;background:#2c2c34;color:#eee}
+button{cursor:pointer}
+button:disabled{opacity:.4;cursor:default}
+#log{font-size:.8rem;color:#aaa;max-width:480px;text-align:center;min-height:1em}
+</style>
+</head>
+<body>
+<h1>Chess over WebRTC</h1>
+<div class="row" id="lobby">
+  <button id="host">Host a new game</button>
+  <input id="code" placeholder="room code" size="10" autocomplete="off">
+  <button id="join">Join</button>
+</div>
+<div id="info"></div>
+<div id="board"></div>
+<div id="status"></div>
+<div class="row">
+  <button id="resign" disabled>Resign</button>
+  <button id="rematch" disabled>Rematch</button>
+</div>
+<div id="log"></div>
+<script type="module">
+import { Chess } from 'https://esm.sh/chess.js@latest';
+import Peer from 'https://esm.sh/peerjs@latest';
+
+const $ = id => document.getElementById(id);
+const PREFIX = 'h4ks-chess-';
+const PIECES = {
+  w: { k: '\u2654', q: '\u2655', r: '\u2656', b: '\u2657', n: '\u2658', p: '\u2659' },
+  b: { k: '\u265A', q: '\u265B', r: '\u265C', b: '\u265D', n: '\u265E', p: '\u265F' }
+};
+
+const game = new Chess();
+let peer = null;
+let conn = null;
+let myColor = null;   // 'w' or 'b'
+let selected = null;
+let lastMove = null;
+let resigned = false;
+
+function log(msg) { $('log').textContent = msg; }
+
+function setConnected(ok) {
+  $('resign').disabled = !ok;
+  $('rematch').disabled = !ok;
+  $('host').disabled = ok;
+  $('join').disabled = ok;
+  $('code').disabled = ok;
+  if (ok) $('lobby').style.display = 'none';
+}
+
+function squareName(row, col) {
+  const flip = myColor === 'b';
+  return flip ? 'hgfedcba'[col] + (row + 1) : 'abcdefgh'[col] + (8 - row);
+}
+
+function render() {
+  const boardEl = $('board');
+  boardEl.innerHTML = '';
+  const legal = selected ? game.moves({ square: selected, verbose: true }).map(m => m.to) : [];
+  for (let row = 0; row < 8; row++) {
+    for (let col = 0; col < 8; col++) {
+      const sq = squareName(row, col);
+      const d = document.createElement('div');
+      d.className = 'sq ' + ((row + col) % 2 === 0 ? 'light' : 'dark');
+      if (sq === selected) d.classList.add('sel');
+      if (lastMove && (sq === lastMove.from || sq === lastMove.to)) d.classList.add('last');
+      const p = game.get(sq);
+      if (p) {
+        const s = document.createElement('span');
+        s.textContent = PIECES[p.color][p.type];
+        s.className = 'piece ' + p.color;
+        d.appendChild(s);
+      }
+      if (legal.includes(sq)) d.classList.add('hint');
+      d.onclick = () => onSquare(sq);
+      boardEl.appendChild(d);
+    }
+  }
+  updateStatus();
+}
+
+function updateStatus() {
+  const turnName = game.turn() === 'w' ? 'White' : 'Black';
+  let text;
+  if (resigned) {
+    text = 'Game over: ' + (game.turn() === 'w' ? 'Black' : 'White') + ' wins (resignation)';
+  } else if (game.isCheckmate()) {
+    text = 'Checkmate! ' + (game.turn() === 'w' ? 'Black' : 'White') + ' wins';
+  } else if (game.isDraw()) {
+    text = 'Draw';
+  } else if (!myColor) {
+    text = 'Host or join a room to play';
+  } else if (!conn) {
+    text = 'Waiting for opponent...';
+  } else {
+    text = turnName + ' to move' + (game.isCheck() ? ' (check)' : '') +
+      (game.turn() === myColor ? ' - your move' : ' - opponent\'s move');
+  }
+  $('status').textContent = text;
+}
+
+function gameOver() {
+  return resigned || game.isGameOver();
+}
+
+function onSquare(sq) {
+  if (!conn || !myColor || gameOver()) return;
+  if (game.turn() !== myColor) return;
+
+  if (selected) {
+    const legal = game.moves({ square: selected, verbose: true }).map(m => m.to);
+    if (legal.includes(sq)) {
+      const piece = game.get(selected);
+      const promotion = (piece && piece.type === 'p' && (sq[1] === '1' || sq[1] === '8')) ? 'q' : undefined;
+      const from = selected;
+      selected = null;
+      const m = game.move({ from, to: sq, promotion });
+      if (m) {
+        lastMove = m;
+        send({ type: 'move', from, to: sq, promotion, fen: game.fen() });
+      }
+      render();
+      return;
+    }
+  }
+
+  const p = game.get(sq);
+  if (p && p.color === myColor) {
+    selected = sq;
+  } else {
+    selected = null;
+  }
+  render();
+}
+
+function send(obj) {
+  if (conn && conn.open) conn.send(obj);
+}
+
+function handleData(d) {
+  if (!d || typeof d !== 'object') return;
+  if (d.type === 'move') {
+    if (gameOver()) return;
+    let m = null;
+    try { m = game.move({ from: d.from, to: d.to, promotion: d.promotion }); } catch (e) { m = null; }
+    if (m) lastMove = m;
+    if (d.fen && game.fen() !== d.fen) {
+      try { game.load(d.fen); lastMove = null; } catch (e) {}
+    }
+    selected = null;
+    render();
+  } else if (d.type === 'resign') {
+    resigned = true;
+    render();
+  } else if (d.type === 'reset') {
+    resetBoard();
+  }
+}
+
+function resetBoard() {
+  game.reset();
+  lastMove = null;
+  selected = null;
+  resigned = false;
+  render();
+}
+
+function setupConn(c) {
+  conn = c;
+  c.on('open', () => {
+    setConnected(true);
+    log('Connected! You are playing ' + (myColor === 'w' ? 'White' : 'Black') + '.');
+    render();
+  });
+  c.on('data', handleData);
+  c.on('close', () => {
+    log('Opponent disconnected.');
+    conn = null;
+    setConnected(false);
+    $('lobby').style.display = '';
+    render();
+  });
+  c.on('error', e => log('Connection error: ' + e));
+}
+
+$('host').onclick = () => {
+  const code = Math.random().toString(36).slice(2, 6).toLowerCase();
+  myColor = 'w';
+  peer = new Peer(PREFIX + code);
+  peer.on('open', () => {
+    $('info').textContent = 'Room code: ' + code.toUpperCase() + ' (share it with your opponent)';
+    log('Waiting for someone to join...');
+  });
+  peer.on('connection', c => {
+    if (conn) { c.close(); return; }
+    setupConn(c);
+  });
+  peer.on('error', e => log('Error: ' + e.type));
+  render();
+};
+
+$('join').onclick = () => {
+  const code = $('code').value.trim().toLowerCase();
+  if (!code) { log('Enter a room code first.'); return; }
+  myColor = 'b';
+  peer = new Peer();
+  peer.on('open', () => {
+    $('info').textContent = 'Joining room ' + code.toUpperCase() + '...';
+    setupConn(peer.connect(PREFIX + code, { reliable: true }));
+  });
+  peer.on('error', e => {
+    log(e.type === 'peer-unavailable' ? 'No room with that code.' : 'Error: ' + e.type);
+  });
+  render();
+};
+
+$('resign').onclick = () => {
+  if (!conn || gameOver()) return;
+  send({ type: 'resign' });
+  resigned = true;
+  render();
+};
+
+$('rematch').onclick = () => {
+  if (!conn) return;
+  send({ type: 'reset' });
+  resetBoard();
+};
+
+render();
+</script>
+</body>
+</html>
