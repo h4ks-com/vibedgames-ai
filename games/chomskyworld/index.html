@@ -1,7 +1,7 @@
 <!doctype html>
 <html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>Hangar Strut - Outdoor Park</title>
+<title>Chomsky World - Outdoor Park</title>
 <style>
 html,body{margin:0;height:100%;overflow:hidden;background:#9fd8ff;font-family:sans-serif;touch-action:none;user-select:none;-webkit-user-select:none}
 canvas{display:block}
@@ -35,6 +35,8 @@ import { clone as cloneSkel } from 'three/addons/utils/SkeletonUtils.js';
 
 const PROF_URL = 'https://s3-api.t3ks.com/workflows/character/2026-09-27/a-history-professor-in-a-tweed-jacket-194707.glb';
 const PLAYER_URL = 'https://s3-api.t3ks.com/workflows/character/2026-10-07/a-gloriously-flamboyant-over-the-top-proud-humanoid-in-a-da-161214.glb';
+const TREE_URL = './tree.glb';   // Sketchfab "Trees" by bumstrum (CC-BY), imported to this project
+const ROCK_URL = './rock.glb';   // Sketchfab "Free Pack - Rocks Stylized" by polyone (CC-BY)
 
 const LINES = [
   'Your sequence diagram is a context-free grammar in disguise. Repent.',
@@ -55,14 +57,14 @@ const br = document.getElementById('br');
 const bt = document.getElementById('bt');
 
 // ---------- renderer / scene ----------
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));   // capped for performance
 renderer.setSize(innerWidth, innerHeight);
 document.body.prepend(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x9fd8ff);
-scene.fog = new THREE.Fog(0x9fd8ff, 40, 150);
+scene.fog = new THREE.Fog(0x9fd8ff, 45, 160);
 
 const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 400);
 
@@ -71,47 +73,219 @@ const sun = new THREE.DirectionalLight(0xffffff, 1.5);
 sun.position.set(30, 50, 20);
 scene.add(sun);
 
-// Ground plane at exactly y = 0
+// seeded random so the layout is the same every visit
+let seed = 7;
+const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
+
+// procedural grass texture (one canvas, tiled)
+function groundTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const g = c.getContext('2d');
+  g.fillStyle = '#4f9a3a';
+  g.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 2500; i++) {
+    const dark = rnd() < 0.5;
+    g.fillStyle = dark ? 'rgba(30,90,30,0.35)' : 'rgba(110,170,70,0.3)';
+    g.fillRect(rnd() * 256, rnd() * 256, 2 + rnd() * 2, 2 + rnd() * 2);
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(30, 30);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
 const ground = new THREE.Mesh(
   new THREE.CircleGeometry(120, 64),
-  new THREE.MeshStandardMaterial({ color: 0x4f9a3a })
+  new THREE.MeshStandardMaterial({ color: 0xffffff, map: groundTexture() })
 );
 ground.rotation.x = -Math.PI / 2;
 ground.position.y = 0;
 scene.add(ground);
 
+// small pond (walkable, purely visual)
+const pond = new THREE.Mesh(
+  new THREE.CircleGeometry(5, 32),
+  new THREE.MeshStandardMaterial({ color: 0x3a8fd0, roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.85 })
+);
+pond.rotation.x = -Math.PI / 2;
+pond.position.set(-26, 0.03, 20);
+scene.add(pond);
+
 const sunDisc = new THREE.Mesh(new THREE.SphereGeometry(6, 16, 16), new THREE.MeshBasicMaterial({ color: 0xfff3a0 }));
 sunDisc.position.set(90, 80, -90);
 scene.add(sunDisc);
 
-// Trees and rocks, keeping the spawn clearing empty
-let seed = 7;
-const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-for (let i = 0; i < 60; i++) {
-  const a = rnd() * Math.PI * 2, r = 14 + rnd() * 60;
-  const x = Math.cos(a) * r, z = Math.sin(a) * r;
-  if (rnd() < 0.6) {
-    const t = new THREE.Group();
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.45, 2.5, 8), new THREE.MeshStandardMaterial({ color: 0x6b4a2b }));
-    trunk.position.y = 1.25;
-    const top = new THREE.Mesh(new THREE.ConeGeometry(2.2, 4.5, 8), new THREE.MeshStandardMaterial({ color: 0x2d7a33 }));
-    top.position.y = 4.2;
-    t.add(trunk, top);
-    t.position.set(x, 0, z);
-    scene.add(t);
-  } else {
-    const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(0.8 + rnd() * 0.8), new THREE.MeshStandardMaterial({ color: 0x8a8a8a, flatShading: true }));
-    rock.position.set(x, 0.4, z);
-    rock.rotation.set(rnd(), rnd(), rnd());
-    scene.add(rock);
-  }
-}
-// Six stone pillars near spawn
+// ---------- world layout (collision list shared by everything) ----------
+const PLAYER_R = 0.45;
+const SPAWN_CLEAR = 9;
+const PROF_SPOTS = [[9, 6], [-11, 5], [-6, -12], [12, -10], [0, 18]];
+const obstacles = [];   // {x, z, r}
+
+// six stone pillars near spawn (also solid)
 for (let i = 0; i < 6; i++) {
   const a = (i / 6) * Math.PI * 2;
+  const x = Math.cos(a) * 7, z = Math.sin(a) * 7;
   const p = new THREE.Mesh(new THREE.BoxGeometry(0.8, 3, 0.8), new THREE.MeshStandardMaterial({ color: 0xbfb8a8 }));
-  p.position.set(Math.cos(a) * 7, 1.5, Math.sin(a) * 7);
+  p.position.set(x, 1.5, z);
   scene.add(p);
+  obstacles.push({ x, z, r: 0.55 });
+}
+PROF_SPOTS.forEach(([x, z]) => obstacles.push({ x, z, r: 0.7 }));
+
+function placeable(x, z, r) {
+  const d = Math.hypot(x, z);
+  if (d < SPAWN_CLEAR || d > 105 || Math.hypot(x, z) < 0) return false;
+  for (const p of PROF_SPOTS) if (Math.hypot(x - p[0], z - p[1]) < 4) return false;
+  if (Math.hypot(x - (-26), z - 20) < 6.5) return false;   // keep the pond clear
+  for (const o of obstacles) if (Math.hypot(x - o.x, z - o.z) < o.r + r + 0.6) return false;
+  return true;
+}
+
+const treeSpots = [], rockSpots = [];
+for (let i = 0; i < 150; i++) {
+  const a = rnd() * Math.PI * 2, r = 10 + rnd() * 95;
+  const x = Math.cos(a) * r, z = Math.sin(a) * r;
+  const isTree = rnd() < 0.68;
+  const sc = 0.8 + rnd() * 0.5;
+  const rr = isTree ? 0.45 * sc : 0.8 * sc;
+  if (!placeable(x, z, rr)) continue;
+  obstacles.push({ x, z, r: rr });
+  (isTree ? treeSpots : rockSpots).push({ x, z, sc, rot: rnd() * Math.PI * 2 });
+}
+
+// ---------- instancing helpers (GLB parts -> InstancedMesh, one draw call per part) ----------
+function placementMatrix(s) {
+  return new THREE.Matrix4().compose(
+    new THREE.Vector3(s.x, 0, s.z),
+    new THREE.Quaternion().setFromAxisAngle(Y_AXIS, s.rot),
+    new THREE.Vector3(s.sc, s.sc, s.sc)
+  );
+}
+
+// Normalise a loaded GLB so its base sits at y=0 and its height is targetH.
+// Returns one {geo, mat, base} per static mesh part.
+function bakeParts(gltfScene, targetH) {
+  const root = gltfScene;
+  root.position.set(0, 0, 0);
+  root.rotation.set(0, 0, 0);
+  root.scale.set(1, 1, 1);
+  root.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(root);
+  const size = box.getSize(new THREE.Vector3());
+  const c = box.getCenter(new THREE.Vector3());
+  const s = targetH / Math.max(size.y, 1e-3);
+  const N = new THREE.Matrix4().makeScale(s, s, s).multiply(
+    new THREE.Matrix4().makeTranslation(-c.x, -box.min.y, -c.z)
+  );
+  const parts = [];
+  root.traverse((o) => {
+    if (o.isMesh && !o.isSkinnedMesh) {
+      parts.push({ geo: o.geometry, mat: o.material, base: new THREE.Matrix4().multiplyMatrices(N, o.matrixWorld) });
+    }
+  });
+  return parts;
+}
+
+function addInstanced(parts, spots) {
+  const mats = spots.map(placementMatrix);
+  for (const p of parts) {
+    const im = new THREE.InstancedMesh(p.geo, p.mat, mats.length);
+    const tmp = new THREE.Matrix4();
+    mats.forEach((M, i) => im.setMatrixAt(i, tmp.multiplyMatrices(M, p.base)));
+    im.instanceMatrix.needsUpdate = true;
+    im.frustumCulled = false;
+    scene.add(im);
+  }
+}
+
+// procedural fallback if a GLB fails to load
+function addProceduralTrees(spots) {
+  const trunkGeo = new THREE.CylinderGeometry(0.3, 0.45, 2.5, 8);
+  const topGeo = new THREE.ConeGeometry(2.2, 4.5, 8);
+  const trunkMat = new THREE.MeshStandardMaterial({ color: 0x6b4a2b });
+  const topMat = new THREE.MeshStandardMaterial({ color: 0x2d7a33, flatShading: true });
+  const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, spots.length);
+  const tops = new THREE.InstancedMesh(topGeo, topMat, spots.length);
+  const m = new THREE.Matrix4();
+  spots.forEach((s, i) => {
+    const pos = new THREE.Vector3(s.x, 0, s.z);
+    const q = new THREE.Quaternion().setFromAxisAngle(Y_AXIS, s.rot);
+    const sc = new THREE.Vector3(s.sc, s.sc, s.sc);
+    m.compose(new THREE.Vector3(s.x, 1.25 * s.sc, s.z), q, sc); trunks.setMatrixAt(i, m);
+    m.compose(new THREE.Vector3(s.x, 4.2 * s.sc, s.z), q, sc); tops.setMatrixAt(i, m);
+  });
+  scene.add(trunks, tops);
+}
+function addProceduralRocks(spots) {
+  const geo = new THREE.DodecahedronGeometry(0.9);
+  const mat = new THREE.MeshStandardMaterial({ color: 0x8a8a8a, flatShading: true });
+  const im = new THREE.InstancedMesh(geo, mat, spots.length);
+  const m = new THREE.Matrix4();
+  spots.forEach((s, i) => {
+    m.compose(new THREE.Vector3(s.x, 0.4 * s.sc, s.z), new THREE.Quaternion().setFromAxisAngle(Y_AXIS, s.rot), new THREE.Vector3(s.sc, s.sc, s.sc));
+    im.setMatrixAt(i, m);
+  });
+  scene.add(im);
+}
+
+// ---------- grass, flowers, clouds (cheap instanced decoration) ----------
+{
+  const grassGeo = new THREE.ConeGeometry(0.12, 0.5, 4);
+  grassGeo.translate(0, 0.25, 0);
+  const grass = new THREE.InstancedMesh(grassGeo, new THREE.MeshStandardMaterial({ color: 0x3d8c2b, flatShading: true }), 2500);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(1, 1, 1);
+  let n = 0;
+  while (n < 2500) {
+    const a = rnd() * Math.PI * 2, r = 2 + Math.sqrt(rnd()) * 100;
+    const x = Math.cos(a) * r, z = Math.sin(a) * r;
+    if (Math.hypot(x, z) < 2) continue;
+    q.setFromAxisAngle(Y_AXIS, rnd() * 6.28);
+    s.set(0.8 + rnd() * 0.6, 0.7 + rnd() * 0.8, 0.8 + rnd() * 0.6);
+    m.compose(new THREE.Vector3(x, 0, z), q, s);
+    grass.setMatrixAt(n++, m);
+  }
+  grass.frustumCulled = false;
+  scene.add(grass);
+
+  const flowerGeo = new THREE.SphereGeometry(0.11, 6, 4);
+  flowerGeo.translate(0, 0.12, 0);
+  const flowers = new THREE.InstancedMesh(flowerGeo, new THREE.MeshStandardMaterial({ color: 0xffffff, flatShading: true }), 400);
+  const palette = [0xff6b8a, 0xffe066, 0xffffff, 0xb388ff, 0x74c0fc];
+  const col = new THREE.Color();
+  n = 0;
+  while (n < 400) {
+    const a = rnd() * Math.PI * 2, r = 3 + Math.sqrt(rnd()) * 95;
+    const x = Math.cos(a) * r, z = Math.sin(a) * r;
+    if (placeable(x, z, 0.2) === false) continue;
+    m.makeTranslation(x, 0, z);
+    flowers.setMatrixAt(n, m);
+    flowers.setColorAt(n, col.set(palette[Math.floor(rnd() * palette.length)]));
+    n++;
+  }
+  flowers.frustumCulled = false;
+  scene.add(flowers);
+}
+
+const clouds = [];
+{
+  const cloudGeo = new THREE.IcosahedronGeometry(1, 0);
+  const cloudMat = new THREE.MeshStandardMaterial({ color: 0xffffff, flatShading: true, roughness: 1 });
+  for (let i = 0; i < 9; i++) {
+    const g = new THREE.Group();
+    const puffs = 3 + Math.floor(rnd() * 3);
+    for (let j = 0; j < puffs; j++) {
+      const p = new THREE.Mesh(cloudGeo, cloudMat);
+      p.position.set(j * 2.2 - puffs, rnd() * 0.8, rnd() * 1.5);
+      p.scale.setScalar(2 + rnd() * 1.5);
+      g.add(p);
+    }
+    g.position.set(-150 + rnd() * 300, 45 + rnd() * 15, -150 + rnd() * 300);
+    g.userData.speed = 0.8 + rnd() * 1.2;
+    scene.add(g);
+    clouds.push(g);
+  }
 }
 
 // ---------- animation rig helper ----------
@@ -145,7 +319,6 @@ class Rig {
 }
 
 // Put the model's feet on y = 0, measured while the Idle pose is applied
-// (the bind pose alone gives the wrong bounds, which sank the models underground).
 function seatOnGround(model, rig) {
   model.position.y = 0;
   rig.play('Idle', true);
@@ -169,7 +342,6 @@ let dancing = false, running = false;
 
 // ---------- professors ----------
 const profs = [];
-const PROF_SPOTS = [[9, 6], [-11, 5], [-6, -12], [12, -10], [0, 18]];
 
 // ---------- input ----------
 const keys = {};
@@ -310,6 +482,19 @@ addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
 });
 
+// push the player out of any solid obstacle (trees, rocks, pillars, professors)
+function resolveCollisions() {
+  for (const o of obstacles) {
+    const dx = player.position.x - o.x, dz = player.position.z - o.z;
+    const d2 = dx * dx + dz * dz, minD = o.r + PLAYER_R;
+    if (d2 < minD * minD && d2 > 1e-6) {
+      const d = Math.sqrt(d2), push = (minD - d) / d;
+      player.position.x += dx * push;
+      player.position.z += dz * push;
+    }
+  }
+}
+
 // ---------- update loop ----------
 const clock = new THREE.Clock();
 const tmpFwd = new THREE.Vector3(), tmpRight = new THREE.Vector3();
@@ -341,6 +526,8 @@ function update(dt) {
     dr = Math.atan2(Math.sin(dr), Math.cos(dr));
     player.rotation.y += dr * Math.min(1, dt * 12);
   }
+
+  resolveCollisions();
 
   const r = Math.hypot(player.position.x, player.position.z);
   if (r > 110) { player.position.x *= 110 / r; player.position.z *= 110 / r; }
@@ -389,6 +576,12 @@ function update(dt) {
   bt.style.display = near && isCoarse ? 'block' : 'none';
   if (bubble.style.display === 'block' && now > bubbleTimer) bubble.style.display = 'none';
 
+  // slow cloud drift (cheap, no physics)
+  for (const c of clouds) {
+    c.position.x += c.userData.speed * dt;
+    if (c.position.x > 170) c.position.x = -170;
+  }
+
   // camera orbits the player and stays above the ground plane
   const target = new THREE.Vector3(player.position.x, player.position.y + 1.3, player.position.z);
   const off = new THREE.Vector3(
@@ -413,6 +606,15 @@ function frame() {
 // ---------- load assets ----------
 (async () => {
   try {
+    statusEl.textContent = 'Loading world...';
+    // Sketchfab nature models: fall back to procedural meshes if they fail
+    const [treeGltf, rockGltf] = await Promise.all([
+      loadGLB(TREE_URL).catch(() => null),
+      loadGLB(ROCK_URL).catch(() => null)
+    ]);
+    if (treeGltf) addInstanced(bakeParts(treeGltf.scene, 6.5), treeSpots); else addProceduralTrees(treeSpots);
+    if (rockGltf) addInstanced(bakeParts(rockGltf.scene, 1.4), rockSpots); else addProceduralRocks(rockSpots);
+
     statusEl.textContent = 'Loading characters...';
     const [playerGltf, profGltf] = await Promise.all([loadGLB(PLAYER_URL), loadGLB(PROF_URL)]);
 
@@ -433,7 +635,7 @@ function frame() {
       profs.push({ group, rig, busyUntil: 0, nextAct: performance.now() + 3000 + i * 1000 });
     });
 
-    window.__dbg = { player, profs: profs.map(p => p.group), ground };
+    window.__dbg = { player, profs: profs.map(p => p.group), ground, obstacles, treeSpots: treeSpots.length, rockSpots: rockSpots.length, scene, renderer };
     statusEl.textContent = 'Ready';
     requestAnimationFrame(frame);
   } catch (err) {
