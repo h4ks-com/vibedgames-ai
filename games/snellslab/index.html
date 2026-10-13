@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Snell's Law = The Fastest Lifeguard Path</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#1d2633;color:#eee;margin:0;padding:12px;max-width:900px;margin:auto;line-height:1.4}
+h1{font-size:1.4em;margin:6px 0} h2{font-size:1.1em;margin:4px 0 6px;color:#9cd}
+.card{background:#263142;border-radius:10px;padding:12px;margin:10px 0}
+canvas{width:100%;border-radius:8px;display:block;background:#fff}
+label{display:block;margin:8px 0 2px} input[type=range]{width:100%}
+button{padding:8px 12px;margin:4px 4px 4px 0;border:0;border-radius:6px;background:#4a90e2;color:#fff;cursor:pointer;font-size:0.95em}
+button.alt{background:#e2894a}
+.mono{font-family:ui-monospace,monospace;background:#1a212d;padding:6px 8px;border-radius:6px;display:inline-block}
+.good{color:#7f7}.small{font-size:0.88em;color:#bcd}
+.hidden{display:none}
+</style></head><body>
+<h1>🏊 Snell's Law = The Fastest Lifeguard Path</h1>
+<p class="small">Move the sliders. Find the path that takes the <b>least time</b>. That's the whole idea behind light bending.</p>
+
+<div class="card">
+  <h2>1. The beach</h2>
+  <canvas id="c" width="800" height="380"></canvas>
+  <p class="small">🟨 Sand (top): lifeguard runs. 🟦 Water (bottom): lifeguard swims slower. The red dot is where the lifeguard enters the water. Green dot = the fastest entry point.</p>
+  <label>Entry point x: <span id="xv"></span></label>
+  <input type="range" id="x" min="0" max="100" step="0.1">
+  <button onclick="snapBest()">⚡ Jump to fastest</button>
+  <button class="alt" onclick="toggleAuto()" id="autoBtn">▶ Auto-search</button>
+</div>
+
+<div class="card">
+  <h2>2. Change the world</h2>
+  <label>Running speed on sand: <span id="v1v"></span></label>
+  <input type="range" id="v1" min="1" max="10" step="0.1" value="6">
+  <label>Swimming speed in water: <span id="v2v"></span></label>
+  <input type="range" id="v2" min="1" max="10" step="0.1" value="2">
+  <label>Distance along the beach: <span id="Dv"></span></label>
+  <input type="range" id="D" min="4" max="16" step="0.1" value="10">
+  <p class="small">Lower the swim speed and the lifeguard should run further along the sand before diving in.</p>
+</div>
+
+<div class="card">
+  <h2>3. The total time (the "action")</h2>
+  <p>For any entry point <b>x</b>, the total time is:</p>
+  <p class="mono">T(x) = √(x² + H²) / v₁ + √((D−x)² + h²) / v₂</p>
+  <p class="small">Read it as: sand distance ÷ run speed + water distance ÷ swim speed.</p>
+  <canvas id="g" width="800" height="200"></canvas>
+  <p>Current time: <b id="T"></b> &nbsp; Fastest time: <b id="Tb" class="good"></b></p>
+</div>
+
+<div class="card">
+  <h2>4. Where does Snell's law come from?</h2>
+  <p>The fastest path is where a tiny nudge of <b>x</b> changes the time by <b>zero</b>. In math: slope = 0.</p>
+  <p class="mono">dT/dx = sin θ₁ / v₁ − sin θ₂ / v₂</p>
+  <p>Setting that to zero gives:</p>
+  <p class="mono big">sin θ₁ / v₁ = sin θ₂ / v₂</p>
+  <p>That's <b>Snell's law</b>. For light, speed in air ÷ speed in glass gives the same kind of ratio.</p>
+  <p>Live check: <span class="mono">sin θ₁ / v₁ = <span id="s1"></span></span> &nbsp; <span class="mono">sin θ₂ / v₂ = <span id="s2"></span></span></p>
+  <p>θ₁ (run angle) = <b id="a1"></b>° &nbsp; θ₂ (swim angle) = <b id="a2"></b>°</p>
+  <p id="verdict" class="small"></p>
+</div>
+
+<div class="card">
+  <h2>5. The "least action" story, step by step</h2>
+  <button onclick="step()">Next step →</button>
+  <button class="alt" onclick="resetStep()">Restart</button>
+  <div id="steps" class="small"></div>
+</div>
+
+<script>
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');
+const gv=document.getElementById('g'),gctx=gv.getContext('2d');
+const $=id=>document.getElementById(id);
+const H=5, h=3; // lifeguard height above water line, victim depth below
+let xNow=0,autoOn=false,autoTimer=null,stepI=0;
+
+function params(){return{v1:+$('v1').value,v2:+$('v2').value,D:+$('D').value};}
+function T(x,p){return Math.hypot(x,H)/p.v1+Math.hypot(p.D-x,h)/p.v2;}
+function best(p){ // scan then refine
+  let bx=0,bt=Infinity;
+  for(let i=0;i<=2000;i++){const x=p.D*i/2000,t=T(x,p);if(t<bt){bt=t;bx=x;}}
+  let lo=Math.max(0,bx-p.D/2000*2),hi=Math.min(p.D,bx+p.D/2000*2);
+  for(let k=0;k<60;k++){const m1=lo+(hi-lo)/3,m2=hi-(hi-lo)/3;
+    if(T(m1,p)<T(m2,p))hi=m2;else lo=m1;}
+  bx=(lo+hi)/2;return{x:bx,t:T(bx,p)};
+}
+function angles(x,p){return{a1:Math.atan2(x,H),a2:Math.atan2(p.D-x,h)};}
+
+// world -> canvas for beach
+function mapX(x,p){const pad=40;return pad+(x+1)/(p.D+2)*(cv.width-2*pad);}
+function mapY(y){// y: +up (sand), water negative
+  const top=20,bot=cv.height-20,ymin=-h-1.5,ymax=H+1.5;
+  return bot-(y-ymin)/(ymax-ymin)*(bot-top);}
+
+function drawBeach(p,bx){
+  ctx.clearRect(0,0,cv.width,cv.height);
+  const wy=mapY(0);
+  ctx.fillStyle='#f6d88a';ctx.fillRect(0,0,cv.width,wy);
+  ctx.fillStyle='#6cc3e8';ctx.fillRect(0,wy,cv.width,cv.height-wy);
+  ctx.strokeStyle='#345';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(0,wy);ctx.lineTo(cv.width,wy);ctx.stroke();
+  // dashed normal at entry
+  const ex=mapX(xNow,p);
+  ctx.setLineDash([5,5]);ctx.strokeStyle='#666';ctx.beginPath();ctx.moveTo(ex,wy-120);ctx.lineTo(ex,wy+120);ctx.stroke();ctx.setLineDash([]);
+  // lifeguard path
+  ctx.strokeStyle='#d33';ctx.lineWidth=3;
+  ctx.beginPath();ctx.moveTo(mapX(0,p),mapY(H));ctx.lineTo(ex,wy);ctx.stroke();
+  ctx.strokeStyle='#1a5';
+  ctx.beginPath();ctx.moveTo(ex,wy);ctx.lineTo(mapX(p.D,p),mapY(-h));ctx.stroke();
+  // best path ghost
+  ctx.strokeStyle='rgba(0,120,0,0.35)';ctx.lineWidth=2;ctx.setLineDash([6,4]);
+  ctx.beginPath();ctx.moveTo(mapX(0,p),mapY(H));ctx.lineTo(mapX(bx,p),wy);ctx.lineTo(mapX(p.D,p),mapY(-h));ctx.stroke();ctx.setLineDash([]);
+  // dots
+  dot(mapX(0,p),mapY(H),'#222','Lifeguard');
+  dot(mapX(p.D,p),mapY(-h),'#e60','Victim');
+  dot(mapX(bx,p),wy,'#0a0','');
+  dot(ex,wy,'#d00','');
+  ctx.fillStyle='#222';ctx.font='13px sans-serif';
+  ctx.fillText('sand',8,16);ctx.fillText('water',8,cv.height-8);
+}
+function dot(x,y,c,label){ctx.fillStyle=c;ctx.beginPath();ctx.arc(x,y,7,0,7);ctx.fill();
+  if(label){ctx.fillStyle='#222';ctx.font='bold 13px sans-serif';ctx.fillText(label,x+10,y-8);}}
+
+function drawGraph(p,bx){
+  gctx.clearRect(0,0,gv.width,gv.height);
+  let tmax=0,tmin=Infinity;const N=300,vals=[];
+  for(let i=0;i<=N;i++){const t=T(p.D*i/N,p);vals.push(t);tmax=Math.max(tmax,t);tmin=Math.min(tmin,t);}
+  const pad=30,W=gv.width-2*pad,Hh=gv.height-40;
+  const yOf=t=>gv.height-20-(t-tmin)/(tmax-tmin+1e-9)*Hh;
+  gctx.strokeStyle='#267';gctx.lineWidth=2;gctx.beginPath();
+  vals.forEach((t,i)=>{const X=pad+i/N*W,Y=yOf(t);i?gctx.lineTo(X,Y):gctx.moveTo(X,Y);});gctx.stroke();
+  const X=x=>pad+x/p.D*W;
+  gctx.fillStyle='#d00';gctx.beginPath();gctx.arc(X(xNow),yOf(T(xNow,p)),6,0,7);gctx.fill();
+  gctx.fillStyle='#0a0';gctx.beginPath();gctx.arc(X(bx),yOf(T(bx,p)),6,0,7);gctx.fill();
+  gctx.fillStyle='#222';gctx.font='13px sans-serif';
+  gctx.fillText('entry point x →',gv.width-130,gv.height-4);
+  gctx.fillText('time',4,16);
+}
+
+function update(){
+  const p=params();
+  $('v1v').textContent=p.v1.toFixed(1);$('v2v').textContent=p.v2.toFixed(1);$('Dv').textContent=p.D.toFixed(1);
+  const xs=$('x');xs.max=p.D;
+  xNow=Math.min(xNow,p.D);xs.value=xNow;
+  $('xv').textContent=xNow.toFixed(2);
+  const b=best(p);
+  const a=angles(xNow,p);
+  const s1=Math.sin(a.a1)/p.v1,s2=Math.sin(a.a2)/p.v2;
+  $('T').textContent=T(xNow,p).toFixed(3);
+  $('Tb').textContent=b.t.toFixed(3)+' (at x='+b.x.toFixed(2)+')';
+  $('s1').textContent=s1.toFixed(4);$('s2').textContent=s2.toFixed(4);
+  $('a1').textContent=(a.a1*180/Math.PI).toFixed(1);$('a2').textContent=(a.a2*180/Math.PI).toFixed(1);
+  const diff=Math.abs(s1-s2);
+  $('verdict').textContent=diff<0.002?'✅ Both sides match. This is the fastest path.':'Not fastest yet. Slide x until the two numbers match (or press "Jump to fastest").';
+  drawBeach(p,b.x);drawGraph(p,b.x);
+}
+
+$('x').addEventListener('input',e=>{xNow=+e.target.value;update();});
+['v1','v2','D'].forEach(id=>$(id).addEventListener('input',update));
+function snapBest(){const b=best(params());xNow=b.x;update();}
+function toggleAuto(){
+  autoOn=!autoOn;$('autoBtn').textContent=autoOn?'■ Stop':'▶ Auto-search';
+  if(autoOn){const p=params();let dir=1;
+    autoTimer=setInterval(()=>{xNow+=dir*p.D/200;if(xNow>=p.D){xNow=p.D;dir=-1;}
+      if(xNow<=0){xNow=0;dir=1;}update();},60);}
+  else clearInterval(autoTimer);
+}
+
+const STEPS=[
+ "Start: the lifeguard is on the sand and the victim is in the water. We want the <b>quickest</b> route.",
+ "Pick any entry point x. The lifeguard runs on sand, then swims. Add up the times: T(x).",
+ "Light and lifeguards share a trick (Fermat's principle): nature picks the path where time, the 'action', is <b>least</b>.",
+ "Least action in math: a path is best when moving it a tiny bit changes nothing. Slope = 0: dT/dx = 0.",
+ "Taking that slope gives: (sand angle ÷ run speed) = (water angle ÷ swim speed). That is Snell's law.",
+ "Meaning: the faster you are on one side, the more you should run along the sand so your path bends toward the slow zone less sharply. Hit 'Jump to fastest' and check the two numbers match!"
+];
+function step(){ if(stepI<STEPS.length){$('steps').innerHTML+='<p>'+(stepI+1)+'. '+STEPS[stepI]+'</p>';stepI++;} }
+function resetStep(){stepI=0;$('steps').innerHTML='';}
+
+update();
+</script></body></html>
