@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GodotJS - browser game engine</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:#1d1d23;color:#ddd;font:13px system-ui,sans-serif;overflow:hidden}
+#app{display:grid;grid-template-columns:220px 1fr 310px;grid-template-rows:40px 1fr 150px;height:100vh}
+#top{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:4px 8px;background:#2b2b35;border-bottom:1px solid #111}
+button,select,input,textarea{background:#353545;color:#eee;border:1px solid #111;border-radius:4px;padding:4px 7px;font:inherit;min-width:0}
+button{cursor:pointer}button:hover{background:#44445a}
+#play{background:#2e7d4f}#stop{background:#9b3b3b}
+#left,#right{overflow:auto;background:#24242c;padding:8px}
+#left{border-right:1px solid #111}#right{border-left:1px solid #111}
+#view{position:relative;overflow:hidden;background:#000}
+#view canvas{display:block;width:100%;height:100%}
+#ui{position:absolute;inset:0;pointer-events:none}
+.ui-el{position:absolute;pointer-events:auto;padding:4px 10px;background:rgba(0,0,0,.55);color:#fff;border-radius:4px;white-space:pre}
+.ui-el.btn{background:#3d6fd6;cursor:pointer;border:0}
+#bottom{grid-column:1/-1;background:#16161b;border-top:1px solid #111;overflow:auto;font:12px ui-monospace,monospace;padding:6px 8px}
+.row{display:flex;gap:4px;align-items:center;margin:3px 0}
+.row label{width:64px;color:#9aa;flex:none}
+.row input,.row select,.row textarea{flex:1}
+.item{padding:3px 6px;border-radius:3px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.item:hover{background:#33334a}.item.sel{background:#3d6fd6}
+h3{margin:10px 0 4px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#8ab}
+textarea{width:100%;height:160px;font:12px ui-monospace,monospace}
+.err{color:#f77}.ok{color:#7d7}.warn{color:#fd6}
+details{margin-top:10px;color:#aab}details pre{white-space:pre-wrap;font-size:11px;background:#16161b;padding:6px}
+.exported #top,.exported #left,.exported #right,.exported #bottom{display:none}
+.exported #app{grid-template-columns:1fr;grid-template-rows:1fr}
+@media (max-width:800px){#app{grid-template-columns:1fr;grid-template-rows:auto 50vh auto auto auto;height:auto;min-height:100vh}html,body{overflow:auto}}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="top">
+    <select id="addType"></select>
+    <button id="addBtn">+ Add (child of selection)</button>
+    <button id="dupBtn">Duplicate</button>
+    <button id="delBtn">Delete</button>
+    <span style="flex:1"></span>
+    <button id="play">▶ Play</button>
+    <button id="stop">■ Stop</button>
+    <button id="saveBtn">Save JSON</button>
+    <button id="loadBtn">Load JSON</button>
+    <input type="file" id="loadFile" accept=".json,application/json" hidden>
+    <button id="exportBtn">Export HTML</button>
+    <button id="resetBtn">Reset demo</button>
+  </div>
+  <div id="left"><h3>Scene tree</h3><div id="tree"></div></div>
+  <div id="view"></div>
+  <div id="right">
+    <div id="inspector"></div>
+    <details><summary>Lua API</summary><pre>_ready()  _process(dt)  any function = signal target
+get_position() set_position(x,y,z)   get_rotation() set_rotation(x,y,z) (degrees)
+get_scale() set_scale(x,y,z)   set_color("#rrggbb")   set_visible(bool)
+get_text() set_text(s)   play_anim(name)
+emit("signal", arg?)   call("NodeName", "method", arg?)
+get_position_of("Node")   set_position_of("Node",x,y,z)
+is_key_down("w" | "arrowleft" | "space")   time()   print(...)
+
+Signals: connect in the inspector. Built-ins: clicked (3D node / UI), pressed (UI Button).</pre></details>
+  </div>
+  <div id="bottom"><div id="log"></div></div>
+</div>
+<datalist id="sigs"></datalist>
+<script id="embedded-project" type="application/json">null</script>
+<script src="https://unpkg.com/fengari-web@0.1.4/dist/fengari-web.js"></script>
+<script type="importmap">
+{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+const { lua: K, lauxlib: A, lualib: LB, to_luastring: S } = fengari;
+const $ = s => document.querySelector(s);
+const D2R = Math.PI / 180;
+const TYPE_NAMES = { Node3D:'Node3D', Box:'MeshBox', Sphere:'MeshSphere', Plane:'MeshPlane', Light:'DirectionalLight', Camera:'Camera3D', Model:'GLB Model', Label:'UI Label', Button:'UI Button' };
+const SIGNALS = ['pressed','clicked','ready','hit','collided','timeout','body_entered'];
+const SCRIPT_OPEN = '<script id="embedded-project" type="application/json">';
+const SCRIPT_CLOSE = '<' + '/script>';
+const PLACEHOLDER = SCRIPT_OPEN + 'null' + SCRIPT_CLOSE;
+const EMBED = (() => { try { return JSON.parse($('#embedded-project').textContent); } catch (e) { return null; } })();
+
+let uid = 0, roots = [], byId = new Map(), selId = null, playing = false, gameTime = 0, snapshot = null;
+const keys = new Set();
+
+// ---------- log
+function log(msg, cls = '') {
+  const d = document.createElement('div'); d.className = cls;
+  d.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  $('#log').appendChild(d); $('#bottom').scrollTop = 1e9;
+}
+
+// ---------- node model
+function defaultP(type) {
+  const p = { pos:[0,0,0], rot:[0,0,0], scale:[1,1,1], color:'#5a8cff', texture:'', model:'', anim:'', visible:true,
+    text: type === 'Button' ? 'Button' : 'Label', x:20, y:20, script:'' };
+  if (type === 'Camera') { p.pos = [0,2.5,7]; p.rot = [-15,0,0]; }
+  if (type === 'Light') { p.pos = [3,5,4]; p.rot = [-45,30,0]; }
+  if (type === 'Plane') { p.rot = [-90,0,0]; p.color = '#56606b'; }
+  return p;
+}
+function makeNode(type) {
+  const n = { id: ++uid, name: type.toLowerCase() + uid, type, children: [], conn: [], p: defaultP(type) };
+  byId.set(n.id, n); return n;
+}
+function revive(d) {
+  const n = { id: d.id, name: d.name, type: d.type, p: Object.assign(defaultP(d.type), d.p), conn: d.conn || [], children: [] };
+  uid = Math.max(uid, d.id); byId.set(n.id, n);
+  n.children = (d.children || []).map(revive);
+  return n;
+}
+function clean(n) { return { id:n.id, name:n.name, type:n.type, p:n.p, conn:n.conn, children:n.children.map(clean) }; }
+function cloneData(d) { const n = makeNode(d.type); n.name = d.name + '_copy'; n.p = JSON.parse(JSON.stringify(d.p)); n.conn = []; n.children = d.children.map(cloneData); return n; }
+function restoreFrom(json) { byId.clear(); roots = JSON.parse(json).map(revive); }
+function walk(list, fn) { for (const n of list) { fn(n); walk(n.children, fn); } }
+function nodeByName(name) { let r = null; walk(roots, n => { if (!r && n.name === name) r = n; }); return r; }
+function parentOf(id) { let r = null; walk(roots, n => { if (n.children.some(c => c.id === id)) r = n; }); return r; }
+function siblingsOf(n) { const p = parentOf(n.id); return p ? p.children : roots; }
+function changed() {
+  if (!playing && !EMBED) localStorage.setItem('godotjs-project', JSON.stringify(roots.map(clean)));
+}
+
+// ---------- viewport
+const view = $('#view');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#2b2c35');
+const grid = new THREE.GridHelper(40, 40, 0x666677, 0x3a3a46);
+const ambient = new THREE.AmbientLight(0xffffff, 0.5);
+scene.add(grid, ambient);
+const editCam = new THREE.PerspectiveCamera(55, 1, 0.05, 500);
+editCam.position.set(6, 6, 10); editCam.lookAt(0, 0.5, 0);
+const orbit = new OrbitControls(editCam, renderer.domElement);
+orbit.target.set(0, 0.5, 0); orbit.update();
+const uiLayer = document.createElement('div'); uiLayer.id = 'ui';
+view.replaceChildren(renderer.domElement, uiLayer);
+const loader = new GLTFLoader(), texLoader = new THREE.TextureLoader();
+const ray = new THREE.Raycaster(), mouse = new THREE.Vector2();
+
+function resize() {
+  const w = Math.max(1, view.clientWidth), h = Math.max(1, view.clientHeight);
+  renderer.setSize(w, h, false);
+  editCam.aspect = w / h; editCam.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(view);
+
+function activeCamera() {
+  if (playing) {
+    let c = null; walk(roots, n => { if (!c && n.cam && n.p.visible) c = n.cam; });
+    if (c) { c.aspect = view.clientWidth / Math.max(1, view.clientHeight); c.updateProjectionMatrix(); return c; }
+  }
+  return editCam;
+}
+
+function applyProps(n) {
+  const o = n.obj, p = n.p;
+  if (o) {
+    o.position.set(p.pos[0], p.pos[1], p.pos[2]);
+    o.rotation.set(p.rot[0] * D2R, p.rot[1] * D2R, p.rot[2] * D2R);
+    o.scale.set(p.scale[0], p.scale[1], p.scale[2]);
+    o.visible = p.visible;
+  }
+  if (n.mat) {
+    n.mat.color.set(p.color);
+    n.mat.emissive.set(!playing && n.id === selId ? 0x335577 : 0x000000);
+  }
+  if (n.el) {
+    if (n.el.textContent !== p.text) n.el.textContent = p.text;
+    n.el.style.left = p.x + 'px'; n.el.style.top = p.y + 'px';
+    n.el.style.display = p.visible ? '' : 'none';
+    n.el.style.outline = !playing && n.id === selId ? '2px solid #ffd24d' : '';
+  }
+}
+
+function loadTexture(n) {
+  const tok = n.ttok = (n.ttok || 0) + 1;
+  if (!n.p.texture) return;
+  texLoader.load(n.p.texture, t => {
+    if (n.ttok !== tok) return;
+    t.colorSpace = THREE.SRGBColorSpace;
+    if (n.mat) { n.mat.map = t; n.mat.needsUpdate = true; }
+    if (n.gltf) n.gltf.scene.traverse(o => { if (o.isMesh) { o.material.map = t; o.material.needsUpdate = true; } });
+  }, undefined, () => log(`${n.name}: texture failed to load`, 'err'));
+}
+
+function playAnim(n, name) {
+  if (!n.actions) return false;
+  const names = Object.keys(n.actions); if (!names.length) return false;
+  const pick = n.actions[name] ? name : names[0];
+  names.forEach(k => n.actions[k].stop());
+  const a = n.actions[pick]; a.reset(); a.play(); return true;
+}
+
+function loadModel(n) {
+  const tok = n.mtok = (n.mtok || 0) + 1;
+  loader.load(n.p.model, g => {
+    if (n.mtok !== tok || !n.obj) return;
+    n.gltf = g; n.obj.add(g.scene);
+    n.mixer = new THREE.AnimationMixer(g.scene); n.actions = {};
+    g.animations.forEach(c => { n.actions[c.name] = n.mixer.clipAction(c); });
+    n.anims = g.animations.map(c => c.name);
+    playAnim(n, n.p.anim);
+    if (n.p.texture) loadTexture(n);
+    log(`${n.name}: model loaded, animations: ${n.anims.length ? n.anims.join(', ') : 'none'}`, 'ok');
+    if (selId === n.id) renderInspector(n);
+  }, undefined, e => log(`${n.name}: model failed to load (${e.message || e})`, 'err'));
+}
+
+function buildNode(n, parent) {
+  const T = n.type; let o;
+  if (T === 'Box' || T === 'Sphere' || T === 'Plane') {
+    n.mat = new THREE.MeshStandardMaterial({ color: n.p.color, roughness: 0.6 });
+    const geo = T === 'Box' ? new THREE.BoxGeometry(1, 1, 1)
+              : T === 'Sphere' ? new THREE.SphereGeometry(0.6, 32, 16)
+              : new THREE.PlaneGeometry(4, 4);
+    o = new THREE.Mesh(geo, n.mat);
+    if (n.p.texture) loadTexture(n);
+  } else if (T === 'Light') {
+    o = new THREE.DirectionalLight(0xffffff, 2.2);
+  } else if (T === 'Camera') {
+    o = new THREE.Object3D(); n.cam = new THREE.PerspectiveCamera(60, 1, 0.1, 500); o.add(n.cam);
+  } else if (T === 'Model') {
+    o = new THREE.Object3D(); if (n.p.model) loadModel(n);
+  } else {
+    o = new THREE.Object3D();
+  }
+  o.userData.nodeId = n.id; n.obj = o; parent.add(o);
+  if (T === 'Label' || T === 'Button') {
+    const el = document.createElement('div');
+    el.className = 'ui-el' + (T === 'Button' ? ' btn' : '');
+    el.onclick = () => {
+      if (playing) { if (T === 'Button') emit(n, 'pressed', []); emit(n, 'clicked', []); }
+      else select(n.id);
+    };
+    uiLayer.appendChild(el); n.el = el;
+  }
+  n.children.forEach(c => buildNode(c, o));
+}
+
+function rebuild() {
+  for (const c of [...scene.children]) if (c !== grid && c !== ambient) scene.remove(c);
+  uiLayer.replaceChildren();
+  walk(roots, n => { n.obj = null; n.mat = null; n.cam = null; n.el = null; n.gltf = null; n.mixer = null; n.actions = null; });
+  roots.forEach(n => buildNode(n, scene));
+  walk(roots, n => applyProps(n));
+  renderTree();
+}
+
+// ---------- signals
+function emit(n, sig, args = []) {
+  for (const c of n.conn) {
+    if (c.signal !== sig) continue;
+    const t = byId.get(c.target);
+    if (t) callLua(t, c.method, args);
+  }
+}
+
+// ---------- Lua (fengari) per-node VM
+function makeVM(n) {
+  const L = A.luaL_newstate(); LB.luaL_openlibs(L);
+  const reg = (name, fn) => { K.lua_pushjsfunction(L, fn); K.lua_setglobal(L, S(name)); };
+  const num = i => K.lua_tonumber(L, i);
+  const str = i => K.lua_tojsstring(L, i);
+  const arg = i => {
+    const t = K.lua_type(L, i);
+    if (t === K.LUA_TNUMBER) return K.lua_tonumber(L, i);
+    if (t === K.LUA_TBOOLEAN) return K.lua_toboolean(L, i);
+    if (t === K.LUA_TSTRING) return K.lua_tojsstring(L, i);
+    return null;
+  };
+  const out = (...vs) => {
+    vs.forEach(v => {
+      if (v === null || v === undefined) K.lua_pushnil(L);
+      else if (typeof v === 'number') K.lua_pushnumber(L, v);
+      else if (typeof v === 'boolean') K.lua_pushboolean(L, v);
+      else K.lua_pushstring(L, S(String(v)));
+    });
+    return vs.length;
+  };
+  const restArgs = from => { const r = []; for (let i = from; i <= K.lua_gettop(L); i++) r.push(arg(i)); return r; };
+
+  reg('print', () => { log(`[${n.name}] ` + restArgs(1).map(String).join('\t')); return 0; });
+  reg('get_position', () => out(...n.p.pos));
+  reg('set_position', () => { n.p.pos = [num(1), num(2), num(3)]; applyProps(n); changed(); return 0; });
+  reg('get_rotation', () => out(...n.p.rot));
+  reg('set_rotation', () => { n.p.rot = [num(1), num(2), num(3)]; applyProps(n); return 0; });
+  reg('get_scale', () => out(...n.p.scale));
+  reg('set_scale', () => { n.p.scale = [num(1), num(2), num(3)]; applyProps(n); return 0; });
+  reg('set_color', () => { n.p.color = str(1); applyProps(n); return 0; });
+  reg('set_visible', () => { n.p.visible = !!arg(1); applyProps(n); return 0; });
+  reg('get_text', () => out(n.p.text));
+  reg('set_text', () => { n.p.text = String(arg(1)); applyProps(n); return 0; });
+  reg('play_anim', () => out(playAnim(n, str(1))));
+  reg('is_key_down', () => out(keys.has(String(arg(1)).toLowerCase())));
+  reg('time', () => out(gameTime));
+  reg('emit', () => { emit(n, str(1), restArgs(2)); return 0; });
+  reg('call', () => {
+    const t = nodeByName(str(1));
+    if (!t) { log(`call: no node named ${str(1)}`, 'warn'); return 0; }
+    callLua(t, str(2), restArgs(3)); return 0;
+  });
+  reg('get_position_of', () => { const t = nodeByName(str(1)); return out(...(t ? t.p.pos : [0,0,0])); });
+  reg('set_position_of', () => {
+    const t = nodeByName(str(1));
+    if (t) { t.p.pos = [num(2), num(3), num(4)]; applyProps(t); }
+    return 0;
+  });
+
+  if (A.luaL_loadstring(L, S(n.p.script || '')) !== K.LUA_OK) { log(`${n.name} script: ${str(-1)}`, 'err'); return null; }
+  if (K.lua_pcall(L, 0, 0, 0) !== K.LUA_OK) { log(`${n.name} script: ${str(-1)}`, 'err'); return null; }
+  return L;
+}
+
+function callLua(n, fname, args = []) {
+  const L = n.vm;
+  if (!L) return;
+  if (K.lua_getglobal(L, S(fname)) !== K.LUA_TFUNCTION) { K.lua_settop(L, 0); return; }
+  args.forEach(a => {
+    if (typeof a === 'number') K.lua_pushnumber(L, a);
+    else if (typeof a === 'boolean') K.lua_pushboolean(L, a);
+    else if (a === null || a === undefined) K.lua_pushnil(L);
+    else K.lua_pushstring(L, S(String(a)));
+  });
+  if (K.lua_pcall(L, args.length, 0, 0) !== K.LUA_OK) {
+    log(`${n.name}.${fname}: ${K.lua_tojsstring(L, -1)}`, 'err');
+    n.vm = null; // disable a broken script instead of spamming errors every frame
+    return;
+  }
+  K.lua_settop(L, 0);
+}
+
+// ---------- play / stop
+function play() {
+  if (playing) return;
+  snapshot = JSON.stringify(roots.map(clean));
+  playing = true; gameTime = 0;
+  rebuild();
+  walk(roots, n => { if ((n.p.script || '').trim()) n.vm = makeVM(n); });
+  walk(roots, n => { if (n.vm) callLua(n, '_ready'); });
+  log('▶ Play', 'ok');
+}
+function stop() {
+  if (!playing) return;
+  walk(roots, n => { n.vm = null; });
+  playing = false;
+  restoreFrom(snapshot);
+  rebuild();
+  if (selId != null && !byId.has(selId)) selId = null;
+  renderInspector();
+  log('■ Stop: scene restored from snapshot', 'warn');
+}
+
+// ---------- loop
+const clock = new THREE.Clock();
+function frame() {
+  const dt = Math.min(clock.getDelta(), 0.1);
+  if (playing) {
+    gameTime += dt;
+    walk(roots, n => { if (n.mixer) n.mixer.update(dt); applyProps(n); });
+    walk(roots, n => { if (n.vm) callLua(n, '_process', [dt]); });
+  } else {
+    orbit.update();
+  }
+  renderer.render(scene, activeCamera());
+  requestAnimationFrame(frame);
+}
+
+// ---------- picking
+renderer.domElement.addEventListener('click', e => {
+  const r = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((e.clientX - r.left) / r.width) * 2 - 1;
+  mouse.y = -((e.clientY - r.top) / r.height) * 2 + 1;
+  ray.setFromCamera(mouse, activeCamera());
+  const hits = ray.intersectObjects(scene.children, true);
+  for (const h of hits) {
+    let o = h.object;
+    while (o && o.userData.nodeId == null) o = o.parent;
+    if (o) {
+      const n = byId.get(o.userData.nodeId);
+      if (n) { if (playing) emit(n, 'clicked', []); else select(n.id); return; }
+    }
+  }
+  if (!playing) select(null);
+});
+
+// ---------- input
+addEventListener('keydown', e => {
+  if (e.target.matches && e.target.matches('input,textarea,select')) return;
+  const k = e.key === ' ' ? 'space' : e.key.toLowerCase();
+  keys.add(k);
+  if (k === 'space') e.preventDefault();
+});
+addEventListener('keyup', e => keys.delete(e.key === ' ' ? 'space' : e.key.toLowerCase()));
+addEventListener('blur', () => keys.clear());
+
+// ---------- editor UI
+function select(id) { selId = id == null ? null : id; walk(roots, n => applyProps(n)); renderTree(); renderInspector(); }
+
+function renderTree() {
+  const t = $('#tree'); t.innerHTML = '';
+  const add = (n, d) => {
+    const el = document.createElement('div');
+    el.className = 'item' + (n.id === selId ? ' sel' : '');
+    el.style.paddingLeft = (6 + d * 14) + 'px';
+    el.textContent = `${n.name} · ${TYPE_NAMES[n.type]}`;
+    el.onclick = () => select(n.id);
+    t.appendChild(el);
+    n.children.forEach(c => add(c, d + 1));
+  };
+  roots.forEach(n => add(n, 0));
+  if (!roots.length) t.innerHTML = '<i>empty scene</i>';
+}
+
+function field(label, el) {
+  const r = document.createElement('div'); r.className = 'row';
+  const l = document.createElement('label'); l.textContent = label;
+  r.append(l, el); return r;
+}
+function textIn(value, onChange) {
+  const i = document.createElement('input'); i.type = 'text'; i.value = value;
+  i.onchange = () => onChange(i.value); return i;
+}
+function numIn(v, step, onChange) {
+  const i = document.createElement('input'); i.type = 'number'; i.step = step;
+  i.value = +(+v).toFixed(3); i.onchange = () => onChange(parseFloat(i.value) || 0); return i;
+}
+function vec(label, n, key, step) {
+  const w = document.createElement('div'); w.style.cssText = 'display:flex;gap:3px;flex:1;min-width:0';
+  n.p[key].forEach((v, i) => w.appendChild(numIn(v, step, val => { n.p[key][i] = val; applyProps(n); changed(); })));
+  return field(label, w);
+}
+function button(label, fn) { const b = document.createElement('button'); b.textContent = label; b.onclick = fn; return b; }
+
+function renderInspector(node) {
+  const box = $('#inspector'); box.innerHTML = '';
+  const n = node || (selId != null ? byId.get(selId) : null);
+  if (!n) { box.innerHTML = '<i>Select a node in the tree or the viewport.</i>'; return; }
+  const h = document.createElement('h3'); h.textContent = TYPE_NAMES[n.type]; box.appendChild(h);
+  box.appendChild(field('name', textIn(n.name, v => { n.name = v.trim().replace(/\s+/g, '_') || n.name; renderTree(); renderInspector(n); changed(); })));
+
+  if (n.type === 'Label' || n.type === 'Button') {
+    box.appendChild(field('text', textIn(n.p.text, v => { n.p.text = v; applyProps(n); changed(); })));
+    box.appendChild(field('x (px)', numIn(n.p.x, 1, v => { n.p.x = v; applyProps(n); changed(); })));
+    box.appendChild(field('y (px)', numIn(n.p.y, 1, v => { n.p.y = v; applyProps(n); changed(); })));
+  } else {
+    box.appendChild(vec('position', n, 'pos', 0.1));
+    box.appendChild(vec('rotation°', n, 'rot', 1));
+    box.appendChild(vec('scale', n, 'scale', 0.1));
+  }
+  if (['Box', 'Sphere', 'Plane'].includes(n.type)) {
+    const c = document.createElement('input'); c.type = 'color'; c.value = n.p.color;
+    c.onchange = () => { n.p.color = c.value; applyProps(n); changed(); };
+    box.appendChild(field('color', c));
+  }
+  if (['Box', 'Sphere', 'Plane', 'Model'].includes(n.type)) {
+    box.appendChild(field('texture URL', textIn(n.p.texture, v => { n.p.texture = v.trim(); rebuild(); renderInspector(n); changed(); })));
+  }
+  if (n.type === 'Model') {
+    box.appendChild(field('model URL', textIn(n.p.model, v => { n.p.model = v.trim(); rebuild(); renderInspector(n); changed(); })));
+    const sel = document.createElement('select');
+    sel.add(new Option('(first clip)', ''));
+    (n.anims || []).forEach(a => sel.add(new Option(a, a)));
+    sel.value = (n.anims || []).includes(n.p.anim) ? n.p.anim : '';
+    sel.onchange = () => { n.p.anim = sel.value; playAnim(n, sel.value); changed(); };
+    box.appendChild(field('animation', sel));
+  }
+  const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = n.p.visible;
+  cb.onchange = () => { n.p.visible = cb.checked; applyProps(n); changed(); };
+  box.appendChild(field('visible', cb));
+
+  box.appendChild(field('script (Lua)', (() => {
+    const ta = document.createElement('textarea'); ta.value = n.p.script || '';
+    ta.onchange = () => { n.p.script = ta.value; changed(); };
+    return ta;
+  })()));
+
+  const hs = document.createElement('h3'); hs.textContent = 'Signals'; box.appendChild(hs);
+  n.conn.forEach((c, i) => {
+    const row = document.createElement('div'); row.className = 'row';
+    const t = byId.get(c.target);
+    const s = document.createElement('span'); s.style.flex = '1';
+    s.textContent = `${c.signal} → ${t ? t.name : '?'}.${c.method}`;
+    row.append(s, button('×', () => { n.conn.splice(i, 1); renderInspector(n); changed(); }));
+    box.appendChild(row);
+  });
+  const sig = document.createElement('input'); sig.placeholder = 'signal (e.g. pressed)'; sig.setAttribute('list', 'sigs');
+  const tgt = document.createElement('select');
+  walk(roots, t => tgt.add(new Option(t.name, String(t.id))));
+  const meth = document.createElement('input'); meth.placeholder = 'method (e.g. jump)';
+  box.appendChild(field('signal', sig));
+  box.appendChild(field('to node', tgt));
+  box.appendChild(field('method', meth));
+  box.appendChild(button('+ connect', () => {
+    if (!sig.value.trim() || !meth.value.trim() || !tgt.value) return;
+    n.conn.push({ signal: sig.value.trim(), target: +tgt.value, method: meth.value.trim() });
+    renderInspector(n); changed();
+  }));
+}
+
+function removeNode(n) {
+  const ids = new Set(); walk([n], x => ids.add(x.id));
+  const list = siblingsOf(n); list.splice(list.indexOf(n), 1);
+  ids.forEach(i => byId.delete(i));
+  walk(roots, x => { x.conn = x.conn.filter(c => !ids.has(c.target)); });
+}
+
+// ---------- toolbar
+function addSelect() {
+  const s = $('#addType');
+  Object.keys(TYPE_NAMES).forEach(k => s.add(new Option(TYPE_NAMES[k], k)));
+}
+$('#addBtn').onclick = () => {
+  if (playing) return log('Stop the game before editing', 'warn');
+  const parent = selId != null ? byId.get(selId) : null;
+  const n = makeNode($('#addType').value);
+  (parent ? parent.children : roots).push(n);
+  selId = n.id; rebuild(); renderInspector(); changed();
+};
+$('#dupBtn').onclick = () => {
+  if (playing || selId == null) return;
+  const n = byId.get(selId); const list = siblingsOf(n);
+  const copy = cloneData(clean(n)); list.splice(list.indexOf(n) + 1, 0, copy);
+  selId = copy.id; rebuild(); renderInspector(); changed();
+};
+$('#delBtn').onclick = () => {
+  if (playing || selId == null) return;
+  removeNode(byId.get(selId)); selId = null; rebuild(); renderInspector(); changed();
+};
+$('#play').onclick = play;
+$('#stop').onclick = stop;
+function download(name, text, type = 'application/json') {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+$('#saveBtn').onclick = () => download('project.godotjs.json', JSON.stringify({ godotjs: 1, roots: roots.map(clean) }, null, 2));
+$('#loadBtn').onclick = () => $('#loadFile').click();
+$('#loadFile').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    const d = JSON.parse(await f.text());
+    if (playing) stop();
+    restoreFrom(JSON.stringify(Array.isArray(d) ? d : d.roots));
+    selId = null; rebuild(); renderInspector(); changed(); log(`loaded ${f.name}`, 'ok');
+  } catch (err) { log(`load failed: ${err.message}`, 'err'); }
+  e.target.value = '';
+};
+$('#exportBtn').onclick = () => {
+  if (playing) stop();
+  const data = JSON.stringify({ godotjs: 1, roots: roots.map(clean) }).replace(/</g, '\\u003c');
+  const html = '<!DOCTYPE html>\n' + document.documentElement.outerHTML.replace(PLACEHOLDER,
+    () => SCRIPT_OPEN + data + SCRIPT_CLOSE);
+  download('game.html', html, 'text/html');
+  log('exported game.html (double-click to run it in any browser)', 'ok');
+};
+$('#resetBtn').onclick = () => { if (playing) stop(); demo(); rebuild(); renderInspector(); changed(); log('demo scene restored'); };
+
+// ---------- demo scene
+const PLAYER_LUA = `local speed = 3
+local jumpT = 0
+
+function _ready()
+  print("Player ready: WASD / arrows to move, click the orange button to jump")
+end
+
+function jump()
+  jumpT = 0.6
+  set_color("#ff5577")
+end
+
+function _process(dt)
+  local x, _, z = get_position()
+  if is_key_down("a") or is_key_down("arrowleft") then x = x - speed * dt end
+  if is_key_down("d") or is_key_down("arrowright") then x = x + speed * dt end
+  if is_key_down("w") or is_key_down("arrowup") then z = z - speed * dt end
+  if is_key_down("s") or is_key_down("arrowdown") then z = z + speed * dt end
+  local y = 0.5
+  if jumpT > 0 then
+    jumpT = jumpT - dt
+    y = 0.5 + math.sin(math.max(jumpT, 0) / 0.6 * math.pi) * 1.5
+  end
+  set_position(x, y, z)
+  set_rotation(0, time() * 90, 0)
+end
+`;
+const LABEL_LUA = `local score = 0
+
+function on_coin()
+  score = score + 1
+  set_text("Coins: " .. score)
+end
+`;
+function demo() {
+  roots = []; byId.clear(); uid = 0; selId = null;
+  const floor = makeNode('Plane'); floor.name = 'Floor'; floor.p.texture = 'https://threejs.org/examples/textures/uv_grid_opengl.jpg'; floor.p.scale = [3, 3, 1]; roots.push(floor);
+  const cam = makeNode('Camera'); cam.name = 'MainCamera'; roots.push(cam);
+  const sun = makeNode('Light'); sun.name = 'Sun'; roots.push(sun);
+  const player = makeNode('Box'); player.name = 'Player'; player.p.pos = [0, 0.5, 0]; player.p.color = '#ffaa33'; player.p.script = PLAYER_LUA; roots.push(player);
+  const coin = makeNode('Sphere'); coin.name = 'Coin'; coin.p.pos = [2.5, 0.6, 0]; coin.p.color = '#ffe14d'; roots.push(coin);
+  const soldier = makeNode('Model'); soldier.name = 'Soldier'; soldier.p.pos = [-2.5, 0, 0]; soldier.p.model = 'https://threejs.org/examples/models/gltf/Soldier.glb'; roots.push(soldier);
+  const label = makeNode('Label'); label.name = 'ScoreLabel'; label.p.text = 'Coins: 0'; label.p.x = 16; label.p.y = 16; label.p.script = LABEL_LUA; roots.push(label);
+  const btn = makeNode('Button'); btn.name = 'JumpButton'; btn.p.text = 'Jump'; btn.p.x = 16; btn.p.y = 60; roots.push(btn);
+  btn.conn.push({ signal: 'pressed', target: player.id, method: 'jump' });
+  coin.conn.push({ signal: 'clicked', target: label.id, method: 'on_coin' });
+}
+
+// ---------- boot
+addSelect();
+const dl = $('#sigs'); SIGNALS.forEach(s => dl.appendChild(new Option(s, s)));
+if (EMBED && EMBED.roots) {
+  document.body.classList.add('exported');
+  restoreFrom(JSON.stringify(EMBED.roots));
+} else {
+  const saved = localStorage.getItem('godotjs-project');
+  let ok = false;
+  if (saved) { try { restoreFrom(saved); ok = true; } catch (e) { ok = false; } }
+  if (!ok) demo();
+}
+resize();
+rebuild();
+renderInspector();
+if (EMBED && EMBED.roots) play();
+else log('GodotJS browser engine ready. Click Play, or select nodes to edit them. Export HTML makes a standalone game.', 'ok');
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
