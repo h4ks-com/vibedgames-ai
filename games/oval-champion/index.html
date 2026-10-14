@@ -1,199 +1,319 @@
 <!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>Oval Champion</title>
 <style>
-body{margin:0;background:#111;color:#fff;font-family:monospace;display:flex;flex-direction:column;align-items:center;user-select:none;touch-action:none}
-#hud{width:800px;max-width:100vw;display:flex;justify-content:space-between;padding:6px;box-sizing:border-box;font-size:15px}
-canvas{background:#2d6b2d;max-width:100vw;height:auto;border:2px solid #333}
-#ctl{display:flex;gap:8px;margin:8px}
-#ctl button{width:80px;height:60px;font-size:18px;background:#333;color:#fff;border:1px solid #666;border-radius:8px}
-#msg{min-height:20px;font-size:14px;color:#ccc;text-align:center;padding:4px}
-</style>
-</head>
-<body>
-<div id="hud"><span id="lap"></span><span id="pos"></span><span id="g"></span></div>
-<canvas id="c" width="800" height="600"></canvas>
-<div id="ctl">
-  <button data-k="l">&#9664;</button>
-  <button data-k="g">GAS</button>
-  <button data-k="b">BRAKE</button>
-  <button data-k="r">&#9654;</button>
-</div>
-<div id="msg">Arrows/WASD to drive. Up = gas, Down = brake, Left/Right = steer. Stay on the track!</div>
+html,body{margin:0;height:100%;overflow:hidden;background:#000;font-family:monospace;touch-action:none;-webkit-user-select:none;user-select:none}
+canvas{display:block}
+</style></head>
+<body><canvas id="c"></canvas>
 <script>
-const cv = document.getElementById('c'), ctx = cv.getContext('2d');
-const CX = 400, CY = 300, RX = 300, RY = 180, HW = 40, LAPS = 3, TAU = Math.PI * 2, SEASON = 5;
-const keys = {}, touch = {};
-let state = 'countdown';
-let season = { race: 1, pp: 0, rp: 0 };
-let race;
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');
+const TAU=Math.PI*2;
+let W=0,H=0;
+const R={cx:0,cy:0,rx:300,ry:200,avg:250,perim:1500};
+function layout(){
+  R.cx=W/2;R.cy=H/2;
+  R.rx=Math.min(W*0.36,440);R.ry=Math.min(H*0.3,260);
+  R.avg=(R.rx+R.ry)/2;
+  R.perim=Math.PI*(3*(R.rx+R.ry)-Math.sqrt((3*R.rx+R.ry)*(R.rx+3*R.ry)));
+}
+function resize(){W=cv.width=innerWidth;H=cv.height=innerHeight;layout();}
+addEventListener('resize',resize);resize();
 
-addEventListener('keydown', e => {
-  keys[e.key] = true;
-  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
-  if ((e.key === ' ' || e.key === 'Enter') && state === 'result') advance();
-});
-addEventListener('keyup', e => keys[e.key] = false);
-document.querySelectorAll('#ctl button').forEach(b => {
-  const k = b.dataset.k;
-  b.addEventListener('pointerdown', e => { touch[k] = true; e.preventDefault(); });
-  ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => b.addEventListener(ev, () => touch[k] = false));
-});
-cv.addEventListener('pointerdown', () => { if (state === 'result') advance(); });
+const CH=[
+ {title:'Kart Days',year:'Age 9',
+  blurb:'Every champion starts on a tiny kart. Learn the line, keep your speed, and beat Marco to the flag.',
+  winText:'Marco shrugs. "Again tomorrow."',
+  laps:2,rivalName:'Marco',rivalSpeed:2.9,maxSpeed:4.6,accel:.09,turn:.05,grip:.2,drag:.992,hw:60,
+  rival:'#ff9f1c',pal:{grass:'#2f8a3e',track:'#555',line:'#fff'}},
+ {title:'Formula One: Rookie Title',year:'Age 21',
+  blurb:'Formula One at 21. Three world titles start here, and the rival Dario Vale is the car to beat.',
+  winText:'First title. Dario is already waiting for next season.',
+  laps:3,rivalName:'Dario Vale',rivalSpeed:4.0,maxSpeed:5.6,accel:.12,turn:.04,grip:.18,drag:.993,hw:55,
+  rival:'#e9c46a',pal:{grass:'#1b4d2e',track:'#333',line:'#fff'}},
+ {title:"Formula One: The Rival's Year",year:'Age 23',
+  blurb:'Dario takes a title in between. He is faster this year. You need this win to get back in the fight.',
+  winText:'Back in the title fight, and Dario knows it.',
+  laps:3,rivalName:'Dario Vale',rivalSpeed:5.1,maxSpeed:5.7,accel:.12,turn:.04,grip:.18,drag:.993,hw:55,
+  rival:'#e9c46a',pal:{grass:'#1b4d2e',track:'#333',line:'#ffd166'}},
+ {title:'Wartime Sortie',year:'Age 27',
+  blurb:'War splits the two friends. The rival Hartmann now flies for the other side. Dodge the debris on the circuit and win the race.',
+  winText:'You land on the carrier. Hartmann is still out there.',
+  laps:3,rivalName:'Hartmann',rivalSpeed:4.8,maxSpeed:5.8,accel:.12,turn:.045,grip:.2,drag:.99,hw:58,debris:9,
+  rival:'#8ecae6',pal:{grass:'#4b3f22',track:'#2b2b2b',line:'#e63946'}},
+ {title:'Jupiter Circuit',year:'Age 34',
+  blurb:'Recruited by the space agencies, the only people who can take these g-forces. Jupiter gives you a slick track and heavy air. Race Sato anyway.',
+  winText:'Sato hangs up his helmet. Next stop: Mars.',
+  laps:3,rivalName:'Sato',rivalSpeed:5.0,maxSpeed:6.2,accel:.1,turn:.05,grip:.05,drag:.996,hw:62,bands:true,
+  rival:'#ffd6a5',pal:{grass:'#8a4b1f',track:'#4a3a33',line:'#ffe0b2'}},
+ {title:'Mars: Second Man',year:'Age 38',
+  blurb:'Test pilot, then astronaut, then the second man on Mars. One last race in the red dust against Dario.',
+  winText:'',
+  laps:3,rivalName:'Dario Vale',rivalSpeed:5.3,maxSpeed:6.4,accel:.11,turn:.045,grip:.1,drag:.995,hw:60,stars:true,
+  rival:'#e9c46a',pal:{grass:'#a0442a',track:'#6b3a2c',line:'#fff3e0'}}
+];
 
-function input() {
-  return {
-    left:  keys.ArrowLeft || keys.a || keys.A || touch.l,
-    right: keys.ArrowRight || keys.d || keys.D || touch.r,
-    gas:   keys.ArrowUp || keys.w || keys.W || touch.g,
-    brake: keys.ArrowDown || keys.s || keys.S || touch.b
-  };
+let st='intro',ch=0,cdT=0,raceT=0,P,Q,debris=[],resWin=false,flash='',flashT=0,stars=[];
+const keys={};
+let tL=false,tR=false,tG=false;
+
+function K(...n){return n.some(k=>keys[k]);}
+function say(s,t){flash=s;flashT=t;}
+function tangentH(t){return Math.atan2(R.ry*Math.cos(t),-R.rx*Math.sin(t));}
+function trackPt(t){return {x:R.cx+R.rx*Math.cos(t),y:R.cy+R.ry*Math.sin(t),h:tangentH(t)};}
+function makeStars(){stars=[];for(let i=0;i<90;i++)stars.push({x:Math.random()*W,y:Math.random()*H,r:Math.random()*1.6+.3});}
+
+function startChapter(i){
+  ch=i;const c=CH[i];
+  const sa=-0.15;
+  const p0=trackPt(sa);
+  P={x:p0.x,y:p0.y,h:p0.h,vx:0,vy:0,prog:0,last:sa,start:sa,done:false};
+  Q={prog:0,done:false};
+  debris=[];
+  for(let k=0;k<(c.debris||0);k++){
+    let t=1+Math.random()*(TAU-2);
+    debris.push({t:t,off:(Math.random()*2-1)*32,hit:false});
+  }
+  makeStars();
+  st='intro';flash='';flashT=0;
 }
 
-function newRace() {
-  race = {
-    t: 0,
-    p: { tot: -0.3, d: 0, v: 0 },
-    r: { tot: -0.7, d: -12, v: 0, skill: 355 + Math.random() * 70 },
-    g: 0, winner: null
-  };
-  state = 'countdown';
-  setMsg('Race ' + season.race + ' of ' + SEASON + ' - get ready!');
+function finish(win){
+  if(win){
+    if(ch===CH.length-1) st='end'; else st='result';
+    resWin=true;
+  } else {
+    st='result';resWin=false;
+  }
 }
 
-function advance() {
-  if (season.race >= SEASON) {
-    const champ = season.pp >= season.rp ? 'YOU are the CHAMPION!' : 'The rival takes the title.';
-    setMsg(champ + ' Final: you ' + season.pp + ' pts, rival ' + season.rp + ' pts. Press Space to start a new season.');
-    season = { race: 1, pp: 0, rp: 0 };
-    state = 'end';
+function update(){
+  if(flashT>0)flashT--;
+  if(st==='countdown'){
+    cdT--;
+    if(cdT<=0){st='race';raceT=0;say('GO!',60);}
     return;
   }
-  newRace();
+  if(st!=='race')return;
+  const c=CH[ch];raceT++;
+
+  const left=tL||K('ArrowLeft','a'),right=tR||K('ArrowRight','d');
+  const gas=tG||K('ArrowUp','w'),brake=K('ArrowDown','s');
+
+  let sp=Math.hypot(P.vx,P.vy);
+  const steer=(left?-1:0)+(right?1:0);
+  if(sp>0.2)P.h+=steer*c.turn*Math.min(1,sp/2.5);
+
+  const fx=Math.cos(P.h),fy=Math.sin(P.h);
+  if(gas&&sp<c.maxSpeed){P.vx+=fx*c.accel;P.vy+=fy*c.accel;}
+  if(brake){P.vx*=0.9;P.vy*=0.9;}
+
+  // grip: bleed off lateral (sideways) velocity
+  const f=P.vx*fx+P.vy*fy;
+  const lx=P.vx-fx*f,ly=P.vy-fy*f,ret=1-c.grip;
+  P.vx=fx*f+lx*ret;P.vy=fy*f+ly*ret;
+  P.vx*=c.drag;P.vy*=c.drag;
+  P.x+=P.vx;P.y+=P.vy;
+
+  // off-track grass and walls
+  let nx=(P.x-R.cx)/R.rx,ny=(P.y-R.cy)/R.ry,d=Math.hypot(nx,ny);
+  const dist=Math.abs(d-1)*R.avg;
+  if(dist>c.hw){
+    P.vx*=0.96;P.vy*=0.96;
+    if(dist>c.hw+18){
+      const sc=(1+Math.sign(d-1)*(c.hw+18)/R.avg)/d;
+      P.x=R.cx+(P.x-R.cx)*sc;P.y=R.cy+(P.y-R.cy)*sc;
+      P.vx*=0.5;P.vy*=0.5;
+    }
+  }
+  nx=(P.x-R.cx)/R.rx;ny=(P.y-R.cy)/R.ry;d=Math.hypot(nx,ny);
+
+  // progress around the oval
+  const a=Math.atan2(ny,nx);
+  let da=a-P.last;
+  if(da>Math.PI)da-=TAU;else if(da<-Math.PI)da+=TAU;
+  P.prog+=da;P.last=a;
+
+  // debris hits
+  const am=((a%TAU)+TAU)%TAU;
+  for(const db of debris){
+    if(db.hit)continue;
+    const m=(((am-db.t+Math.PI)%TAU)+TAU)%TAU-Math.PI;
+    if(Math.abs(m)<0.07){
+      const radial=(d-1)*R.avg;
+      if(Math.abs(radial-db.off)<20){
+        db.hit=true;P.vx*=0.3;P.vy*=0.3;say('HIT DEBRIS! Speed lost',120);
+      }
+    }
+  }
+
+  // rival AI
+  const wob=1+0.06*Math.sin(Q.prog*2.3);
+  Q.prog+=c.rivalSpeed*wob/R.perim*TAU;
+
+  const pAbs=P.start+P.prog;
+  if(!P.done&&pAbs>=c.laps*TAU)P.done=true;
+  if(!Q.done&&Q.prog>=c.laps*TAU)Q.done=true;
+  if(P.done)finish(true);
+  else if(Q.done)finish(false);
 }
 
-function setMsg(t) { document.getElementById('msg').textContent = t; }
-
-function pos(th, d) {
-  return [CX + (RX + d) * Math.cos(th), CY + (RY + d) * Math.sin(th)];
+function wrap(text,maxW){
+  const words=text.split(' ');const out=[];let line='';
+  for(const w of words){
+    const t=line?line+' '+w:w;
+    if(ctx.measureText(t).width>maxW&&line){out.push(line);line=w;}
+    else line=t;
+  }
+  if(line)out.push(line);
+  return out;
 }
 
-function update(dt) {
-  if (state === 'end') return;
-  if (state === 'countdown') {
-    race.t += dt;
-    if (race.t >= 3) { state = 'race'; race.t = 0; setMsg('GO! Lap 3 wins the race.'); }
-    return;
+function panel(items){
+  const pw=Math.min(W*0.9,660),rows=[];
+  for(const [t,sz,col] of items){
+    ctx.font='bold '+sz+'px monospace';
+    for(const ln of wrap(t,pw-40))rows.push({t:ln,sz:sz,col:col,lh:sz*1.5});
+    rows.push({gap:12});
   }
-  if (state !== 'race') return;
-
-  const p = race.p, r = race.r, inp = input();
-  race.t += dt;
-
-  // Player physics
-  if (inp.gas) p.v += 220 * dt;
-  if (inp.brake) p.v -= 450 * dt;
-  p.v -= 25 * dt;
-  p.v = Math.max(0, Math.min(p.v, 430));
-  const steer = (inp.left ? -1 : 0) + (inp.right ? 1 : 0);
-  if (p.v > 0) p.d += steer * 140 * dt * Math.min(1, p.v / 150);
-  if (Math.abs(p.d) > HW) {
-    p.v *= (1 - 0.6 * dt);
-    p.d = Math.max(-70, Math.min(70, p.d));
-  }
-  p.tot += p.v * dt / 240;
-  race.g = (p.v * p.v / 240) / 98;
-
-  // Rival AI: holds a racing line and weaves a little
-  r.v += (r.skill - r.v) * dt * 2;
-  r.tot += r.v * dt / 240;
-  r.d = -12 + 15 * Math.sin(race.t * 0.9);
-
-  // Lap status
-  const lapP = Math.min(LAPS, Math.floor(Math.max(0, p.tot) / TAU) + 1);
-  document.getElementById('lap').textContent = 'Lap ' + lapP + '/' + LAPS + '  Speed ' + Math.round(p.v) + ' km/h';
-  document.getElementById('pos').textContent = (p.tot >= r.tot ? 'P1' : 'P2') + '  Race ' + season.race + '/' + SEASON;
-  document.getElementById('g').textContent = 'G: ' + race.g.toFixed(1);
-
-  if (p.tot >= LAPS * TAU || r.tot >= LAPS * TAU) {
-    race.winner = p.tot >= LAPS * TAU ? 'player' : 'rival';
-    if (race.winner === 'player') season.pp += 25, season.rp += 15;
-    else season.rp += 25, season.pp += 15;
-    state = 'result';
-    setMsg((race.winner === 'player' ? 'You WIN race ' : 'Rival wins race ') + season.race +
-      '! Points: you ' + season.pp + ' - rival ' + season.rp + '. Press Space or tap to continue.');
-    season.race++;
+  let th=30;for(const r of rows)th+=r.gap||r.lh;
+  const top=(H-th)/2,x0=(W-pw)/2;
+  ctx.fillStyle='rgba(0,0,0,0.75)';ctx.fillRect(x0,top,pw,th);
+  let cur=top+15;
+  ctx.textAlign='center';ctx.textBaseline='top';
+  for(const r of rows){
+    if(r.gap){cur+=r.gap;continue;}
+    ctx.font='bold '+r.sz+'px monospace';
+    ctx.fillStyle=r.col||'#fff';
+    ctx.fillText(r.t,W/2,cur);
+    cur+=r.lh;
   }
 }
 
-function drawCar(th, d, color) {
-  const [x, y] = pos(th, d);
-  const dx = -(RX + d) * Math.sin(th), dy = (RY + d) * Math.cos(th);
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(Math.atan2(dy, dx));
-  ctx.fillStyle = color;
-  ctx.fillRect(-13, -7, 26, 14);
-  ctx.fillStyle = '#123';
-  ctx.fillRect(2, -5, 8, 10);
+function car(x,y,h,col){
+  ctx.save();ctx.translate(x,y);ctx.rotate(h);
+  ctx.fillStyle='#000';ctx.fillRect(-15,-10,30,20);
+  ctx.fillStyle=col;ctx.fillRect(-13,-8,26,16);
+  ctx.fillStyle='#222';ctx.fillRect(6,-6,4,12);
   ctx.restore();
 }
 
-function drawTrack() {
-  ctx.fillStyle = '#2d6b2d';
-  ctx.fillRect(0, 0, cv.width, cv.height);
-  ctx.beginPath();
-  ctx.ellipse(CX, CY, RX, RY, 0, 0, TAU);
-  ctx.lineWidth = 2 * HW;
-  ctx.strokeStyle = '#555';
-  ctx.stroke();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = '#fff';
-  ctx.setLineDash([12, 12]);
-  ctx.stroke();
-  ctx.setLineDash([]);
-  const a = pos(0, -HW), b = pos(0, HW);
-  ctx.beginPath();
-  ctx.moveTo(a[0], a[1]);
-  ctx.lineTo(b[0], b[1]);
-  ctx.lineWidth = 4;
-  ctx.strokeStyle = '#fff';
-  ctx.stroke();
+function draw(){
+  const c=CH[ch],p=c.pal;
+  ctx.textBaseline='alphabetic';
+  ctx.fillStyle=p.grass;ctx.fillRect(0,0,W,H);
+  if(c.stars){ctx.fillStyle='rgba(255,255,255,0.7)';for(const s of stars){ctx.beginPath();ctx.arc(s.x,s.y,s.r,0,TAU);ctx.fill();}}
+  if(c.bands){for(let y=0;y<H;y+=28){ctx.fillStyle=((y/28)|0)%2?'rgba(255,220,180,0.10)':'rgba(120,50,20,0.12)';ctx.fillRect(0,y,W,28);}}
+
+  // track
+  ctx.beginPath();ctx.ellipse(R.cx,R.cy,R.rx,R.ry,0,0,TAU);
+  ctx.strokeStyle=p.track;ctx.lineWidth=c.hw*2;ctx.stroke();
+  ctx.strokeStyle='#fff';ctx.lineWidth=3;
+  ctx.beginPath();ctx.ellipse(R.cx,R.cy,R.rx+c.hw,R.ry+c.hw,0,0,TAU);ctx.stroke();
+  ctx.beginPath();ctx.ellipse(R.cx,R.cy,Math.max(1,R.rx-c.hw),Math.max(1,R.ry-c.hw),0,0,TAU);ctx.stroke();
+  ctx.save();
+  ctx.setLineDash([18,18]);ctx.globalAlpha=0.45;ctx.strokeStyle=p.line;ctx.lineWidth=2;
+  ctx.beginPath();ctx.ellipse(R.cx,R.cy,R.rx,R.ry,0,0,TAU);ctx.stroke();
+  ctx.restore();
+  ctx.fillStyle='#fff';ctx.fillRect(R.cx+R.rx-3,R.cy-c.hw,6,c.hw*2);
+
+  // debris
+  for(const db of debris){
+    if(db.hit)continue;
+    const x=R.cx+(R.rx+db.off)*Math.cos(db.t),y=R.cy+(R.ry+db.off)*Math.sin(db.t);
+    ctx.save();ctx.translate(x,y);ctx.rotate(Math.PI/4);
+    ctx.fillStyle='#ff4d4d';ctx.fillRect(-7,-7,14,14);ctx.restore();
+  }
+
+  // cars
+  const q=trackPt(Q.prog);
+  car(q.x,q.y,q.h,c.rival);
+  car(P.x,P.y,P.h,'#4cc9f0');
+
+  // HUD
+  if(st==='race'||st==='countdown'||st==='result'){
+    const pAbs=P.start+P.prog;
+    const lap=Math.min(c.laps,Math.max(1,Math.floor(pAbs/TAU)+1));
+    ctx.fillStyle='#fff';ctx.font='bold 16px monospace';ctx.textAlign='left';
+    ctx.fillText(c.title+'  ('+c.year+')',14,24);
+    ctx.fillText('LAP '+lap+'/'+c.laps+'   '+(pAbs>=Q.prog?'P1':'P2')+'   '+(raceT/60).toFixed(1)+'s   '+Math.round(Math.hypot(P.vx,P.vy)*20)+' kph',14,46);
+  }
+  if(flash&&flashT>0){
+    ctx.globalAlpha=Math.min(1,flashT/30);
+    ctx.fillStyle='#ffd166';ctx.font='bold 28px monospace';ctx.textAlign='center';
+    ctx.fillText(flash,W/2,H*0.14);
+    ctx.globalAlpha=1;
+  }
+
+  // overlays
+  if(st==='intro'){
+    panel([
+      [c.title,22,'#ffd166'],
+      [c.year,14,'#aaa'],
+      [c.blurb,16],
+      ['Drive: arrows or WASD. Up gas, Down brake. Phones: tap left or right to steer, middle to gas.',12,'#ccc'],
+      ['SPACE or tap to start',16,'#7fff7f']
+    ]);
+  } else if(st==='countdown'){
+    ctx.fillStyle='#fff';ctx.font='bold 90px monospace';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText(String(Math.ceil(cdT/60)),W/2,H/2);
+    ctx.textBaseline='alphabetic';
+  } else if(st==='result'){
+    if(resWin){
+      panel([
+        ['CHAPTER WON',24,'#7fff7f'],
+        ['Time '+(raceT/60).toFixed(2)+'s against '+c.rivalName,14],
+        [c.winText,16],
+        [ch<CH.length-1?'SPACE to continue':'SPACE to finish',16,'#ffd166']
+      ]);
+    } else {
+      panel([
+        ['DEFEATED',24,'#ff6b6b'],
+        [c.rivalName+' crosses the line first.',16],
+        ['SPACE or R to try again',16,'#ffd166']
+      ]);
+    }
+  } else if(st==='end'){
+    panel([
+      ['OVAL CHAMPION',26,'#ffd166'],
+      ['Karting at nine. Three world titles in Formula One. A war that split two friends. Racing on Jupiter. Test pilot, astronaut, and the second man on Mars.',15],
+      ['SPACE or R to race again',14,'#7fff7f']
+    ]);
+  }
 }
 
-function draw() {
-  drawTrack();
-  if (race) {
-    drawCar(race.r.tot, race.r.d, '#e33');
-    drawCar(race.p.tot, race.p.d, '#39f');
-  }
-  ctx.textAlign = 'center';
-  ctx.font = 'bold 36px monospace';
-  ctx.fillStyle = '#fff';
-  if (state === 'countdown' && race) {
-    const n = 3 - Math.floor(race.t);
-    ctx.fillText(n > 0 ? String(n) : 'GO!', CX, CY + 12);
-  }
-  if (state === 'result' && race) {
-    ctx.font = 'bold 28px monospace';
-    ctx.fillText(race.winner === 'player' ? 'YOU WIN!' : 'RIVAL WINS', CX, CY + 10);
-  }
+function advance(){
+  if(st==='intro'){st='countdown';cdT=180;}
+  else if(st==='result'){ if(resWin)startChapter(ch+1); else startChapter(ch); }
+  else if(st==='end'){startChapter(0);}
 }
 
-let last = performance.now();
-function loop(now) {
-  const dt = Math.min(0.05, (now - last) / 1000);
-  last = now;
-  update(dt);
-  draw();
-  requestAnimationFrame(loop);
-}
+function normKey(e){return e.key.length===1?e.key.toLowerCase():e.key;}
+addEventListener('keydown',e=>{
+  const k=normKey(e);
+  keys[k]=true;
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key))e.preventDefault();
+  if((e.key===' '||e.key==='Enter')&&!e.repeat)advance();
+  if(k==='r'&&!e.repeat){ if(st==='end')startChapter(0); else startChapter(ch); }
+});
+addEventListener('keyup',e=>{keys[normKey(e)]=false;});
 
-newRace();
-requestAnimationFrame(loop);
+function touchUpdate(e){
+  tL=tR=tG=false;
+  for(const t of e.touches){
+    const x=t.clientX/innerWidth;
+    if(x<0.3)tL=true;else if(x>0.7)tR=true;else tG=true;
+  }
+}
+cv.addEventListener('touchstart',e=>{e.preventDefault();touchUpdate(e);if(st!=='race')advance();},{passive:false});
+cv.addEventListener('touchmove',e=>{e.preventDefault();touchUpdate(e);},{passive:false});
+cv.addEventListener('touchend',e=>{e.preventDefault();touchUpdate(e);},{passive:false});
+cv.addEventListener('touchcancel',e=>{e.preventDefault();touchUpdate(e);},{passive:false});
+cv.addEventListener('mousedown',()=>{if(st!=='race')advance();});
+
+function frame(){update();draw();requestAnimationFrame(frame);}
+startChapter(0);
+frame();
 </script>
-</body>
-</html>
+</body></html>
