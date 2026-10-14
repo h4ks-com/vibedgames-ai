@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Oval Champion</title>
+<style>
+body{margin:0;background:#111;color:#fff;font-family:monospace;display:flex;flex-direction:column;align-items:center;user-select:none;touch-action:none}
+#hud{width:800px;max-width:100vw;display:flex;justify-content:space-between;padding:6px;box-sizing:border-box;font-size:15px}
+canvas{background:#2d6b2d;max-width:100vw;height:auto;border:2px solid #333}
+#ctl{display:flex;gap:8px;margin:8px}
+#ctl button{width:80px;height:60px;font-size:18px;background:#333;color:#fff;border:1px solid #666;border-radius:8px}
+#msg{min-height:20px;font-size:14px;color:#ccc;text-align:center;padding:4px}
+</style>
+</head>
+<body>
+<div id="hud"><span id="lap"></span><span id="pos"></span><span id="g"></span></div>
+<canvas id="c" width="800" height="600"></canvas>
+<div id="ctl">
+  <button data-k="l">&#9664;</button>
+  <button data-k="g">GAS</button>
+  <button data-k="b">BRAKE</button>
+  <button data-k="r">&#9654;</button>
+</div>
+<div id="msg">Arrows/WASD to drive. Up = gas, Down = brake, Left/Right = steer. Stay on the track!</div>
+<script>
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const CX = 400, CY = 300, RX = 300, RY = 180, HW = 40, LAPS = 3, TAU = Math.PI * 2, SEASON = 5;
+const keys = {}, touch = {};
+let state = 'countdown';
+let season = { race: 1, pp: 0, rp: 0 };
+let race;
+
+addEventListener('keydown', e => {
+  keys[e.key] = true;
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+  if ((e.key === ' ' || e.key === 'Enter') && state === 'result') advance();
+});
+addEventListener('keyup', e => keys[e.key] = false);
+document.querySelectorAll('#ctl button').forEach(b => {
+  const k = b.dataset.k;
+  b.addEventListener('pointerdown', e => { touch[k] = true; e.preventDefault(); });
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => b.addEventListener(ev, () => touch[k] = false));
+});
+cv.addEventListener('pointerdown', () => { if (state === 'result') advance(); });
+
+function input() {
+  return {
+    left:  keys.ArrowLeft || keys.a || keys.A || touch.l,
+    right: keys.ArrowRight || keys.d || keys.D || touch.r,
+    gas:   keys.ArrowUp || keys.w || keys.W || touch.g,
+    brake: keys.ArrowDown || keys.s || keys.S || touch.b
+  };
+}
+
+function newRace() {
+  race = {
+    t: 0,
+    p: { tot: -0.3, d: 0, v: 0 },
+    r: { tot: -0.7, d: -12, v: 0, skill: 355 + Math.random() * 70 },
+    g: 0, winner: null
+  };
+  state = 'countdown';
+  setMsg('Race ' + season.race + ' of ' + SEASON + ' - get ready!');
+}
+
+function advance() {
+  if (season.race >= SEASON) {
+    const champ = season.pp >= season.rp ? 'YOU are the CHAMPION!' : 'The rival takes the title.';
+    setMsg(champ + ' Final: you ' + season.pp + ' pts, rival ' + season.rp + ' pts. Press Space to start a new season.');
+    season = { race: 1, pp: 0, rp: 0 };
+    state = 'end';
+    return;
+  }
+  newRace();
+}
+
+function setMsg(t) { document.getElementById('msg').textContent = t; }
+
+function pos(th, d) {
+  return [CX + (RX + d) * Math.cos(th), CY + (RY + d) * Math.sin(th)];
+}
+
+function update(dt) {
+  if (state === 'end') return;
+  if (state === 'countdown') {
+    race.t += dt;
+    if (race.t >= 3) { state = 'race'; race.t = 0; setMsg('GO! Lap 3 wins the race.'); }
+    return;
+  }
+  if (state !== 'race') return;
+
+  const p = race.p, r = race.r, inp = input();
+  race.t += dt;
+
+  // Player physics
+  if (inp.gas) p.v += 220 * dt;
+  if (inp.brake) p.v -= 450 * dt;
+  p.v -= 25 * dt;
+  p.v = Math.max(0, Math.min(p.v, 430));
+  const steer = (inp.left ? -1 : 0) + (inp.right ? 1 : 0);
+  if (p.v > 0) p.d += steer * 140 * dt * Math.min(1, p.v / 150);
+  if (Math.abs(p.d) > HW) {
+    p.v *= (1 - 0.6 * dt);
+    p.d = Math.max(-70, Math.min(70, p.d));
+  }
+  p.tot += p.v * dt / 240;
+  race.g = (p.v * p.v / 240) / 98;
+
+  // Rival AI: holds a racing line and weaves a little
+  r.v += (r.skill - r.v) * dt * 2;
+  r.tot += r.v * dt / 240;
+  r.d = -12 + 15 * Math.sin(race.t * 0.9);
+
+  // Lap status
+  const lapP = Math.min(LAPS, Math.floor(Math.max(0, p.tot) / TAU) + 1);
+  document.getElementById('lap').textContent = 'Lap ' + lapP + '/' + LAPS + '  Speed ' + Math.round(p.v) + ' km/h';
+  document.getElementById('pos').textContent = (p.tot >= r.tot ? 'P1' : 'P2') + '  Race ' + season.race + '/' + SEASON;
+  document.getElementById('g').textContent = 'G: ' + race.g.toFixed(1);
+
+  if (p.tot >= LAPS * TAU || r.tot >= LAPS * TAU) {
+    race.winner = p.tot >= LAPS * TAU ? 'player' : 'rival';
+    if (race.winner === 'player') season.pp += 25, season.rp += 15;
+    else season.rp += 25, season.pp += 15;
+    state = 'result';
+    setMsg((race.winner === 'player' ? 'You WIN race ' : 'Rival wins race ') + season.race +
+      '! Points: you ' + season.pp + ' - rival ' + season.rp + '. Press Space or tap to continue.');
+    season.race++;
+  }
+}
+
+function drawCar(th, d, color) {
+  const [x, y] = pos(th, d);
+  const dx = -(RX + d) * Math.sin(th), dy = (RY + d) * Math.cos(th);
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(Math.atan2(dy, dx));
+  ctx.fillStyle = color;
+  ctx.fillRect(-13, -7, 26, 14);
+  ctx.fillStyle = '#123';
+  ctx.fillRect(2, -5, 8, 10);
+  ctx.restore();
+}
+
+function drawTrack() {
+  ctx.fillStyle = '#2d6b2d';
+  ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.beginPath();
+  ctx.ellipse(CX, CY, RX, RY, 0, 0, TAU);
+  ctx.lineWidth = 2 * HW;
+  ctx.strokeStyle = '#555';
+  ctx.stroke();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#fff';
+  ctx.setLineDash([12, 12]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  const a = pos(0, -HW), b = pos(0, HW);
+  ctx.beginPath();
+  ctx.moveTo(a[0], a[1]);
+  ctx.lineTo(b[0], b[1]);
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = '#fff';
+  ctx.stroke();
+}
+
+function draw() {
+  drawTrack();
+  if (race) {
+    drawCar(race.r.tot, race.r.d, '#e33');
+    drawCar(race.p.tot, race.p.d, '#39f');
+  }
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 36px monospace';
+  ctx.fillStyle = '#fff';
+  if (state === 'countdown' && race) {
+    const n = 3 - Math.floor(race.t);
+    ctx.fillText(n > 0 ? String(n) : 'GO!', CX, CY + 12);
+  }
+  if (state === 'result' && race) {
+    ctx.font = 'bold 28px monospace';
+    ctx.fillText(race.winner === 'player' ? 'YOU WIN!' : 'RIVAL WINS', CX, CY + 10);
+  }
+}
+
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+
+newRace();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
