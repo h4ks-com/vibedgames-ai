@@ -35,6 +35,7 @@ import { clone as cloneSkel } from 'three/addons/utils/SkeletonUtils.js';
 
 const PROF_URL = 'https://s3-api.t3ks.com/workflows/character/2026-09-27/a-history-professor-in-a-tweed-jacket-194707.glb';
 const PLAYER_URL = 'https://s3-api.t3ks.com/workflows/character/2026-10-07/a-gloriously-flamboyant-over-the-top-proud-humanoid-in-a-da-161214.glb';
+const CHOMSKY_URL = 'https://s3-api.t3ks.com/workflows/character/2026-10-14/noam-chomsky-an-elderly-linguist-and-philosopher-humanoid-084628.glb';
 const TREE_URL = './tree.glb';   // Sketchfab "Trees" by bumstrum (CC-BY), imported to this project
 const ROCK_URL = './rock.glb';   // Sketchfab "Free Pack - Rocks Stylized" by polyone (CC-BY)
 
@@ -46,6 +47,17 @@ const LINES = [
   'Chomsky wept when he saw the first UML diagram. Type 2, at best.'
 ];
 const PROF_ACTIONS = ['Adjust Spectacles', 'Write On Blackboard', 'Unroll Scroll', 'Dust Off Artifact'];
+
+// Noam Chomsky NPC (paraphrased talking points from his public work)
+const CHOMSKY_SPOT = [-18, -4];
+const CHOMSKY_ACTIONS = ['Lecture', 'Glasses', 'Shrug', 'Gesture'];
+const CHOMSKY_LINES = [
+  'Colorless green ideas sleep furiously. Grammatical, yet meaningless. Remember that.',
+  'Every child masters a language in a few years, and nobody teaches them the rules. Think about that.',
+  'The Chomsky hierarchy has four levels. Your pathfinding is probably regular. Ha.',
+  'Manufacturing consent is easier than you think. Read the propaganda model.',
+  'Power rarely announces itself. Ask who benefits.'
+];
 
 const statusEl = document.getElementById('status');
 const bubble = document.getElementById('bubble');
@@ -133,11 +145,13 @@ for (let i = 0; i < 6; i++) {
   obstacles.push({ x, z, r: 0.55 });
 }
 PROF_SPOTS.forEach(([x, z]) => obstacles.push({ x, z, r: 0.7 }));
+obstacles.push({ x: CHOMSKY_SPOT[0], z: CHOMSKY_SPOT[1], r: 0.7 });
 
 function placeable(x, z, r) {
   const d = Math.hypot(x, z);
   if (d < SPAWN_CLEAR || d > 105 || Math.hypot(x, z) < 0) return false;
   for (const p of PROF_SPOTS) if (Math.hypot(x - p[0], z - p[1]) < 4) return false;
+  if (Math.hypot(x - CHOMSKY_SPOT[0], z - CHOMSKY_SPOT[1]) < 4) return false;
   if (Math.hypot(x - (-26), z - 20) < 6.5) return false;   // keep the pond clear
   for (const o of obstacles) if (Math.hypot(x - o.x, z - o.z) < o.r + r + 0.6) return false;
   return true;
@@ -463,10 +477,12 @@ let bubbleTimer = 0;
 function talk() {
   const p = nearestProf();
   if (!p) return;
-  const act = PROF_ACTIONS[Math.floor(Math.random() * PROF_ACTIONS.length)];
+  const acts = p.actions || PROF_ACTIONS;
+  const lines = p.lines || LINES;
+  const act = acts[Math.floor(Math.random() * acts.length)];
   p.rig.play(act, false);
   p.busyUntil = performance.now() + 4000;
-  bubble.textContent = 'Professor: "' + LINES[Math.floor(Math.random() * LINES.length)] + '"';
+  bubble.textContent = (p.speaker || 'Professor') + ': "' + lines[Math.floor(Math.random() * lines.length)] + '"';
   bubble.style.display = 'block';
   bubbleTimer = performance.now() + 5000;
 }
@@ -561,8 +577,9 @@ function update(dt) {
 
   const now = performance.now();
   for (const p of profs) {
+    const acts = p.actions || PROF_ACTIONS;
     if (now > p.busyUntil && now > p.nextAct) {
-      const act = PROF_ACTIONS[Math.floor(Math.random() * PROF_ACTIONS.length)];
+      const act = acts[Math.floor(Math.random() * acts.length)];
       p.rig.play(act, false);
       p.busyUntil = now + 3500;
       p.nextAct = now + 6000 + Math.random() * 6000;
@@ -603,6 +620,23 @@ function frame() {
   requestAnimationFrame(frame);
 }
 
+// Chomsky NPC: loaded on its own so a failure here never stops the rest of the game
+async function loadChomsky() {
+  const gltf = await loadGLB(CHOMSKY_URL);
+  const model = gltf.scene;
+  const group = new THREE.Group();
+  group.add(model);
+  group.position.set(CHOMSKY_SPOT[0], 0, CHOMSKY_SPOT[1]);
+  group.rotation.y = Math.atan2(-CHOMSKY_SPOT[0], -CHOMSKY_SPOT[1]);
+  scene.add(group);
+  const rig = new Rig(model, gltf.animations);
+  seatOnGround(model, rig);
+  profs.push({
+    group, rig, busyUntil: 0, nextAct: performance.now() + 4000,
+    actions: CHOMSKY_ACTIONS, lines: CHOMSKY_LINES, speaker: 'Chomsky'
+  });
+}
+
 // ---------- load assets ----------
 (async () => {
   try {
@@ -634,6 +668,9 @@ function frame() {
       seatOnGround(model, rig);
       profs.push({ group, rig, busyUntil: 0, nextAct: performance.now() + 3000 + i * 1000 });
     });
+
+    // Chomsky failing to load must not break the park
+    await loadChomsky().catch((err) => console.warn('Chomsky NPC skipped:', err));
 
     window.__dbg = { player, profs: profs.map(p => p.group), ground, obstacles, treeSpots: treeSpots.length, rockSpots: rockSpots.length, scene, renderer };
     statusEl.textContent = 'Ready';
