@@ -1,0 +1,1016 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Deep Structure</title>
+<style>
+  :root { --ink:#f4ead2; --gold:#ffcf5a; --red:#ff5a4e; --green:#6dff9c; --panel:rgba(14,10,24,.82); }
+  html,body { margin:0; height:100%; background:#0b0814; color:var(--ink); font-family:'Courier New',monospace; overflow:hidden; }
+  canvas { display:block; }
+  .screen { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; background:radial-gradient(circle at 50% 40%,#2a1a44,#07050d 70%); z-index:10; padding:16px; box-sizing:border-box; }
+  .screen h1 { font-size:clamp(28px,6vw,64px); margin:0 0 8px; color:var(--gold); letter-spacing:4px; text-shadow:0 0 24px #ff9d2a88; }
+  .screen h2 { font-size:clamp(14px,2vw,18px); margin:0 0 24px; opacity:.8; font-weight:normal; }
+  .screen p { max-width:640px; line-height:1.6; font-size:15px; }
+  button { font:inherit; font-size:18px; padding:12px 32px; margin-top:20px; background:var(--gold); color:#1a1020; border:none; cursor:pointer; font-weight:bold; letter-spacing:2px; }
+  button:hover { filter:brightness(1.15); }
+  .keys { margin-top:16px; font-size:13px; opacity:.75; line-height:1.8; }
+  .bar { width:min(420px,80vw); height:10px; background:#ffffff22; margin-top:16px; }
+  .bar > div { height:100%; width:0; background:var(--gold); transition:width .2s; }
+  #hud { position:fixed; inset:0; pointer-events:none; z-index:5; display:none; }
+  .meter { position:absolute; left:16px; width:260px; height:14px; background:#00000088; border:2px solid #ffffff55; }
+  .meter > div { height:100%; transition:width .15s; }
+  .meter span { position:absolute; left:6px; top:-2px; font-size:11px; font-weight:bold; text-shadow:0 0 3px #000; }
+  #hpBar { top:16px; } #hpBar > div { background:var(--green); }
+  #ultBar { top:38px; height:8px; } #ultBar > div { background:#b18cff; }
+  #ultKey { position:absolute; left:286px; top:30px; padding:2px 9px; border:2px solid #b18cff; color:#b18cff; font-weight:bold; font-size:15px; background:#00000088; opacity:.25; }
+  #ultKey.ready { opacity:1; color:#1a1020; background:#b18cff; box-shadow:0 0 14px #b18cff; animation:pulse .8s ease-in-out infinite alternate; }
+  #ultKey.ready::after { content:' MUDRA READY'; font-size:11px; letter-spacing:1px; }
+  @keyframes pulse { from { transform:scale(1); } to { transform:scale(1.12); } }
+  #boss { position:absolute; top:16px; left:50%; transform:translateX(-50%); width:min(520px,60vw); text-align:center; display:none; }
+  #boss .meter { position:relative; left:0; width:100%; height:16px; }
+  #boss .meter > div { background:var(--red); }
+  #bossName { font-weight:bold; color:var(--red); margin-bottom:4px; letter-spacing:2px; }
+  #objective { position:absolute; top:62px; left:16px; font-size:13px; color:var(--gold); text-shadow:0 0 4px #000; }
+  #banner { position:absolute; top:30%; width:100%; text-align:center; font-size:clamp(28px,5vw,52px); color:var(--gold); font-weight:bold; text-shadow:0 0 18px #000; opacity:0; transition:opacity .4s; letter-spacing:3px; }
+  #dialog { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); width:min(760px,calc(100vw - 32px)); background:var(--panel); border:2px solid var(--gold); padding:14px 18px; box-sizing:border-box; z-index:6; display:none; cursor:pointer; }
+  #dialog b { color:var(--gold); display:block; margin-bottom:6px; letter-spacing:2px; }
+  #dialog small { position:absolute; right:12px; bottom:6px; opacity:.5; font-size:11px; }
+  #hint { position:absolute; bottom:12px; right:16px; font-size:11px; opacity:.6; }
+  #focus { position:fixed; inset:0; z-index:8; display:none; align-items:center; justify-content:center; flex-direction:column; background:rgba(7,5,13,.55); cursor:pointer; text-align:center; }
+  #focus b { font-size:clamp(24px,4vw,40px); color:var(--gold); letter-spacing:4px; text-shadow:0 0 18px #000; }
+  #focus span { margin-top:10px; font-size:13px; opacity:.8; }
+  #flash { position:fixed; inset:0; background:#ff0000; opacity:0; pointer-events:none; z-index:4; transition:opacity .25s; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="loading" class="screen">
+  <h1>THE DEEP STRUCTURE</h1>
+  <h2>loading the cast</h2>
+  <div class="bar"><div id="loadBar"></div></div>
+  <p id="loadText" style="font-size:12px;opacity:.6"></p>
+</div>
+<div id="title" class="screen" style="display:none">
+  <h1>THE DEEP STRUCTURE</h1>
+  <h2>a professor, a master, a princess, and far too many eggs</h2>
+  <p>A strongman summit has taken Princess Misty hostage in the Tower of Surface Forms.
+  Donald and Vladimir plan to replace every human language with three-word slogans,
+  and their army of David Boiled Eggs is already marching across campus.</p>
+  <p>Only one man can stop them: the Professor, last student of Master Chomsky.</p>
+  <button id="startBtn">BEGIN THE LECTURE</button>
+  <div class="keys">WASD move &middot; mouse look &middot; Q/E turn &middot; ESC pause &middot; M music<br>
+  click or F throw a syntax tree &middot; SPACE jump &middot; SHIFT roll &middot; R mudra blast when charged</div>
+</div>
+<div id="over" class="screen" style="display:none">
+  <h1 id="overTitle">CLASS DISMISSED</h1>
+  <p id="overText"></p>
+  <button id="overBtn">TRY AGAIN</button>
+</div>
+<div id="hud">
+  <div id="hpBar" class="meter"><div></div><span>PROFESSOR</span></div>
+  <div id="ultBar" class="meter"><div></div></div>
+  <div id="ultKey">R</div>
+  <div id="objective"></div>
+  <div id="boss"><div id="bossName"></div><div class="meter"><div></div></div></div>
+  <div id="banner"></div>
+  <div id="hint">ESC to pause</div>
+</div>
+<div id="focus"><b>CLICK TO PLAY</b><span>the mouse controls the camera &middot; ESC to pause</span></div>
+<div id="dialog"><b id="dName"></b><span id="dText"></span><small>click / enter</small></div>
+<div id="flash"></div>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+
+const BUCKET = 'https://s3-api.t3ks.com/workflows/character/';
+const MODELS = {
+  professor: { url: BUCKET + '2026-09-28/an-eccentric-computer-science-professor-085926.glb', height: 1.8 },
+  chomsky:   { url: BUCKET + '2026-10-14/noam-chomsky-an-elderly-linguist-and-philosopher-humanoid-084628.glb', height: 1.75 },
+  misty:     { url: BUCKET + '2026-10-27/chubby-version-of-misty-from-pokemon-red-haired-pigtailed-w-231958.glb', height: 1.65 },
+  egg:       { url: BUCKET + '2026-10-28/david-boiled-egg-a-cheerful-humanoid-boiled-egg-with-two-ar-133812.glb', height: 1.25 },
+  vladimir:  { url: BUCKET + '2026-10-13/vladimir-putin-as-a-game-character-middle-aged-man-in-a-dar-080444.glb', height: 2.6 },
+  trump:     { url: BUCKET + '2026-10-12/donald-trump-a-humanoid-character-with-two-arms-and-two-leg-153551.glb', height: 2.7 },
+};
+const ARENA = 27, TOWER = new THREE.Vector3(0, 0, -20), TOWER_R = 4.5, TOWER_H = 5;
+const $ = id => document.getElementById(id);
+
+// ---------- renderer / scene ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1d1430);
+scene.fog = new THREE.Fog(0x1d1430, 30, 75);
+const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 200);
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+scene.add(new THREE.HemisphereLight(0xbfa8ff, 0x2a1f12, 1.1));
+const sun = new THREE.DirectionalLight(0xffe2b0, 2.2);
+sun.position.set(12, 25, 10);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -32, right: 32, top: 32, bottom: -32, far: 80 });
+scene.add(sun);
+
+function buildArena() {
+  const ground = new THREE.Mesh(new THREE.CircleGeometry(ARENA + 4, 64),
+    new THREE.MeshStandardMaterial({ color: 0x3b5a3a, roughness: 1 }));
+  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
+  const ring = new THREE.Mesh(new THREE.RingGeometry(ARENA, ARENA + 0.6, 64),
+    new THREE.MeshBasicMaterial({ color: 0xffcf5a, transparent: true, opacity: .35, side: THREE.DoubleSide }));
+  ring.rotation.x = -Math.PI / 2; ring.position.y = .02; scene.add(ring);
+  // a path of tiles from the lecture spot to the tower
+  const tileMat = new THREE.MeshStandardMaterial({ color: 0x8c7a5b, roughness: .9 });
+  for (let z = 16; z > -14; z -= 2.2) {
+    const t = new THREE.Mesh(new THREE.BoxGeometry(2.6, .1, 1.9), tileMat);
+    t.position.set(0, .05, z); t.receiveShadow = true; scene.add(t);
+  }
+  // columns of the old faculty building around the edge
+  const colMat = new THREE.MeshStandardMaterial({ color: 0xd8cfc0, roughness: .7 });
+  for (let i = 0; i < 16; i++) {
+    const a = i / 16 * Math.PI * 2;
+    if (Math.abs(Math.sin(a)) < .15 && Math.cos(a) > 0) continue;
+    const c = new THREE.Mesh(new THREE.CylinderGeometry(.6, .7, 7, 12), colMat);
+    c.position.set(Math.sin(a) * (ARENA + 2.5), 3.5, Math.cos(a) * (ARENA + 2.5));
+    c.castShadow = true; c.receiveShadow = true; scene.add(c);
+  }
+  // the Tower of Surface Forms
+  const tower = new THREE.Mesh(new THREE.CylinderGeometry(TOWER_R - .3, TOWER_R, TOWER_H, 24),
+    new THREE.MeshStandardMaterial({ color: 0x5b4a6e, roughness: .8 }));
+  tower.position.set(TOWER.x, TOWER_H / 2, TOWER.z); tower.castShadow = tower.receiveShadow = true; scene.add(tower);
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(TOWER_R + .3, TOWER_R + .3, .3, 24),
+    new THREE.MeshStandardMaterial({ color: 0xffcf5a, metalness: .6, roughness: .3 }));
+  cap.position.set(TOWER.x, TOWER_H, TOWER.z); scene.add(cap);
+  // floating letters in the sky
+  const letters = 'SNPVPDETNPVPCPADJ';
+  for (let i = 0; i < 26; i++) {
+    const s = textSprite(letters[i % letters.length], '#ffcf5a', 64);
+    s.position.set((Math.random() - .5) * 90, 12 + Math.random() * 20, (Math.random() - .5) * 90);
+    s.scale.setScalar(2 + Math.random() * 3); s.material.opacity = .35; scene.add(s);
+  }
+}
+
+const cage = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.4, 2.6, 20, 1, true),
+  new THREE.MeshBasicMaterial({ color: 0xff5a4e, wireframe: true, transparent: true, opacity: .8 }));
+cage.position.set(TOWER.x, TOWER_H + 1.45, TOWER.z);
+
+function textSprite(text, color = '#fff', size = 48) {
+  const c = document.createElement('canvas'); const ctx = c.getContext('2d');
+  ctx.font = `bold ${size}px Courier New`;
+  c.width = Math.ceil(ctx.measureText(text).width + 24); c.height = size + 20;
+  ctx.font = `bold ${size}px Courier New`;
+  ctx.fillStyle = color; ctx.strokeStyle = '#000'; ctx.lineWidth = 6; ctx.textBaseline = 'middle';
+  ctx.strokeText(text, 12, c.height / 2); ctx.fillText(text, 12, c.height / 2);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+  s.scale.set(c.width / c.height, 1, 1);
+  return s;
+}
+
+// ---------- audio ----------
+let actx, out, verb, noiseBuf, musicBus, muted = false;
+function initAudio() {
+  actx = new (window.AudioContext || window.webkitAudioContext)();
+  const comp = actx.createDynamicsCompressor();
+  out = actx.createGain(); out.gain.value = .9;
+  out.connect(comp).connect(actx.destination);
+  // a generated impulse gives every sound the same hall
+  verb = actx.createConvolver();
+  const len = actx.sampleRate * 2.2, ir = actx.createBuffer(2, len, actx.sampleRate);
+  for (let c = 0; c < 2; c++) { const d = ir.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3); }
+  verb.buffer = ir;
+  const wet = actx.createGain(); wet.gain.value = .35; verb.connect(wet).connect(out);
+  noiseBuf = actx.createBuffer(1, actx.sampleRate, actx.sampleRate);
+  const nd = noiseBuf.getChannelData(0); for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+  musicBus = actx.createGain(); musicBus.gain.value = .32; musicBus.connect(out);
+  startMusic();
+}
+function env(g, t, vol, attack, dur) {
+  g.gain.setValueAtTime(.0001, t);
+  g.gain.exponentialRampToValueAtTime(vol, t + attack);
+  g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+}
+function send(node, reverb, bus = out) { node.connect(bus); if (reverb) { const s = actx.createGain(); s.gain.value = reverb; node.connect(s).connect(verb); } }
+// one oscillator voice: optional pitch glide, detuned twin and a sweeping filter
+function tone({ f, to, dur = .2, type = 'sine', vol = .1, attack = .005, at = 0, detune = 0, cutoff, cutTo, q = 1, reverb = .2, bus }) {
+  if (!actx) return;
+  const t = actx.currentTime + at, g = actx.createGain();
+  let node = g;
+  if (cutoff) {
+    const fl = actx.createBiquadFilter(); fl.type = 'lowpass'; fl.Q.value = q;
+    fl.frequency.setValueAtTime(cutoff, t); if (cutTo) fl.frequency.exponentialRampToValueAtTime(cutTo, t + dur);
+    g.connect(fl); node = fl;
+  }
+  for (const d of detune ? [-detune, detune] : [0]) {
+    const o = actx.createOscillator(); o.type = type; o.detune.value = d;
+    o.frequency.setValueAtTime(f, t); if (to) o.frequency.exponentialRampToValueAtTime(to, t + dur);
+    o.connect(g); o.start(t); o.stop(t + dur + .05);
+  }
+  env(g, t, vol, attack, dur);
+  send(node, reverb, bus || out);
+}
+function noise({ dur = .2, vol = .1, type = 'bandpass', f = 1000, to, q = 1, at = 0, attack = .002, reverb = .15, bus }) {
+  if (!actx) return;
+  const t = actx.currentTime + at, src = actx.createBufferSource(), fl = actx.createBiquadFilter(), g = actx.createGain();
+  src.buffer = noiseBuf; src.loop = true;
+  fl.type = type; fl.Q.value = q; fl.frequency.setValueAtTime(f, t); if (to) fl.frequency.exponentialRampToValueAtTime(to, t + dur);
+  src.connect(fl).connect(g); env(g, t, vol, attack, dur); send(g, reverb, bus || out);
+  src.start(t); src.stop(t + dur + .05);
+}
+const PENTA = [0, 3, 5, 7, 10];
+const sfx = {
+  cast() {
+    tone({ f: 330, to: 1320, dur: .22, type: 'sawtooth', vol: .06, detune: 14, cutoff: 600, cutTo: 7000, q: 6, reverb: .3 });
+    [0, 7, 12].forEach((n, i) => tone({ f: 1320 * 2 ** (n / 12), dur: .25, vol: .03, at: .04 + i * .035, reverb: .6 }));
+    noise({ dur: .18, vol: .05, type: 'highpass', f: 3000, to: 9000 });
+  },
+  crack() {
+    noise({ dur: .07, vol: .25, f: 2600, q: 3 });
+    noise({ dur: .14, vol: .12, f: 900, to: 300, q: 2, at: .02 });
+    tone({ f: 180, to: 45, dur: .22, vol: .22, type: 'sine', reverb: .05 });
+    tone({ f: 600 + Math.random() * 300, to: 120, dur: .12, type: 'square', vol: .03, cutoff: 2000, at: .03 });
+  },
+  hurt() {
+    tone({ f: 320, to: 70, dur: .32, type: 'sawtooth', vol: .12, detune: 30, cutoff: 1800, cutTo: 200, q: 4, reverb: .1 });
+    noise({ dur: .2, vol: .1, type: 'lowpass', f: 1500, to: 200 });
+  },
+  blip() { tone({ f: 660 * 2 ** (PENTA[Math.floor(Math.random() * 5)] / 12), dur: .05, type: 'square', vol: .015, cutoff: 2200, reverb: 0 }); },
+  jump() { tone({ f: 260, to: 720, dur: .16, type: 'triangle', vol: .06, reverb: .1 }); noise({ dur: .12, vol: .03, type: 'highpass', f: 2000, to: 5000 }); },
+  roll() { noise({ dur: .3, vol: .08, f: 400, to: 2400, q: 4 }); },
+  puck() { noise({ dur: .03, vol: .3, type: 'highpass', f: 4000 }); tone({ f: 900, to: 400, dur: .08, type: 'square', vol: .05, cutoff: 3000 }); noise({ dur: .4, vol: .05, f: 1500, to: 600, q: 6, at: .03 }); },
+  slogan() { tone({ f: 146, dur: .28, type: 'sawtooth', vol: .07, detune: 20, cutoff: 300, cutTo: 2400, q: 8, reverb: .3 }); },
+  heal() { [0, 4, 7, 12, 16].forEach((n, i) => tone({ f: 523 * 2 ** (n / 12), dur: .6, vol: .05, at: i * .07, reverb: .7 })); },
+  boss() {
+    for (const f of [55, 82.4, 110]) tone({ f, dur: 1.6, type: 'sawtooth', vol: .09, detune: 12, attack: .08, cutoff: 200, cutTo: 1400, q: 3, reverb: .5 });
+    noise({ dur: .9, vol: .25, type: 'lowpass', f: 300, to: 60, reverb: .6 });
+  },
+  ult() {
+    noise({ dur: .7, vol: .15, type: 'bandpass', f: 200, to: 6000, q: 2, reverb: .6 });
+    tone({ f: 90, to: 1400, dur: .6, type: 'sawtooth', vol: .07, detune: 25, cutoff: 400, cutTo: 8000, q: 5, reverb: .5 });
+    tone({ f: 70, to: 30, dur: .9, vol: .35, at: .5, reverb: .3 });
+    noise({ dur: .8, vol: .2, type: 'lowpass', f: 900, to: 80, at: .5, reverb: .7 });
+  },
+  win() {
+    [0, 4, 7, 12, 7, 12, 16, 19].forEach((n, i) => tone({ f: 392 * 2 ** (n / 12), dur: .35, type: 'triangle', vol: .07, at: i * .11, reverb: .6 }));
+    for (const n of [0, 4, 7]) tone({ f: 196 * 2 ** (n / 12), dur: 1.6, type: 'sawtooth', vol: .04, detune: 10, cutoff: 1200, at: .9, attack: .2, reverb: .7 });
+  },
+};
+
+// a small step sequencer: minor progression, arp and drums; boss mode doubles the drums
+let musicMode = 'calm', step = 0, nextStep = 0;
+const CHORDS = [[57, 60, 64], [53, 57, 60], [55, 59, 62], [52, 55, 59]];
+const midi = n => 440 * 2 ** ((n - 69) / 12);
+function startMusic() {
+  nextStep = actx.currentTime + .1;
+  setInterval(() => {
+    const bpm = musicMode === 'boss' ? 150 : 112, sixteenth = 60 / bpm / 4;
+    while (nextStep < actx.currentTime + .2) {
+      const at = nextStep - actx.currentTime, chord = CHORDS[Math.floor(step / 32) % 4], s = step % 16;
+      if (!muted) {
+        if (s % 2 === 0) tone({ f: midi(chord[(s / 2) % 3] + 12 + (s >= 8 ? 12 : 0)), dur: sixteenth * 1.6, type: 'square', vol: .035, cutoff: musicMode === 'boss' ? 2600 : 1300, at, reverb: .4, bus: musicBus });
+        if (s % 4 === 0) tone({ f: midi(chord[0] - 24), dur: sixteenth * 3.5, type: 'sawtooth', vol: .09, cutoff: 500, q: 4, at, reverb: 0, bus: musicBus });
+        if (s % 8 === 0 || (musicMode === 'boss' && s % 4 === 0)) { tone({ f: 120, to: 40, dur: .25, vol: .35, at, reverb: 0, bus: musicBus }); }
+        if (s % 8 === 4) noise({ dur: .15, vol: .12, f: 1800, q: .8, at, reverb: .3, bus: musicBus });
+        if (s % 2 === 1) noise({ dur: .04, vol: .04, type: 'highpass', f: 7000, at, reverb: 0, bus: musicBus });
+      }
+      nextStep += sixteenth; step++;
+    }
+  }, 50);
+}
+function music(mode) { musicMode = mode; }
+
+// ---------- models and animation ----------
+const gltfs = {};
+async function loadAll() {
+  const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
+  const names = Object.keys(MODELS);
+  const progress = Object.fromEntries(names.map(n => [n, 0]));
+  const show = () => {
+    const p = names.reduce((s, n) => s + progress[n], 0) / names.length;
+    $('loadBar').style.width = (p * 100).toFixed(0) + '%';
+  };
+  await Promise.all(names.map(async n => {
+    gltfs[n] = await loader.loadAsync(MODELS[n].url, e => {
+      if (e.total) { progress[n] = e.loaded / e.total; show(); }
+      $('loadText').textContent = `loading ${n}...`;
+    });
+    progress[n] = 1; show();
+  }));
+}
+
+function makeCharacter(name) {
+  const g = gltfs[name];
+  // we measure the loaded original because a fresh clone has no world matrices yet
+  if (!g.box) { g.scene.updateMatrixWorld(true); g.box = new THREE.Box3().setFromObject(g.scene); }
+  const box = g.box;
+  const model = SkeletonUtils.clone(g.scene);
+  model.traverse(o => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+  const size = box.getSize(new THREE.Vector3());
+  const s = MODELS[name].height / size.y;
+  model.scale.setScalar(s);
+  const center = box.getCenter(new THREE.Vector3());
+  model.position.set(-center.x * s, -box.min.y * s, -center.z * s);
+  const root = new THREE.Group(); root.add(model); scene.add(root);
+  return { root, anim: new Anim(model, g.animations), height: MODELS[name].height };
+}
+
+class Anim {
+  constructor(model, clips) {
+    this.mixer = new THREE.AnimationMixer(model);
+    this.actions = {};
+    for (const c of clips) this.actions[c.name] = this.mixer.clipAction(c);
+    this.cur = null; this.busy = false; this.done = null;
+    this.mixer.addEventListener('finished', e => {
+      if (e.action !== this.cur) return;
+      this.busy = false; const cb = this.done; this.done = null; cb && cb();
+    });
+  }
+  loop(name, speed = 1, fade = .2) {
+    if (this.busy) return;
+    const a = this.actions[name];
+    if (!a) return;
+    a.timeScale = speed;
+    if (a === this.cur) return;
+    a.reset().setLoop(THREE.LoopRepeat).fadeIn(fade).play();
+    if (this.cur) this.cur.fadeOut(fade);
+    this.cur = a;
+  }
+  once(name, done, speed = 1, fade = .12) {
+    const a = this.actions[name];
+    if (!a) { done && done(); return; }
+    a.reset(); a.setLoop(THREE.LoopOnce, 1); a.clampWhenFinished = true; a.timeScale = speed;
+    a.fadeIn(fade).play();
+    if (this.cur && this.cur !== a) this.cur.fadeOut(fade);
+    this.cur = a; this.busy = true; this.done = done;
+  }
+  release() { this.busy = false; this.done = null; }
+  update(dt) { this.mixer.update(dt); }
+}
+
+// ---------- game state ----------
+const clock = new THREE.Clock();
+const keys = {};
+let yaw = Math.PI, started = false, paused = true;
+let player, chomsky, misty;
+const enemies = [], shots = [], particles = [], timers = [], waiters = [], floaters = [];
+
+function after(sec, fn) { timers.push({ t: sec, fn }); }
+function until(cond) {
+  return new Promise((res, rej) => waiters.push({ cond, res, rej }));
+}
+function sleep(sec) { return new Promise(r => after(sec, r)); }
+
+function face(obj, target, rate = 1) {
+  const want = Math.atan2(target.x - obj.position.x, target.z - obj.position.z);
+  let d = want - obj.rotation.y;
+  d = Math.atan2(Math.sin(d), Math.cos(d));
+  obj.rotation.y += d * Math.min(1, rate);
+}
+function flat(a, b) { return Math.hypot(a.x - b.x, a.z - b.z); }
+function keepInArena(p) {
+  const r = Math.hypot(p.x, p.z);
+  if (r > ARENA) { p.x *= ARENA / r; p.z *= ARENA / r; }
+  const dx = p.x - TOWER.x, dz = p.z - TOWER.z, d = Math.hypot(dx, dz);
+  if (d < TOWER_R + .4 && p.y < TOWER_H - .1) { p.x = TOWER.x + dx / d * (TOWER_R + .4); p.z = TOWER.z + dz / d * (TOWER_R + .4); }
+}
+
+// ---------- HUD ----------
+function setHud() {
+  $('hpBar').firstElementChild.style.width = Math.max(0, player.hp / player.maxHp * 100) + '%';
+  $('ultBar').firstElementChild.style.width = (player.ult * 100) + '%';
+  $('ultKey').classList.toggle('ready', player.ult >= 1);
+  const boss = enemies.find(e => e.boss && !e.dead);
+  $('boss').style.display = boss ? 'block' : 'none';
+  if (boss) { $('bossName').textContent = boss.title; $('boss').querySelector('.meter > div').style.width = (boss.hp / boss.maxHp * 100) + '%'; }
+}
+function objective(t) { $('objective').textContent = t ? '> ' + t : ''; }
+function banner(t, sec = 2) {
+  const b = $('banner'); b.textContent = t; b.style.opacity = 1;
+  after(sec, () => b.style.opacity = 0);
+}
+function hurtFlash() { const f = $('flash'); f.style.opacity = .35; setTimeout(() => f.style.opacity = 0, 120); }
+
+// dialog lines are [speaker character or null, name, text, animation]
+let dialogResolve = null;
+function dialog(lines) {
+  return new Promise(async resolve => {
+    for (const [who, name, text, anim] of lines) {
+      if (who && anim) { who.anim.release(); who.anim.once(anim, () => who.anim.loop('Idle')); }
+      if (who && who !== player) face(who.root, player.root.position);
+      $('dName').textContent = name; $('dText').textContent = '';
+      $('dialog').style.display = 'block';
+      await new Promise(r => {
+        let i = 0, full = false;
+        const typer = setInterval(() => {
+          if (i >= text.length) { clearInterval(typer); full = true; return; }
+          $('dText').textContent += text[i++]; if (i % 3 === 0) sfx.blip();
+        }, 22);
+        dialogResolve = () => {
+          if (!full) { clearInterval(typer); $('dText').textContent = text; full = true; return; }
+          dialogResolve = null; r();
+        };
+      });
+    }
+    $('dialog').style.display = 'none';
+    resolve();
+  });
+}
+function advanceDialog() { if (dialogResolve) dialogResolve(); }
+$('dialog').addEventListener('click', advanceDialog);
+
+// ---------- effects ----------
+const partGeo = new THREE.SphereGeometry(.09, 6, 4);
+function burst(pos, color, n = 14, speed = 5) {
+  for (let i = 0; i < n; i++) {
+    const m = new THREE.Mesh(partGeo, new THREE.MeshBasicMaterial({ color, transparent: true }));
+    m.position.copy(pos);
+    const v = new THREE.Vector3(Math.random() - .5, Math.random() * .9 + .2, Math.random() - .5).normalize().multiplyScalar(speed * (.5 + Math.random()));
+    scene.add(m); particles.push({ m, v, life: .7 + Math.random() * .4 });
+  }
+}
+function floatText(pos, text, color) {
+  const s = textSprite(text, color, 40); s.position.copy(pos); s.scale.multiplyScalar(.7);
+  scene.add(s); floaters.push({ s, life: 1 });
+}
+function shockRing(pos, color, maxR) {
+  const m = new THREE.Mesh(new THREE.RingGeometry(.8, 1, 48), new THREE.MeshBasicMaterial({ color, transparent: true, side: THREE.DoubleSide }));
+  m.rotation.x = -Math.PI / 2; m.position.copy(pos); m.position.y = .15; scene.add(m);
+  particles.push({ m, v: new THREE.Vector3(), life: .6, ring: maxR });
+}
+
+// ---------- player ----------
+function createPlayer() {
+  const c = makeCharacter('professor');
+  Object.assign(c, { hp: 100, maxHp: 100, vy: 0, grounded: true, cd: 0, inv: 0, rolling: 0, ult: 0, dead: false, knock: new THREE.Vector3() });
+  c.root.position.set(0, 0, 14); c.root.rotation.y = Math.PI;
+  c.anim.loop('Idle');
+  return c;
+}
+
+function damagePlayer(n, from) {
+  if (player.dead || player.inv > 0 || paused) return;
+  player.hp -= n; player.inv = .7; sfx.hurt(); hurtFlash();
+  floatText(player.root.position.clone().setY(2.2), '-' + n, '#ff5a4e');
+  if (from) player.knock.copy(player.root.position).sub(from).setY(0).normalize().multiplyScalar(9);
+  if (player.hp <= 0) {
+    player.dead = true; player.anim.release();
+    player.anim.once('Death');
+  } else if (!player.anim.busy) {
+    player.anim.once('Hit', null, 1.4);
+  }
+}
+
+function castSpell() {
+  if (player.dead || paused || player.cd > 0 || player.rolling > 0) return;
+  player.cd = .45;
+  player.anim.release(); player.anim.once('Cast Spell', null, 2.2);
+  sfx.cast();
+  const dir = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
+  player.root.rotation.y = yaw;
+  after(.12, () => {
+    const g = new THREE.Group();
+    const core = new THREE.Mesh(new THREE.OctahedronGeometry(.28), new THREE.MeshBasicMaterial({ color: 0xffe08a }));
+    const halo = new THREE.Mesh(new THREE.SphereGeometry(.45, 12, 8), new THREE.MeshBasicMaterial({ color: 0xffb340, transparent: true, opacity: .35 }));
+    const label = textSprite(['S', 'NP', 'VP', 'CP', 'DP'][Math.floor(Math.random() * 5)], '#fff8d8', 40);
+    label.scale.multiplyScalar(.45); label.position.y = .55;
+    g.add(core, halo, label);
+    g.position.copy(player.root.position).add(dir.clone().multiplyScalar(.8)).setY(1.3);
+    scene.add(g);
+    shots.push({ obj: g, vel: dir.multiplyScalar(22), owner: 'player', dmg: 1, life: 1.4, r: .6, spin: core });
+  });
+}
+
+function mudraBlast() {
+  if (player.dead || paused || player.ult < 1) return;
+  player.ult = 0; sfx.ult();
+  player.anim.release(); player.anim.once('Mudra Summon', null, 1.6);
+  after(.5, () => {
+    shockRing(player.root.position, 0xb18cff, 9);
+    burst(player.root.position.clone().setY(1), 0xb18cff, 40, 9);
+    for (const e of enemies) if (!e.dead && flat(e.root.position, player.root.position) < 8) hitEnemy(e, e.boss ? 6 : 99);
+  });
+}
+
+function updatePlayer(dt) {
+  const p = player.root.position;
+  player.cd -= dt; player.inv -= dt; player.rolling -= dt;
+  if (keys.KeyQ) yaw += 2.2 * dt;
+  if (keys.KeyE) yaw -= 2.2 * dt;
+  if (player.dead || paused) { player.vy = 0; return; }
+
+  const fwd = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
+  const right = new THREE.Vector3(-Math.cos(yaw), 0, Math.sin(yaw));
+  const move = new THREE.Vector3();
+  if (keys.KeyW || keys.ArrowUp) move.add(fwd);
+  if (keys.KeyS || keys.ArrowDown) move.sub(fwd);
+  if (keys.KeyD || keys.ArrowRight) move.add(right);
+  if (keys.KeyA || keys.ArrowLeft) move.sub(right);
+  const moving = move.lengthSq() > 0;
+  if (moving) move.normalize();
+
+  let speed = 6.5;
+  if (player.rolling > 0) { speed = 13; move.copy(player.rollDir); }
+  p.addScaledVector(move, speed * dt);
+  p.addScaledVector(player.knock, dt); player.knock.multiplyScalar(Math.max(0, 1 - 6 * dt));
+
+  player.vy -= 25 * dt; p.y += player.vy * dt;
+  if (p.y <= 0) {
+    p.y = 0;
+    if (!player.grounded) { player.grounded = true; if (!player.anim.busy) player.anim.once('Jump Land', null, 2); }
+    player.vy = 0;
+  }
+  keepInArena(p);
+
+  if (moving && player.rolling <= 0) {
+    const want = Math.atan2(move.x, move.z);
+    let d = want - player.root.rotation.y; d = Math.atan2(Math.sin(d), Math.cos(d));
+    player.root.rotation.y += d * Math.min(1, 12 * dt);
+  }
+  if (!player.grounded) player.anim.loop('Jump Air');
+  else if (moving) player.anim.loop('Run', 1.1);
+  else player.anim.loop('Idle');
+}
+
+function jump() {
+  if (player.dead || paused || !player.grounded) return;
+  player.grounded = false; player.vy = 9.5; sfx.jump();
+  player.anim.release(); player.anim.once('Jump Start', null, 2.5);
+}
+function roll() {
+  if (player.dead || paused || player.rolling > -0.3 || !player.grounded) return;
+  player.rolling = .45; player.inv = .5; sfx.roll();
+  player.rollDir = new THREE.Vector3(Math.sin(player.root.rotation.y), 0, Math.cos(player.root.rotation.y));
+  player.anim.release(); player.anim.once('Roll', null, 1.8);
+}
+
+// ---------- enemies ----------
+function hitEnemy(e, dmg) {
+  if (e.dead) return;
+  e.hp -= dmg; sfx.crack();
+  burst(e.root.position.clone().setY(e.height * .6), e.boss ? 0xff5a4e : 0xffd23a, e.boss ? 8 : 12, 4);
+  player.ult = Math.min(1, player.ult + (e.boss ? .03 : .08));
+  if (e.hp <= 0) e.die();
+  else if (e.onHit) e.onHit();
+}
+
+function spawnEgg(pos) {
+  const c = makeCharacter('egg');
+  const a = Math.random() * Math.PI * 2;
+  c.root.position.copy(pos || new THREE.Vector3(Math.sin(a) * (ARENA - 2), 0, Math.cos(a) * (ARENA - 2)));
+  c.root.position.y = 8;
+  const e = Object.assign(c, {
+    hp: 2, maxHp: 2, r: .7, dead: false, cd: 1 + Math.random(), spawning: true, speed: 2.6 + Math.random() * 1.4,
+    die() {
+      this.dead = true; sfx.crack();
+      burst(this.root.position.clone().setY(.6), 0xfff6e0, 18, 5);
+      burst(this.root.position.clone().setY(.6), 0xffb800, 10, 3);
+      floatText(this.root.position.clone().setY(1.8), 'parsed!', '#ffcf5a');
+      this.squash = 1;
+    },
+    update(dt) {
+      const p = this.root.position;
+      if (this.squash !== undefined) {
+        this.squash -= dt * 2.5; this.root.scale.set(1 + (1 - this.squash), Math.max(.01, this.squash), 1 + (1 - this.squash));
+        if (this.squash <= 0) this.remove = true;
+        return;
+      }
+      if (this.spawning) {
+        p.y = Math.max(0, p.y - 14 * dt); face(this.root, player.root.position);
+        if (p.y === 0) { this.spawning = false; this.anim.once('Wave Hello', null, 1.6); burst(p.clone().setY(.1), 0xffffff, 8, 3); }
+        return;
+      }
+      this.cd -= dt;
+      if (this.anim.busy) return;
+      const d = flat(p, player.root.position);
+      face(this.root, player.root.position, 8 * dt);
+      if (d > 1.5) {
+        const dir = player.root.position.clone().sub(p).setY(0).normalize();
+        p.addScaledVector(dir, this.speed * dt);
+        this.anim.loop('Wobble Side To Side', 1.8);
+      } else if (this.cd <= 0) {
+        this.cd = 1.6;
+        this.anim.once('Cheer Arms Up', null, 1.6);
+        after(.35, () => { if (!this.dead && flat(this.root.position, player.root.position) < 2) damagePlayer(7, this.root.position); });
+      } else this.anim.loop('Tap Dance', 1.3);
+      keepInArena(p);
+    },
+  });
+  enemies.push(e);
+  return e;
+}
+
+function separateEnemies() {
+  for (let i = 0; i < enemies.length; i++) for (let j = i + 1; j < enemies.length; j++) {
+    const a = enemies[i], b = enemies[j]; if (a.dead || b.dead) continue;
+    const pa = a.root.position, pb = b.root.position, d = flat(pa, pb), min = a.r + b.r;
+    if (d > 0 && d < min) {
+      const push = (min - d) / 2, nx = (pa.x - pb.x) / d, nz = (pa.z - pb.z) / d;
+      pa.x += nx * push; pa.z += nz * push; pb.x -= nx * push; pb.z -= nz * push;
+    }
+  }
+}
+
+function spawnVladimir() {
+  const c = makeCharacter('vladimir');
+  c.root.position.set(0, 0, -12);
+  const e = Object.assign(c, {
+    boss: true, title: 'VLADIMIR, MINISTER OF JUDO', hp: 45, maxHp: 45, r: 1.1, dead: false,
+    mode: 'chase', t: 2, charge: null,
+    die() {
+      this.dead = true; this.anim.release(); this.anim.once('Death');
+      sfx.boss(); burst(this.root.position.clone().setY(1.5), 0xff5a4e, 40, 7);
+    },
+    update(dt) {
+      if (this.dead) return;
+      const p = this.root.position, pp = player.root.position, d = flat(p, pp);
+      this.t -= dt;
+      if (this.charge) {
+        p.addScaledVector(this.charge, 15 * dt);
+        if (flat(p, pp) < 2) damagePlayer(15, p);
+        if (this.t <= 0 || Math.hypot(p.x, p.z) > ARENA - .5) { this.charge = null; this.anim.release(); this.mode = 'chase'; this.t = 3; }
+        keepInArena(p); return;
+      }
+      if (this.anim.busy) return;
+      face(this.root, pp, 6 * dt);
+      if (this.mode === 'chase') {
+        if (d > 2.4) { p.addScaledVector(pp.clone().sub(p).setY(0).normalize(), 5 * dt); this.anim.loop('Run'); }
+        else {
+          this.anim.once('Judo Throw', null, 1.3);
+          after(.55, () => { if (!this.dead && flat(this.root.position, player.root.position) < 3.2) { damagePlayer(20, this.root.position); player.vy = 9; player.grounded = false; } });
+        }
+        if (this.t <= 0) { this.mode = ['shoot', 'charge'][Math.floor(Math.random() * 2)]; this.t = 0; }
+      } else if (this.mode === 'shoot') {
+        this.anim.once('Hockey Slap Shot', () => { this.mode = 'chase'; this.t = 3; }, 1.2);
+        after(.6, () => {
+          if (this.dead) return;
+          for (const spread of [-.25, 0, .25]) {
+            const dir = player.root.position.clone().sub(this.root.position).setY(0).normalize().applyAxisAngle(new THREE.Vector3(0, 1, 0), spread);
+            const puck = new THREE.Mesh(new THREE.CylinderGeometry(.35, .35, .15, 16), new THREE.MeshStandardMaterial({ color: 0x111111 }));
+            puck.position.copy(this.root.position).add(dir.clone().multiplyScalar(1.5)).setY(.3);
+            scene.add(puck); shots.push({ obj: puck, vel: dir.multiplyScalar(16), owner: 'enemy', dmg: 12, life: 2.5, r: .6 });
+          }
+          sfx.puck();
+        });
+      } else if (this.mode === 'charge') {
+        this.anim.once('Deadpan Slow Clap', () => {
+          if (this.dead) return;
+          this.charge = player.root.position.clone().sub(this.root.position).setY(0).normalize();
+          face(this.root, player.root.position);
+          this.anim.release(); this.anim.loop('Horse Gallop', 1.4); this.t = 1.6;
+          floatText(this.root.position.clone().setY(3), 'HORSE!', '#ff5a4e');
+        }, 2.2);
+      }
+      keepInArena(p);
+    },
+  });
+  e.anim.loop('Idle');
+  enemies.push(e);
+  return e;
+}
+
+const SLOGANS = ['TREMENDOUS', 'BIGLY', 'SAD!', 'WALL', 'WINNING', 'COVFEFE', 'FAKE', 'HUGE'];
+function spawnTrump() {
+  const c = makeCharacter('trump');
+  c.root.position.set(0, 0, -12);
+  const e = Object.assign(c, {
+    boss: true, title: 'DONALD, MINISTER OF SLOGANS', hp: 55, maxHp: 55, r: 1.2, dead: false,
+    mode: 'walk', t: 2.5, summons: 0,
+    die() {
+      this.dead = true; this.anim.release(); this.anim.loop('Dance', 1.3);
+      sfx.boss(); this.shrink = 3;
+    },
+    update(dt) {
+      const p = this.root.position, pp = player.root.position;
+      if (this.dead) {
+        this.shrink -= dt; this.root.scale.setScalar(Math.max(.01, this.shrink / 3));
+        if (Math.random() < .3) burst(p.clone().setY(1.2), 0xffcf5a, 2, 3);
+        if (this.shrink <= 0 && !this.gone) { this.gone = true; this.root.visible = false; burst(p.clone().setY(.5), 0xffcf5a, 50, 8); }
+        return;
+      }
+      this.t -= dt;
+      if (this.anim.busy) return;
+      face(this.root, pp, 4 * dt);
+      if (this.mode === 'walk') {
+        if (flat(p, pp) > 5) { p.addScaledVector(pp.clone().sub(p).setY(0).normalize(), 2.2 * dt); this.anim.loop('Walk'); }
+        else this.anim.loop('Idle');
+        if (flat(p, pp) < 2.5) damagePlayer(10, p);
+        if (this.t <= 0) {
+          const alive = enemies.filter(x => !x.dead && !x.boss).length;
+          this.mode = alive < 3 && Math.random() < .45 ? 'summon' : 'rally';
+        }
+      } else if (this.mode === 'rally') {
+        this.anim.once('Talking Gesture', () => { this.mode = 'walk'; this.t = 2.2; }, 1.2);
+        for (let k = 0; k < 3; k++) after(.4 + k * .35, () => {
+          if (this.dead) return;
+          const base = player.root.position.clone().sub(this.root.position).setY(0).normalize();
+          for (let i = -2; i <= 2; i++) {
+            const dir = base.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), i * .22 + (k - 1) * .1);
+            const s = textSprite(SLOGANS[Math.floor(Math.random() * SLOGANS.length)], '#ff5a4e', 48);
+            s.scale.multiplyScalar(.8);
+            s.position.copy(this.root.position).add(dir.clone().multiplyScalar(1.5)).setY(1.6);
+            scene.add(s); shots.push({ obj: s, vel: dir.multiplyScalar(9), owner: 'enemy', dmg: 8, life: 3, r: .7 });
+          }
+          sfx.slogan();
+        });
+      } else if (this.mode === 'summon') {
+        this.anim.once('Audience Point', () => { this.mode = 'walk'; this.t = 3; }, 1.1);
+        floatText(this.root.position.clone().setY(3.4), 'EGGS, GET HIM!', '#ffcf5a');
+        after(.6, () => { for (let i = 0; i < 3; i++) spawnEgg(); });
+      }
+      keepInArena(p);
+    },
+  });
+  e.onHit = function () { if (Math.random() < .08 && !this.anim.busy) this.anim.once('Hand Wave', null, 1.5); };
+  e.anim.loop('Idle');
+  enemies.push(e);
+  return e;
+}
+
+// ---------- projectiles ----------
+function updateShots(dt) {
+  for (const s of shots) {
+    s.obj.position.addScaledVector(s.vel, dt); s.life -= dt;
+    if (s.spin) { s.spin.rotation.x += dt * 8; s.spin.rotation.y += dt * 10; }
+    if (s.owner === 'player') {
+      for (const e of enemies) {
+        if (e.dead || e.spawning) continue;
+        const ep = e.root.position;
+        if (flat(ep, s.obj.position) < e.r + s.r && s.obj.position.y < ep.y + e.height + .3) { hitEnemy(e, s.dmg); s.life = 0; break; }
+      }
+    } else if (!player.dead) {
+      const pp = player.root.position;
+      if (flat(pp, s.obj.position) < .6 + s.r && Math.abs(s.obj.position.y - (pp.y + 1)) < 1.4) { damagePlayer(s.dmg, s.obj.position); s.life = 0; }
+    }
+    if (Math.hypot(s.obj.position.x, s.obj.position.z) > ARENA + 3) s.life = 0;
+    if (s.life <= 0) scene.remove(s.obj);
+  }
+  for (let i = shots.length - 1; i >= 0; i--) if (shots[i].life <= 0) shots.splice(i, 1);
+}
+
+// ---------- story ----------
+function clearEnemies() {
+  for (const e of enemies) scene.remove(e.root);
+  enemies.length = 0;
+  for (const s of shots) scene.remove(s.obj);
+  shots.length = 0;
+}
+function aliveEnemies() { return enemies.filter(e => !e.dead).length; }
+async function wave(count, label) {
+  objective(label);
+  let spawned = 0;
+  while (spawned < count) {
+    const batch = Math.min(4, count - spawned);
+    for (let i = 0; i < batch; i++) spawnEgg();
+    spawned += batch;
+    await until(() => aliveEnemies() <= 1);
+  }
+  await until(() => aliveEnemies() === 0);
+  await sleep(1);
+  for (let i = enemies.length - 1; i >= 0; i--) if (enemies[i].remove || enemies[i].dead) { scene.remove(enemies[i].root); enemies.splice(i, 1); }
+}
+async function chomskyHeal() {
+  chomsky.anim.release(); chomsky.anim.once('Cast Spell', () => chomsky.anim.loop('Idle'));
+  await sleep(.5);
+  shockRing(player.root.position, 0x6dff9c, 4);
+  burst(player.root.position.clone().setY(1), 0x6dff9c, 24, 4);
+  player.hp = player.maxHp; floatText(player.root.position.clone().setY(2.3), 'HEALED', '#6dff9c'); sfx.heal();
+}
+async function talk(lines) {
+  paused = true; player.anim.release(); player.anim.loop('Idle');
+  await dialog(lines);
+  paused = false;
+}
+
+const P = () => player, C = () => chomsky, M = () => misty;
+const stages = [
+  async function lecture() {
+    await talk([
+      [C(), 'MASTER CHOMSKY', 'Professor. The strongman summit has taken Princess Misty to the Tower of Surface Forms.', 'Lecture Point'],
+      [C(), 'MASTER CHOMSKY', 'They want a language with no recursion. No subordinate clauses. Only slogans.', 'Emphatic Speaking'],
+      [P(), 'PROFESSOR', 'One, two, three words per sentence... that is not a language, that is a bumper sticker.', 'Counting Fingers'],
+      [M(), 'PRINCESS MISTY', 'Professor! Up here! They took my bike AND my subordinate clauses!', 'Water Splash'],
+      [C(), 'MASTER CHOMSKY', 'Every sentence is a tree. Throw yours: click or press F. Space jumps, Shift rolls.', 'Adjust Glasses'],
+      [C(), 'MASTER CHOMSKY', 'Parse enough eggs and you can release a mudra blast with R. Now, they are coming.', 'Disbelieving Shrug'],
+    ]);
+  },
+  async function eggs1() {
+    banner('WAVE 1: THE EGGS');
+    await wave(6, 'parse the David Boiled Eggs');
+    await talk([[C(), 'MASTER CHOMSKY', 'Hard-boiled, but not hard to parse. Hold still.', 'Lecture Point']]);
+    await chomskyHeal();
+  },
+  async function eggs2() {
+    banner('WAVE 2: MORE EGGS');
+    await wave(12, 'the eggs are multiplying');
+    await talk([[C(), 'MASTER CHOMSKY', 'Good. Now the ministers themselves will come down.', 'Emphatic Speaking']]);
+    await chomskyHeal();
+  },
+  async function vladimir() {
+    const v = spawnVladimir();
+    paused = true;
+    await dialog([
+      [v, 'VLADIMIR', 'Very nice lecture, Professor.', 'Deadpan Slow Clap'],
+      [v, 'VLADIMIR', 'In my country, the tree parses YOU. Now: judo.', 'Judo Throw'],
+    ]);
+    paused = false; sfx.boss(); music('boss'); banner('BOSS: VLADIMIR');
+    objective('defeat Vladimir: roll through his charge, dodge the pucks');
+    await until(() => v.dead);
+    music('calm');
+    await sleep(2.5);
+    await talk([[C(), 'MASTER CHOMSKY', 'One minister down. The other one has a much larger vocabulary of three words.', 'Disbelieving Shrug']]);
+    scene.remove(v.root); enemies.splice(enemies.indexOf(v), 1);
+    await chomskyHeal();
+  },
+  async function trump() {
+    const t = spawnTrump();
+    paused = true;
+    await dialog([
+      [t, 'DONALD', 'Nobody knows grammar better than me. Everybody says it. Tremendous grammar.', 'Talking Gesture'],
+      [t, 'DONALD', 'Eggs! The best eggs! Get him!', 'Audience Point'],
+    ]);
+    paused = false; sfx.boss(); music('boss'); banner('BOSS: DONALD');
+    objective('defeat Donald: his slogans hurt, his eggs hurt more');
+    await until(() => t.gone);
+    await until(() => aliveEnemies() === 0);
+    await sleep(1);
+  },
+  async function rescue() {
+    objective('');
+    clearEnemies();
+    // the cage melts and Misty comes down from the tower
+    const fade = { t: 1 };
+    await new Promise(r => {
+      const step = () => { fade.t -= .02; cage.material.opacity = fade.t * .8; cage.scale.y = fade.t;
+        if (fade.t > 0) requestAnimationFrame(step); else { scene.remove(cage); r(); } };
+      step();
+    });
+    burst(misty.root.position.clone().setY(misty.root.position.y + 1), 0x6dd6ff, 40, 6);
+    misty.root.position.set(1.5, 0, player.root.position.z - 2.5);
+    misty.root.position.x = player.root.position.x + 1.5;
+    chomsky.root.position.set(player.root.position.x - 1.5, 0, player.root.position.z - 2.5);
+    sfx.win(); music('calm');
+    await talk([
+      [M(), 'PRINCESS MISTY', 'You did it, Professor! My clauses are free! And they can embed again!', 'Pokeball Throw'],
+      [C(), 'MASTER CHOMSKY', 'Language is infinite use of finite means. Remember that. Class dismissed.', 'Lecture Point'],
+      [P(), 'PROFESSOR', 'Dance party in the faculty lounge?', 'Furious Typing'],
+    ]);
+    paused = true;
+    for (const c of [player, chomsky, misty]) { c.anim.release(); c.anim.loop('Dance'); face(c.root, camera.position); }
+    for (let i = 0; i < 6; i++) {
+      const e = spawnEgg(new THREE.Vector3(player.root.position.x + Math.sin(i) * 6, 0, player.root.position.z - 4 + Math.cos(i) * 3));
+      e.root.position.y = 0; e.spawning = false; face(e.root, camera.position); e.anim.loop('Tap Dance');
+    }
+    banner('THE TREE STANDS', 4);
+    await sleep(6);
+    $('overTitle').textContent = 'THE TREE STANDS';
+    $('overText').textContent = 'Misty is free, the ministers are parsed, and every egg has learned a subordinate clause.';
+    $('overBtn').textContent = 'PLAY AGAIN';
+    $('overBtn').onclick = () => location.reload();
+    showOver();
+  },
+];
+
+async function runStory() {
+  for (let i = 0; i < stages.length; i++) {
+    try { await stages[i](); }
+    catch (err) {
+      if (err !== 'dead') throw err;
+      paused = true;
+      await new Promise(r => setTimeout(r, 2200));
+      $('overTitle').textContent = 'YOU WERE PARSED';
+      $('overText').textContent = 'Master Chomsky sighs and starts the lecture over from this chapter.';
+      $('overBtn').textContent = 'TRY AGAIN';
+      showOver();
+      await new Promise(r => $('overBtn').onclick = r);
+      hideOver();
+      clearEnemies();
+      player.dead = false; player.hp = player.maxHp; player.anim.release(); player.anim.loop('Idle');
+      player.root.position.set(0, 0, 10); yaw = Math.PI;
+      paused = false;
+      i--;
+    }
+  }
+}
+
+// ---------- input ----------
+addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'Enter' || (e.code === 'Space' && dialogResolve)) { advanceDialog(); e.preventDefault(); return; }
+  if (!started) return;
+  if (e.code === 'Space') { jump(); e.preventDefault(); }
+  if (e.code === 'KeyF') castSpell();
+  if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') roll();
+  if (e.code === 'KeyR') mudraBlast();
+  if (e.code === 'KeyM') muted = !muted;
+});
+addEventListener('keyup', e => keys[e.code] = false);
+// the game runs only while the mouse is locked, like a desktop game that pauses on focus loss
+const locked = () => document.pointerLockElement === renderer.domElement;
+const lockMouse = () => renderer.domElement.requestPointerLock();
+const overlayOpen = () => $('over').style.display === 'flex';
+function updateFocus() {
+  const waiting = started && !locked() && !overlayOpen();
+  $('focus').style.display = waiting ? 'flex' : 'none';
+  if (actx) waiting ? actx.suspend() : actx.resume();
+}
+document.addEventListener('pointerlockchange', updateFocus);
+$('focus').addEventListener('click', lockMouse);
+// a locked pointer sends every click to the canvas, so we advance dialog from here too
+renderer.domElement.addEventListener('mousedown', () => {
+  if (!started || !locked()) return;
+  if (dialogResolve) advanceDialog();
+  else castSpell();
+});
+addEventListener('mousemove', e => {
+  if (locked()) yaw -= e.movementX * .0035;
+});
+function showOver() { document.exitPointerLock(); $('over').style.display = 'flex'; updateFocus(); }
+function hideOver() { $('over').style.display = 'none'; lockMouse(); }
+
+// ---------- loop ----------
+function tick() {
+  const frame = Math.min(clock.getDelta(), .05);
+  const dt = started && !locked() && !overlayOpen() ? 0 : frame;
+  for (let i = timers.length - 1; i >= 0; i--) { timers[i].t -= dt; if (timers[i].t <= 0) { const t = timers.splice(i, 1)[0]; t.fn(); } }
+  for (let i = waiters.length - 1; i >= 0; i--) {
+    const w = waiters[i];
+    if (player && player.dead && !paused) { waiters.splice(i, 1); w.rej('dead'); }
+    else if (w.cond()) { waiters.splice(i, 1); w.res(); }
+  }
+  if (player) {
+    updatePlayer(dt);
+    if (!paused) for (const e of enemies) e.update(dt);
+    separateEnemies();
+    for (let i = enemies.length - 1; i >= 0; i--) if (enemies[i].remove) { scene.remove(enemies[i].root); enemies.splice(i, 1); }
+    updateShots(dt);
+    for (const c of [player, chomsky, misty, ...enemies]) c.anim.update(dt);
+    if (misty && !misty.anim.busy && Math.random() < .002 && cage.parent) misty.anim.once('Water Splash', () => misty.anim.loop('Idle'));
+    if (cage.parent) cage.rotation.y += dt * .5;
+    setHud();
+    // camera behind the professor
+    const p = player.root.position;
+    const want = new THREE.Vector3(p.x - Math.sin(yaw) * 7, p.y + 3.4, p.z - Math.cos(yaw) * 7);
+    camera.position.lerp(want, Math.min(1, 10 * dt));
+    camera.lookAt(p.x + Math.sin(yaw) * 2, p.y + 1.5, p.z + Math.cos(yaw) * 2);
+  }
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const q = particles[i]; q.life -= dt;
+    if (q.ring) { const s = 1 + (1 - q.life / .6) * q.ring; q.m.scale.set(s, s, s); }
+    else { q.v.y -= 12 * dt; q.m.position.addScaledVector(q.v, dt); if (q.m.position.y < .05) { q.m.position.y = .05; q.v.multiplyScalar(.6); } }
+    q.m.material.opacity = Math.max(0, q.life);
+    if (q.life <= 0) { scene.remove(q.m); particles.splice(i, 1); }
+  }
+  for (let i = floaters.length - 1; i >= 0; i--) {
+    const f = floaters[i]; f.life -= dt; f.s.position.y += dt * 1.2; f.s.material.opacity = Math.max(0, f.life);
+    if (f.life <= 0) { scene.remove(f.s); floaters.splice(i, 1); }
+  }
+  renderer.render(scene, camera);
+  requestAnimationFrame(tick);
+}
+
+// ---------- boot ----------
+buildArena();
+scene.add(cage);
+camera.position.set(0, 6, 26); camera.lookAt(0, 2, 0);
+tick();
+try {
+  await loadAll();
+} catch (err) {
+  $('loadText').textContent = 'could not load the models: ' + err.message;
+  throw err;
+}
+player = createPlayer();
+chomsky = makeCharacter('chomsky');
+chomsky.root.position.set(-2.5, 0, 9); chomsky.root.rotation.y = 0.6; chomsky.anim.loop('Idle');
+misty = makeCharacter('misty');
+misty.root.position.set(TOWER.x, TOWER_H + .15, TOWER.z); misty.anim.loop('Idle');
+$('loading').style.display = 'none';
+$('title').style.display = 'flex';
+$('startBtn').onclick = () => {
+  initAudio();
+  $('title').style.display = 'none'; $('hud').style.display = 'block';
+  started = true; paused = false;
+  lockMouse(); updateFocus();
+  runStory();
+};
+</script>
+</body>
+</html>
