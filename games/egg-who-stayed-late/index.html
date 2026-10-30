@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Egg Who Stayed Late</title>
+<style>
+html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:Georgia,serif;color:#e8e0d0}
+canvas{display:block}
+#title{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:radial-gradient(#1a0f14,#000);text-align:center;padding:20px;box-sizing:border-box;z-index:5}
+#title h1{font-size:54px;margin:0 0 10px;color:#b3121c;text-shadow:0 0 18px #600}
+#title p{max-width:680px;line-height:1.5;color:#cfc4b0}
+button{background:#b3121c;color:#fff;border:0;padding:14px 34px;font:bold 20px Georgia,serif;cursor:pointer;margin-top:18px}
+button:disabled{background:#444;cursor:wait}
+#hud{position:fixed;left:16px;top:14px;width:260px;pointer-events:none}
+#hpbar{height:12px;background:#300;border:1px solid #888}
+#hpfill{height:100%;background:#c81d25;width:100%}
+#chapter{font-size:14px;margin-top:6px;color:#bba}
+#bossbar{display:none;position:fixed;top:14px;left:50%;transform:translateX(-50%);width:520px;height:18px;background:#300;border:1px solid #888;pointer-events:none}
+#bossfill{height:100%;background:#e0a010;width:100%}
+#bosstitle{display:none;position:fixed;top:36px;width:100%;text-align:center;font-size:16px;pointer-events:none}
+#box{display:none;position:fixed;left:50%;bottom:24px;transform:translateX(-50%);width:min(820px,92vw);background:rgba(0,0,0,.82);border:2px solid #b3121c;padding:14px 18px;min-height:56px;box-sizing:border-box;pointer-events:none;font-size:18px;line-height:1.4}
+#box b{color:#ff6b6b}
+#banner{position:fixed;top:38%;width:100%;text-align:center;font-size:48px;color:#fff;text-shadow:0 0 20px #f00;opacity:0;transition:opacity .6s;pointer-events:none}
+#flash{position:fixed;inset:0;background:rgba(200,0,0,0);pointer-events:none;transition:background .15s}
+#clicker{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);align-items:center;justify-content:center;font-size:36px;z-index:4;cursor:pointer}
+#special{position:fixed;right:20px;bottom:24px;color:#777;font-size:18px;border:1px solid #444;padding:6px 10px;pointer-events:none}
+#special.ready{color:#ffe066;border-color:#ffe066;animation:pulse .6s infinite alternate}
+@keyframes pulse{to{transform:scale(1.08)}}
+</style>
+<script type="importmap">
+{"imports":{"three":"https://unpkg.com/three@latest/build/three.module.js","three/addons/":"https://unpkg.com/three@latest/examples/jsm/"}}
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="title">
+  <h1>THE EGG WHO STAYED LATE</h1>
+  <p>Misty took a wrong turn into the cellar of Hollowmere Manor and found a crate of boiled eggs that are very much awake. The house's owner, a lecturer who has been talking to the dead for a century, wants a new student. Behind him, the Aura Wraith drifts in: a glowing ghost that feeds on hype.</p>
+  <p>Survive the eggs, out-argue the Professor, and absorb the Wraith's energy bursts. Then dance your way out at dawn.</p>
+  <p style="font-size:14px;color:#998">WASD move · Mouse look (click to lock) · Shift run · Left click punch · Right click orb · Space roll · F special (fills on hits) · Enter or click advance dialogue · M mute · Esc pause</p>
+  <button id="start" disabled>LOADING...</button>
+</div>
+<div id="hud"><div id="hpbar"><div id="hpfill"></div></div><div id="chapter"></div></div>
+<div id="bossbar"><div id="bossfill"></div></div>
+<div id="bosstitle"></div>
+<div id="box"></div>
+<div id="banner"></div>
+<div id="flash"></div>
+<div id="special">SPECIAL [F]</div>
+<div id="clicker">CLICK TO PLAY (ESC to pause)</div>
+<audio id="bgm" src="bg.mp3" loop preload="auto"></audio>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+
+const MODELS = {
+  misty: 'https://s3-api.t3ks.com/workflows/character/2026-10-27/chubby-version-of-misty-from-pokemon-red-haired-pigtailed-w-231958.glb',
+  egg: 'https://s3-api.t3ks.com/workflows/character/2026-10-28/david-boiled-egg-a-cheerful-humanoid-boiled-egg-with-two-ar-133812.glb',
+  professor: 'https://s3-api.t3ks.com/workflows/character/2026-10-14/noam-chomsky-an-elderly-linguist-and-philosopher-humanoid-084628.glb',
+  aura: 'https://s3-api.t3ks.com/workflows/character/2026-10-19/3d-character-153148.glb'
+};
+const HEIGHTS = { misty: 1.8, egg: 1.2, professor: 2.6, aura: 2.6 };
+const ARENA = 22;
+const $ = id => document.getElementById(id);
+const canvas = $('c'), boxEl = $('box'), bannerEl = $('banner'), clicker = $('clicker');
+const bossEl = $('bossbar'), bossFill = $('bossfill'), bossTitle = $('bosstitle');
+const hpFill = $('hpfill'), specialEl = $('special'), flashEl = $('flash'), chapterEl = $('chapter');
+const bgm = $('bgm'), startBtn = $('start'), titleEl = $('title');
+
+// ---------- renderer / scene ----------
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x07060a);
+scene.fog = new THREE.Fog(0x07060a, 14, 60);
+const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 200);
+addEventListener('resize', () => {
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+});
+scene.add(new THREE.HemisphereLight(0x553355, 0x110a08, 0.8));
+const moon = new THREE.DirectionalLight(0x8fa0ff, 1.0);
+moon.position.set(-10, 20, 8); moon.castShadow = true;
+moon.shadow.mapSize.set(1024, 1024);
+Object.assign(moon.shadow.camera, { left: -30, right: 30, top: 30, bottom: -30 });
+scene.add(moon);
+
+const floor = new THREE.Mesh(new THREE.CircleGeometry(ARENA, 48), new THREE.MeshStandardMaterial({ color: 0x2a2420, roughness: 0.95 }));
+floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
+const wall = new THREE.Mesh(new THREE.CylinderGeometry(ARENA + 1, ARENA + 1, 9, 48, 1, true),
+  new THREE.MeshStandardMaterial({ color: 0x1a1414, side: THREE.BackSide, roughness: 1 }));
+wall.position.y = 4.5; scene.add(wall);
+const pillars = [];
+for (const [x, z] of [[-8, -6], [9, -9], [-10, 8], [7, 10], [0, -14], [14, 2], [-15, -2]]) {
+  const p = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.2, 5, 16), new THREE.MeshStandardMaterial({ color: 0x3a302a, roughness: 0.9 }));
+  p.position.set(x, 2.5, z); p.castShadow = p.receiveShadow = true; scene.add(p);
+  pillars.push({ x, z, r: 1.4 });
+}
+for (const i of [0, 2, 5]) {
+  const l = new THREE.PointLight(0xff9040, 1.4, 12);
+  l.position.set(pillars[i].x, 4.5, pillars[i].z); scene.add(l);
+}
+for (const [x, z] of [[-4, 4], [5, -3], [-12, -10], [11, 6], [3, 14]]) {
+  const b = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.2, 1.2), new THREE.MeshStandardMaterial({ color: 0x5a3e24, roughness: 1 }));
+  b.position.set(x, 0.6, z); b.castShadow = b.receiveShadow = true; scene.add(b);
+  pillars.push({ x, z, r: 0.9 });
+}
+
+const ORB = new THREE.SphereGeometry(0.25, 12, 8);
+const projectiles = [], particles = [], fxs = [], enemies = [], allies = [];
+let hero = null, boss = null, heroDown = false, shake = 0, specialCharge = 0;
+const camPos = new THREE.Vector3();
+
+// ---------- models ----------
+const loader = new GLTFLoader();
+loader.setMeshoptDecoder(MeshoptDecoder);
+const gltfs = {};
+
+class Anim {
+  constructor(model, clips) {
+    this.mixer = new THREE.AnimationMixer(model); this.actions = {};
+    for (const c of clips) this.actions[c.name] = this.mixer.clipAction(c);
+    this.cur = null; this.busy = false; this.done = null;
+    this.mixer.addEventListener('finished', e => {
+      if (e.action !== this.cur) return;
+      this.busy = false; const cb = this.done; this.done = null; cb && cb();
+    });
+  }
+  loop(name, speed = 1, fade = 0.2) {
+    const a = this.actions[name];
+    if (this.busy || !a) return;
+    a.timeScale = speed;
+    if (a === this.cur) return;
+    a.reset().setLoop(THREE.LoopRepeat).fadeIn(fade).play();
+    if (this.cur) this.cur.fadeOut(fade);
+    this.cur = a;
+  }
+  once(name, done, speed = 1, fade = 0.12) {
+    const a = this.actions[name];
+    if (!a) { done && done(); return; }
+    a.reset(); a.setLoop(THREE.LoopOnce, 1); a.clampWhenFinished = true; a.timeScale = speed;
+    a.fadeIn(fade).play();
+    if (this.cur && this.cur !== a) this.cur.fadeOut(fade);
+    this.cur = a; this.busy = true; this.done = done;
+  }
+  release() { this.busy = false; this.done = null; }
+}
+
+function makeChar(model, x, z) {
+  const g = gltfs[model], box = g.box, obj = SkeletonUtils.clone(g.scene);
+  obj.traverse(o => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+  const size = box.getSize(new THREE.Vector3()), c = box.getCenter(new THREE.Vector3());
+  const h = HEIGHTS[model], s = h / size.y;
+  obj.scale.setScalar(s);
+  obj.position.set(-c.x * s, -box.min.y * s, -c.z * s);
+  const root = new THREE.Group(); root.add(obj); root.position.set(x, 0, z); scene.add(root);
+  return { root, anim: new Anim(obj, g.animations), h };
+}
+
+// ---------- audio ----------
+let actx = null, master = null, muted = false;
+function initAudio() {
+  actx = new (window.AudioContext || window.webkitAudioContext)();
+  master = actx.createGain(); master.gain.value = 0.5; master.connect(actx.destination);
+}
+function tone(f, dur, type = 'sine', vol = 0.2, glide = 0) {
+  if (!actx) return;
+  const o = actx.createOscillator(), g = actx.createGain(), t = actx.currentTime;
+  o.type = type; o.frequency.setValueAtTime(f, t);
+  if (glide) o.frequency.exponentialRampToValueAtTime(Math.max(20, f * glide), t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g).connect(master); o.start(t); o.stop(t + dur + 0.05);
+}
+function noise(dur, vol = 0.2, freq = 800) {
+  if (!actx) return;
+  const len = Math.floor(actx.sampleRate * dur), buf = actx.createBuffer(1, len, actx.sampleRate);
+  const d = buf.getChannelData(0); for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  const s = actx.createBufferSource(); s.buffer = buf;
+  const f = actx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = freq;
+  const g = actx.createGain(); g.gain.setValueAtTime(vol, actx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, actx.currentTime + dur);
+  s.connect(f).connect(g).connect(master); s.start();
+}
+const sfx = {
+  throw: () => { tone(600, 0.25, 'sawtooth', 0.12, 4); noise(0.2, 0.1, 3000); },
+  hit: () => { noise(0.12, 0.3, 1500); tone(180, 0.2, 'sine', 0.4, 0.25); },
+  hurt: () => tone(300, 0.4, 'sawtooth', 0.2, 0.3),
+  boom: () => { tone(90, 0.8, 'sine', 0.5, 0.4); noise(0.6, 0.3, 300); },
+  roar: () => { tone(110, 1.4, 'sawtooth', 0.15, 0.6); noise(1.2, 0.12, 200); },
+  heal: () => [660, 880, 990, 1320].forEach((f, i) => setTimeout(() => tone(f, 0.5, 'triangle', 0.15), i * 90)),
+  blip: () => tone(700 + Math.random() * 300, 0.04, 'square', 0.03)
+};
+
+// ---------- timers / waits ----------
+const waits = [], conds = [];
+const keys = {};
+let yaw = 0, started = false, paused = true, locked = false, dlg = null, ended = false;
+function later(t, fn) { waits.push({ t, fn }); }
+function sleep(t) { return new Promise((res, rej) => waits.push({ t, fn: res, rej })); }
+function until(cond) { return new Promise((res, rej) => conds.push({ cond, res, rej })); }
+function banner(t, ms = 2200) {
+  bannerEl.textContent = t; bannerEl.style.opacity = 1;
+  setTimeout(() => bannerEl.style.opacity = 0, ms);
+}
+const esc = s => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+function say(who, text, c, clip) {
+  return new Promise(res => {
+    if (c && clip) c.anim.once(clip, null);
+    dlg = { who, text, pos: 0, res }; boxEl.style.display = 'block';
+  });
+}
+function advance() {
+  if (!dlg) return;
+  if (dlg.pos < dlg.text.length) { dlg.pos = dlg.text.length; return; }
+  const r = dlg.res; dlg = null; boxEl.style.display = 'none'; r();
+}
+function renderDlg() {
+  const n = Math.min(dlg.text.length, Math.floor(dlg.pos));
+  boxEl.innerHTML = '<b>' + esc(dlg.who) + ':</b> ' + esc(dlg.text.slice(0, n)) +
+    (n >= dlg.text.length ? ' <span style="color:#888">[click]</span>' : '');
+}
+
+// ---------- helpers ----------
+const lerpAng = (a, b, t) => { const d = ((b - a + Math.PI * 3) % (Math.PI * 2)) - Math.PI; return a + d * t; };
+function collide(p, rad) {
+  const rr = Math.hypot(p.x, p.z), r = ARENA - 1;
+  if (rr > r) { p.x *= r / rr; p.z *= r / rr; }
+  for (const q of pillars) {
+    const dx = p.x - q.x, dz = p.z - q.z, d = Math.hypot(dx, dz), m = q.r + rad;
+    if (d < m && d > 1e-4) { p.x = q.x + dx / d * m; p.z = q.z + dz / d * m; }
+  }
+}
+function moveEnemy(e, dx, dz, d, sp, dt) {
+  if (d < 1e-3) return;
+  e.c.root.position.x += dx / d * sp * dt; e.c.root.position.z += dz / d * sp * dt;
+}
+function label(t, color) {
+  const cv = document.createElement('canvas'); cv.width = 256; cv.height = 96;
+  const x = cv.getContext('2d'); x.font = 'bold 64px Georgia'; x.textAlign = 'center'; x.fillStyle = color; x.fillText(t, 128, 70);
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cv), depthTest: false }));
+  s.scale.set(1.6, 0.6, 1); s.position.y = 0.6; return s;
+}
+function shot(team, pos, dir, speed, dmg, color, life, r, text, tc) {
+  const m = new THREE.Mesh(ORB, new THREE.MeshBasicMaterial({ color }));
+  m.position.copy(pos); m.scale.setScalar(r * 2);
+  if (text) m.add(label(text, tc));
+  scene.add(m);
+  projectiles.push({ m, v: dir.clone().setY(0).normalize().multiplyScalar(speed), team, dmg, life, r });
+}
+function burst(pos, color, n) {
+  for (let i = 0; i < n; i++) {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(0.1, 6, 4), new THREE.MeshBasicMaterial({ color }));
+    m.position.copy(pos); scene.add(m);
+    particles.push({ m, v: new THREE.Vector3((Math.random() - 0.5) * 6, Math.random() * 5, (Math.random() - 0.5) * 6), life: 0.6 });
+  }
+}
+function fxRing(pos, r, color) {
+  const m = new THREE.Mesh(new THREE.RingGeometry(0.6, 0.8, 48), new THREE.MeshBasicMaterial({ color, transparent: true, side: THREE.DoubleSide }));
+  m.rotation.x = -Math.PI / 2; m.position.set(pos.x, 0.1, pos.z); scene.add(m);
+  fxs.push({ m, t: 0, life: 0.5, grow: r / 0.7 });
+}
+function mkRing(x, z, r, color) {
+  const m = new THREE.Mesh(new THREE.RingGeometry(r - 0.2, r, 40), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.7, side: THREE.DoubleSide }));
+  m.rotation.x = -Math.PI / 2; m.position.set(x, 0.05, z); scene.add(m); return m;
+}
+function hurt(n) {
+  if (!hero || hero.inv > 0 || heroDown || dlg) return;
+  hero.hp = Math.max(0, hero.hp - n); hero.inv = 0.5;
+  hero.anim.once('Hit', null); sfx.hurt(); shake = 0.6;
+  flashEl.style.background = 'rgba(200,0,0,.45)';
+  setTimeout(() => flashEl.style.background = 'rgba(200,0,0,0)', 120);
+}
+function charge(n) { specialCharge = Math.min(100, specialCharge + n); }
+function inFront(e, range, minDot) {
+  const vx = e.c.root.position.x - hero.root.position.x, vz = e.c.root.position.z - hero.root.position.z;
+  const d = Math.hypot(vx, vz); if (d > range || d < 1e-3) return false;
+  const fx = Math.sin(yaw), fz = Math.cos(yaw);
+  return (vx * fx + vz * fz) / d >= minDot;
+}
+
+// ---------- enemies ----------
+const ENEMY = {
+  egg: { model: 'egg', hp: 26, speed: 3, range: 1.8, rad: 0.7, dmg: 6, atk: 'Tap Dance', walk: 'Wobble Side To Side', idle: 'Wobble Side To Side' },
+  prof: { model: 'professor', hp: 230, speed: 2.2, range: 4, rad: 1.1, boss: true, title: 'THE PROFESSOR', idle: 'Idle', walk: 'Walk', pattern: ['melee', 'lecture', 'charge', 'lecture', 'melee', 'charge'] },
+  aura: { model: 'aura', hp: 280, speed: 1.6, range: 4, rad: 1.1, boss: true, title: 'THE AURA WRAITH', idle: 'Aura Pose', walk: 'Walk', pattern: ['orbs', 'shock', 'summon', 'orbs', 'shock'] }
+};
+function spawnEnemy(key, x, z) {
+  const d = ENEMY[key], c = makeChar(d.model, x, z);
+  const e = { key, c, ...d, maxhp: d.hp, dying: false, dieT: 0, t: 0, cd: 1 + Math.random(), pend: false, hitAt: 0, act: null, cool: 3, k: -1 };
+  c.anim.loop(d.idle);
+  enemies.push(e); return e;
+}
+function removeEnemy(e) {
+  scene.remove(e.c.root);
+  const i = enemies.indexOf(e); if (i >= 0) enemies.splice(i, 1);
+}
+function damageEnemy(e, n) {
+  if (e.dying) return;
+  e.hp -= n; burst(e.c.root.position.clone().setY(e.c.h * 0.6), 0xff3344, 10);
+  if (e.hp <= 0) { e.hp = 0; e.dying = true; e.dieT = 0; sfx.boom(); }
+}
+function minionUpdate(e, dt, d, dx, dz) {
+  const c = e.c;
+  if (e.pend && e.t >= e.hitAt) { e.pend = false; if (d < e.range + 0.9) hurt(e.dmg); }
+  if (c.anim.busy) return;
+  if (d < e.range && e.cd <= 0) { e.cd = 1.6; e.pend = true; e.hitAt = e.t + 0.45; c.anim.once(e.atk, null); return; }
+  if (d > e.range * 0.8) { moveEnemy(e, dx, dz, d, e.speed, dt); c.anim.loop(e.walk); }
+  else c.anim.loop(e.idle);
+}
+const ACTS = {
+  melee(e, a, dt, d) {
+    if (!a.s) { a.s = 1; e.c.anim.once('Emphatic Speaking', null); }
+    if (a.t > 0.6 && !a.h) { a.h = 1; if (d < 4.6) { hurt(14); sfx.hit(); } }
+    return a.t > 1.4;
+  },
+  lecture(e, a) {
+    if (!a.s) { a.s = 1; e.c.anim.once('Lecture Point', null); }
+    if (a.t > 0.5 && !a.h) {
+      a.h = 1; const b = e.c.root.position, hp = hero.root.position;
+      shot('enemy', new THREE.Vector3(b.x, 1.5, b.z), new THREE.Vector3(hp.x - b.x, 0, hp.z - b.z), 9, 8, 0xffe066, 4, 0.45, 'Q?', '#ffe066');
+    }
+    return a.t > 1.3;
+  },
+  charge(e, a, dt) {
+    const c = e.c;
+    if (!a.s) {
+      a.s = 1; c.anim.once('Adjust Glasses', null);
+      a.tx = hero.root.position.x; a.tz = hero.root.position.z;
+      a.ring = mkRing(a.tx, a.tz, 2.3, 0xff2020); sfx.roar();
+    }
+    if (a.t < 1.2) { a.ring.scale.setScalar(1 + 0.2 * Math.sin(a.t * 30)); return false; }
+    if (!a.go) { a.go = 1; c.anim.loop('Run', 1.2); }
+    const p = c.root.position, dx = a.tx - p.x, dz = a.tz - p.z, dd = Math.hypot(dx, dz);
+    moveEnemy(e, dx, dz, dd, 11, dt);
+    const hp = hero.root.position;
+    if (!a.h && Math.hypot(hp.x - p.x, hp.z - p.z) < 2) { a.h = 1; hurt(18); }
+    return a.t > 2.6 || dd < 0.4;
+  },
+  orbs(e, a) {
+    if (!a.s) { a.s = 1; e.c.anim.once('Energy Channel', null); }
+    if (a.t > 0.6 && !a.h) {
+      a.h = 1; const b = e.c.root.position, hp = hero.root.position;
+      const base = Math.atan2(hp.x - b.x, hp.z - b.z);
+      for (const o of [-0.3, 0, 0.3]) {
+        const ang = base + o;
+        shot('enemy', new THREE.Vector3(b.x, 1.5, b.z), new THREE.Vector3(Math.sin(ang), 0, Math.cos(ang)), 7, 9, 0x99ccff, 5, 0.4, 'VIBE', '#9cf');
+      }
+    }
+    return a.t > 1.3;
+  },
+  shock(e, a, dt, d) {
+    if (!a.s) { a.s = 1; e.c.anim.once('Power Flex', null); }
+    if (a.t > 0.8 && !a.h) {
+      a.h = 1; fxRing(e.c.root.position, 7, 0x99ccff); shake = 0.8; sfx.boom();
+      if (d < 7) hurt(16);
+    }
+    return a.t > 1.5;
+  },
+  summon(e, a) {
+    if (!a.s) { a.s = 1; e.c.anim.once('Aura Pose', null); }
+    if (a.t > 0.7 && !a.h) {
+      a.h = 1; const p = e.c.root.position;
+      if (enemies.filter(x => x.key === 'egg' && !x.dying).length < 4) {
+        spawnEnemy('egg', p.x - 2, p.z + 2); spawnEnemy('egg', p.x + 2, p.z + 2);
+      }
+      burst(new THREE.Vector3(p.x, 1.5, p.z), 0x99ccff, 20);
+    }
+    return a.t > 1.3;
+  }
+};
+function bossUpdate(e, dt, d, dx, dz) {
+  const c = e.c;
+  if (e.act) {
+    const a = e.act; a.t += dt;
+    if (ACTS[a.name](e, a, dt, d, dx, dz)) {
+      if (a.ring) scene.remove(a.ring);
+      e.act = null; e.cool = e.hp < e.maxhp * 0.5 ? 0.8 : 1.6;
+    }
+    return;
+  }
+  e.cool -= dt;
+  if (e.cool > 0) {
+    if (d > 4) { moveEnemy(e, dx, dz, d, e.speed, dt); if (!c.anim.busy) c.anim.loop(e.walk); }
+    else if (!c.anim.busy) c.anim.loop(e.idle);
+    return;
+  }
+  e.k = (e.k + 1) % e.pattern.length;
+  e.act = { name: e.pattern[e.k], t: 0 };
+}
+function updateEnemy(e, dt) {
+  const c = e.c;
+  c.anim.mixer.update(dt);
+  if (e.dying) {
+    e.dieT += dt;
+    if (e.boss) {
+      if (!e.dp) { e.dp = 1; c.anim.once('Death', null); }
+      if (e.dieT > 3.5) removeEnemy(e);
+    } else {
+      const k = Math.min(1, e.dieT / 0.35);
+      c.root.scale.set(1 + k * 0.5, 1 - k * 0.8, 1 + k * 0.5);
+      if (e.dieT > 0.35) removeEnemy(e);
+    }
+    return;
+  }
+  c.inv = Math.max(0, (c.inv || 0) - dt);
+  e.cd = Math.max(0, e.cd - dt); e.t += dt;
+  const p = c.root.position, dx = hero.root.position.x - p.x, dz = hero.root.position.z - p.z, d = Math.hypot(dx, dz);
+  c.root.rotation.y = Math.atan2(dx, dz);
+  if (dlg || heroDown) { c.anim.loop(e.idle); collide(p, e.rad); return; }
+  if (e.boss) bossUpdate(e, dt, d, dx, dz); else minionUpdate(e, dt, d, dx, dz);
+  collide(p, e.rad);
+}
+
+// ---------- hero ----------
+function updateHero(dt) {
+  const c = hero; c.anim.mixer.update(dt);
+  c.inv = Math.max(0, c.inv - dt);
+  const fwd = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
+  const right = new THREE.Vector3(-Math.cos(yaw), 0, Math.sin(yaw));
+  const mv = new THREE.Vector3();
+  if (keys.KeyW) mv.add(fwd); if (keys.KeyS) mv.sub(fwd);
+  if (keys.KeyD) mv.add(right); if (keys.KeyA) mv.sub(right);
+  if (keys.KeyQ) yaw += dt * 2; if (keys.KeyE) yaw -= dt * 2;
+  const moving = mv.lengthSq() > 0; if (moving) mv.normalize();
+  let speed = keys.ShiftLeft ? 6.5 : 4.2, vel = null;
+  if (c.dashT > 0) { c.dashT -= dt; vel = c.dashDir; speed = 14; }
+  else if (moving && !c.anim.busy) vel = mv;
+  if (!c.anim.busy) c.anim.loop(moving ? (keys.ShiftLeft ? 'Run' : 'Walk') : 'Idle');
+  if (vel) {
+    c.root.position.addScaledVector(vel, speed * dt);
+    c.root.rotation.y = lerpAng(c.root.rotation.y, Math.atan2(vel.x, vel.z), Math.min(1, dt * 12));
+  } else if (!c.anim.busy) {
+    c.root.rotation.y = lerpAng(c.root.rotation.y, yaw, Math.min(1, dt * 10));
+  }
+  collide(c.root.position, 0.5);
+}
+function punch() {
+  if (!hero || hero.anim.busy || heroDown || dlg) return;
+  hero.anim.once('Punch', null);
+  later(0.25, () => {
+    const hits = enemies.filter(e => !e.dying && inFront(e, 2.6, 0.2));
+    hits.forEach(e => { damageEnemy(e, 10); charge(8); });
+    if (hits.length) sfx.hit();
+  });
+}
+function throwOrb() {
+  if (!hero || hero.anim.busy || heroDown || dlg) return;
+  hero.anim.once('Pokeball Throw', null); sfx.throw();
+  later(0.2, () => {
+    const p = hero.root.position;
+    const fwd = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
+    shot('hero', new THREE.Vector3(p.x + fwd.x * 0.8, 1.3, p.z + fwd.z * 0.8), fwd, 24, 14, 0x66ddff, 1.4, 0.35);
+  });
+}
+function special() {
+  if (!hero || hero.anim.busy || heroDown || dlg || specialCharge < 100) return;
+  hero.anim.once('Cast Spell', null); specialCharge = 0;
+  later(0.35, () => {
+    const p = hero.root.position;
+    fxRing(p, 7, 0x66ccff); shake = 1; sfx.boom();
+    for (const e of enemies.slice()) {
+      const q = e.c.root.position;
+      if (!e.dying && Math.hypot(q.x - p.x, q.z - p.z) < 7) damageEnemy(e, 35);
+    }
+  });
+}
+function dodge() {
+  if (!hero || hero.anim.busy || heroDown || dlg) return;
+  const fwd = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
+  hero.anim.once('Roll', null); hero.dashT = 0.35; hero.dashDir = fwd; hero.inv = 0.45;
+}
+
+// ---------- projectiles / fx ----------
+function updateShots(dt) {
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const p = projectiles[i]; p.life -= dt;
+    p.m.position.addScaledVector(p.v, dt);
+    const pos = p.m.position;
+    let kill = p.life <= 0 || Math.hypot(pos.x, pos.z) > ARENA + 1;
+    if (!kill && p.team === 'enemy' && !heroDown) {
+      const hp = hero.root.position;
+      if (Math.hypot(pos.x - hp.x, pos.z - hp.z) < p.r + 0.5) { hurt(p.dmg); kill = true; }
+    } else if (!kill && p.team === 'hero') {
+      for (const e of enemies) {
+        if (e.dying) continue;
+        const q = e.c.root.position;
+        if (Math.hypot(pos.x - q.x, pos.z - q.z) < e.rad + p.r) {
+          damageEnemy(e, p.dmg); charge(6); sfx.hit(); kill = true; break;
+        }
+      }
+    }
+    if (kill) { burst(pos.clone(), p.team === 'hero' ? 0x66ddff : 0xffe066, 8); scene.remove(p.m); projectiles.splice(i, 1); }
+  }
+}
+function updateFx(dt) {
+  for (let i = fxs.length - 1; i >= 0; i--) {
+    const f = fxs[i]; f.t += dt; const k = Math.min(1, f.t / f.life);
+    f.m.scale.setScalar(1 + k * (f.grow - 1)); f.m.material.opacity = 1 - k; f.m.material.transparent = true;
+    if (k >= 1) { scene.remove(f.m); fxs.splice(i, 1); }
+  }
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i]; p.life -= dt; p.v.y -= 9 * dt;
+    p.m.position.addScaledVector(p.v, dt);
+    if (p.life <= 0) { scene.remove(p.m); particles.splice(i, 1); }
+  }
+}
+
+// ---------- story runner ----------
+function setBoss(e) {
+  boss = e; bossEl.style.display = 'block'; bossTitle.style.display = 'block'; bossTitle.textContent = e.title;
+}
+function hideBoss() { boss = null; bossEl.style.display = 'none'; bossTitle.style.display = 'none'; }
+function heal(n) { hero.hp = Math.min(100, hero.hp + n); sfx.heal(); }
+
+async function chCellar() {
+  chapterEl.textContent = 'I. THE CELLAR';
+  banner('I. THE CELLAR');
+  await sleep(2.4);
+  await say('Misty', 'Ugh. This cellar smells like a boiled egg factory.');
+  await say('Misty', 'Left click punches. Right click throws an orb. Fill the special meter by hitting things, then press F.');
+  spawnEnemy('egg', -5, -5); spawnEnemy('egg', 5, -5); spawnEnemy('egg', 0, -8);
+  await until(() => enemies.every(e => e.dying));
+  heal(30);
+  await say('Misty', 'Eggs: zero. Misty: still soggy. Upstairs, before anything else crawls out.');
+}
+async function chLecture() {
+  chapterEl.textContent = 'II. THE LECTURE';
+  banner('II. THE LECTURE', 2600);
+  await sleep(1.2);
+  const prof = spawnEnemy('prof', 0, -17);
+  await say('Misty', 'Who is that? Why is a man in a cardigan floating into a lecture hall?');
+  await say('The Professor', 'Class. Today we discuss the egg. Is it a meal, or a question?', prof.c, 'Lecture Point');
+  await say('The Professor', 'Emphatic Speaking is a reasoning method. You will now be reasoned with.', prof.c, 'Emphatic Speaking');
+  setBoss(prof);
+  await until(() => prof.dying);
+  await sleep(3.2);
+  hideBoss();
+  await say('The Professor', '...I was about to conclude that you were correct.', prof.c, 'Disbelieving Shrug');
+}
+async function chAura() {
+  chapterEl.textContent = 'III. THE AURA';
+  banner('III. THE AURA', 2600);
+  await sleep(1.2);
+  const aura = spawnEnemy('aura', 0, -14);
+  spawnEnemy('egg', -6, -4); spawnEnemy('egg', 6, -4);
+  await say('Aura Wraith', 'Your vibes are inadequate. I will absorb them.', aura.c, 'Aura Pose');
+  await say('Misty', 'It is glowing through the walls. Okay, this is a bad vibe.');
+  setBoss(aura);
+  await until(() => enemies.every(e => e.dying));
+  await sleep(3.5);
+  hideBoss();
+}
+async function chEnding() {
+  chapterEl.textContent = 'IV. DAWN';
+  banner('IV. DAWN', 2600);
+  await sleep(1);
+  hero.anim.release(); hero.anim.loop('Dance');
+  const pos = [[-3, -3, 'professor', 'Dance'], [3, -3, 'aura', 'Dance'], [-5, 3, 'egg', 'Tap Dance'], [5, 3, 'egg', 'Tap Dance']];
+  for (const [x, z, m, clip] of pos) {
+    const c = makeChar(m, x, z); c.anim.loop(clip); c.root.rotation.y = Math.PI; allies.push(c);
+  }
+  await say('Misty', 'Everyone is somehow alive. The eggs are dancing. Fine. I accept this.');
+  await say('The Professor', 'Let me conclude: the dance is correct.', allies[0], 'Dance');
+  banner('THE END', 5000);
+  await sleep(4.5);
+  await say('Misty', 'Thanks for playing The Egg Who Stayed Late. Reload the page to lecture the eggs again.');
+  ended = true;
+}
+async function resetAfterDeath() {
+  for (const e of enemies.slice()) removeEnemy(e);
+  for (const p of projectiles) scene.remove(p.m); projectiles.length = 0;
+  for (const f of fxs) scene.remove(f.m); fxs.length = 0;
+  for (const p of particles) scene.remove(p.m); particles.length = 0;
+  hideBoss(); dlg = null; boxEl.style.display = 'none';
+  hero.root.position.set(0, 0, 9); hero.hp = 100; hero.inv = 0; hero.dashT = 0;
+  hero.anim.release(); hero.anim.loop('Idle');
+  heroDown = false;
+  banner('YOU DIED. TRYING AGAIN...', 2000);
+  await sleep(2.2);
+}
+async function story() {
+  for (const ch of [chCellar, chLecture, chAura, chEnding]) {
+    for (;;) {
+      try { await ch(); break; }
+      catch (err) { if (err !== 'dead') throw err; await resetAfterDeath(); }
+    }
+  }
+}
+
+// ---------- camera / loop ----------
+function updateCam(dt) {
+  const hp = hero.root.position;
+  const target = new THREE.Vector3(hp.x - Math.sin(yaw) * 7, 3.4, hp.z - Math.cos(yaw) * 7);
+  camPos.lerp(target, 1 - Math.exp(-dt * 8));
+  shake = Math.max(0, shake - dt * 2);
+  camera.position.set(camPos.x + (Math.random() - 0.5) * shake * 0.4, camPos.y + (Math.random() - 0.5) * shake * 0.4, camPos.z);
+  camera.lookAt(hp.x + Math.sin(yaw) * 2, 1.6, hp.z + Math.cos(yaw) * 2);
+}
+function updateHud() {
+  hpFill.style.width = (hero.hp) + '%';
+  specialEl.textContent = specialCharge >= 100 ? 'SPECIAL [F]: READY' : 'SPECIAL [F] ' + Math.floor(specialCharge) + '%';
+  specialEl.classList.toggle('ready', specialCharge >= 100);
+  if (boss && !boss.dying) bossFill.style.width = (boss.hp / boss.maxhp * 100) + '%';
+}
+function tick(dt) {
+  for (const w of waits.slice()) {
+    w.t -= dt;
+    if (w.t <= 0) { waits.splice(waits.indexOf(w), 1); w.fn(); }
+  }
+  if (!heroDown && hero.hp <= 0) {
+    heroDown = true; hero.anim.once('Death', null);
+    for (const c of conds) c.rej('dead'); conds.length = 0;
+    for (const w of waits) if (w.rej) w.rej('dead'); waits.length = 0;
+  }
+  for (const c of conds.slice()) {
+    if (c.cond()) { conds.splice(conds.indexOf(c), 1); c.res(); }
+  }
+  if (dlg) {
+    const before = Math.floor(dlg.pos);
+    dlg.pos = Math.min(dlg.text.length, dlg.pos + dt * 40);
+    if (Math.floor(dlg.pos) % 4 === 0 && Math.floor(dlg.pos) !== before) sfx.blip();
+    renderDlg();
+  }
+}
+let last = performance.now();
+function frame(now) {
+  let dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (paused) dt = 0;
+  if (hero) {
+    tick(dt);
+    updateHero(dt);
+    for (const e of enemies.slice()) updateEnemy(e, dt);
+    for (const a of allies) a.anim.mixer.update(dt);
+    updateShots(dt); updateFx(dt);
+    updateCam(dt); updateHud();
+  }
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// ---------- input ----------
+addEventListener('keydown', e => {
+  if (!started) return;
+  keys[e.code] = true;
+  if (['Space', 'Tab'].includes(e.code)) e.preventDefault();
+  if (e.code === 'Enter') advance();
+  if (e.code === 'KeyF') special();
+  if (e.code === 'Space') dodge();
+  if (e.code === 'KeyM') { muted = !muted; bgm.muted = muted; if (master) master.gain.value = muted ? 0 : 0.5; }
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+addEventListener('mousedown', e => {
+  if (!started) return;
+  if (dlg && locked) { advance(); return; }
+  if (paused || !locked) return;
+  if (e.button === 0) punch();
+  if (e.button === 2) throwOrb();
+});
+addEventListener('contextmenu', e => e.preventDefault());
+addEventListener('mousemove', e => { if (locked && !paused) yaw -= e.movementX * 0.0035; });
+document.addEventListener('pointerlockchange', () => {
+  locked = document.pointerLockElement === canvas;
+  if (!started) return;
+  paused = !locked && !ended;
+  clicker.style.display = paused ? 'flex' : 'none';
+  if (paused) { bgm.pause(); if (actx) actx.suspend(); }
+  else { bgm.play().catch(() => {}); if (actx) actx.resume(); }
+});
+clicker.onclick = () => canvas.requestPointerLock();
+
+// ---------- boot ----------
+(async () => {
+  try {
+    const names = Object.keys(MODELS);
+    await Promise.all(names.map(async n => {
+      const g = await loader.loadAsync(MODELS[n]);
+      g.scene.updateMatrixWorld(true);
+      g.box = new THREE.Box3().setFromObject(g.scene);
+      gltfs[n] = g;
+    }));
+    console.log('models loaded', Object.fromEntries(names.map(n => [n, gltfs[n].animations.map(a => a.name)])));
+    hero = makeChar('misty', 0, 9);
+    Object.assign(hero, { hp: 100, inv: 0, dashT: 0, dashDir: new THREE.Vector3(0, 0, 1) });
+    hero.anim.loop('Idle');
+    camPos.set(0, 3.4, 9 + 7);
+    startBtn.disabled = false; startBtn.textContent = 'START';
+  } catch (err) {
+    console.error('[ERROR] model load failed', err);
+    startBtn.textContent = 'LOAD FAILED';
+  }
+})();
+
+startBtn.onclick = () => {
+  if (!hero) return;
+  titleEl.style.display = 'none';
+  initAudio();
+  bgm.play().catch(() => {});
+  started = true; paused = false;
+  const p = canvas.requestPointerLock();
+  if (p && p.catch) p.catch(() => { paused = true; clicker.style.display = 'flex'; });
+  story().catch(err => console.error('[ERROR] story', err));
+};
+</script>
+</body>
+</html>
