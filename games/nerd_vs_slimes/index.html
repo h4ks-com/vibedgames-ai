@@ -1,0 +1,139 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>Nerd Knight: One Tap</title>
+<style>
+html,body{margin:0;height:100%;background:#000;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+canvas{display:block;width:100vw;height:100vh;object-fit:contain}
+</style></head><body><canvas id="c" width="360" height="640"></canvas>
+<script>
+const SHEET="https://s3-api.t3ks.com/workflows/sprite-sheet/2026-10-31/make-nerd-knight-from-reference-image-attack-071712.png";
+const W=360,H=640,GROUND=560,FRAMES=8,ATK_LEN=0.6;
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');ctx.imageSmoothingEnabled=false;
+const sheet=new Image();let FW=49,FH=64,sheetOK=false;
+sheet.onload=()=>{FW=sheet.naturalWidth/FRAMES;FH=sheet.naturalHeight;sheetOK=true;};
+sheet.onerror=()=>console.error('sprite failed to load');
+sheet.src=SHEET;
+
+let state='title',hearts=3,score=0,best=+(localStorage.getItem('nk_best')||0);
+let speed=120,enemies=[],spawnT=1,atkT=-1,flash=0,shake=0,t=0,ac=null;
+const SLIMES=[{c:'#4ade80',r:16},{c:'#a78bfa',r:20},{c:'#fb923c',r:24}];
+
+function beep(f,d,type='square'){try{ac=ac||new (window.AudioContext||window.webkitAudioContext)();const o=ac.createOscillator(),g=ac.createGain();o.type=type;o.frequency.value=f;g.gain.setValueAtTime(.12,ac.currentTime);g.gain.exponentialRampToValueAtTime(.001,ac.currentTime+d);o.connect(g).connect(ac.destination);o.start();o.stop(ac.currentTime+d);}catch(e){}}
+
+function start(){state='play';hearts=3;score=0;speed=120;enemies=[];spawnT=1;atkT=-1;beep(660,.15,'triangle');}
+function attack(){
+  atkT=0;beep(520,.08,'sawtooth');
+  let target=null;
+  for(const e of enemies){ if(!e.dead&&!e.gone&&e.x>=140&&e.x<=200&&(!target||Math.abs(e.x-170)<Math.abs(target.x-170))) target=e; }
+  if(target){
+    target.dead=true;score++;speed=Math.min(120+score*4,260);
+    beep(1200,.12,'sawtooth');setTimeout(()=>beep(1600,.08,'triangle'),60);
+  }
+}
+function tap(){
+  if(state==='title'||state==='over'){start();return;}
+  if(state==='play')attack();
+}
+addEventListener('pointerdown',e=>{e.preventDefault();tap();},{passive:false});
+addEventListener('keydown',e=>{if(e.code==='Space'||e.code==='Enter'){e.preventDefault();tap();}});
+
+function update(dt){
+  t+=dt;
+  if(atkT>=0){atkT+=dt;if(atkT>ATK_LEN)atkT=-1;}
+  flash=Math.max(0,flash-dt);shake=Math.max(0,shake-dt);
+  spawnT-=dt;
+  if(spawnT<=0){
+    enemies.push({x:W+30,type:Math.floor(Math.random()*SLIMES.length),dead:false,gone:false,dtime:0,ph:Math.random()*6});
+    spawnT=Math.max(0.6,0.9+Math.random()*1.1-Math.min(score*0.02,0.5));
+  }
+  for(const e of enemies){
+    if(e.dead){e.dtime+=dt;continue;}
+    if(e.gone)continue;
+    e.x-=speed*dt;
+    if(e.x<120){
+      e.gone=true;hearts--;flash=.3;shake=.3;beep(150,.3,'sawtooth');
+      if(hearts<=0){
+        state='over';if(score>best){best=score;localStorage.setItem('nk_best',best);}
+        beep(90,.6,'sawtooth');
+      }
+    }
+  }
+  enemies=enemies.filter(e=>!(e.dead&&e.dtime>0.35)&&!(e.gone&&e.x<-60)&&!(e.gone&&e.x<120&&e.x>=-60&&false));
+  enemies=enemies.filter(e=>e.x>-60);
+}
+
+function drawSlime(e){
+  const s=SLIMES[e.type];
+  const bob=e.dead?0:Math.sin(t*8+e.ph)*2;
+  ctx.save();
+  let sx=1,sy=1,alpha=1;
+  if(e.dead){const k=Math.min(e.dtime/0.35,1);sx=1+k*0.6;sy=1-k*0.8;alpha=1-k;}
+  ctx.globalAlpha=alpha;
+  const cx=e.x,cy=GROUND-s.r+bob;
+  ctx.translate(cx,GROUND);ctx.scale(sx,sy);ctx.translate(-cx,-GROUND);
+  ctx.fillStyle=s.c;ctx.beginPath();ctx.ellipse(cx,cy,s.r,s.r*0.8,0,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#fff';ctx.fillRect(cx-s.r*0.4,cy-s.r*0.2,5,6);ctx.fillRect(cx+s.r*0.1,cy-s.r*0.2,5,6);
+  ctx.fillStyle='#111';ctx.fillRect(cx-s.r*0.4+2,cy,2,3);ctx.fillRect(cx+s.r*0.1+2,cy,2,3);
+  ctx.restore();
+}
+
+function drawKnight(){
+  const f=atkT>=0?Math.min(FRAMES-1,Math.floor(atkT/(ATK_LEN/FRAMES))):0;
+  const dw=FW*3,dh=FH*3,dx=20,dy=GROUND-dh;
+  if(sheetOK)ctx.drawImage(sheet,f*FW,0,FW,FH,dx,dy,dw,dh);
+  else{ctx.fillStyle='#38bdf8';ctx.fillRect(dx+40,dy+30,50,dh-30);}
+}
+
+function drawHUD(){
+  ctx.textAlign='left';ctx.fillStyle='#fff';ctx.font='bold 22px sans-serif';
+  ctx.fillText('SLAIN '+score,14,34);
+  ctx.textAlign='right';
+  for(let i=0;i<3;i++){ctx.fillStyle=i<hearts?'#f43f5e':'#475569';ctx.fillText('♥',W-14-i*26,34);}
+  ctx.textAlign='left';
+}
+
+function center(text,y,size,color='#fff'){ctx.fillStyle=color;ctx.font='bold '+size+'px sans-serif';ctx.textAlign='center';ctx.fillText(text,W/2,y);ctx.textAlign='left';}
+
+function draw(){
+  ctx.save();
+  if(shake>0)ctx.translate((Math.random()-.5)*10,(Math.random()-.5)*10);
+  const g=ctx.createLinearGradient(0,0,0,GROUND);
+  g.addColorStop(0,'#1e3a8a');g.addColorStop(1,'#7c3aed');
+  ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='#312e81';
+  const off=(t*speed*0.3)%80;
+  for(let x=-80;x<W+80;x+=80){ctx.beginPath();ctx.moveTo(x-off,GROUND);ctx.lineTo(x+40-off,GROUND-60);ctx.lineTo(x+80-off,GROUND);ctx.fill();}
+  ctx.fillStyle='#166534';ctx.fillRect(0,GROUND,W,H-GROUND);
+  ctx.fillStyle='#15803d';const roff=(t*speed)%24;
+  for(let x=-24;x<W+24;x+=24)ctx.fillRect(x-roff,GROUND,12,6);
+  if(state==='play'||state==='over'){
+    drawKnight();
+    for(const e of enemies)drawSlime(e);
+    drawHUD();
+  }
+  if(flash>0){ctx.fillStyle='rgba(244,63,94,'+(flash*0.8)+')';ctx.fillRect(0,0,W,H);}
+  if(state==='title'){
+    ctx.fillStyle='rgba(0,0,0,.45)';ctx.fillRect(0,0,W,H);
+    center('NERD KNIGHT',220,40,'#facc15');
+    center('One tap. Slash the slimes',270,18);
+    center('before they reach your castle.',296,18);
+    center('Tap the slime when it is in front of the blade.',340,14,'#cbd5e1');
+    if(Math.floor(t*2)%2===0)center('TAP TO START',440,26,'#4ade80');
+  }
+  if(state==='over'){
+    ctx.fillStyle='rgba(0,0,0,.55)';ctx.fillRect(0,0,W,H);
+    center('GAME OVER',260,38,'#f43f5e');
+    center('Slain: '+score,305,24);
+    center('Best: '+best,340,20,'#facc15');
+    if(Math.floor(t*2)%2===0)center('TAP TO RETRY',430,24,'#4ade80');
+  }
+  ctx.restore();
+}
+
+let last=performance.now();
+function frame(now){
+  const dt=Math.min((now-last)/1000,0.05);last=now;
+  if(state==='play')update(dt);else t+=dt;
+  draw();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script></body></html>
