@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>CELL-8 3x3 TV Grid</title>
+<style>
+body{margin:0;background:#050805;color:#9f9;font-family:monospace;display:flex;flex-direction:column;align-items:center}
+h3{margin:8px}
+#status{font-size:13px;color:#7c7}
+#tv{display:grid;grid-template-columns:repeat(3,270px);gap:10px;margin:8px}
+.screen{position:relative;background:#000;border:6px solid #222;border-radius:14px;padding:4px;box-shadow:0 0 14px #040;transition:border-color .3s}
+.screen.new{border-color:#ff4}
+.label{font-size:11px;display:flex;justify-content:space-between;gap:4px;white-space:nowrap;overflow:hidden}
+canvas{width:100%;height:auto;image-rendering:pixelated;display:block;background:#000}
+.scan{position:absolute;left:10px;right:10px;top:26px;bottom:10px;pointer-events:none;background:repeating-linear-gradient(to bottom,rgba(0,0,0,.28) 0 1px,transparent 1px 3px)}
+#board{width:860px;font-size:12px;white-space:pre;color:#8c8;background:#0a0f0a;padding:6px;border:1px solid #232}
+#log{width:860px;font-size:11px;white-space:pre;color:#aa6;background:#0a0a06;padding:6px;border:1px solid #223;margin-top:6px}
+</style></head><body>
+<h3>CELL-8 · 3×3 TV GRID · autorank by class-4 heuristic</h3>
+<div id="status"></div>
+<div id="tv"></div>
+<pre id="board"></pre>
+<pre id="log"></pre>
+<script>
+const W=64,H=48,N=W*H,SCREENS=9,WARM=200,WIN=200,EVOLVE_MS=15000,STEPS=2;
+const MSG="HELLO CELL8 ";
+const bits=[];
+for(const ch of MSG){const c=ch.charCodeAt(0);for(let b=7;b>=0;b--)bits.push((c>>b)&1);}
+let inputPos=0,ticks=0;
+const logLines=[];
+function log(m){logLines.unshift(new Date().toLocaleTimeString()+"  "+m);if(logLines.length>6)logLines.pop();}
+
+function randGenome(){const g=new Uint8Array(28);for(let i=0;i<28;i++)g[i]=Math.random()<0.5?1:0;return g;}
+
+// Hex neighbourhood (odd-r offset layout), toroidal wrap
+const DIRS_EVEN=[[-1,0],[1,0],[0,-1],[-1,-1],[0,1],[-1,1]];
+const DIRS_ODD=[[-1,0],[1,0],[0,-1],[1,-1],[0,1],[1,1]];
+const NB=new Int32Array(N*6);
+for(let r=0;r<H;r++)for(let c=0;c<W;c++){
+  const d=(r&1)?DIRS_ODD:DIRS_EVEN;
+  for(let k=0;k<6;k++){
+    const rr=(r+d[k][1]+H)%H, cc=(c+d[k][0]+W)%W;
+    NB[(r*W+c)*6+k]=rr*W+cc;
+  }
+}
+
+function hash(a){let h=0x811c9dc5;for(let k=0;k<a.length;k++){h^=a[k];h=Math.imul(h,0x01000193);}return h>>>0;}
+
+const tv=document.getElementById('tv');
+const screens=[];
+for(let i=0;i<SCREENS;i++){
+  const wrap=document.createElement('div');
+  wrap.className='screen';
+  wrap.innerHTML='<div class="label"><span class="a"></span><span class="b"></span></div><canvas></canvas><div class="scan"></div>';
+  tv.appendChild(wrap);
+  const canvas=wrap.querySelector('canvas');
+  canvas.width=W*4;canvas.height=H*4;
+  const s={i,el:wrap,la:wrap.querySelector('.a'),lb:wrap.querySelector('.b'),ctx:canvas.getContext('2d'),
+    g:randGenome(),cur:new Uint8Array(N),next:new Uint8Array(N),hist:[],act:[],age:0,
+    score:null,stats:null,rank:0,flash:0,origin:'initial'};
+  randomize(s);
+  screens.push(s);
+}
+
+function randomize(s){
+  for(let k=0;k<N;k++)s.cur[k]=Math.random()<0.3?1:0;
+  s.hist=[];s.act=[];s.age=0;s.score=null;s.stats=null;
+}
+
+// One CA step. Genome index = self*14 + neighbourCount*2 + wildcard (2*7*2 = 28 bits).
+// Row 0 receives the streamed input bit as its wildcard; other rows get 0.
+function stepScreen(s,inBit){
+  const cur=s.cur,next=s.next,g=s.g;
+  let changed=0;
+  for(let idx=0;idx<N;idx++){
+    let n=0;const base=idx*6;
+    for(let k=0;k<6;k++)n+=cur[NB[base+k]];
+    const wild=idx<W?inBit:0;
+    const v=g[cur[idx]*14+n*2+wild];
+    next[idx]=v;
+    if(v!==cur[idx])changed++;
+  }
+  s.act.push(changed/N);
+  s.hist.push(hash(next));
+  if(s.act.length>WIN){s.act.shift();s.hist.shift();}
+  s.cur=next;s.next=cur;
+  s.age++;
+}
+
+// Heuristic class-4 score:
+//  - novelty: fraction of distinct states in the window (class 1/2 repeat, class 3 mostly novel)
+//  - activity band: peaks near 0.2 changed-cells/step (class 4 sits between frozen and noise)
+//  - penalty for short cycles
+function scoreScreen(s){
+  if(s.hist.length<WIN){s.score=null;return;}
+  const distinct=new Set(s.hist).size;
+  const novelty=distinct/s.hist.length;
+  const meanAct=s.act.reduce((a,b)=>a+b,0)/s.act.length;
+  const band=Math.max(0,1-Math.abs(meanAct-0.2)/0.2);
+  let cyc=0;
+  for(let p=1;p<=20;p++){
+    let ok=true;
+    for(let t=s.hist.length-1;t>=s.hist.length-40&&t-p>=0;t--){if(s.hist[t]!==s.hist[t-p]){ok=false;break;}}
+    if(ok){cyc=p;break;}
+  }
+  const cyclePenalty=cyc?0.5:1;
+  s.score=+(novelty*band*cyclePenalty).toFixed(3);
+  s.stats={novelty:+novelty.toFixed(2),act:+meanAct.toFixed(3),cyc};
+}
+
+function mutate(g){
+  const m=Uint8Array.from(g);
+  const flips=1+(Math.random()<0.3?1:0);
+  for(let f=0;f<flips;f++){const i=Math.floor(Math.random()*28);m[i]^=1;}
+  return m;
+}
+
+function draw(s){
+  const img=s.ctx.createImageData(W*4,H*4);
+  const d=img.data;
+  for(let r=0;r<H;r++)for(let c=0;c<W;c++){
+    const v=s.cur[r*W+c]?255:0;
+    for(let dy=0;dy<4;dy++)for(let dx=0;dx<4;dx++){
+      const o=((r*4+dy)*W*4+(c*4+dx))*4;
+      d[o]=v;d[o+1]=s.cur[r*W+c]?(s.origin==='mutant'?200:255):0;d[o+2]=v;d[o+3]=255;
+    }
+  }
+  s.ctx.putImageData(img,0,0);
+  const sc=s.score==null?'warming':s.score.toFixed(3);
+  s.la.textContent='CH'+(s.i+1)+' rank '+(s.rank||'-');
+  s.lb.textContent='score '+sc;
+  s.el.classList.toggle('new',s.flash>0);
+  if(s.flash>0)s.flash--;
+}
+
+function rankAll(){
+  const ranked=[...screens].sort((a,b)=>(b.score??-1)-(a.score??-1));
+  ranked.forEach((s,i)=>{s.rank=i+1;});
+  return ranked;
+}
+
+function evolve(){
+  const ranked=rankAll();
+  const scored=ranked.filter(s=>s.score!=null);
+  if(scored.length<SCREENS)return;
+  const worst=ranked[ranked.length-1];
+  const top=ranked.slice(0,3);
+  let parent=top[Math.floor(Math.random()*3)];
+  let newG;
+  if(Math.random()<0.1){newG=randGenome();worst.origin='random';}
+  else{newG=mutate(parent.g);worst.origin='mutant';}
+  worst.g=newG;
+  randomize(worst);
+  worst.flash=20;
+  log('CH'+(worst.i+1)+' replaced ('+worst.origin+(worst.origin==='mutant'?' of CH'+(parent.i+1):'')+')');
+}
+
+function renderBoard(){
+  const ranked=rankAll();
+  let out='RANK  CH  SCORE   NOVELTY  ACT    CYC  GENOME\n';
+  ranked.forEach(s=>{
+    const st=s.stats||{novelty:0,act:0,cyc:0};
+    out+=String(s.rank).padEnd(6)+('CH'+(s.i+1)).padEnd(4)+(s.score==null?'warm':s.score.toFixed(3)).padEnd(8)+
+      String(st.novelty).padEnd(9)+String(st.act).padEnd(7)+String(st.cyc).padEnd(5)+Array.from(s.g).join('')+'\n';
+  });
+  document.getElementById('board').textContent=out;
+}
+
+function drawLog(){document.getElementById('log').textContent=logLines.join('\n');}
+
+function tick(){
+  const inBit=bits[inputPos];inputPos=(inputPos+1)%bits.length;
+  for(const s of screens){
+    for(let k=0;k<STEPS;k++)stepScreen(s,inBit);
+    scoreScreen(s);
+    draw(s);
+  }
+  renderBoard();
+  ticks++;
+  document.getElementById('status').textContent='tick '+ticks+'  input bit '+inBit+'  next evolve in '+Math.max(0,Math.ceil((EVOLVE_MS-(Date.now()-lastEvolve))/1000))+'s';
+}
+
+let lastEvolve=Date.now();
+setInterval(tick,100);
+setInterval(()=>{evolve();lastEvolve=Date.now();drawLog();},EVOLVE_MS);
+</script>
+</body></html>
