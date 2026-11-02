@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cell-8 test</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  body { background:#111; color:#ddd; font-family: monospace; margin:0; padding:12px; }
+  h1 { font-size:18px; margin:0 0 8px; }
+  #wrap { display:flex; flex-wrap:wrap; gap:16px; align-items:flex-start; }
+  canvas { background:#000; border:1px solid #333; }
+  button, input { background:#222; color:#ddd; border:1px solid #444; padding:4px 8px; font-family:monospace; }
+  button:hover { background:#333; }
+  #genome { display:grid; grid-template-columns: repeat(14, 26px); gap:2px; margin-top:6px; }
+  #genome div { width:26px; height:22px; font-size:11px; text-align:center; line-height:22px; cursor:pointer; border:1px solid #333; }
+  .on { background:#2a7a3a; color:#fff; }
+  .off { background:#222; color:#777; }
+  #stats, #help { font-size:12px; color:#aaa; line-height:1.5; max-width:420px; }
+</style>
+</head>
+<body>
+<h1>Cell-8: hexagonal CA with a wildcard input cell (sketch)</h1>
+<div id="wrap">
+  <div>
+    <canvas id="cv" width="640" height="560"></canvas>
+  </div>
+  <div>
+    <div>
+      <button id="step">Step</button>
+      <button id="run">Run</button>
+      <button id="rand">Random genome</button>
+      <button id="seed">Random grid</button>
+      <button id="clear">Clear</button>
+    </div>
+    <div style="margin-top:8px">
+      Input stream (text, sent as bits into the wildcard cells on row 0):<br>
+      <input id="stream" size="34" value="HELLO CELL8">
+      <button id="restart">Restart stream</button>
+    </div>
+    <div style="margin-top:8px">
+      Genome: 28 bits, one per (self, live neighbours 0-6, wildcard). Click to toggle.
+      Column labels: index = self*14 + neighbours*2 + wildcard.
+    </div>
+    <div id="genome"></div>
+    <div id="stats" style="margin-top:8px"></div>
+    <div id="help" style="margin-top:8px">
+      Each step, every hex cell looks at itself, its 6 hex neighbours and a wildcard bit.
+      Row 0 receives the current input bit; other rows get 0. The genome table decides the next state.
+      The grid wraps on a torus. This is only a sketch of the idea, not a trained system.
+    </div>
+  </div>
+</div>
+
+<script>
+const N = 40;                 // grid is N x N in axial coordinates (q, r)
+const SIZE = 9;               // hex radius in pixels
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+
+let grid = new Uint8Array(N * N);
+let next = new Uint8Array(N * N);
+let genome = new Uint8Array(28);
+let bits = [];
+let pos = 0;
+let running = false;
+let timer = null;
+let steps = 0;
+let lastChanged = 0;
+
+const idx = (q, r) => ((r + N) % N) * N + ((q + N) % N);
+
+const NEI = [[1,0],[-1,0],[0,1],[0,-1],[1,-1],[-1,1]];
+
+function neighbours(i) {
+  const q = i % N, r = (i - q) / N;
+  let c = 0;
+  for (const [dq, dr] of NEI) c += grid[idx(q + dq, r + dr)];
+  return c;
+}
+
+function nextBit() {
+  if (bits.length === 0) return 0;
+  const b = bits[pos];
+  pos = (pos + 1) % bits.length;
+  return b;
+}
+
+function step() {
+  const wildThisStep = nextBit();
+  for (let i = 0; i < N * N; i++) {
+    const row = Math.floor(i / N);
+    const wild = row === 0 ? wildThisStep : 0;
+    const s = grid[i];
+    const c = neighbours(i);
+    next[i] = genome[s * 14 + c * 2 + wild];
+  }
+  let changed = 0;
+  for (let i = 0; i < N * N; i++) { if (next[i] !== grid[i]) changed++; }
+  lastChanged = changed / (N * N);
+  [grid, next] = [next, grid];
+  steps++;
+  draw();
+  stats();
+}
+
+function draw() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, cv.width, cv.height);
+  const w = Math.sqrt(3) * SIZE;
+  const ox = 30, oy = 30;
+  for (let r = 0; r < N; r++) {
+    for (let q = 0; q < N; q++) {
+      const x = ox + w * (q + r / 2);
+      const y = oy + 1.5 * SIZE * r;
+      const alive = grid[idx(q, r)];
+      ctx.beginPath();
+      for (let k = 0; k < 6; k++) {
+        const a = Math.PI / 3 * k + Math.PI / 6;
+        const px = x + SIZE * Math.cos(a), py = y + SIZE * Math.sin(a);
+        k ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fillStyle = alive ? (r === 0 ? '#e0a040' : '#5fd17a') : '#0d0d0d';
+      ctx.fill();
+      ctx.strokeStyle = '#1a1a1a';
+      ctx.stroke();
+    }
+  }
+}
+
+function stats() {
+  let alive = 0;
+  for (let i = 0; i < N * N; i++) alive += grid[i];
+  const ones = genome.reduce((a, b) => a + b, 0);
+  document.getElementById('stats').textContent =
+    `step ${steps} | alive ${(100 * alive / (N * N)).toFixed(1)}% | changed last step ${(100 * lastChanged).toFixed(1)}% | genome ones ${ones}/28 | stream pos ${bits.length ? pos : 0}/${bits.length}`;
+}
+
+function buildGenomeUI() {
+  const g = document.getElementById('genome');
+  g.innerHTML = '';
+  for (let i = 0; i < 28; i++) {
+    const d = document.createElement('div');
+    d.textContent = i;
+    d.className = genome[i] ? 'on' : 'off';
+    d.title = `self=${Math.floor(i / 14)} nei=${Math.floor((i % 14) / 2)} wild=${i % 2}`;
+    d.onclick = () => { genome[i] ^= 1; buildGenomeUI(); stats(); };
+    g.appendChild(d);
+  }
+}
+
+function setStream() {
+  const text = document.getElementById('stream').value;
+  bits = [];
+  for (const byte of new TextEncoder().encode(text)) {
+    for (let b = 7; b >= 0; b--) bits.push((byte >> b) & 1);
+  }
+  pos = 0;
+}
+
+function randomGenome() {
+  for (let i = 0; i < 28; i++) genome[i] = Math.random() < 0.5 ? 1 : 0;
+  buildGenomeUI(); stats();
+}
+
+function randomGrid() {
+  for (let i = 0; i < N * N; i++) grid[i] = Math.random() < 0.3 ? 1 : 0;
+  steps = 0; draw(); stats();
+}
+
+function setRunning(on) {
+  running = on;
+  document.getElementById('run').textContent = on ? 'Stop' : 'Run';
+  clearInterval(timer);
+  if (on) timer = setInterval(step, 100);
+}
+
+document.getElementById('step').onclick = step;
+document.getElementById('run').onclick = () => setRunning(!running);
+document.getElementById('rand').onclick = randomGenome;
+document.getElementById('seed').onclick = randomGrid;
+document.getElementById('clear').onclick = () => { grid.fill(0); steps = 0; draw(); stats(); };
+document.getElementById('restart').onclick = () => { setStream(); stats(); };
+document.getElementById('stream').onchange = setStream;
+
+// Start with a seeded grid, a random genome and the first input stream.
+randomGenome();
+setStream();
+randomGrid();
+</script>
+</body>
+</html>
