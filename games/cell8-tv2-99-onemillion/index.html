@@ -1,0 +1,279 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Cell-8 3x3</title>
+<style>
+  body{background:#111;color:#ddd;font-family:monospace;margin:0;padding:10px}
+  h1{font-size:16px;margin:4px 0}
+  #controls{margin:6px 0}
+  #controls button,#controls input,#controls select{margin:2px;font-family:monospace}
+  #grid{display:grid;grid-template-columns:repeat(3,auto);gap:10px;width:max-content}
+  .screen{cursor:pointer;text-align:center}
+  .screen canvas{display:block;background:#000;border:1px solid #333}
+  .screen.sel canvas{border-color:#ff0}
+  .label{font-size:11px;color:#888}
+  #stats{margin:6px 0;color:#9c9;font-size:12px}
+  #genome{display:grid;grid-template-columns:repeat(14,34px);gap:2px;margin-top:4px}
+  #genome div{font-size:10px;text-align:center;padding:3px 0;cursor:pointer;border:1px solid #333}
+  #genome .on{background:#2a5a2a}
+  #genome .off{background:#1a1a1a}
+  #help{font-size:11px;color:#777;margin-top:8px;max-width:700px}
+</style>
+</head>
+<body>
+<h1>Cell-8 — 3x3 screens (hex, 28-bit genome, shared wildcard input)</h1>
+
+<div id="controls">
+  <button id="step">Step</button>
+  <button id="run">Run</button>
+  <button id="reset">Reset</button>
+  seed <input id="seed" value="1" size="6">
+  steps/evolve <input id="spr" value="200" size="4">
+  mutation <input id="mut" value="0.02" size="4">
+  target activity <input id="tgt" value="0.4" size="4">
+  <br>
+  input stream <input id="stream" value="" size="40" placeholder="text as bits; empty = random">
+  <br>
+  palette
+  <select id="preset">
+    <option value="classic">classic</option>
+    <option value="amber">amber</option>
+    <option value="ocean">ocean</option>
+    <option value="neon">neon</option>
+    <option value="mono">mono</option>
+    <option value="sunset">sunset</option>
+    <option value="custom">Custom</option>
+  </select>
+  off <input type="color" id="colOff" value="#001a00">
+  on <input type="color" id="colOn" value="#66ff66">
+  trail <input type="color" id="colTrail" value="#226622">
+  <label><input type="checkbox" id="tint" checked> Tint screens by rank</label>
+  <button id="randGenomes">Randomise selected genome</button>
+</div>
+
+<div id="stats"></div>
+<div id="grid"></div>
+<div id="sel"></div>
+<div id="genome"></div>
+<div id="help">
+  Cell-8 rule: each cell has state self (0/1), live neighbours among its 6 hex neighbours (0-6), and one wildcard bit (0/1).
+  Genome index = self*14 + neighbours*2 + wildcard (28 entries, all used). Row 0 gets the current input bit each step; other rows get 0.
+  Grid wraps as a torus. Click a screen to select it; click a genome bit to flip it.
+  Evolution (every "steps/evolve" steps): the 3 lowest-scoring screens are replaced by a crossover of the top 2 genomes with mutation, and get a fresh random grid.
+  The fitness score (activity closeness to target + recent change) is a heuristic, not a class-4 measure.
+</div>
+
+<script>
+const N_SCREENS = 9, GW = 24, GH = 20, S = 5, SQ3 = Math.sqrt(3);
+const PRESETS = {
+  classic: { off:'#001a00', on:'#66ff66', trail:'#226622' },
+  amber:   { off:'#1a0e00', on:'#ffb000', trail:'#663f00' },
+  ocean:   { off:'#001823', on:'#40e0d0', trail:'#0b4a55' },
+  neon:    { off:'#120018', on:'#ff2bd6', trail:'#5a1a4a' },
+  mono:    { off:'#000000', on:'#ffffff', trail:'#555555' },
+  sunset:  { off:'#1a0a1f', on:'#ff7b3a', trail:'#7a2f5a' }
+};
+const NEI = [[1,0],[-1,0],[0,1],[0,-1],[1,-1],[-1,1]];
+const $ = id => document.getElementById(id);
+
+let screens = [], bits = [], pos = 0, rng, steps = 0, running = false, timer = null, selected = 0;
+
+function makeRng(seed) {
+  let s = (seed >>> 0) || ((Math.random() * 2**32) >>> 0);
+  return () => { s ^= s << 13; s >>>= 0; s ^= s >>> 17; s ^= s << 5; s >>>= 0; return s / 4294967296; };
+}
+
+function idx(q, r) { return ((r + GH) % GH) * GW + ((q + GW) % GW); }
+
+function newScreen() {
+  const genome = new Uint8Array(28);
+  for (let i = 0; i < 28; i++) genome[i] = rng() < 0.5 ? 1 : 0;
+  const cells = new Uint8Array(GW * GH);
+  for (let i = 0; i < cells.length; i++) cells[i] = rng() < 0.3 ? 1 : 0;
+  return { genome, cells, prev: new Uint8Array(GW * GH), score: 0, ema: 0, alive: 0 };
+}
+
+function reset() {
+  rng = makeRng(parseInt($('seed').value, 10) || 0);
+  screens = [];
+  for (let i = 0; i < N_SCREENS; i++) screens.push(newScreen());
+  const text = $('stream').value;
+  bits = [];
+  for (const byte of new TextEncoder().encode(text)) for (let b = 7; b >= 0; b--) bits.push((byte >> b) & 1);
+  pos = 0; steps = 0;
+  buildGrid(); selected = 0; draw(); stats(); buildGenomeUI();
+}
+
+function buildGrid() {
+  const g = $('grid'); g.innerHTML = '';
+  screens.forEach((s, i) => {
+    const d = document.createElement('div');
+    d.className = 'screen' + (i === selected ? ' sel' : '');
+    const c = document.createElement('canvas');
+    c.id = 'cv' + i;
+    c.width = Math.ceil(SQ3 * S * (GW + 0.5) + 2 * S);
+    c.height = Math.ceil(1.5 * S * (GH - 1) + 2 * S + 2);
+    const l = document.createElement('div'); l.className = 'label'; l.id = 'lb' + i;
+    l.textContent = 'screen ' + (i + 1);
+    d.appendChild(c); d.appendChild(l);
+    d.onclick = () => { selected = i; buildGrid(); buildGenomeUI(); draw(); };
+    g.appendChild(d);
+  });
+}
+
+function inputBit() {
+  if (bits.length) { const b = bits[pos]; pos = (pos + 1) % bits.length; return b; }
+  return rng() < 0.5 ? 1 : 0;
+}
+
+function neighbours(cells, i) {
+  const q = i % GW, r = (i - q) / GW;
+  let c = 0;
+  for (const [dq, dr] of NEI) c += cells[idx(q + dq, r + dr)];
+  return c;
+}
+
+function step() {
+  const w = inputBit();
+  screens.forEach(s => {
+    const cur = s.cells, next = new Uint8Array(GW * GH);
+    for (let i = 0; i < GW * GH; i++) {
+      const row = Math.floor(i / GW);
+      const wild = row === 0 ? w : 0;
+      const self = cur[i];
+      const nei = neighbours(cur, i);
+      next[i] = s.genome[self * 14 + nei * 2 + wild];
+    }
+    let changed = 0, alive = 0;
+    for (let i = 0; i < next.length; i++) { if (next[i] !== cur[i]) changed++; alive += next[i]; }
+    s.prev = cur;
+    s.cells = next;
+    s.alive = alive / next.length;
+    s.ema = s.ema * 0.9 + (changed / next.length) * 0.1;
+    const target = parseFloat($('tgt').value) || 0;
+    const actScore = 1 - Math.min(1, Math.abs(s.alive - target) * 2);
+    s.score = 0.5 * actScore + 0.5 * Math.min(1, s.ema * 3);
+  });
+  steps++;
+  if (steps % (parseInt($('spr').value, 10) || 200) === 0) evolve();
+  draw(); stats();
+}
+
+function evolve() {
+  const mut = parseFloat($('mut').value) || 0;
+  const order = screens.map((_, i) => i).sort((a, b) => screens[b].score - screens[a].score);
+  const g1 = screens[order[0]].genome, g2 = screens[order[1]].genome;
+  for (let k = 1; k <= 3; k++) {
+    const s = screens[order[N_SCREENS - k]];
+    for (let i = 0; i < 28; i++) {
+      let b = rng() < 0.5 ? g1[i] : g2[i];
+      if (rng() < mut) b ^= 1;
+      s.genome[i] = b;
+    }
+    for (let i = 0; i < s.cells.length; i++) s.cells[i] = rng() < 0.3 ? 1 : 0;
+    s.ema = 0;
+  }
+  buildGenomeUI();
+}
+
+function hexToRgb(h) { return [1, 3, 5].map(i => parseInt(h.substr(i, 2), 16)); }
+
+function palette() {
+  return { off: hexToRgb($('colOff').value), on: hexToRgb($('colOn').value), trail: hexToRgb($('colTrail').value) };
+}
+
+function rankOrder() {
+  return screens.map((_, i) => i).sort((a, b) => screens[b].score - screens[a].score);
+}
+
+function draw() {
+  const pal = palette();
+  const rank = $('tint').checked ? rankOrder() : null;
+  const rankOf = {};
+  if (rank) rank.forEach((i, r) => rankOf[i] = r);
+  const w = SQ3 * S;
+  const ox = S * 1.5, oy = S * 1.2;
+  screens.forEach((s, si) => {
+    const cv = $('cv' + si);
+    const ctx = cv.getContext('2d');
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, cv.width, cv.height);
+    for (let r = 0; r < GH; r++) {
+      for (let q = 0; q < GW; q++) {
+        const i = idx(q, r);
+        const x = ox + w * (q + r / 2);
+        const y = oy + 1.5 * S * r;
+        ctx.beginPath();
+        for (let k = 0; k < 6; k++) {
+          const a = Math.PI / 3 * k + Math.PI / 6;
+          const px = x + S * Math.cos(a), py = y + S * Math.sin(a);
+          k ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+        }
+        ctx.closePath();
+        let col;
+        if (s.cells[i]) col = pal.on;
+        else if (s.prev[i]) col = pal.trail;
+        else col = pal.off;
+        ctx.fillStyle = `rgb(${col[0]},${col[1]},${col[2]})`;
+        ctx.fill();
+        ctx.strokeStyle = '#111';
+        ctx.stroke();
+      }
+    }
+    cv.style.opacity = rank ? (1 - 0.6 * (rankOf[si] / (N_SCREENS - 1))) : 1;
+    $('lb' + si).textContent = `screen ${si + 1}  score ${s.score.toFixed(2)}  alive ${(100 * s.alive).toFixed(0)}%`;
+  });
+}
+
+function stats() {
+  const best = rankOrder()[0];
+  $('stats').textContent = `step ${steps} | best screen ${best + 1} score ${screens[best].score.toFixed(2)} | selected screen ${selected + 1} | stream pos ${bits.length ? pos : 0}/${bits.length}`;
+}
+
+function buildGenomeUI() {
+  const g = $('genome'); g.innerHTML = '';
+  const s = screens[selected];
+  $('sel').textContent = `Genome of screen ${selected + 1} (self 0/1 x neighbours 0-6 x wildcard 0/1):`;
+  for (let i = 0; i < 28; i++) {
+    const d = document.createElement('div');
+    d.textContent = i;
+    d.className = s.genome[i] ? 'on' : 'off';
+    d.title = `self=${Math.floor(i / 14)} nei=${Math.floor((i % 14) / 2)} wild=${i % 2}`;
+    d.onclick = () => { s.genome[i] ^= 1; buildGenomeUI(); draw(); };
+    g.appendChild(d);
+  }
+}
+
+function setRunning(on) {
+  running = on;
+  $('run').textContent = on ? 'Stop' : 'Run';
+  clearInterval(timer);
+  if (on) timer = setInterval(step, 100);
+}
+
+function applyPreset(name) {
+  const p = PRESETS[name];
+  if (!p) return;
+  $('colOff').value = p.off; $('colOn').value = p.on; $('colTrail').value = p.trail;
+  draw();
+}
+
+$('preset').onchange = e => applyPreset(e.target.value);
+['colOff', 'colOn', 'colTrail'].forEach(id => $(id).oninput = () => { $('preset').value = 'custom'; draw(); });
+$('tint').onchange = draw;
+$('step').onclick = step;
+$('run').onclick = () => setRunning(!running);
+$('reset').onclick = () => { setRunning(false); reset(); };
+$('randGenomes').onclick = () => {
+  const s = screens[selected];
+  for (let i = 0; i < 28; i++) s.genome[i] = rng() < 0.5 ? 1 : 0;
+  buildGenomeUI(); draw();
+};
+
+applyPreset('classic');
+$('preset').value = 'classic';
+reset();
+</script>
+</body>
+</html>
