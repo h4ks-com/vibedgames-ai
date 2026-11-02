@@ -87,98 +87,117 @@ function stepScreen(s,inBit){
 // Heuristic class-4 score:
 //  - novelty: fraction of distinct states in the window (class 1/2 repeat, class 3 mostly novel)
 //  - activity band: peaks near 0.2 changed-cells/step (class 4 sits between frozen and noise)
-//  - penalty for short cycles
-function scoreScreen(s){
-  if(s.hist.length<WIN){s.score=null;return;}
-  const distinct=new Set(s.hist).size;
-  const novelty=distinct/s.hist.length;
-  const meanAct=s.act.reduce((a,b)=>a+b,0)/s.act.length;
-  const band=Math.max(0,1-Math.abs(meanAct-0.2)/0.2);
-  let cyc=0;
-  for(let p=1;p<=20;p++){
-    let ok=true;
-    for(let t=s.hist.length-1;t>=s.hist.length-40&&t-p>=0;t--){if(s.hist[t]!==s.hist[t-p]){ok=false;break;}}
-    if(ok){cyc=p;break;}
-  }
-  const cyclePenalty=cyc?0.5:1;
-  s.score=+(novelty*band*cyclePenalty).toFixed(3);
-  s.stats={novelty:+novelty.toFixed(2),act:+meanAct.toFixed(3),cyc};
+//  - periodicity penalty: current state already seen at a short lag => settled into a cycle
+function score(s){
+  if(s.age<WARM){s.score=null;return;}
+  const recent=s.hist, acts=s.act;
+  const distinct=new Set(recent).size/recent.length;
+  const a=acts.reduce((x,y)=>x+y,0)/acts.length;
+  const last=recent[recent.length-1];
+  const earlier=recent.lastIndexOf(last,recent.length-2);
+  const period=earlier>=0?(recent.length-1-earlier):0;
+  const actFit=Math.exp(-Math.pow((a-0.2)/0.15,2));
+  let sc=distinct*actFit;
+  if(period)sc*=0.2;
+  if(a<0.001)sc=0;
+  s.score=sc;
+  s.stats={a,distinct,period};
 }
 
-function mutate(g){
-  const m=Uint8Array.from(g);
-  const flips=1+(Math.random()<0.3?1:0);
-  for(let f=0;f<flips;f++){const i=Math.floor(Math.random()*28);m[i]^=1;}
-  return m;
+function ranking(){
+  const ready=screens.filter(s=>s.score!==null).sort((x,y)=>y.score-x.score);
+  screens.forEach(s=>s.rank=0);
+  ready.forEach((s,i)=>s.rank=i+1);
 }
 
 function draw(s){
-  const img=s.ctx.createImageData(W*4,H*4);
-  const d=img.data;
-  for(let r=0;r<H;r++)for(let c=0;c<W;c++){
-    const v=s.cur[r*W+c]?255:0;
-    for(let dy=0;dy<4;dy++)for(let dx=0;dx<4;dx++){
-      const o=((r*4+dy)*W*4+(c*4+dx))*4;
-      d[o]=v;d[o+1]=s.cur[r*W+c]?(s.origin==='mutant'?200:255):0;d[o+2]=v;d[o+3]=255;
+  const ctx=s.ctx;
+  ctx.fillStyle='#000';ctx.fillRect(0,0,W*4,H*4);
+  for(let r=0;r<H;r++){
+    const off=(r&1)*2;
+    for(let c=0;c<W;c++){
+      const idx=r*W+c;
+      if(s.cur[idx]){
+        ctx.fillStyle=r===0?'#6cf':'#6f6';
+        ctx.fillRect(c*4+off,r*4,3,3);
+      }
     }
   }
-  s.ctx.putImageData(img,0,0);
-  const sc=s.score==null?'warming':s.score.toFixed(3);
-  s.la.textContent='CH'+(s.i+1)+' rank '+(s.rank||'-');
-  s.lb.textContent='score '+sc;
-  s.el.classList.toggle('new',s.flash>0);
-  if(s.flash>0)s.flash--;
-}
-
-function rankAll(){
-  const ranked=[...screens].sort((a,b)=>(b.score??-1)-(a.score??-1));
-  ranked.forEach((s,i)=>{s.rank=i+1;});
-  return ranked;
-}
-
-function evolve(){
-  const ranked=rankAll();
-  const scored=ranked.filter(s=>s.score!=null);
-  if(scored.length<SCREENS)return;
-  const worst=ranked[ranked.length-1];
-  const top=ranked.slice(0,3);
-  let parent=top[Math.floor(Math.random()*3)];
-  let newG;
-  if(Math.random()<0.1){newG=randGenome();worst.origin='random';}
-  else{newG=mutate(parent.g);worst.origin='mutant';}
-  worst.g=newG;
-  randomize(worst);
-  worst.flash=20;
-  log('CH'+(worst.i+1)+' replaced ('+worst.origin+(worst.origin==='mutant'?' of CH'+(parent.i+1):'')+')');
-}
-
-function renderBoard(){
-  const ranked=rankAll();
-  let out='RANK  CH  SCORE   NOVELTY  ACT    CYC  GENOME\n';
-  ranked.forEach(s=>{
-    const st=s.stats||{novelty:0,act:0,cyc:0};
-    out+=String(s.rank).padEnd(6)+('CH'+(s.i+1)).padEnd(4)+(s.score==null?'warm':s.score.toFixed(3)).padEnd(8)+
-      String(st.novelty).padEnd(9)+String(st.act).padEnd(7)+String(st.cyc).padEnd(5)+Array.from(s.g).join('')+'\n';
-  });
-  document.getElementById('board').textContent=out;
-}
-
-function drawLog(){document.getElementById('log').textContent=logLines.join('\n');}
-
-function tick(){
-  const inBit=bits[inputPos];inputPos=(inputPos+1)%bits.length;
-  for(const s of screens){
-    for(let k=0;k<STEPS;k++)stepScreen(s,inBit);
-    scoreScreen(s);
-    draw(s);
+  if(s.flash>0.02){
+    ctx.fillStyle='rgba(255,255,255,'+s.flash.toFixed(3)+')';
+    ctx.fillRect(0,0,W*4,H*4);
+    s.flash*=0.9;
   }
-  renderBoard();
-  ticks++;
-  document.getElementById('status').textContent='tick '+ticks+'  input bit '+inBit+'  next evolve in '+Math.max(0,Math.ceil((EVOLVE_MS-(Date.now()-lastEvolve))/1000))+'s';
+  s.el.classList.toggle('new',s.flash>0.05);
+  const ch='CH'+(s.i+1);
+  const tag=s.rank?('#'+s.rank):'warming '+Math.min(s.age,WARM)+'/'+WARM;
+  const sc=s.score!==null?s.score.toFixed(3):'--';
+  s.la.textContent=ch+' '+tag;
+  s.lb.textContent='score '+sc;
 }
 
-let lastEvolve=Date.now();
-setInterval(tick,100);
-setInterval(()=>{evolve();lastEvolve=Date.now();drawLog();},EVOLVE_MS);
-</script>
-</body></html>
+let lastStatusTick=0;
+function renderBoard(){
+  const hdr='rk  ch   score  act    distinct period  genome(28 bits)            origin\n';
+  let out=hdr;
+  const sorted=[...screens].sort((x,y)=>(x.rank||99)-(y.rank||99));
+  for(const s of sorted){
+    const st=s.stats;
+    const row=(s.rank?String(s.rank):'-').padEnd(4)+('CH'+(s.i+1)).padEnd(5)+
+      (s.score!==null?s.score.toFixed(3):'  --  ').padEnd(8)+
+      (st?st.a.toFixed(3):'  -  ').padEnd(7)+
+      (st?st.distinct.toFixed(2):' - ').padEnd(9)+
+      (st?(st.period?String(st.period):'-'):'-').padEnd(8)+
+      Array.from(s.g).join('').padEnd(29)+s.origin;
+    out+=row+'\n';
+  }
+  document.getElementById('board').textContent=out;
+  document.getElementById('log').textContent=logLines.join('\n');
+}
+
+function tickAll(){
+  for(let t=0;t<STEPS;t++){
+    const inBit=bits[inputPos];
+    inputPos=(inputPos+1)%bits.length;
+    for(const s of screens)stepScreen(s,inBit);
+  }
+  for(const s of screens)score(s);
+  ranking();
+  for(const s of screens)draw(s);
+  ticks++;
+  const cur=MSG[Math.floor(((inputPos-1+bits.length)%bits.length)/8)];
+  document.getElementById('status').textContent=
+    'shared input stream: "'+MSG+'"  now sending: '+JSON.stringify(cur)+'  bit '+bits[(inputPos-1+bits.length)%bits.length]+
+    '  |  step '+(ticks*STEPS)+'  |  evolve every '+(EVOLVE_MS/1000)+'s';
+  if(ticks%5===0)renderBoard();
+}
+
+// Replace the lowest-ranked screen with a mutant of a top-3 genome (or a fresh random one).
+function evolve(){
+  const ready=screens.filter(s=>s.score!==null);
+  if(ready.length<SCREENS)return;
+  const sorted=[...ready].sort((a,b)=>b.score-a.score);
+  const worst=sorted[sorted.length-1];
+  const top=sorted.slice(0,3);
+  if(Math.random()<0.7){
+    const parent=top[Math.floor(Math.random()*top.length)];
+    worst.g=Uint8Array.from(parent.g);
+    const flips=1+Math.floor(Math.random()*3);
+    for(let f=0;f<flips;f++)worst.g[Math.floor(Math.random()*28)]^=1;
+    worst.origin='mut of CH'+(parent.i+1);
+  }else{
+    worst.g=randGenome();
+    worst.origin='random';
+  }
+  randomize(worst);
+  worst.flash=1;
+  worst.rank=0;
+  log('CH'+(worst.i+1)+' replaced ('+worst.origin+')');
+}
+
+// Show a grid-wide pass at boot so the grid doesn't look empty
+for(let t=0;t<40;t++){for(const s of screens)stepScreen(s,bits[inputPos]);inputPos=(inputPos+1)%bits.length;}
+setInterval(tickAll,60);
+setInterval(evolve,EVOLVE_MS);
+tickAll();
+</script></body></html>
