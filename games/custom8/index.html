@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Cell-8 contact GA (customizable)</title>
+<style>
+body{font-family:monospace;background:#111;color:#ddd;margin:12px}
+fieldset{margin-bottom:8px;border:1px solid #444;max-width:520px}
+label{display:inline-block;width:220px}
+input{width:90px;background:#222;color:#ddd;border:1px solid #555}
+button{margin-right:6px;background:#222;color:#ddd;border:1px solid #666;padding:4px 10px;cursor:pointer}
+canvas{border:1px solid #444;image-rendering:pixelated;width:100%;max-width:768px;display:block;margin-top:8px}
+#log{white-space:pre;height:200px;overflow:auto;background:#000;padding:6px;margin-top:8px}
+</style></head><body>
+<h3>Cell-8: top + bottom inputs, mutate toward interaction</h3>
+<fieldset><legend>Search settings</legend>
+<label>Generations</label><input id="gens" type="number" value="40" min="1"><br>
+<label>Population</label><input id="pop" type="number" value="30" min="4"><br>
+<label>Mutation rate (per bit)</label><input id="mut" type="number" value="0.03" step="0.01" min="0" max="1"><br>
+<label>Crossover rate</label><input id="xo" type="number" value="0.8" step="0.05" min="0" max="1"><br>
+<label>Elites kept</label><input id="elite" type="number" value="2" min="0"><br>
+<label>Tournament size</label><input id="tour" type="number" value="3" min="1"><br>
+<label>Seeds per evaluation</label><input id="seeds" type="number" value="2" min="1"><br>
+<label>Steps per evaluation</label><input id="steps" type="number" value="80" min="10"><br>
+<label>Activity target (0-1)</label><input id="target" type="number" value="0.2" step="0.01" min="0" max="1"><br>
+<label>Activity width (sigma)</label><input id="sigma" type="number" value="0.1" step="0.01" min="0.01"><br>
+<label>Grid width</label><input id="W" type="number" value="48" min="8" max="256"><br>
+<label>Grid height</label><input id="H" type="number" value="32" min="8" max="256"><br>
+<label>RNG seed (0 = random)</label><input id="rseed" type="number" value="0"><br>
+</fieldset>
+<button id="start">Start</button><button id="stop">Stop</button><button id="reset">Reset</button>
+<span id="status">idle</span>
+<p>Best rule: <span id="genome">-</span> &nbsp; fitness <span id="bestf">-</span></p>
+<canvas id="cv"></canvas>
+<div id="log"></div>
+<script>
+const $ = id => document.getElementById(id);
+const val = id => +$(id).value;
+let stopFlag = false, running = false, nb = null, N = 0, W = 0, H = 0;
+
+function mulberry(seed){
+  let a = seed >>> 0;
+  return function(){
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+// Odd-r hex neighbourhood: 6 neighbours, columns wrap, rows bounded.
+function buildNeighbours(){
+  nb = new Int32Array(N * 6).fill(-1);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const even = (y % 2) === 0;
+    const offs = even
+      ? [[-1,0],[1,0],[-1,-1],[0,-1],[-1,1],[0,1]]
+      : [[-1,0],[1,0],[0,-1],[1,-1],[0,1],[1,1]];
+    offs.forEach((o, k) => {
+      const yy = y + o[1];
+      if (yy < 0 || yy >= H) return;
+      const xx = (x + o[0] + W) % W;
+      nb[(y * W + x) * 6 + k] = yy * W + xx;
+    });
+  }
+}
+
+// Genome: 28 bits, index = self*14 + count*2 + wildcard
+function simulate(g, inst, steps, warm){
+  let cur = Uint8Array.from(inst.init), nxt = new Uint8Array(N);
+  const Hh = H >> 1;
+  let contactSum = 0, actSum = 0, actN = 0;
+  for (let t = 0; t < steps; t++){
+    const wA = inst.A[t], wB = inst.B[t];
+    let changed = 0;
+    for (let y = 0; y < H; y++){
+      const w = y === 0 ? wA : (y === H - 1 ? wB : 0);
+      for (let x = 0; x < W; x++){
+        const i = y * W + x, s = cur[i], b = i * 6;
+        let cnt = 0;
+        for (let k = 0; k < 6; k++){ const n = nb[b + k]; if (n >= 0) cnt += cur[n]; }
+        const ns = (g >>> (s * 14 + cnt * 2 + w)) & 1;
+        nxt[i] = ns; if (ns !== s) changed++;
+      }
+    }
+    const tmp = cur; cur = nxt; nxt = tmp;
+    if (t >= warm){ actSum += changed / N; actN++; }
+    // contact: lowest active row in top half vs highest active row in bottom half
+    let topFront = -1, botFront = H;
+    for (let y = 0; y < Hh; y++){
+      for (let x = 0; x < W; x++) if (cur[y * W + x]) { topFront = y; break; }
+    }
+    for (let y = H - 1; y >= Hh; y--){
+      let hit = false;
+      for (let x = 0; x < W; x++) if (cur[y * W + x]) { hit = true; break; }
+      if (hit) botFront = y;
+    }
+    let close = 0;
+    if (topFront >= 0 && botFront < H) close = Math.max(0, 1 - (botFront - topFront) / H);
+    contactSum += close;
+  }
+  const contact = contactSum / steps;
+  const a = actN ? actSum / actN : 0;
+  const tgt = val('target'), sig = val('sigma');
+  const act = Math.exp(-((a - tgt) ** 2) / (2 * sig * sig));
+  return { fit: contact * act, frame: cur };
+}
+
+function evalGenome(g, insts, steps, warm){
+  let s = 0;
+  for (const inst of insts) s += simulate(g, inst, steps, warm).fit;
+  return s / insts.length;
+}
+
+function drawFrame(frame){
+  const cv = $('cv'); cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d');
+  const img = ctx.createImageData(W, H);
+  for (let i = 0; i < N; i++){
+    const on = frame[i];
+    const y = (i / W) | 0;
+    const half = y < (H >> 1);
+    img.data[i*4]   = on ? (half ? 255 : 80) : 0;
+    img.data[i*4+1] = on ? 200 : 0;
+    img.data[i*4+2] = on ? (half ? 80 : 255) : 0;
+    img.data[i*4+3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+function hex(g){ return '0x' + (g >>> 0).toString(16).padStart(7, '0'); }
+function log(s){ const l = $('log'); l.textContent += s + '\n'; l.scrollTop = l.scrollHeight; }
+
+async function runSearch(){
+  if (running) return;
+  running = true; stopFlag = false;
+  const gens = Math.max(1, val('gens')), P = Math.max(4, val('pop'));
+  const mut = val('mut'), xo = val('xo'), elite = Math.min(Math.max(0, val('elite')), P - 1);
+  const tour = Math.max(1, val('tour')), nSeeds = Math.max(1, val('seeds'));
+  const steps = Math.max(10, val('steps'));
+  const warm = Math.min(10, Math.floor(steps / 5));
+  W = Math.max(8, val('W')); H = Math.max(8, val('H')); N = W * H;
+  buildNeighbours();
+  let rs = val('rseed') || (Date.now() & 0x7fffffff);
+  const rng = mulberry(rs);
+  log(`start: gens=${gens} pop=${P} mut=${mut} xo=${xo} elite=${elite} tour=${tour} seeds=${nSeeds} steps=${steps} grid=${W}x${H} rseed=${rs}`);
+
+  // fixed evaluation instances so generations are comparable
+  const insts = [];
+  for (let s = 0; s < nSeeds; s++){
+    const init = new Uint8Array(N);
+    for (let i = 0; i < N; i++) init[i] = rng() < 0.5 ? 1 : 0;
+    const A = new Uint8Array(steps), B = new Uint8Array(steps);
+    for (let t = 0; t < steps; t++){ A[t] = rng() < 0.5 ? 1 : 0; B[t] = rng() < 0.5 ? 1 : 0; }
+    insts.push({ init, A, B });
+  }
+
+  const randGenome = () => Math.floor(rng() * 268435456);
+  let pop = Array.from({ length: P }, randGenome);
+  let bestG = null, bestF = -1;
+
+  for (let gen = 1; gen <= gens && !stopFlag; gen++){
+    const fits = pop.map(g => evalGenome(g, insts, steps, warm));
+    const order = fits.map((f, i) => i).sort((a, b) => fits[b] - fits[a]);
+    if (fits[order[0]] > bestF){ bestF = fits[order[0]]; bestG = pop[order[0]]; }
+    const mean = fits.reduce((a, b) => a + b, 0) / P;
+    log(`gen ${String(gen).padStart(3)}  best ${fits[order[0]].toFixed(4)}  mean ${mean.toFixed(4)}  rule ${hex(pop[order[0]])}`);
+    $('status').textContent = `gen ${gen}/${gens}`;
+    $('genome').textContent = hex(bestG);
+    $('bestf').textContent = bestF.toFixed(4);
+
+    const select = () => {
+      let bi = -1;
+      for (let k = 0; k < tour; k++){
+        const c = Math.floor(rng() * P);
+        if (bi < 0 || fits[c] > fits[bi]) bi = c;
+      }
+      return pop[bi];
+    };
+    const next = [];
+    for (let e = 0; e < elite; e++) next.push(pop[order[e]]);
+    while (next.length < P){
+      let child = select();
+      if (rng() < xo){
+        const other = select();
+        const mask = randGenome();
+        child = ((child & mask) | (other & ~mask)) & 0x0fffffff;
+      }
+      for (let b = 0; b < 28; b++) if (rng() < mut) child ^= (1 << b);
+      next.push(child >>> 0 & 0x0fffffff);
+    }
+    pop = next;
+    await new Promise(r => setTimeout(r, 0));
+  }
+
+  if (bestG !== null){
+    const r = simulate(bestG, insts[0], steps, warm);
+    drawFrame(r.frame);
+  }
+  log(stopFlag ? 'stopped.' : 'done.');
+  $('status').textContent = stopFlag ? 'stopped' : 'done';
+  running = false;
+}
+
+$('start').onclick = () => runSearch();
+$('stop').onclick = () => { stopFlag = true; };
+$('reset').onclick = () => {
+  stopFlag = true;
+  $('log').textContent = ''; $('genome').textContent = '-'; $('bestf').textContent = '-';
+  $('status').textContent = 'idle';
+  const cv = $('cv'); cv.width = 1; cv.height = 1;
+};
+</script></body></html>
