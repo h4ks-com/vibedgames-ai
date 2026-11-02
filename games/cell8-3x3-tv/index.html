@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Cell-8 3x3 TV: autoranked class-4 search</title>
+<style>
+  body { margin: 0; background: #111; color: #ddd; font-family: monospace; }
+  header { padding: 6px 10px; background: #1b1b1b; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  header label { font-size: 12px; }
+  header input { width: 60px; }
+  button { background: #333; color: #eee; border: 1px solid #555; padding: 4px 10px; cursor: pointer; }
+  #wrap { display: flex; gap: 8px; padding: 8px; }
+  #grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; flex: 2; }
+  .cell { position: relative; background: #000; border: 1px solid #333; }
+  .cell canvas { width: 100%; height: auto; display: block; image-rendering: pixelated; }
+  .tag { position: absolute; top: 2px; left: 4px; font-size: 12px; background: rgba(0,0,0,.6); padding: 1px 4px; }
+  #board { flex: 1; min-width: 240px; font-size: 12px; }
+  #board table { border-collapse: collapse; width: 100%; }
+  #board td, #board th { border-bottom: 1px solid #333; padding: 3px; text-align: left; }
+  #status { padding: 4px 10px; font-size: 12px; color: #9c9; }
+</style>
+</head>
+<body>
+<header>
+  <button id="go">Start</button>
+  <button id="reset">Reset</button>
+  <label>Steps/frame <input id="spf" type="number" value="2" min="1" max="20"></label>
+  <label>Steps per round <input id="round" type="number" value="200" min="20"></label>
+  <label>Mutation (per bit) <input id="mut" type="number" value="0.02" step="0.01" min="0" max="1"></label>
+  <label>Activity target <input id="target" type="number" value="0.2" step="0.05" min="0" max="1"></label>
+  <label>RNG seed (0 = random) <input id="seed" type="number" value="0" min="0"></label>
+  <span id="status">idle</span>
+</header>
+<div id="wrap">
+  <div id="grid"></div>
+  <div id="board">
+    <b>Autorank (class-4 proxy)</b>
+    <table><thead><tr><th>#</th><th>Screen</th><th>Score</th><th>Act</th><th>Rule</th></tr></thead><tbody id="rows"></tbody></table>
+    <p>Score rewards activity near the target and persistent variation over a sliding window. Bottom three screens are replaced each round by crossover and mutation of the top two.</p>
+  </div>
+</div>
+<script>
+const W = 64, H = 48, N = 9, WINDOW = 300;
+const OFF_EVEN = [[-1,0],[1,0],[-1,-1],[0,-1],[-1,1],[0,1]];
+const OFF_ODD  = [[-1,0],[1,0],[0,-1],[1,-1],[0,1],[1,1]];
+
+let rng = Math.random;
+let sims = [], shared = 0, roundSteps = 0, generation = 0, running = false;
+const $ = id => document.getElementById(id);
+
+function seeded(seed) {
+  let s = seed >>> 0 || 1;
+  return () => { s ^= s << 13; s >>>= 0; s ^= s >>> 17; s ^= s << 5; s >>>= 0; return s / 4294967296; };
+}
+function randGenome() { return Math.floor(rng() * 2 ** 28) >>> 0; }
+
+// Genome: 28 bits. Lookup index = self*7 + liveHexNeighbours (0..13).
+// Next state = bit[index]. Only bits 0..13 are read in this version.
+function makeSim(genome, label) {
+  const div = document.createElement('div');
+  div.className = 'cell';
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const tag = document.createElement('span');
+  tag.className = 'tag';
+  div.appendChild(canvas); div.appendChild(tag);
+  $('grid').appendChild(div);
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(W, H);
+  return {
+    genome, label, div, tag, ctx, img,
+    cells: new Uint8Array(W * H), next: new Uint8Array(W * H),
+    acts: [], score: 0, act: 0, age: 0
+  };
+}
+
+function randomize(s) {
+  for (let i = 0; i < s.cells.length; i++) s.cells[i] = rng() < 0.5 ? 1 : 0;
+  s.acts = []; s.age = 0;
+}
+
+function stepSim(s, inputRow) {
+  const { cells, next, genome } = s;
+  let changed = 0;
+  for (let y = 1; y < H; y++) {
+    const offs = (y & 1) ? OFF_ODD : OFF_EVEN;
+    for (let x = 0; x < W; x++) {
+      let count = 0;
+      for (const [dx, dy] of offs) {
+        const nx = x + dx, ny = y + dy;
+        if (nx >= 0 && nx < W && ny >= 0 && ny < H) count += cells[ny * W + nx];
+      }
+      const i = y * W + x;
+      const idx = cells[i] * 7 + count;
+      const v = (genome >>> idx) & 1;
+      next[i] = v;
+      if (v !== cells[i]) changed++;
+    }
+  }
+  // Top row is driven by the shared input stream, identical on every screen.
+  for (let x = 0; x < W; x++) {
+    const v = inputRow[x];
+    if (cells[x] !== v) changed++;
+    next[x] = v;
+  }
+  s.cells.set(next);
+  const a = changed / (W * H);
+  s.acts.push(a); if (s.acts.length > WINDOW) s.acts.shift();
+  s.act = a; s.age++;
+  return a;
+}
+
+function scoreSim(s, target) {
+  const a = s.acts;
+  if (a.length < 20) { s.score = 0; return; }
+  const mean = a.reduce((p, c) => p + c, 0) / a.length;
+  const sd = Math.sqrt(a.reduce((p, c) => p + (c - mean) ** 2, 0) / a.length);
+  const closeness = Math.max(0, 1 - Math.abs(mean - target) / Math.max(target, 0.05));
+  const variation = Math.min(1, sd * 20);
+  s.score = 0.6 * closeness + 0.4 * variation;
+}
+
+function render(s) {
+  const d = s.img.data;
+  for (let i = 0; i < s.cells.length; i++) {
+    const on = s.cells[i];
+    const j = i * 4;
+    d[j] = on ? 240 : 0; d[j + 1] = on ? 240 : 0; d[j + 2] = on ? 255 : 0; d[j + 3] = 255;
+  }
+  s.ctx.putImageData(s.img, 0, 0);
+}
+
+function mutateGenome(g, p) {
+  for (let b = 0; b < 28; b++) if (rng() < p) g = (g ^ (1 << b)) >>> 0;
+  return g;
+}
+function crossover(a, b) {
+  const cut = Math.floor(rng() * 28);
+  const mask = cut === 0 ? 0 : ((2 ** cut) - 1);
+  return ((a & mask) | (b & ~mask & 0x0FFFFFFF)) >>> 0;
+}
+
+function rankAndBreed() {
+  const mu = parseFloat($('mut').value) || 0.02;
+  const target = parseFloat($('target').value) || 0.2;
+  sims.forEach(s => scoreSim(s, target));
+  const order = sims.map((s, i) => i).sort((i, j) => sims[j].score - sims[i].score);
+  const parents = [sims[order[0]].genome, sims[order[1]].genome];
+  for (let k = 6; k < 9; k++) {
+    const s = sims[order[k]];
+    s.genome = mutateGenome(crossover(parents[0], parents[1]), mu);
+    randomize(s);
+  }
+  generation++;
+}
+
+function updateBoard() {
+  const target = parseFloat($('target').value) || 0.2;
+  const order = sims.map((s, i) => i).sort((i, j) => sims[j].score - sims[i].score);
+  sims.forEach((s, i) => { s.tag.textContent = `#${order.indexOf(i) + 1} ${s.label}`; });
+  $('rows').innerHTML = order.map((i, r) => {
+    const s = sims[i];
+    return `<tr><td>${r + 1}</td><td>${s.label}</td><td>${s.score.toFixed(3)}</td><td>${s.act.toFixed(3)}</td><td>${s.genome.toString(16)}</td></tr>`;
+  }).join('');
+  $('status').textContent = `gen ${generation} | steps ${roundSteps} | target ${target}`;
+}
+
+function init() {
+  const seedVal = parseInt($('seed').value, 10) || 0;
+  rng = seedVal ? seeded(seedVal) : Math.random;
+  $('grid').innerHTML = '';
+  sims = [];
+  for (let k = 0; k < N; k++) {
+    const s = makeSim(randGenome(), `S${k + 1}`);
+    randomize(s);
+    sims.push(s);
+  }
+  generation = 0; roundSteps = 0;
+  updateBoard();
+}
+
+function frame() {
+  if (!running) return;
+  const spf = Math.max(1, parseInt($('spf').value, 10) || 1);
+  const round = Math.max(20, parseInt($('round').value, 10) || 200);
+  for (let t = 0; t < spf; t++) {
+    const inputRow = new Uint8Array(W);
+    for (let x = 0; x < W; x++) inputRow[x] = rng() < 0.5 ? 1 : 0;
+    for (const s of sims) stepSim(s, inputRow);
+    roundSteps++;
+    if (roundSteps >= round) { rankAndBreed(); roundSteps = 0; }
+  }
+  sims.forEach(render);
+  updateBoard();
+  requestAnimationFrame(frame);
+}
+
+$('go').onclick = () => {
+  running = !running;
+  $('go').textContent = running ? 'Stop' : 'Start';
+  if (running) requestAnimationFrame(frame);
+};
+$('reset').onclick = () => { init(); sims.forEach(render); };
+
+init();
+sims.forEach(render);
+$('go').click();
+</script>
+</body>
+</html>
