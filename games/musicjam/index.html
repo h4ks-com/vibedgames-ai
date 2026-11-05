@@ -36,6 +36,8 @@
   .links a { color: var(--bg); background: var(--accent); padding: 7px 11px; border-radius: 8px; text-decoration: none; font-size: 0.85rem; font-weight: 600; }
   .links a.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
   .empty { color: var(--muted); padding: 24px; text-align: center; }
+  .detail video { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 8px; margin-bottom: 12px; cursor: pointer; }
+  .row .tag { color: var(--accent); font-size: 0.7rem; border: 1px solid var(--accent); border-radius: 4px; padding: 0 4px; margin-left: 6px; vertical-align: 1px; }
   .bar { position: fixed; left: 0; right: 0; bottom: 0; background: #0f0f0f; border-top: 1px solid var(--line); padding: 10px 16px; }
   .bar .in { width: min(1100px, 100%); margin: 0 auto; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; align-items: center; }
   .controls { display: flex; gap: 6px; }
@@ -103,7 +105,8 @@
 <audio id="audio" preload="none"></audio>
 <script>
   // Songs are public objects in the workflows bucket: each musicjam/<day>/<slug>-<time>.mp3 has a .json beside it,
-  // and its project zip lives at <slug>-project-<time>.zip with its own .json.
+  // and its project zip lives at <slug>-project-<time>.zip with its own .json. A song made with a video also has
+  // <slug>-video-<time>.mp4, stored a little later, which plays muted in step with the player.
   const S3 = "https://s3-api.t3ks.com/workflows/";
   const PREFIX = "musicjam/";
   const $ = (id) => document.getElementById(id);
@@ -134,6 +137,8 @@
       const meta = all.has(key.replace(/\.mp3$/, ".json")) ? await fetch(S3 + key.replace(/\.mp3$/, ".json")).then((r) => r.json()).catch(() => ({})) : {};
       const projectKey = key.replace(/-(\d{6})\.mp3$/, "-project-$1");
       const project = [".zip", ".erk"].map((ext) => projectKey + ext).find((candidate) => all.has(candidate));
+      const videoPrefix = key.replace(/-\d{6}\.mp3$/, "-video-");
+      const video = keys.find((candidate) => candidate.startsWith(videoPrefix) && /-video-\d{6}\.mp4$/.test(candidate));
       let viewer = null;
       if (all.has(projectKey + ".json")) {
         const projectMeta = await fetch(S3 + projectKey + ".json").then((r) => r.json()).catch(() => ({}));
@@ -142,7 +147,8 @@
       }
       return { key, url: S3 + key, title: meta.title || key.split("/").pop().replace(/-\d{6}\.mp3$/, "").replace(/-/g, " "),
         prompt: meta.prompt || "", details: meta.details || "", seconds: meta.seconds || 0,
-        created: meta.created_at || key.split("/")[1] || "", project: project ? S3 + project : null, viewer };
+        created: meta.created_at || key.split("/")[1] || "", project: project ? S3 + project : null, viewer,
+        video: video ? S3 + video : null };
     });
     const results = [];
     for (let index = 0; index < queue.length; index += 8) results.push(...await Promise.all(queue.slice(index, index + 8).map((task) => task())));
@@ -162,7 +168,7 @@
   function render() {
     if (!shown.length) { $("list").innerHTML = '<p class="empty">No songs match.</p>'; return; }
     $("list").innerHTML = shown.map((song, index) => `<div class="row${shown[index] === songs[current] ? " active" : ""}" data-i="${index}">
-      <span class="n">${index + 1}</span><div style="min-width:0"><div class="t">${esc(song.title)}</div><div class="p">${esc(song.prompt)}</div></div>
+      <span class="n">${index + 1}</span><div style="min-width:0"><div class="t">${esc(song.title)}${song.video ? '<span class="tag">video</span>' : ""}</div><div class="p">${esc(song.prompt)}</div></div>
       <span class="d">${clock(song.seconds)}</span></div>`).join("");
     for (const row of $("list").querySelectorAll(".row")) row.onclick = () => select(Number(row.dataset.i), true);
   }
@@ -176,14 +182,17 @@
     $("nowTitle").textContent = song.title;
     $("detail").innerHTML = `<button class="close" id="close" title="Close the details">✕</button><h2>${esc(song.title)}</h2>
       <p class="meta">${esc(String(song.created).slice(0, 16).replace("T", " "))} · ${clock(song.seconds)}</p>
+      ${song.video ? `<video id="video" src="${esc(song.video)}" muted playsinline preload="metadata" title="Play or pause"></video>` : ""}
       ${song.prompt ? `<p class="prompt">“${esc(song.prompt)}”</p>` : ""}
       <div class="links">
         ${song.viewer ? `<a href="${esc(song.viewer)}" target="_blank" rel="noopener">Open in Emerick</a>` : ""}
         ${song.project ? `<a class="ghost" href="${esc(song.project)}">Download project</a>` : ""}
         <a class="ghost" href="${esc(song.url)}" download>Download MP3</a>
+        ${song.video ? `<a class="ghost" href="${esc(song.video)}" download>Download video</a>` : ""}
       </div>
       <p class="text">${esc(song.details)}</p>`;
     $("close").onclick = () => $("detail").classList.remove("open");
+    if ($("video")) $("video").onclick = () => $("play").click();
     render();
     if (play) audio.play();
   }
@@ -204,10 +213,18 @@
   $("prev").onclick = () => step(-1);
   $("shuffle").onclick = () => { shuffle = !shuffle; $("shuffle").classList.toggle("on", shuffle); };
   $("seek").onclick = (event) => { const box = $("seek").getBoundingClientRect(); if (audio.duration) audio.currentTime = ((event.clientX - box.left) / box.width) * audio.duration; };
-  audio.onplay = () => { $("play").textContent = "⏸"; };
-  audio.onpause = () => { $("play").textContent = "▶"; };
+  // The audio element leads and the video follows it, so the player bar, seeking and shuffle work the same with or without one.
+  const follow = () => {
+    const video = $("video");
+    if (!video) return;
+    if (Math.abs(video.currentTime - audio.currentTime) > 0.25) video.currentTime = audio.currentTime;
+    if (audio.paused !== video.paused) audio.paused ? video.pause() : video.play().catch(() => {});
+  };
+  audio.onplay = () => { $("play").textContent = "⏸"; follow(); };
+  audio.onpause = () => { $("play").textContent = "▶"; follow(); };
+  audio.onseeked = follow;
   audio.onended = () => step(1);
-  audio.ontimeupdate = () => { $("cur").textContent = clock(audio.currentTime); $("dur").textContent = clock(audio.duration); $("fill").style.width = (audio.duration ? (audio.currentTime / audio.duration) * 100 : 0) + "%"; };
+  audio.ontimeupdate = () => { $("cur").textContent = clock(audio.currentTime); $("dur").textContent = clock(audio.duration); $("fill").style.width = (audio.duration ? (audio.currentTime / audio.duration) * 100 : 0) + "%"; follow(); };
   load().catch((error) => { $("list").innerHTML = `<p class="empty">Could not list the songs: ${esc(error.message)}</p>`; });
 </script>
 </body>
