@@ -80,7 +80,7 @@
       <h1><span>♪</span> musicjam</h1>
       <p class="sub">Every song made by the musicjam job on <a href="https://workflows.h4ks.com" style="color:var(--accent)">workflows.h4ks.com</a>.</p>
     </div>
-    <input type="search" id="q" placeholder="Search titles and prompts">
+    <input type="search" id="q" placeholder="Search titles">
   </header>
   <div class="grid">
     <div class="list" id="list"><p class="empty">Loading songs…</p></div>
@@ -104,7 +104,7 @@
 </div>
 <audio id="audio" preload="none"></audio>
 <script>
-  // Songs are public objects in the workflows bucket: each musicjam/<day>/<slug>-<time>.mp3 has a .json beside it,
+  // Songs are public objects in the workflows bucket, found with one listing: each musicjam/<day>/<slug>-<time>.mp3 has a .json beside it,
   // and its project zip lives at <slug>-project-<time>.zip with its own .json. A song made with a video also has
   // <slug>-video-<time>.mp4, stored a little later, which plays muted in step with the player.
   const S3 = "https://s3-api.t3ks.com/workflows/";
@@ -112,6 +112,7 @@
   const $ = (id) => document.getElementById(id);
   const audio = $("audio");
   let songs = [], shown = [], current = -1, shuffle = false;
+  const modified = {};
 
   const esc = (text) => { const node = document.createElement("div"); node.textContent = text == null ? "" : String(text); return node.innerHTML; };
   const clock = (seconds) => { seconds = Math.max(0, Math.round(seconds || 0)); return Math.floor(seconds / 60) + ":" + String(seconds % 60).padStart(2, "0"); };
@@ -122,7 +123,11 @@
     do {
       const url = S3 + "?list-type=2&prefix=" + encodeURIComponent(PREFIX) + (token ? "&continuation-token=" + encodeURIComponent(token) : "");
       const xml = new DOMParser().parseFromString(await (await fetch(url)).text(), "application/xml");
-      for (const node of xml.getElementsByTagName("Contents")) keys.push(node.getElementsByTagName("Key")[0].textContent);
+      for (const node of xml.getElementsByTagName("Contents")) {
+        const key = node.getElementsByTagName("Key")[0].textContent;
+        keys.push(key);
+        modified[key] = node.getElementsByTagName("LastModified")[0].textContent;
+      }
       const next = xml.getElementsByTagName("NextContinuationToken")[0];
       token = next ? next.textContent : null;
     } while (token);
@@ -133,25 +138,17 @@
     const keys = await listKeys();
     const all = new Set(keys);
     const songKeys = keys.filter((key) => key.endsWith(".mp3") && !key.startsWith(PREFIX + "spike/"));
-    const queue = songKeys.map((key) => async () => {
-      const meta = all.has(key.replace(/\.mp3$/, ".json")) ? await fetch(S3 + key.replace(/\.mp3$/, ".json")).then((r) => r.json()).catch(() => ({})) : {};
+    const results = songKeys.map((key) => {
       const projectKey = key.replace(/-(\d{6})\.mp3$/, "-project-$1");
       const project = [".zip", ".erk"].map((ext) => projectKey + ext).find((candidate) => all.has(candidate));
       const videoPrefix = key.replace(/-\d{6}\.mp3$/, "-video-");
       const video = keys.find((candidate) => candidate.startsWith(videoPrefix) && /-video-\d{6}\.mp4$/.test(candidate));
-      let viewer = null;
-      if (all.has(projectKey + ".json")) {
-        const projectMeta = await fetch(S3 + projectKey + ".json").then((r) => r.json()).catch(() => ({}));
-        const match = String(projectMeta.details || "").match(/https:\/\/emerick\.t3ks\.com\/projects\/[^\s"]+/);
-        viewer = match ? match[0] : null;
-      }
-      return { key, url: S3 + key, title: meta.title || key.split("/").pop().replace(/-\d{6}\.mp3$/, "").replace(/-/g, " "),
-        prompt: meta.prompt || "", details: meta.details || "", seconds: meta.seconds || 0,
-        created: meta.created_at || key.split("/")[1] || "", project: project ? S3 + project : null, viewer,
-        video: video ? S3 + video : null };
+      const meta = key.replace(/\.mp3$/, ".json");
+      const name = key.split("/").pop().replace(/-\d{6}\.mp3$/, "").replace(/-/g, " ");
+      return { key, url: S3 + key, title: name.charAt(0).toUpperCase() + name.slice(1), prompt: "", details: "", seconds: 0,
+        created: modified[key] || key.split("/")[1] || "", project: project ? S3 + project : null, video: video ? S3 + video : null,
+        meta: all.has(meta) ? S3 + meta : null, projectMeta: all.has(projectKey + ".json") ? S3 + projectKey + ".json" : null };
     });
-    const results = [];
-    for (let index = 0; index < queue.length; index += 8) results.push(...await Promise.all(queue.slice(index, index + 8).map((task) => task())));
     songs = results.sort((a, b) => String(b.created).localeCompare(String(a.created)));
     filter();
     const wanted = location.hash.slice(1);
@@ -169,8 +166,28 @@
     if (!shown.length) { $("list").innerHTML = '<p class="empty">No songs match.</p>'; return; }
     $("list").innerHTML = shown.map((song, index) => `<div class="row${shown[index] === songs[current] ? " active" : ""}" data-i="${index}">
       <span class="n">${index + 1}</span><div style="min-width:0"><div class="t">${esc(song.title)}${song.video ? '<span class="tag">video</span>' : ""}</div><div class="p">${esc(song.prompt)}</div></div>
-      <span class="d">${clock(song.seconds)}</span></div>`).join("");
+      <span class="d">${song.seconds ? clock(song.seconds) : ""}</span></div>`).join("");
     for (const row of $("list").querySelectorAll(".row")) row.onclick = () => select(Number(row.dataset.i), true);
+  }
+
+  // A song's prompt, details and viewer link come from the JSON files beside it, fetched only when it is opened: a
+  // visitor that fetched every song's files at once looked like a crawler to the bucket's firewall and got banned.
+  async function describe(song) {
+    if (!song.described) {
+      const meta = song.meta ? await fetch(song.meta).then((r) => r.json()).catch(() => ({})) : {};
+      const projectMeta = song.projectMeta ? await fetch(song.projectMeta).then((r) => r.json()).catch(() => ({})) : {};
+      const match = String(projectMeta.details || "").match(/https:\/\/emerick\.t3ks\.com\/projects\/[^\s"]+/);
+      Object.assign(song, { title: meta.title || song.title, prompt: meta.prompt || "", details: meta.details || "",
+        seconds: meta.seconds || song.seconds, viewer: match ? match[0] : null, described: true });
+    }
+    if (songs[current] !== song) return;
+    $("nowTitle").textContent = song.title;
+    $("songTitle").textContent = song.title;
+    $("meta").textContent = String(song.created).slice(0, 16).replace("T", " ") + (song.seconds ? " · " + clock(song.seconds) : "");
+    $("prompt").textContent = song.prompt ? `“${song.prompt}”` : "";
+    $("text").textContent = song.details;
+    $("viewer").innerHTML = song.viewer ? `<a href="${esc(song.viewer)}" target="_blank" rel="noopener">Open in Emerick</a>` : "";
+    render();
   }
 
   function select(index, play) {
@@ -180,21 +197,22 @@
     history.replaceState(null, "", "#" + encodeURIComponent(song.key));
     audio.src = song.url;
     $("nowTitle").textContent = song.title;
-    $("detail").innerHTML = `<button class="close" id="close" title="Close the details">✕</button><h2>${esc(song.title)}</h2>
-      <p class="meta">${esc(String(song.created).slice(0, 16).replace("T", " "))} · ${clock(song.seconds)}</p>
+    $("detail").innerHTML = `<button class="close" id="close" title="Close the details">✕</button><h2 id="songTitle">${esc(song.title)}</h2>
+      <p class="meta" id="meta"></p>
       ${song.video ? `<video id="video" src="${esc(song.video)}" muted playsinline preload="metadata" title="Play or pause"></video>` : ""}
-      ${song.prompt ? `<p class="prompt">“${esc(song.prompt)}”</p>` : ""}
+      <p class="prompt" id="prompt"></p>
       <div class="links">
-        ${song.viewer ? `<a href="${esc(song.viewer)}" target="_blank" rel="noopener">Open in Emerick</a>` : ""}
+        <span id="viewer"></span>
         ${song.project ? `<a class="ghost" href="${esc(song.project)}">Download project</a>` : ""}
         <a class="ghost" href="${esc(song.url)}" download>Download MP3</a>
         ${song.video ? `<a class="ghost" href="${esc(song.video)}" download>Download video</a>` : ""}
       </div>
-      <p class="text">${esc(song.details)}</p>`;
+      <p class="text" id="text"></p>`;
     $("close").onclick = () => $("detail").classList.remove("open");
     if ($("video")) $("video").onclick = () => $("play").click();
     render();
     if (play) audio.play();
+    describe(song);
   }
 
   function step(direction) {
