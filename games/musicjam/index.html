@@ -36,6 +36,7 @@
   .links a { color: var(--bg); background: var(--accent); padding: 7px 11px; border-radius: 8px; text-decoration: none; font-size: 0.85rem; font-weight: 600; }
   .links a.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
   .empty { color: var(--muted); padding: 24px; text-align: center; }
+  .detail video[hidden] { display: none; }
   .detail video { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 8px; margin-bottom: 12px; cursor: pointer; }
   .row .tag { color: var(--accent); font-size: 0.7rem; border: 1px solid var(--accent); border-radius: 4px; padding: 0 4px; margin-left: 6px; vertical-align: 1px; }
   .bar { position: fixed; left: 0; right: 0; bottom: 0; background: #0f0f0f; border-top: 1px solid var(--line); padding: 10px 16px; }
@@ -106,7 +107,8 @@
 <script>
   // Songs are public objects in the workflows bucket, found with one listing: each musicjam/<day>/<slug>-<time>.mp3 has a .json beside it,
   // and its project zip lives at <slug>-project-<time>.zip with its own .json. A song made with a video also has
-  // <slug>-video-<time>.mp4, stored a little later, which plays muted in step with the player.
+  // <slug>-video-<time>.mp4, stored a little later, which plays muted in step with the player. A song made with karaoke
+  // has <slug>-karaoke-<time>.mp4, which carries its own backing track and plays on its own.
   const S3 = "https://s3-api.t3ks.com/workflows/";
   const PREFIX = "musicjam/";
   const $ = (id) => document.getElementById(id);
@@ -143,10 +145,12 @@
       const project = [".zip", ".erk"].map((ext) => projectKey + ext).find((candidate) => all.has(candidate));
       const videoPrefix = key.replace(/-\d{6}\.mp3$/, "-video-");
       const video = keys.find((candidate) => candidate.startsWith(videoPrefix) && /-video-\d{6}\.mp4$/.test(candidate));
+      const karaokePrefix = key.replace(/-\d{6}\.mp3$/, "-karaoke-");
+      const karaoke = keys.find((candidate) => candidate.startsWith(karaokePrefix) && /-karaoke-\d{6}\.mp4$/.test(candidate));
       const meta = key.replace(/\.mp3$/, ".json");
       const name = key.split("/").pop().replace(/-\d{6}\.mp3$/, "").replace(/-/g, " ");
       return { key, url: S3 + key, title: name.charAt(0).toUpperCase() + name.slice(1), prompt: "", details: "", seconds: 0,
-        created: modified[key] || key.split("/")[1] || "", project: project ? S3 + project : null, video: video ? S3 + video : null,
+        created: modified[key] || key.split("/")[1] || "", project: project ? S3 + project : null, video: video ? S3 + video : null, karaoke: karaoke ? S3 + karaoke : null,
         meta: all.has(meta) ? S3 + meta : null, projectMeta: all.has(projectKey + ".json") ? S3 + projectKey + ".json" : null };
     });
     songs = results.sort((a, b) => String(b.created).localeCompare(String(a.created)));
@@ -165,7 +169,7 @@
   function render() {
     if (!shown.length) { $("list").innerHTML = '<p class="empty">No songs match.</p>'; return; }
     $("list").innerHTML = shown.map((song, index) => `<div class="row${shown[index] === songs[current] ? " active" : ""}" data-i="${index}">
-      <span class="n">${index + 1}</span><div style="min-width:0"><div class="t">${esc(song.title)}${song.video ? '<span class="tag">video</span>' : ""}</div><div class="p">${esc(song.prompt)}</div></div>
+      <span class="n">${index + 1}</span><div style="min-width:0"><div class="t">${esc(song.title)}${song.video ? '<span class="tag">video</span>' : ""}${song.karaoke ? '<span class="tag">karaoke</span>' : ""}</div><div class="p">${esc(song.prompt)}</div></div>
       <span class="d">${song.seconds ? clock(song.seconds) : ""}</span></div>`).join("");
     for (const row of $("list").querySelectorAll(".row")) row.onclick = () => select(Number(row.dataset.i), true);
   }
@@ -200,16 +204,28 @@
     $("detail").innerHTML = `<button class="close" id="close" title="Close the details">✕</button><h2 id="songTitle">${esc(song.title)}</h2>
       <p class="meta" id="meta"></p>
       ${song.video ? `<video id="video" src="${esc(song.video)}" muted playsinline preload="metadata" title="Play or pause"></video>` : ""}
+      ${song.karaoke ? `<video id="karaoke" src="${esc(song.karaoke)}" controls playsinline preload="none" hidden></video>` : ""}
       <p class="prompt" id="prompt"></p>
       <div class="links">
+        ${song.karaoke ? `<a href="#" id="singAlong">Sing along</a>` : ""}
         <span id="viewer"></span>
         ${song.project ? `<a class="ghost" href="${esc(song.project)}">Download project</a>` : ""}
         <a class="ghost" href="${esc(song.url)}" download>Download MP3</a>
         ${song.video ? `<a class="ghost" href="${esc(song.video)}" download>Download video</a>` : ""}
+        ${song.karaoke ? `<a class="ghost" href="${esc(song.karaoke)}" download>Download karaoke</a>` : ""}
       </div>
       <p class="text" id="text"></p>`;
     $("close").onclick = () => $("detail").classList.remove("open");
     if ($("video")) $("video").onclick = () => $("play").click();
+    // The karaoke video has its own sound, so it takes the place of the song while it plays.
+    if ($("singAlong")) $("singAlong").onclick = (event) => {
+      event.preventDefault();
+      audio.pause();
+      if ($("video")) $("video").hidden = true;
+      $("karaoke").hidden = false;
+      $("karaoke").play();
+    };
+    if ($("karaoke")) $("karaoke").onplay = () => audio.pause();
     render();
     if (play) audio.play();
     describe(song);
@@ -238,7 +254,7 @@
     if (Math.abs(video.currentTime - audio.currentTime) > 0.25) video.currentTime = audio.currentTime;
     if (audio.paused !== video.paused) audio.paused ? video.pause() : video.play().catch(() => {});
   };
-  audio.onplay = () => { $("play").textContent = "⏸"; follow(); };
+  audio.onplay = () => { $("play").textContent = "⏸"; if ($("karaoke")) $("karaoke").pause(); follow(); };
   audio.onpause = () => { $("play").textContent = "▶"; follow(); };
   audio.onseeked = follow;
   audio.onended = () => step(1);
