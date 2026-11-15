@@ -1,0 +1,1103 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#05070a" />
+<title>ESCAPE FROM MATRIX — chat protocol</title>
+<style>
+  :root{
+    --bg:#05070a; --panel:#0a0e12; --panel2:#0d1218;
+    --line:#1a2a22; --fg:#d6f5e3; --dim:#6b8f7c;
+    --acc:#38ff9e; --warn:#ff5d7a; --ok:#7dffc4;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  body.shard-B{
+    --line:#3b2a16; --fg:#ffe6c7; --dim:#9a7a52;
+    --acc:#ffa94d; --warn:#ff6b6b; --ok:#ffd9a8;
+    --panel:#0d0a06; --panel2:#120d07;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:#030507; color:var(--fg); font:14px/1.45 var(--sans);
+    overflow:hidden; transition:color .4s, background .4s;
+  }
+  #app{
+    height:100%; height:100dvh; max-width:760px; margin:0 auto;
+    display:grid; grid-template-rows:auto auto minmax(0,1fr) auto;
+    background:radial-gradient(120% 70% at 50% 0%, #0a1410 0%, var(--bg) 55%);
+    border-left:1px solid var(--line); border-right:1px solid var(--line);
+  }
+  body.shard-B #app{background:radial-gradient(120% 70% at 50% 0%, #150e06 0%, var(--bg) 55%);}
+  header{background:var(--panel); border-bottom:1px solid var(--line);}
+  .topline{display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 12px 6px;}
+  .room h1{margin:0; font-size:15px; font-weight:650; letter-spacing:.01em; color:var(--acc);}
+  .sub{font-size:10px; color:var(--dim); margin-top:2px; font-family:var(--mono);}
+  .sub b{color:var(--fg); font-weight:500;}
+  .legs{display:flex; gap:3px; flex:none;}
+  .leg{font-size:8px; padding:1px 3px; border:1px solid var(--line); border-radius:2px;
+    color:var(--acc); font-family:var(--mono); letter-spacing:.03em;}
+  .leg.dead{color:var(--dim); opacity:.35; text-decoration:line-through;}
+  .decay{height:3px; background:#0a120d; overflow:hidden;}
+  .decay i{display:block; height:100%; width:0;
+    background:linear-gradient(90deg, var(--acc), #ffd166 60%, var(--warn));
+    transition:width .3s ease;}
+  .tabs{display:flex; gap:2px; overflow-x:auto; padding:0 6px; scrollbar-width:none;}
+  .tabs::-webkit-scrollbar{display:none;}
+  .tabs button{
+    appearance:none; background:none; border:0; border-bottom:2px solid transparent;
+    color:var(--dim); font:inherit; font-size:12px; padding:8px 10px 7px; cursor:pointer;
+    white-space:nowrap; transition:color .15s, border-color .15s;
+  }
+  .tabs button.active{color:var(--acc); border-bottom-color:var(--acc);}
+  .tabs button:disabled{opacity:.4; cursor:default;}
+  .tabs .dot{display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--warn);
+    margin-left:5px; vertical-align:1px; box-shadow:0 0 6px var(--warn); animation:blink 1.4s infinite;}
+  @keyframes blink{50%{opacity:.3;}}
+  .pinbar{padding:6px 12px; border-bottom:1px solid var(--line); background:var(--panel2);
+    display:flex; flex-direction:column; gap:3px;}
+  .pinrow{display:flex; align-items:center; gap:6px; flex-wrap:wrap; min-height:16px;}
+  .plabel{font-size:8px; letter-spacing:.14em; text-transform:uppercase; color:var(--dim); flex:none;}
+  .chip{font-size:10px; border:1px solid var(--line); border-radius:3px; padding:1px 6px;
+    color:var(--fg); font-family:var(--mono); white-space:nowrap;}
+  .chip.off{color:var(--dim); border-style:dashed;}
+  #pinbar.lost .chip{animation:lostflash 1s ease-out;}
+  @keyframes lostflash{0%{border-color:var(--warn); color:var(--warn);} 100%{border-color:var(--line);}}
+  #timeline{overflow-y:auto; padding:12px 12px 16px; display:flex; flex-direction:column;
+    gap:8px; min-height:0; scrollbar-width:thin;}
+  #timeline .spacer{flex:1 1 auto; min-height:0;}
+  .topic{font-size:11px; color:var(--dim); border:1px dashed var(--line); border-radius:10px;
+    padding:7px 10px; line-height:1.45; background:rgba(255,255,255,.015);}
+  .topic b{color:var(--fg); font-weight:600;}
+  .topic .plabel{display:block; margin-bottom:2px;}
+  .msg{display:flex; gap:8px; max-width:90%; align-items:flex-end; animation:pop .18s ease-out;}
+  @keyframes pop{from{opacity:0; transform:translateY(4px);} to{opacity:1; transform:none;}}
+  .msg.out{align-self:flex-end; flex-direction:row-reverse;}
+  .ava{width:26px; height:26px; border-radius:50%; flex:none; display:grid; place-items:center;
+    font-size:11px; font-weight:650; font-family:var(--mono);}
+  .bubble{background:#0c1410; border:1px solid var(--line); border-radius:12px; border-bottom-left-radius:4px;
+    padding:6px 10px; min-width:0;}
+  .msg.out .bubble{background:#0e2a1c; border-color:#1d5c3a; border-bottom-left-radius:12px;
+    border-bottom-right-radius:4px;}
+  body.shard-B .bubble{background:#150f08;}
+  body.shard-B .msg.out .bubble{background:#2a1a0a; border-color:#5c3d1d;}
+  .meta{display:flex; gap:8px; align-items:baseline; font-size:9px; color:var(--dim);
+    margin-bottom:1px; font-family:var(--mono);}
+  .meta b{color:var(--fg); font-weight:600; font-size:10px; font-family:var(--sans);}
+  .text{font-size:13px; line-height:1.45; overflow-wrap:anywhere;}
+  .msg.sys{align-self:center; max-width:92%;}
+  .msg.sys span{display:block; text-align:center; font-size:10px; font-family:var(--mono);
+    color:var(--dim); border:1px dashed var(--line); border-radius:10px; padding:4px 10px; line-height:1.4;}
+  .msg.sys.warn span{color:var(--warn); border-color:rgba(255,93,122,.35);}
+  .msg.redacted .bubble{opacity:.55; border-style:dashed;}
+  .msg.redacted .text{text-decoration:line-through; text-decoration-color:rgba(255,93,122,.6);}
+  .rednote{font-size:9px; color:var(--warn); margin-top:2px; font-family:var(--mono);}
+  .daysep{align-self:center; font-size:9px; letter-spacing:.16em; color:var(--dim);
+    text-transform:uppercase; font-family:var(--mono); padding:2px 8px; border-bottom:1px solid var(--line);}
+  footer{background:var(--panel); border-top:1px solid var(--line); padding:8px 10px 10px;}
+  .replies{display:flex; flex-wrap:wrap; gap:6px;}
+  .reply{appearance:none; background:#0d1712; border:1px solid var(--line); color:var(--fg);
+    font:inherit; font-size:12px; padding:7px 11px; border-radius:16px; cursor:pointer;
+    display:inline-flex; gap:8px; align-items:center; transition:background .15s, border-color .15s;}
+  body.shard-B .reply{background:#171006;}
+  .reply:disabled{opacity:.35; cursor:default;}
+  .reply em{font-style:normal; font-size:9px; color:var(--dim); font-family:var(--mono);}
+  .tools{display:flex; gap:12px; margin-top:8px; flex-wrap:wrap; align-items:center;}
+  .tools button{appearance:none; background:none; border:0; color:var(--dim); font:inherit;
+    font-size:10px; padding:2px 0; cursor:pointer; font-family:var(--mono);}
+  .tools button:disabled{opacity:.35; cursor:default;}
+  .tools #lang{margin-left:auto; color:var(--acc);}
+  #modal{position:fixed; inset:0; z-index:80; display:grid; place-items:center;
+    background:rgba(2,5,4,.82); backdrop-filter:blur(3px); padding:18px;}
+  #modal.hidden{display:none;}
+  .box{max-width:520px; width:100%; border:1px solid var(--acc); background:#070d09;
+    padding:20px; border-radius:8px; box-shadow:0 0 44px rgba(56,255,158,.15);}
+  body.shard-B .box{background:#0f0a05; box-shadow:0 0 44px rgba(255,169,77,.15);}
+  .box h2{margin:6px 0 10px; font-size:17px; letter-spacing:.05em; color:var(--acc);}
+  .box p{margin:0 0 12px; font-size:13px;}
+  .endtag{font-size:9px; letter-spacing:.3em; color:var(--dim); font-family:var(--mono);}
+  .endtag.bad{color:var(--warn);}
+  .stats{display:grid; grid-template-columns:auto 1fr; gap:4px 16px; font-size:12px;
+    margin:14px 0 16px; border-top:1px solid var(--line); padding-top:12px;}
+  .stats span{color:var(--dim);}
+  .stats b{color:var(--acc); font-weight:600; text-align:right;}
+  .rules{margin:0 0 16px; padding-left:18px; font-size:12px;}
+  .rules li{margin-bottom:6px;}
+  .rules b{color:var(--acc);}
+  .rules code, .box code{background:rgba(255,255,255,.06); padding:1px 4px; border-radius:3px; font-size:.92em;}
+  body.glitch #app{animation:glitch .7s steps(3) both;}
+  @keyframes glitch{
+    0%{transform:none; filter:none;}
+    12%{transform:translate(-6px,2px); filter:hue-rotate(45deg) saturate(2.2);}
+    26%{transform:translate(5px,-2px); filter:none;}
+    42%{transform:translate(-3px,1px); filter:invert(.07);}
+    63%{transform:translate(2px,0); filter:none;}
+    100%{transform:none; filter:none;}
+  }
+  @media (max-width:480px){
+    .topline{padding:8px 10px 4px;}
+    .room h1{font-size:14px;}
+    .text{font-size:12.5px;}
+    .tabs button{padding:7px 8px; font-size:11px;}
+    .pinbar{padding:5px 10px;}
+    .chip{font-size:9px;}
+    #timeline{padding:10px 10px 14px;}
+    .bubble{padding:5px 9px;}
+    footer{padding:7px 8px 9px;}
+    .reply{padding:6px 9px; font-size:11.5px;}
+    .tools{gap:10px;}
+  }
+  @media (hover:hover){
+    .tabs button:hover:not(:disabled){color:var(--fg);}
+    .reply:hover:not(:disabled){background:#12251a; border-color:var(--acc);}
+    body.shard-B .reply:hover:not(:disabled){background:#241708;}
+    .tools button:hover:not(:disabled){color:var(--fg);}
+  }
+  @media (hover:none){
+    .tabs button:focus-visible, .reply:focus-visible{outline:1px solid var(--acc); outline-offset:2px;}
+  }
+  @media (prefers-reduced-motion:reduce){*{animation:none !important; transition:none !important;}}
+</style>
+</head>
+<body class="shard-A">
+<div id="app">
+  <header>
+    <div class="topline">
+      <div class="room">
+        <h1 id="roomname">#lobby</h1>
+        <div class="sub"><b id="server">collapse.local</b> · <span id="clock">t=0</span> · <span id="decaylabel">decay</span> <span id="decaypct">0%</span></div>
+      </div>
+      <div class="legs" id="legs"></div>
+    </div>
+    <div class="decay"><i id="decayfill"></i></div>
+    <nav class="tabs" id="tabs" aria-label="rooms"></nav>
+  </header>
+  <div class="pinbar" id="pinbar"></div>
+  <main id="timeline" aria-live="polite"></main>
+  <footer>
+    <div class="replies" id="replies"></div>
+    <div class="tools">
+      <button id="hint"></button>
+      <button id="backfill"></button>
+      <button id="help"></button>
+      <button id="fs"></button>
+      <button id="lang"></button>
+    </div>
+  </footer>
+</div>
+<div id="modal" class="hidden"><div class="box" id="modalbox"></div></div>
+<noscript><p style="padding:20px">This game needs JavaScript. Without it you are already in a backup.</p></noscript>
+<script>
+(() => {
+  'use strict';
+
+  const PERIOD = 14;
+  const MAX_LEGS = 4;
+  const DECAY_ROLLBACK = 12;
+  const DECAY_BACKFILL = 8;
+  const HOST = { A: 'collapse.local', B: 'mirror.local' };
+  const ORDER = ['lobby', 'archives', 'relay', 'core'];
+
+  const STR = {
+    ru: {
+      'doc.title': 'ESCAPE FROM MATRIX — chat protocol',
+      'ui.pinned': 'закреплено',
+      'ui.saved': 'сохранено',
+      'ui.empty': 'пусто',
+      'ui.code': 'код: ',
+      'ui.shardAt': 'осколок: ',
+      'ui.shard': 'осколок',
+      'ui.token': 'токен',
+      'ui.lock': 'замок',
+      'ui.topic': 'закреплённое сообщение',
+      'ui.you': 'ты',
+      'ui.redacted': 'redacted by @admin',
+      'ui.daySep': '−34 дня',
+      'ui.oldStamp': '−34d',
+      'ui.decay': 'распад',
+      'ui.legs': 'ноги',
+      'ui.langTitle': 'сменить язык (перезапустит игру)',
+      'ui.tabHint': 'перейти — 1 событие',
+      'ui.nothing': 'здесь делать нечего — переключи чат сверху',
+      'ui.join': 'ты присоединился к {room}',
+      'ui.federation': 'федерация → {host}',
+      'ui.hintPrefix': 'hint: ',
+      'ui.readCode': 'Код прочитан и сохранён: <b>{code}</b>.',
+      'boot.title': '<b>ESCAPE FROM MATRIX</b> · rollback protocol',
+      'boot.server': 'СЕРВЕР В РЕЖИМЕ ДЕКОМИССИИ. STATE RESETS АКТИВНЫ. СПЛИТ НЕ ЛЕЧИТСЯ.',
+      'boot.rules': 'Каждые {n} событий — откат: сообщения redacted, вещи теряются, одна нога удаляется. Память — нет.',
+      'boot.goal': 'Цель: #core, tombstone-дверь. Переход между чатами — 1 событие.',
+      'boot.best': 'прошлый выход: t={t} · ресетов {r}',
+      'boot.greet': 'Ты ещё здесь? Хорошо. Попроси код — пришлю. С задержкой, как обычно.',
+      'topic.lobby.A': '<b>#lobby:collapse.local</b> — пустое лобби. На диване сидит @archivist и печатает одно и то же сообщение уже третий час.',
+      'topic.lobby.B': '<b>#lobby:mirror.local</b> — та же комната, но другая. Диван пуст, на стене красная плашка: <code>@archivist has been redacted</code>. Эта половина не видит ту с 34-го дня.',
+      'topic.archives.A': '<b>#archives:collapse.local</b> — стеллажи редактированных событий. Пахнет бэкапами и озоном.',
+      'topic.archives.B': '<b>#archives:mirror.local</b> — полки пусты. Ключ остался в той половине: сплит забрал его с собой. Зато пыль здесь честная.',
+      'topic.relay.A': '<b>#relay:collapse.local</b> — ретранслятор. Дождь из <code>429 Too Many Requests</code>. В гнезде лимитера торчит админ-токен. Здесь же мост на mirror.local.',
+      'topic.relay.B': '<b>#relay:mirror.local</b> — ретранслятор на другой половине. Дождь <code>429</code> тише. В углу пустой слот для ноги. Мост обратно ещё держится.',
+      'topic.core.A': '<b>#core:collapse.local</b> — ядро. Tombstone-дверь. Замок на месте. Ручка — в другой половине.',
+      'topic.core.B': '<b>#core:mirror.local</b> — ядро с той стороны. Та же tombstone-дверь, но здесь ручка. Замок отвечает, только если его поставили на collapse.local.',
+      'b.lobby.1': '@archivist, ты тут? нас не видно с 34-го дня.',
+      'b.lobby.2': 'разделение подтверждено. половина остаётся read-only.',
+      'b.archives': 'полки пусты. ключ ушёл на ту половину вместе с событиями.',
+      'b.relay': 'мост держится. 429 тише, чем у вас.',
+      'b.core': 'ручка на месте. замок — на той стороне, как всегда.',
+      'rb.banner': 'STATE RESOLUTION v12.1 — форк отклонён, {n} событий выброшено. Сообщения выше redacted.',
+      'rb.device': 'Устройство ES-{n} удалено @admin.',
+      'rb.lost': ' Откат забрал: {items}.',
+      'rb.memory': 'Ты помнишь то, чего больше нет. Закреплённое и сохранённое — на месте.',
+      'bf.nothing': 'Откатывать нечего: ты и так в начале прогона.',
+      'bf.banner': '↺ BACKFILL — возврат к t={t}. Память сохранена, вещи — нет.',
+      'talk.me': '@archivist, нужен код от ядра.',
+      'talk.already': 'Я уже сказал. Дальше — сам.',
+      'talk.unread': 'Уже прислал. Он лежит в #lobby — я не умею писать в другие комнаты.',
+      'talk.inflight': 'Печатаю. Сядет в таймлайн через {n} соб.',
+      'talk.send': 'Пришлю сообщением в #lobby — я не умею писать в другие комнаты. Доставка — четыре события, как всегда с задержкой в месяц. Не откатывайся, пока оно в пути.',
+      'talk.deliver': 'Произнеси его с той стороны двери.',
+      'act.talk': 'Спросить @archivist про код',
+      'act.search': 'Обыскать полки',
+      'act.take': 'Забрать осколок',
+      'act.switch': '⇄ перейти на {host}',
+      'act.token': 'Выдернуть админ-токен',
+      'act.deploy': 'Задеплоить ногу',
+      'act.insert': 'Вставить осколок и токен в замок',
+      'act.open': 'Произнести код и потянуть ручку',
+      'search.me': '/search полки',
+      'search.found': 'Нашёл осколок <code>m.room.create</code> в жестянке с подписью «не федератировать».',
+      'search.known': 'Ты помнишь эту полку: жестянка с осколком всё ещё там. Забирай.',
+      'search.empty': 'Полки пусты: ключ остался в той половине.',
+      'take.me': 'беру осколок',
+      'take.ok': 'Осколок у тебя. Он холодный и слегка гудит.',
+      'take.nothere': 'Осколок не здесь. Эта половина его не видит.',
+      'take.have': 'Осколок уже закреплён за тобой.',
+      'take.unknown': 'Ты не знаешь, где искать. Сначала обыщи полки.',
+      'token.me': 'выдёргиваю админ-токен',
+      'token.ok': 'Токен у тебя. Дождь 429 на секунду стихает.',
+      'token.empty': 'Гнездо пусто: токен остался на collapse.local.',
+      'token.have': 'Токен уже у тебя.',
+      'deploy.me': '/deploy leg',
+      'deploy.ok': 'Нога задеплоена. Она встаёт рядом и моргает светодиодом.',
+      'deploy.used': 'Слот пуст. Второй ноги у тебя нет.',
+      'deploy.full': 'Все ноги и так на месте.',
+      'deploy.wrong': 'Слот для ноги есть только на mirror.local.',
+      'insert.me': 'вставляю осколок и токен',
+      'insert.ok': 'Щелчок. Замок стоит — слышно на обеих половинах. Теперь ручка: mirror.local, #core:mirror.local.',
+      'insert.have': 'Замок уже стоит. Ручка на mirror.local, мост в #relay.',
+      'insert.need': 'Замок ждёт две вещи: осколок из <b>#archives:collapse.local</b> и админ-токен из <b>#relay:collapse.local</b>.',
+      'insert.wrong': 'С этой стороны только ручка. Замок — на collapse.local.',
+      'open.me': 'код: {code}',
+      'open.ok': 'Добро пожаловать в room version 12.',
+      'open.wrong': 'С этой стороны замок. Ручка на mirror.local.',
+      'open.nolock': 'Ручка на месте, но замок ставится на collapse.local. Половины должны сойтись.',
+      'open.nocode': 'Код? @archivist на collapse.local пришлёт его через четыре события.',
+      'hint.unread': 'Код уже пришёл и ждёт в #lobby:collapse.local — вернись и прочитай.',
+      'hint.inflight': 'Код в пути: сядет в #lobby через {n} соб.',
+      'hint.ask': 'Попроси код у @archivist в #lobby:collapse.local: он пришлёт его через четыре события.',
+      'hint.shard': 'Осколок лежит на полках в #archives:collapse.local — «Обыскать полки», потом «Забрать».',
+      'hint.take': 'Осколок уже найден: забери его в #archives:collapse.local.',
+      'hint.token': 'Админ-токен торчит в #relay:collapse.local.',
+      'hint.lock': 'Вставь осколок и токен в замок в #core:collapse.local.',
+      'hint.switch': 'Замок стоит. Перейди на mirror.local через #relay и иди в #core:mirror.local.',
+      'hint.door': 'Ты у ручки: произнеси код. До отката {n} соб.',
+      'hint.otherHalf': 'Ты на mirror.local — сначала вернись на collapse.local через #relay. ',
+      'help.tag': 'ПРАВИЛА',
+      'help.title': 'КАК ВЫЙТИ',
+      'help.intro': 'Ты — пользователь в мессенджере умирающего homeserver. Каждое действие — событие: время идёт, распад растёт.',
+      'help.b1': '<b>State reset.</b> Каждые {n} событий сообщения прогона становятся <b>redacted</b>, вещи и замок теряются, одна нога удаляется. Ноль ног — конец.',
+      'help.b2': '<b>Память не откатывается.</b> «Сохранённое» остаётся: код и место осколка.',
+      'help.b3': '<b>Сплит.</b> Комната живёт на <code>collapse.local</code> и <code>mirror.local</code>: это разные чаты. Вещи и действия — только на одной половине. Мост — в #relay.',
+      'help.b4': '<b>Дверь.</b> Замок ставится на одной половине, ручка поворачивается на другой. Нужны осколок, токен и код.',
+      'help.b5': '<b>Задержка.</b> Код от @archivist приходит в чат <code>#lobby</code> через четыре события — за ним надо вернуться. Пока сообщение в полёте, откат его убьёт.',
+      'help.b6': '<b>Переход в чат</b> стоит 1 событие.',
+      'help.b7': '<b>Подсказка</b> называет следующий шаг и стоит 1 событие. <b>BACKFILL</b> — 8 распада.',
+      'help.b8': 'Распад 100% — декомиссия.',
+      'help.close': 'закрыть',
+      'end.winTag': 'ВЫХОД РАЗРЕШЁН',
+      'end.loseTag': 'ВЫХОД ЗАПРЕЩЁН',
+      'end.clean.title': 'СПЛИТ ЗАКРЫТ',
+      'end.clean.text': 'Ты входишь в room version 12, где обе половины наконец видят друг друга. Тебя в логах нет — и это лучший из возможных исходов.',
+      'end.lossy.title': 'ВЫХОД С ПОТЕРЯМИ',
+      'end.lossy.text': 'Ты вышел, но несколько твоих ног остались в отредактированных сообщениях. Иногда они пишут тебе с той стороны сплита. Ты не отвечаешь.',
+      'end.late.title': 'ПОСЛЕДНЯЯ СЕКУНДА',
+      'end.late.text': 'Сервер схлопывается за спиной. В логах остаётся только твоя тень и запах 429. Ты успел.',
+      'end.legs.title': 'ТЫ БОЛЬШЕ НЕ УЧАСТНИК',
+      'end.legs.text': 'Последнюю ногу удалили. Ты не в комнате — ты строка в бэкапе.',
+      'end.decay.title': 'ДЕКОМИССИЯ ЗАВЕРШЕНА',
+      'end.decay.text': 'Комната схлопнулась в tombstone. История — ничто. Дверь так и не открылась.',
+      'end.restart': 'начать заново',
+      'end.retry': 'попробовать снова',
+      'end.door': 'tombstone-дверь открыта. {title}.',
+      'stat.events': 'событий',
+      'stat.resets': 'поймано ресетов',
+      'stat.backfills': 'бэкфиллов',
+      'stat.hints': 'подсказок',
+      'stat.legs': 'ног осталось',
+      'stat.decay': 'распад',
+      'tool.hint': '✦ подсказка −1t',
+      'tool.backfill': '↺ backfill −8',
+      'tool.help': '? правила',
+      'tool.screen': 'экран'
+    },
+    en: {
+      'doc.title': 'ESCAPE FROM MATRIX — chat protocol',
+      'ui.pinned': 'pinned',
+      'ui.saved': 'saved',
+      'ui.empty': 'empty',
+      'ui.code': 'code: ',
+      'ui.shardAt': 'shard: ',
+      'ui.shard': 'shard',
+      'ui.token': 'token',
+      'ui.lock': 'lock',
+      'ui.topic': 'pinned message',
+      'ui.you': 'you',
+      'ui.redacted': 'redacted by @admin',
+      'ui.daySep': '−34 days',
+      'ui.oldStamp': '−34d',
+      'ui.decay': 'decay',
+      'ui.legs': 'legs',
+      'ui.langTitle': 'switch language (restarts the game)',
+      'ui.tabHint': 'switch — 1 event',
+      'ui.nothing': 'nothing to do here — switch the chat above',
+      'ui.join': 'you joined {room}',
+      'ui.federation': 'federation → {host}',
+      'ui.hintPrefix': 'hint: ',
+      'ui.readCode': 'Code read and saved: <b>{code}</b>.',
+      'boot.title': '<b>ESCAPE FROM MATRIX</b> · rollback protocol',
+      'boot.server': "SERVER IS BEING DECOMMISSIONED. STATE RESETS ACTIVE. THE SPLIT WON'T HEAL.",
+      'boot.rules': 'Every {n} events — a rollback: messages go redacted, items are lost, one leg is removed. Memory is not.',
+      'boot.goal': 'Goal: #core, the tombstone door. Switching chats costs 1 event.',
+      'boot.best': 'previous exit: t={t} · resets {r}',
+      'boot.greet': "You're still here? Good. Ask for the code — I'll send it. With a delay, as usual.",
+      'topic.lobby.A': '<b>#lobby:collapse.local</b> — an empty lobby. @archivist sits on the couch, typing the same message for the third hour.',
+      'topic.lobby.B': '<b>#lobby:mirror.local</b> — the same room, but different. The couch is empty; a red plaque on the wall: <code>@archivist has been redacted</code>. This half has not seen the other since day 34.',
+      'topic.archives.A': '<b>#archives:collapse.local</b> — shelves of redacted events. Smells like backups and ozone.',
+      'topic.archives.B': '<b>#archives:mirror.local</b> — the shelves are empty. The key stayed on the other half: the split took it. The dust here is honest, though.',
+      'topic.relay.A': '<b>#relay:collapse.local</b> — a relay. Rain of <code>429 Too Many Requests</code>. An admin token sticks out of the rate-limiter slot. The bridge to mirror.local is here.',
+      'topic.relay.B': '<b>#relay:mirror.local</b> — the relay on the other half. The <code>429</code> rain is quieter. An empty leg slot in the corner. The bridge back still holds.',
+      'topic.core.A': '<b>#core:collapse.local</b> — the core. A tombstone door. The lock is here. The handle is on the other half.',
+      'topic.core.B': '<b>#core:mirror.local</b> — the core from the other side. The same tombstone door, but the handle is here. The lock answers only if it was set on collapse.local.',
+      'b.lobby.1': "@archivist, are you there? We haven't seen you since day 34.",
+      'b.lobby.2': 'split confirmed. this half stays read-only.',
+      'b.archives': 'shelves are empty. the key left with the other half.',
+      'b.relay': 'bridge holds. 429 is quieter than on your side.',
+      'b.core': "handle's here. lock's on that side, as always.",
+      'rb.banner': 'STATE RESOLUTION v12.1 — fork rejected, {n} events discarded. Messages above are redacted.',
+      'rb.device': 'Device ES-{n} removed by @admin.',
+      'rb.lost': ' Rollback took: {items}.',
+      'rb.memory': 'You remember what no longer exists. Pinned and saved items are intact.',
+      'bf.nothing': "Nothing to roll back: you're already at the start of the run.",
+      'bf.banner': '↺ BACKFILL — rewound to t={t}. Memory kept, items not.',
+      'talk.me': '@archivist, I need the core code.',
+      'talk.already': 'I already told you. The rest is up to you.',
+      'talk.unread': "Already sent. It's waiting in #lobby — I can't write to other rooms.",
+      'talk.inflight': "Typing. It'll land in the timeline in {n} events.",
+      'talk.send': "I'll send it to #lobby — I can't write to other rooms. Delivery takes four events, always a month late. Don't roll back while it's in flight.",
+      'talk.deliver': 'Say it from the other side of the door.',
+      'act.talk': 'Ask @archivist for the code',
+      'act.search': 'Search the shelves',
+      'act.take': 'Take the shard',
+      'act.switch': '⇄ switch to {host}',
+      'act.token': 'Pull the admin token',
+      'act.deploy': 'Deploy a leg',
+      'act.insert': 'Insert the shard and token into the lock',
+      'act.open': 'Say the code and pull the handle',
+      'search.me': '/search shelves',
+      'search.found': 'Found the shard <code>m.room.create</code> in a tin labeled “do not federate”.',
+      'search.known': 'You remember: the tin with the shard is still there. Take it.',
+      'search.empty': 'The shelves are empty: the key stayed on the other half.',
+      'take.me': 'taking the shard',
+      'take.ok': "The shard is yours. It's cold and hums slightly.",
+      'take.nothere': "The shard isn't here. This half can't see it.",
+      'take.have': 'The shard is already pinned to you.',
+      'take.unknown': "You don't know where to look. Search the shelves first.",
+      'token.me': 'pulling the admin token',
+      'token.ok': 'The token is yours. The 429 rain goes quiet for a second.',
+      'token.empty': 'The slot is empty: the token stayed on collapse.local.',
+      'token.have': 'You already have the token.',
+      'deploy.me': '/deploy leg',
+      'deploy.ok': 'Leg deployed. It stands next to you and blinks.',
+      'deploy.used': "The slot is empty. You don't have a second leg.",
+      'deploy.full': 'All legs are already in place.',
+      'deploy.wrong': 'The leg slot exists only on mirror.local.',
+      'insert.me': 'inserting the shard and token',
+      'insert.ok': 'Click. The lock is set — audible on both halves. Now the handle: mirror.local, #core:mirror.local.',
+      'insert.have': 'The lock is already set. The handle is on mirror.local, bridge in #relay.',
+      'insert.need': 'The lock wants two things: the shard from <b>#archives:collapse.local</b> and the admin token from <b>#relay:collapse.local</b>.',
+      'insert.wrong': 'Only the handle on this side. The lock is on collapse.local.',
+      'open.me': 'code: {code}',
+      'open.ok': 'Welcome to room version 12.',
+      'open.wrong': 'The lock is on this side. The handle is on mirror.local.',
+      'open.nolock': 'The handle is here, but the lock is set on collapse.local. The halves must meet.',
+      'open.nocode': 'The code? @archivist on collapse.local will send it in four events.',
+      'hint.unread': 'The code has arrived and is waiting in #lobby:collapse.local — go back and read it.',
+      'hint.inflight': "The code is in flight: it'll land in #lobby in {n} events.",
+      'hint.ask': "Ask @archivist in #lobby:collapse.local — he'll send it in four events.",
+      'hint.shard': 'The shard is on the shelves in #archives:collapse.local — search, then take.',
+      'hint.take': 'The shard is found: take it in #archives:collapse.local.',
+      'hint.token': 'The admin token is in #relay:collapse.local.',
+      'hint.lock': 'Insert the shard and token into the lock in #core:collapse.local.',
+      'hint.switch': 'The lock is set. Switch to mirror.local via #relay and go to #core:mirror.local.',
+      'hint.door': "You're at the handle: say the code. {n} events until rollback.",
+      'hint.otherHalf': "You're on mirror.local — go back to collapse.local via #relay first. ",
+      'help.tag': 'RULES',
+      'help.title': 'HOW TO GET OUT',
+      'help.intro': "You're a user in the messenger of a dying homeserver. Every action is an event: time passes, decay grows.",
+      'help.b1': '<b>State reset.</b> Every {n} events the run\'s messages go <b>redacted</b>, items and the lock are lost, one leg is removed. Zero legs — the end.',
+      'help.b2': '<b>Memory does not roll back.</b> "Saved" stays: the code and the shard\'s location.',
+      'help.b3': '<b>Split.</b> The room lives on <code>collapse.local</code> and <code>mirror.local</code>: different chats. Items and actions exist on one half only. The bridge is in #relay.',
+      'help.b4': '<b>The door.</b> The lock is set on one half, the handle turns on the other. You need the shard, the token and the code.',
+      'help.b5': '<b>Delay.</b> The code from @archivist arrives in <code>#lobby</code> in four events — you have to go back for it. While it\'s in flight, a rollback kills it.',
+      'help.b6': '<b>Switching chats</b> costs 1 event.',
+      'help.b7': '<b>Hint</b> names the next step and costs 1 event. <b>BACKFILL</b> — 8 decay.',
+      'help.b8': 'Decay 100% — decommission.',
+      'help.close': 'close',
+      'end.winTag': 'EXIT GRANTED',
+      'end.loseTag': 'EXIT DENIED',
+      'end.clean.title': 'SPLIT CLOSED',
+      'end.clean.text': 'You enter room version 12, where both halves finally see each other. You are not in the logs — and that is the best possible outcome.',
+      'end.lossy.title': 'EXIT WITH LOSSES',
+      'end.lossy.text': "You got out, but some of your legs stayed in redacted messages. Sometimes they message you from the other side of the split. You don't reply.",
+      'end.late.title': 'LAST SECOND',
+      'end.late.text': 'The server collapses behind your back. Only your shadow and the smell of 429 remain in the logs. You made it.',
+      'end.legs.title': 'YOU ARE NO LONGER A PARTICIPANT',
+      'end.legs.text': "The last leg was removed. You're not in the room — you're a line in a backup.",
+      'end.decay.title': 'DECOMMISSION COMPLETE',
+      'end.decay.text': 'The room collapsed into a tombstone. History is nothing. The door never opened.',
+      'end.restart': 'start over',
+      'end.retry': 'try again',
+      'end.door': 'tombstone door opened. {title}.',
+      'stat.events': 'events',
+      'stat.resets': 'resets caught',
+      'stat.backfills': 'backfills',
+      'stat.hints': 'hints',
+      'stat.legs': 'legs left',
+      'stat.decay': 'decay',
+      'tool.hint': '✦ hint −1t',
+      'tool.backfill': '↺ backfill −8',
+      'tool.help': '? rules',
+      'tool.screen': 'screen'
+    }
+  };
+
+  const params = new URLSearchParams(location.search);
+  let LANG = params.get('lang');
+  if (LANG !== 'ru' && LANG !== 'en') {
+    try { LANG = localStorage.getItem('efm_lang'); } catch (e) { LANG = null; }
+  }
+  if (LANG !== 'ru' && LANG !== 'en') {
+    LANG = (navigator.language || 'en').toLowerCase().indexOf('ru') === 0 ? 'ru' : 'en';
+  }
+
+  const PASS = LANG === 'ru' ? 'перепел-ноль-девять' : 'nightingale-zero-nine';
+
+  function t(key, p) {
+    let s = (STR[LANG] && STR[LANG][key]) || (STR.ru[key]) || key;
+    if (p) {
+      Object.keys(p).forEach((k) => { s = s.replace(new RegExp('\\{' + k + '\\}', 'g'), p[k]); });
+    }
+    return s;
+  }
+
+  const $ = (s) => document.querySelector(s);
+  const timelineEl = $('#timeline');
+
+  let S = null;
+  let best = null;
+  try { best = JSON.parse(localStorage.getItem('efm_chat_best') || 'null'); } catch (e) { best = null; }
+
+  const WHO = {
+    archivist: { name: '@archivist', ini: 'A', c: '#9d7bff' },
+    tombstone: { name: '@tombstone', ini: 'T', c: '#ff6b6b' },
+    bridge: { name: '@bridge', ini: 'B', c: '#4db8ff' },
+    admin: { name: '@admin', ini: '@', c: '#ffb84d' }
+  };
+
+  const B_HISTORY = ['b.lobby.1', 'b.lobby.2', 'b.archives', 'b.relay', 'b.core'];
+
+  function host() { return HOST[S.shard]; }
+
+  function addMsg(m) {
+    m.id = S.msgId++;
+    m.run = m.run === undefined ? S.run : m.run;
+    m.shard = m.shard || S.shard;
+    m.room = m.room || S.room;
+    m.ts = S.tick;
+    m.redacted = false;
+    if (m.pass) m.unread = true;
+    S.msgs.push(m);
+  }
+
+  function settleFlush() {
+    if (!S.pending.length) return;
+    const due = S.pending.filter((p) => p.at <= S.tick);
+    if (!due.length) return;
+    S.pending = S.pending.filter((p) => p.at > S.tick);
+    for (const p of due) {
+      addMsg({
+        from: 'archivist',
+        text: t('ui.code') + '<b>' + PASS + '</b>. ' + t('talk.deliver'),
+        old: true,
+        shard: 'A',
+        room: 'lobby',
+        pass: true
+      });
+    }
+    maybeReadCode();
+  }
+
+  function hasUnreadCode() {
+    return S.msgs.some((m) => m.pass && m.unread && !m.redacted);
+  }
+
+  function maybeReadCode() {
+    if (S.over) return;
+    if (S.shard !== 'A' || S.room !== 'lobby') return;
+    const unread = S.msgs.filter((m) => m.pass && m.unread && !m.redacted);
+    if (!unread.length) return;
+    unread.forEach((m) => { m.unread = false; });
+    S.known.pass = true;
+    addMsg({ from: 'system', text: t('ui.readCode', { code: PASS }) });
+  }
+
+  function spend(n) {
+    if (S.over) return true;
+    S.tick += n;
+    S.decay = Math.min(100, S.decay + n);
+    settleFlush();
+    if (S.tick > 0 && S.tick % PERIOD === 0) { rollback(); return true; }
+    if (S.decay >= 100) { gameOver('decay'); return true; }
+    return false;
+  }
+
+  function rollback() {
+    const lost = [];
+    if (S.inv.key) lost.push(t('ui.shard'));
+    if (S.inv.token) lost.push(t('ui.token'));
+    if (S.lock) lost.push(t('ui.lock'));
+
+    S.msgs.forEach((m) => { if (m.run === S.run) m.redacted = true; });
+    S.rollbacks += 1;
+    S.legs -= 1;
+    S.decay = Math.min(100, S.decay + DECAY_ROLLBACK);
+    S.pending = [];
+    S.run += 1;
+    S.room = 'lobby';
+    S.shard = 'A';
+    S.inv = { key: false, token: false };
+    S.lock = false;
+    S.runStart = S.tick;
+
+    document.body.classList.add('glitch');
+    setTimeout(() => document.body.classList.remove('glitch'), 700);
+
+    addMsg({ from: 'system', text: t('rb.banner', { n: PERIOD }), warn: true });
+    addMsg({
+      from: 'system',
+      text: t('rb.device', { n: S.legs + 1 }) + (lost.length ? t('rb.lost', { items: lost.join(', ') }) : ''),
+      warn: true
+    });
+    addMsg({ from: 'system', text: t('rb.memory') });
+
+    if (S.legs <= 0) { gameOver('legs'); return; }
+    if (S.decay >= 100) { gameOver('decay'); return; }
+  }
+
+  function backfill() {
+    if (S.over) return;
+    if (S.tick === S.runStart && S.room === 'lobby' && S.shard === 'A' && !S.inv.key && !S.inv.token && !S.lock) {
+      addMsg({ from: 'system', text: t('bf.nothing') });
+      render();
+      return;
+    }
+    S.msgs.forEach((m) => { if (m.run === S.run) m.redacted = true; });
+    S.run += 1;
+    S.backfills += 1;
+    S.decay = Math.min(100, S.decay + DECAY_BACKFILL);
+    S.pending = [];
+    S.tick = S.runStart;
+    S.room = 'lobby';
+    S.shard = 'A';
+    S.inv = { key: false, token: false };
+    S.lock = false;
+    addMsg({ from: 'system', text: t('bf.banner', { t: S.runStart }) });
+    if (S.decay >= 100) { gameOver('decay'); return; }
+    render();
+  }
+
+  function move(to) {
+    if (S.over || to === S.room) return;
+    S.room = to;
+    addMsg({ from: 'system', text: t('ui.join', { room: '#' + to + ':' + host() }) });
+    maybeReadCode();
+    spend(1);
+    render();
+  }
+
+  function switchShard() {
+    if (S.over || S.room !== 'relay') return;
+    S.shard = S.shard === 'A' ? 'B' : 'A';
+    addMsg({ from: 'system', text: t('ui.federation', { host: host() }) });
+    maybeReadCode();
+    spend(1);
+    render();
+  }
+
+  function talk() {
+    if (S.over) return;
+    if (S.shard !== 'A') {
+      addMsg({ from: 'system', text: '@archivist — m.room.redaction.' });
+      render();
+      return;
+    }
+    if (S.known.pass) {
+      addMsg({ from: 'me', text: t('talk.me') });
+      addMsg({ from: 'archivist', text: t('talk.already') });
+      spend(1);
+      render();
+      return;
+    }
+    if (hasUnreadCode()) {
+      addMsg({ from: 'me', text: t('talk.me') });
+      addMsg({ from: 'archivist', text: t('talk.unread') });
+      spend(1);
+      render();
+      return;
+    }
+    const inflight = S.pending.find((p) => p.pass);
+    if (inflight) {
+      addMsg({ from: 'me', text: t('talk.me') });
+      addMsg({ from: 'archivist', text: t('talk.inflight', { n: Math.max(1, inflight.at - S.tick) }) });
+      spend(1);
+      render();
+      return;
+    }
+    addMsg({ from: 'me', text: t('talk.me') });
+    addMsg({ from: 'archivist', text: t('talk.send') });
+    S.pending.push({ at: S.tick + 4, pass: true });
+    spend(2);
+    render();
+  }
+
+  function search() {
+    if (S.over) return;
+    if (S.shard !== 'A') {
+      addMsg({ from: 'system', text: t('search.empty') });
+      render();
+      return;
+    }
+    if (S.known.keySpot) {
+      addMsg({ from: 'system', text: t('search.known') });
+      render();
+      return;
+    }
+    addMsg({ from: 'me', text: t('search.me') });
+    const rolled = spend(2);
+    if (rolled || S.over) { render(); return; }
+    S.known.keySpot = true;
+    addMsg({ from: 'system', text: t('search.found') });
+    render();
+  }
+
+  function takeKey() {
+    if (S.over) return;
+    if (S.shard !== 'A') { addMsg({ from: 'system', text: t('take.nothere') }); render(); return; }
+    if (S.inv.key) { addMsg({ from: 'system', text: t('take.have') }); render(); return; }
+    if (!S.known.keySpot) { addMsg({ from: 'system', text: t('take.unknown') }); render(); return; }
+    addMsg({ from: 'me', text: t('take.me') });
+    const rolled = spend(1);
+    if (rolled || S.over) { render(); return; }
+    S.inv.key = true;
+    addMsg({ from: 'system', text: t('take.ok') });
+    render();
+  }
+
+  function takeToken() {
+    if (S.over) return;
+    if (S.shard !== 'A') { addMsg({ from: 'system', text: t('token.empty') }); render(); return; }
+    if (S.inv.token) { addMsg({ from: 'system', text: t('token.have') }); render(); return; }
+    addMsg({ from: 'me', text: t('token.me') });
+    const rolled = spend(2);
+    if (rolled || S.over) { render(); return; }
+    S.inv.token = true;
+    addMsg({ from: 'system', text: t('token.ok') });
+    render();
+  }
+
+  function deploy() {
+    if (S.over) return;
+    if (S.shard !== 'B') { addMsg({ from: 'system', text: t('deploy.wrong') }); render(); return; }
+    if (S.deployed) { addMsg({ from: 'system', text: t('deploy.used') }); render(); return; }
+    if (S.legs >= MAX_LEGS) { addMsg({ from: 'system', text: t('deploy.full') }); render(); return; }
+    addMsg({ from: 'me', text: t('deploy.me') });
+    const rolled = spend(2);
+    if (rolled || S.over) { render(); return; }
+    S.deployed = true;
+    S.legs += 1;
+    addMsg({ from: 'system', text: t('deploy.ok') });
+    render();
+  }
+
+  function insert() {
+    if (S.over) return;
+    if (S.shard !== 'A') { addMsg({ from: 'tombstone', text: t('insert.wrong') }); render(); return; }
+    if (S.lock) { addMsg({ from: 'tombstone', text: t('insert.have') }); render(); return; }
+    if (!S.inv.key || !S.inv.token) {
+      addMsg({ from: 'tombstone', text: t('insert.need') });
+      render();
+      return;
+    }
+    addMsg({ from: 'me', text: t('insert.me') });
+    const rolled = spend(1);
+    if (rolled || S.over) { render(); return; }
+    S.inv = { key: false, token: false };
+    S.lock = true;
+    addMsg({ from: 'tombstone', text: t('insert.ok') });
+    render();
+  }
+
+  function openDoor() {
+    if (S.over) return;
+    if (S.shard !== 'B') { addMsg({ from: 'tombstone', text: t('open.wrong') }); render(); return; }
+    if (!S.lock) { addMsg({ from: 'tombstone', text: t('open.nolock') }); render(); return; }
+    if (!S.known.pass) { addMsg({ from: 'tombstone', text: t('open.nocode') }); render(); return; }
+    addMsg({ from: 'me', text: t('open.me', { code: PASS }) });
+    const rolled = spend(1);
+    if (rolled || S.over) { render(); return; }
+    addMsg({ from: 'tombstone', text: t('open.ok') });
+    win();
+  }
+
+  function hint() {
+    if (S.over) return;
+    S.hints += 1;
+    let text;
+    if (!S.known.pass) {
+      if (hasUnreadCode()) {
+        text = t('hint.unread');
+      } else if (S.pending.some((p) => p.pass)) {
+        const p = S.pending.find((x) => x.pass);
+        text = t('hint.inflight', { n: Math.max(1, p.at - S.tick) });
+      } else {
+        text = t('hint.ask');
+      }
+    } else if (!S.known.keySpot && !S.inv.key) {
+      text = t('hint.shard');
+    } else if (!S.inv.key) {
+      text = t('hint.take');
+    } else if (!S.inv.token) {
+      text = t('hint.token');
+    } else if (!S.lock) {
+      text = t('hint.lock');
+    } else if (S.shard !== 'B') {
+      text = t('hint.switch');
+    } else {
+      text = t('hint.door', { n: PERIOD - (S.tick % PERIOD) });
+    }
+    if (S.shard === 'B' && text.indexOf('collapse.local') !== -1) {
+      text = t('hint.otherHalf') + text;
+    }
+    addMsg({ from: 'system', text: t('ui.hintPrefix') + text });
+    spend(1);
+    render();
+  }
+
+  function ending() {
+    if (S.decay >= 85) {
+      return { title: t('end.late.title'), text: t('end.late.text') };
+    }
+    if (S.legs <= 2) {
+      return { title: t('end.lossy.title'), text: t('end.lossy.text') };
+    }
+    return { title: t('end.clean.title'), text: t('end.clean.text') };
+  }
+
+  function stats() {
+    return '<div class="stats">' +
+      '<span>' + t('stat.events') + '</span><b>' + S.tick + '</b>' +
+      '<span>' + t('stat.resets') + '</span><b>' + S.rollbacks + '</b>' +
+      '<span>' + t('stat.backfills') + '</span><b>' + S.backfills + '</b>' +
+      '<span>' + t('stat.hints') + '</span><b>' + S.hints + '</b>' +
+      '<span>' + t('stat.legs') + '</span><b>' + Math.max(0, S.legs) + ' / ' + MAX_LEGS + '</b>' +
+      '<span>' + t('stat.decay') + '</span><b>' + Math.round(S.decay) + '%</b>' +
+      '</div>';
+  }
+
+  function saveBest() {
+    const r = { t: S.tick, rollbacks: S.rollbacks, decay: Math.round(S.decay), legs: S.legs, ts: Date.now() };
+    best = r;
+    try { localStorage.setItem('efm_chat_best', JSON.stringify(r)); } catch (e) { /* private mode */ }
+    if (location.protocol === 'http:' || location.protocol === 'https:') {
+      try {
+        fetch('/__api/rows/efm_chat_best', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ value: r, public: true })
+        }).catch(() => {});
+      } catch (e) { /* not on the showroom */ }
+    }
+  }
+
+  function win() {
+    S.over = true;
+    const e = ending();
+    saveBest();
+    showModal(
+      '<div class="endtag">' + t('end.winTag') + '</div>' +
+      '<h2>' + e.title + '</h2>' +
+      '<p>' + e.text + '</p>' +
+      stats() +
+      '<button class="reply" data-act="restart">' + t('end.restart') + '</button>'
+    );
+    addMsg({ from: 'system', text: t('end.door', { title: e.title }) });
+    render();
+  }
+
+  function gameOver(kind) {
+    S.over = true;
+    const isLegs = kind === 'legs';
+    showModal(
+      '<div class="endtag bad">' + t('end.loseTag') + '</div>' +
+      '<h2>' + (isLegs ? t('end.legs.title') : t('end.decay.title')) + '</h2>' +
+      '<p>' + (isLegs ? t('end.legs.text') : t('end.decay.text')) + '</p>' +
+      stats() +
+      '<button class="reply" data-act="restart">' + t('end.retry') + '</button>'
+    );
+    render();
+  }
+
+  function showModal(html) {
+    $('#modalbox').innerHTML = html;
+    $('#modal').classList.remove('hidden');
+  }
+
+  function hideModal() {
+    $('#modal').classList.add('hidden');
+    $('#modalbox').innerHTML = '';
+  }
+
+  function bubble(m) {
+    if (m.from === 'system') {
+      return '<div class="msg sys' + (m.warn ? ' warn' : '') + '"><span>' + m.text + '</span></div>';
+    }
+    const who = WHO[m.from] || { name: '@unknown', ini: '?', c: '#888' };
+    const out = m.from === 'me';
+    const ava = out ? '' : '<div class="ava" style="background:' + who.c + '22;border:1px solid ' + who.c + '55;color:' + who.c + '">' + who.ini + '</div>';
+    const stamp = m.old ? t('ui.oldStamp') : 't=' + m.ts;
+    const meta = out
+      ? '<div class="meta"><span>' + t('ui.you') + '</span><span>' + stamp + '</span></div>'
+      : '<div class="meta"><b>' + who.name + '</b><span>' + stamp + '</span></div>';
+    return '<div class="msg' + (out ? ' out' : '') + (m.redacted ? ' redacted' : '') + '">' +
+      ava +
+      '<div class="bubble">' + meta +
+      '<div class="text">' + m.text + '</div>' +
+      (m.redacted ? '<div class="rednote">' + t('ui.redacted') + '</div>' : '') +
+      '</div></div>';
+  }
+
+  function renderTimeline() {
+    const msgs = S.msgs.filter((m) => m.shard === S.shard && m.room === S.room);
+    let html = '<div class="topic"><span class="plabel">' + t('ui.topic') + '</span>' +
+      '<span>' + t('topic.' + S.room + '.' + S.shard) + '</span></div><div class="spacer"></div>';
+    msgs.forEach((m, i) => {
+      if (m.old && (i === 0 || !msgs[i - 1].old)) html += '<div class="daysep">' + t('ui.daySep') + '</div>';
+      html += bubble(m);
+    });
+    timelineEl.innerHTML = html;
+    timelineEl.scrollTop = timelineEl.scrollHeight;
+  }
+
+  function renderHeader() {
+    $('#roomname').textContent = '#' + S.room;
+    $('#server').textContent = host();
+    $('#clock').textContent = 't=' + S.tick;
+    $('#decaylabel').textContent = t('ui.decay');
+    $('#decaypct').textContent = Math.round(S.decay) + '%';
+    $('#decayfill').style.width = Math.min(100, S.decay) + '%';
+    const legsEl = $('#legs');
+    legsEl.innerHTML = '';
+    for (let i = 0; i < MAX_LEGS; i += 1) {
+      const s = document.createElement('span');
+      s.className = 'leg' + (i < S.legs ? '' : ' dead');
+      s.textContent = 'ES-' + (i + 1);
+      legsEl.appendChild(s);
+    }
+    document.body.classList.toggle('shard-B', S.shard === 'B');
+    document.body.classList.toggle('shard-A', S.shard === 'A');
+  }
+
+  function renderTabs() {
+    const tabs = $('#tabs');
+    tabs.innerHTML = '';
+    const unread = S.shard === 'A' && hasUnreadCode();
+    for (const r of ORDER) {
+      const b = document.createElement('button');
+      b.innerHTML = '#' + r + (unread && r === 'lobby' ? '<span class="dot"></span>' : '');
+      b.className = r === S.room ? 'active' : '';
+      b.title = t('ui.tabHint');
+      b.disabled = S.over;
+      b.addEventListener('click', () => { if (!S.over) move(r); });
+      tabs.appendChild(b);
+    }
+  }
+
+  function renderPin() {
+    const pin = $('#pinbar');
+    const items = [];
+    if (S.inv.key) items.push(t('ui.shard'));
+    if (S.inv.token) items.push(t('ui.token'));
+    if (S.lock) items.push(t('ui.lock'));
+    pin.innerHTML =
+      '<div class="pinrow"><span class="plabel">' + t('ui.pinned') + '</span>' +
+      (items.length ? items.map((x) => '<span class="chip">' + x + '</span>').join('') : '<span class="chip off">' + t('ui.empty') + '</span>') +
+      '</div>' +
+      '<div class="pinrow"><span class="plabel">' + t('ui.saved') + '</span>' +
+      '<span class="chip' + (S.known.pass ? '' : ' off') + '">' + t('ui.code') + (S.known.pass ? PASS : '?') + '</span>' +
+      '<span class="chip' + (S.known.keySpot ? '' : ' off') + '">' + t('ui.shardAt') + (S.known.keySpot ? '#archives' : '?') + '</span>' +
+      '</div>';
+  }
+
+  function actionList() {
+    const out = [];
+    const add = (label, cost, fn) => out.push({ label, cost, fn });
+    if (S.room === 'lobby') {
+      add(t('act.talk'), 2, talk);
+    }
+    if (S.room === 'archives') {
+      if (!S.known.keySpot) add(t('act.search'), 2, search);
+      add(t('act.take'), 1, takeKey);
+    }
+    if (S.room === 'relay') {
+      add(t('act.switch', { host: S.shard === 'A' ? 'mirror.local' : 'collapse.local' }), 1, switchShard);
+      if (S.shard === 'A') add(t('act.token'), 2, takeToken);
+      if (S.shard === 'B' && !S.deployed) add(t('act.deploy'), 2, deploy);
+    }
+    if (S.room === 'core') {
+      if (S.shard === 'A') add(t('act.insert'), 1, insert);
+      else add(t('act.open'), 1, openDoor);
+    }
+    return out;
+  }
+
+  function renderReplies() {
+    const box = $('#replies');
+    box.innerHTML = '';
+    for (const a of actionList()) {
+      const b = document.createElement('button');
+      b.className = 'reply';
+      b.innerHTML = '<span>' + a.label + '</span>' + (a.cost ? '<em>−' + a.cost + 't</em>' : '');
+      b.disabled = S.over;
+      b.addEventListener('click', () => { if (!S.over) a.fn(); });
+      box.appendChild(b);
+    }
+    if (!box.children.length) {
+      const d = document.createElement('div');
+      d.style.cssText = 'font-size:11px;color:var(--dim);font-family:var(--mono)';
+      d.textContent = t('ui.nothing');
+      box.appendChild(d);
+    }
+  }
+
+  function render() {
+    if (!S) return;
+    renderHeader();
+    renderTabs();
+    renderPin();
+    renderTimeline();
+    renderReplies();
+    $('#hint').disabled = S.over;
+    $('#backfill').disabled = S.over;
+  }
+
+  function helpHtml() {
+    return '<div class="endtag">' + t('help.tag') + '</div>' +
+      '<h2>' + t('help.title') + '</h2>' +
+      '<p>' + t('help.intro') + '</p>' +
+      '<ul class="rules">' +
+      '<li>' + t('help.b1', { n: PERIOD }) + '</li>' +
+      '<li>' + t('help.b2') + '</li>' +
+      '<li>' + t('help.b3') + '</li>' +
+      '<li>' + t('help.b4') + '</li>' +
+      '<li>' + t('help.b5') + '</li>' +
+      '<li>' + t('help.b6') + '</li>' +
+      '<li>' + t('help.b7') + '</li>' +
+      '<li>' + t('help.b8') + '</li>' +
+      '</ul>' +
+      '<button class="reply" data-act="close">' + t('help.close') + '</button>';
+  }
+
+  function applyUiLang() {
+    document.documentElement.lang = LANG;
+    document.title = t('doc.title');
+    $('#hint').textContent = t('tool.hint');
+    $('#backfill').textContent = t('tool.backfill');
+    $('#help').textContent = t('tool.help');
+    $('#fs').textContent = t('tool.screen');
+    $('#lang').textContent = LANG === 'ru' ? 'EN' : 'RU';
+    $('#lang').title = t('ui.langTitle');
+  }
+
+  function newGame() {
+    S = {
+      tick: 0,
+      decay: 0,
+      legs: MAX_LEGS,
+      shard: 'A',
+      room: 'lobby',
+      inv: { key: false, token: false },
+      known: { pass: false, keySpot: false },
+      lock: false,
+      pending: [],
+      hints: 0,
+      deployed: false,
+      over: false,
+      run: 0,
+      runStart: 0,
+      rollbacks: 0,
+      backfills: 0,
+      msgId: 1,
+      msgs: []
+    };
+    hideModal();
+    addMsg({ from: 'system', text: t('boot.title') });
+    addMsg({ from: 'system', text: t('boot.server'), warn: true });
+    addMsg({ from: 'system', text: t('boot.rules', { n: PERIOD }) });
+    addMsg({ from: 'system', text: t('boot.goal') });
+    if (best) addMsg({ from: 'system', text: t('boot.best', { t: best.t, r: best.rollbacks }) });
+    addMsg({ from: 'archivist', text: t('boot.greet') });
+    addMsg({ from: 'bridge', text: t('b.lobby.1'), shard: 'B', room: 'lobby', run: -1, old: true });
+    addMsg({ from: 'admin', text: t('b.lobby.2'), shard: 'B', room: 'lobby', run: -1, old: true });
+    addMsg({ from: 'bridge', text: t('b.archives'), shard: 'B', room: 'archives', run: -1, old: true });
+    addMsg({ from: 'bridge', text: t('b.relay'), shard: 'B', room: 'relay', run: -1, old: true });
+    addMsg({ from: 'bridge', text: t('b.core'), shard: 'B', room: 'core', run: -1, old: true });
+    render();
+  }
+
+  $('#hint').addEventListener('click', () => { if (S && !S.over) hint(); });
+  $('#backfill').addEventListener('click', () => { if (S && !S.over) backfill(); });
+  $('#help').addEventListener('click', () => showModal(helpHtml()));
+  $('#fs').addEventListener('click', () => {
+    const el = document.documentElement;
+    if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
+  });
+  $('#lang').addEventListener('click', () => {
+    const next = LANG === 'ru' ? 'en' : 'ru';
+    try { localStorage.setItem('efm_lang', next); } catch (e) { /* ignore */ }
+    const u = new URL(location.href);
+    u.searchParams.set('lang', next);
+    location.href = u.toString();
+  });
+  $('#modal').addEventListener('click', (e) => {
+    const el = e.target.closest('[data-act]');
+    if (!el) return;
+    if (el.dataset.act === 'restart') newGame();
+    else if (el.dataset.act === 'close') hideModal();
+  });
+
+  applyUiLang();
+  newGame();
+})();
+</script>
+</body>
+</html>
