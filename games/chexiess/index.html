@@ -1,151 +1,323 @@
-<!doctype html>
-<html><head><meta charset="utf-8"><title>hanb 500-game simulator</title>
+<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hex Token Simulator</title>
 <style>
-body{font-family:sans-serif;background:#111;color:#eee;margin:10px}
-h3{text-align:center}
-canvas{background:#222;display:block;margin:auto;max-width:100%}
-#ctrl{text-align:center;margin:8px}
-button{margin:2px;padding:6px 10px;cursor:pointer}
-button.on{background:#48f;color:#fff}
-#bar{width:600px;max-width:100%;height:14px;margin:8px auto;background:#333}
-#fill{height:14px;background:#4a4;width:0}
-#stats{width:600px;max-width:100%;margin:8px auto;font-family:monospace;font-size:14px;text-align:center}
-#log{width:600px;max-width:100%;height:170px;overflow:auto;margin:8px auto;background:#181818;padding:6px;font-family:monospace;font-size:12px;white-space:pre}
-</style></head><body>
-<h3>hanb CA simulator: 500 games at speed</h3>
-<canvas id="c" width="600" height="520"></canvas>
-<div id="ctrl">
-Speed:
-<button class="sp" data-s="1">1x</button>
-<button class="sp" data-s="10">10x</button>
-<button class="sp" data-s="100">100x</button>
-<button class="sp" data-s="max">max</button>
-<br>
-<button id="go">Simulate 500 games</button>
-<button id="one">Watch 1 game</button>
-<button id="stop">Stop</button>
+html,body{margin:0;height:100%;overflow:hidden;background:#111;color:#eee;font:12px/1.3 sans-serif}
+#app{display:grid;grid-template-columns:1fr 260px;height:100vh;width:100vw;box-sizing:border-box}
+#boardwrap{min-width:0;min-height:0;display:flex;align-items:center;justify-content:center;padding:6px}
+#hex{width:100%;height:100%}
+#panel{display:flex;flex-direction:column;gap:6px;padding:8px;background:#1b1b1b;min-height:0;overflow:hidden;box-sizing:border-box}
+#panel h3{margin:0;font-size:14px}
+.row{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+button{background:#333;color:#eee;border:1px solid #555;border-radius:4px;padding:3px 6px;cursor:pointer;font-size:11px}
+button:hover{background:#444}
+button:disabled{opacity:.4;cursor:default}
+button.on{background:#7a5a00;border-color:#c90}
+#biomes{display:grid;grid-template-columns:1fr 1fr;gap:3px}
+#biomes button{width:100%}
+input[type=color]{width:42px;height:26px;padding:0;border:1px solid #555;background:none}
+progress{width:100%}
+#stats{line-height:1.5}
+#log{flex:1;min-height:0;overflow:auto;background:#101010;padding:4px;font-family:monospace;font-size:11px;border:1px solid #333}
+#status{color:#9c9;font-family:monospace;font-size:11px;min-height:14px}
+#avinfo{color:#aaa;font-size:11px;line-height:1.4}
+@media (max-width:700px){#app{grid-template-columns:1fr;grid-template-rows:50vh 50vh}}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="boardwrap"><svg id="hex" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet"></svg></div>
+  <div id="panel">
+    <h3>Biome palettes</h3>
+    <div id="biomes"></div>
+    <div class="row"><button id="rnd">New random palette</button></div>
+    <div class="row">
+      <span>A</span><input type="color" id="c0">
+      <span>B</span><input type="color" id="c1">
+      <span>C</span><input type="color" id="c2">
+      <span>D</span><input type="color" id="c3">
+    </div>
+    <div>P1 (blue slot B) scores on color B. P2 (red slot A) scores on color A.</div>
+
+    <h3>Avatar layer</h3>
+    <div class="row">
+      <label><input type="checkbox" id="avon" checked> Show avatar layer</label>
+    </div>
+    <div class="row">
+      <button id="avnew">New layout</button>
+    </div>
+    <div id="avinfo">No avatars placed on this layout.</div>
+
+    <div class="row">
+      <button id="watch">Watch 1 game</button>
+      <button id="sim">Simulate 500 games</button>
+      <button id="stop">Stop</button>
+    </div>
+    <div class="row" id="speeds">
+      <button data-s="1" class="on">1x</button>
+      <button data-s="10">10x</button>
+      <button data-s="100">100x</button>
+      <button data-s="max">max</button>
+    </div>
+    <progress id="prog" max="500" value="0"></progress>
+    <div id="stats">Games: 0/500 | P1 wins 0 | P2 wins 0 | Draws 0 | P1 win rate: -</div>
+    <div id="status">Ready. Pick a biome or generate a random palette.</div>
+    <div id="log"></div>
+  </div>
 </div>
-<div id="bar"><div id="fill"></div></div>
-<div id="stats">Idle. Press "Simulate 500 games".</div>
-<div id="log"></div>
 <script>
-const W=600,H=520,S=22;
-const DIRS=[[1,0],[1,-1],[0,-1],[-1,0],[-1,1],[0,1]];
-const cells=[];
-for(let q=-4;q<=4;q++)for(let r=Math.max(-4,-q-4);r<=Math.min(4,-q+4);r++)cells.push({q,r});
-const idx=new Map(cells.map((c,i)=>[c.q+','+c.r,i]));
-const nb=cells.map(c=>DIRS.map(([dq,dr])=>idx.get((c.q+dq)+','+(c.r+dr))).filter(x=>x!==undefined));
-const COL=['#d33','#36c','#3a3','#dd3'];
-const NAME=['red','blue','green','yellow'];
-const TURNS=20;
-const rnd4=()=>Math.floor(Math.random()*4);
+const PALETTES = {
+  forest:   ['#2d5a27','#8b5a2b','#a3c585','#1b3a1f'],
+  desert:   ['#e8b86d','#c1440e','#f4e4bc','#7a4a21'],
+  arctic:   ['#e0f7ff','#5fb3d9','#ffffff','#2a4d6e'],
+  moonbase: ['#8d9199','#3d4450','#d9dde3','#f5c542'],
+  LSD:      ['#ff00aa','#00ffd0','#ffee00','#7a00ff'],
+  'film noir':['#0b0b0b','#5a5a5a','#d4d4d4','#8c1d18'],
+  army:     ['#4b5320','#3b2f1e','#6b7a3a','#c2b280'],
+  cheeto:   ['#ff8c00','#ffb300','#ff5e00','#a33b00'],
+  bloop:    ['#00bfff','#ff69b4','#7fff00','#9370db'],
+  taco:     ['#f4a300','#6b8e23','#d62828','#fff3b0']
+};
 
-// speeds in moves per second (1x = 2 moves/s, a move every 0.5 s)
-let speed=2, speedMode='1';
-let running=false, loopId=0, target=500, done=0, started=0;
-let w1=0,w2=0,dr=0, acc=0, last=0;
-let game=null, shown=null;
-const logEl=document.getElementById('log');
-const statsEl=document.getElementById('stats');
-const fillEl=document.getElementById('fill');
-const ctx=document.getElementById('c').getContext('2d');
+// Avatar layer: its own CA with k=4 states. Cell value 0 = nothing drawn,
+// 1/2/3 = avatar type. The layer's k is fixed at 4.
+const AV_K = 4;
+const AV_TYPES = {
+  1: { name:'Ranger',   glyph:'R', color:'#7cfc00' },
+  2: { name:'Merchant', glyph:'M', color:'#ffd700' },
+  3: { name:'Sage',     glyph:'S', color:'#b19cd9' }
+};
+const AV_MAX = 10;   // cap so the board stays readable
+const AV_MIN = 3;
 
-function newGame(){
-  const b=cells.map(rnd4);
-  // each player gets 10 random tokens; a token is a 4-entry color map
-  const toks=[0,1].map(()=>Array.from({length:10},()=>[0,1,2,3].map(rnd4)));
-  return {b,toks,turn:0,last:[],info:'game start'};
-}
-function step(g){
-  const p=g.turn%2;
-  const tok=g.toks[p][Math.floor(g.turn/2)];
-  const ci=Math.floor(Math.random()*cells.length);
-  const aff=[ci,...nb[ci]];
-  aff.forEach(i=>{g.b[i]=tok[g.b[i]];});
-  g.last=aff;
-  g.turn++;
-  g.info=`t${g.turn} P${p+1} plays [${tok.join('')}] at (${cells[ci].q},${cells[ci].r})`;
-}
-const count=(g,c)=>g.b.filter(x=>x===c).length;
-
-function hex(x,y){
-  ctx.beginPath();
+let pal = [];
+let curBiome = null;
+const DIRS=[[1,0],[-1,0],[0,1],[0,-1],[1,-1],[-1,1]];
+const cells=[], idx={};
+for(let q=-4;q<=4;q++) for(let r=-4;r<=4;r++) if(Math.abs(q+r)<=4){ idx[q+','+r]=cells.length; cells.push([q,r]); }
+const N=cells.length; // 61
+const nb=cells.map(([q,r])=>DIRS.map(([dq,dr])=>idx[(q+dq)+','+(r+dr)]).filter(v=>v!==undefined));
+const S=22, SQ3=Math.sqrt(3);
+const svgNS='http://www.w3.org/2000/svg';
+const svg=document.getElementById('hex');
+const polys=[], centers=[];
+let minx=1e9,maxx=-1e9,miny=1e9,maxy=-1e9;
+cells.forEach(([q,r])=>{
+  const cx=S*SQ3*(q+r/2), cy=S*1.5*r;
+  centers.push([cx,cy]);
+  const pts=[];
   for(let k=0;k<6;k++){
-    const a=Math.PI/180*(60*k-30);
-    const px=x+S*Math.cos(a), py=y+S*Math.sin(a);
-    k?ctx.lineTo(px,py):ctx.moveTo(px,py);
+    const a=(30+60*k)*Math.PI/180;
+    const x=cx+S*Math.cos(a), y=cy+S*Math.sin(a);
+    pts.push(x.toFixed(2)+','+y.toFixed(2));
+    minx=Math.min(minx,x);maxx=Math.max(maxx,x);miny=Math.min(miny,y);maxy=Math.max(maxy,y);
   }
-  ctx.closePath();
-}
-function draw(){
-  ctx.clearRect(0,0,W,H);
-  const g=shown;
-  if(!g){ctx.fillStyle='#555';ctx.font='16px sans-serif';ctx.textAlign='center';ctx.fillText('board appears here',W/2,H/2);return;}
-  cells.forEach((c,i)=>{
-    const x=W/2+S*Math.sqrt(3)*(c.q+c.r/2), y=H/2+S*1.5*c.r;
-    hex(x,y);
-    ctx.fillStyle=COL[g.b[i]];ctx.fill();
-    if(g.last.includes(i)){ctx.lineWidth=4;ctx.strokeStyle='#fff';ctx.stroke();}
-    else{ctx.lineWidth=1;ctx.strokeStyle='#111';ctx.stroke();}
-  });
-  ctx.fillStyle='#ddd';ctx.font='13px monospace';ctx.textAlign='left';
-  ctx.fillText(`game ${started}/${target}  turn ${g.turn}/${TURNS}`,8,16);
-  ctx.fillText(g.info,8,H-10);
-}
-function record(g){
-  const s1=count(g,1), s2=count(g,0);
-  let win;
-  if(s1>s2){w1++;win='P1 wins';}
-  else if(s2>s1){w2++;win='P2 wins';}
-  else {dr++;win='draw';}
-  done++;
-  logEl.textContent=`#${done} P1(blue) ${s1} - ${s2} P2(red) => ${win}\n`+logEl.textContent;
-}
-function updateStats(){
-  const pct=done?Math.round(100*w1/done):0;
-  statsEl.textContent=`done ${done}/${target} | P1 (blue) wins ${w1} | P2 (red) wins ${w2} | draws ${dr} | P1 win rate ${pct}%`;
-  fillEl.style.width=(100*done/target)+'%';
-}
-function finish(){
-  running=false;
-  statsEl.textContent=`FINISHED ${done} games | P1 (blue) wins ${w1} | P2 (red) wins ${w2} | draws ${dr} | P1 win rate ${done?Math.round(100*w1/done):0}%`;
-  fillEl.style.width='100%';
-}
-function tick(t,myId){
-  if(!running||myId!==loopId)return;
-  const dt=last?Math.min((t-last)/1000,0.25):0; last=t;
-  let n;
-  if(speed===Infinity){n=400;}
-  else{acc+=speed*dt;n=Math.min(Math.floor(acc),5000);acc-=n;}
-  for(let k=0;k<n&&running;k++){
-    if(!game){
-      if(done>=target){finish();break;}
-      game=newGame(); started++;
-    }
-    step(game);
-    shown=game;
-    if(game.turn>=TURNS){record(game);game=null;}
-  }
-  draw(); updateStats();
-  if(running) requestAnimationFrame(nt=>tick(nt,myId));
-}
-function start(n){
-  target=n; done=0; started=0; w1=w2=dr=0; acc=0; last=0;
-  game=null; shown=null; logEl.textContent='';
-  running=true; const id=++loopId;
-  statsEl.textContent='running...';
-  requestAnimationFrame(nt=>tick(nt,id));
-}
-document.getElementById('go').onclick=()=>start(500);
-document.getElementById('one').onclick=()=>start(1);
-document.getElementById('stop').onclick=()=>{running=false;statsEl.textContent+=' (stopped)';};
-document.querySelectorAll('.sp').forEach(b=>b.onclick=()=>{
-  document.querySelectorAll('.sp').forEach(x=>x.classList.remove('on'));
-  b.classList.add('on');
-  const s=b.dataset.s;
-  speed = s==='max'?Infinity:parseFloat(s)*2;
+  const p=document.createElementNS(svgNS,'polygon');
+  p.setAttribute('points',pts.join(' '));
+  p.setAttribute('stroke','#000');
+  p.setAttribute('stroke-width','1');
+  svg.appendChild(p); polys.push(p);
 });
-document.querySelector('.sp[data-s="1"]').classList.add('on');
-draw();
+svg.setAttribute('viewBox',`${minx-4} ${miny-4} ${maxx-minx+8} ${maxy-miny+8}`);
+
+const avG=document.createElementNS(svgNS,'g');
+avG.setAttribute('pointer-events','none');
+svg.appendChild(avG);
+
+let cur = new Uint8Array(N);
+let busy=false, stopFlag=false, speed=1;
+const delayFor = ()=>({1:500,10:50,100:5,max:0})[speed];
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
+
+function draw(b){
+  cur=b;
+  for(let i=0;i<N;i++) polys[i].setAttribute('fill', pal[b[i]]);
+}
+function randHex(){ return '#'+Math.floor(Math.random()*0xffffff).toString(16).padStart(6,'0'); }
+
+// ---------- avatar layer ----------
+let avCells = [];   // [{i, t}] placed avatars, t = 1..3
+function genAvatarLayer(){
+  for(let attempt=0; attempt<20; attempt++){
+    let g = new Uint8Array(N);
+    for(let i=0;i<N;i++) g[i] = Math.random()<0.15 ? 1+Math.floor(Math.random()*3) : 0;
+    for(let step=0; step<6; step++){
+      const n = new Uint8Array(N);
+      for(let i=0;i<N;i++){
+        const cnt=[0,0,0,0];
+        for(const j of nb[i]) cnt[g[j]]++;
+        // No bias toward 0: the CA only chooses avatar types (1..3),
+        // so populated cells can survive the smoothing steps.
+        let best=1, bs=-1e9;
+        for(let k=1;k<AV_K;k++){
+          const s = cnt[k] + (k===g[i]?0.5:0);
+          if(s>bs){ bs=s; best=k; }
+        }
+        n[i]=best;
+      }
+      g = n;
+    }
+    let placed=[];
+    for(let i=0;i<N;i++) if(g[i]) placed.push({i, t:g[i]});
+    if(placed.length < AV_MIN) continue;
+    for(let i=placed.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [placed[i],placed[j]]=[placed[j],placed[i]]; }
+    return placed.slice(0, AV_MAX);
+  }
+  // Fallback: scatter AV_MIN random cells so the layer is never empty.
+  const order=[...Array(N).keys()].sort(()=>Math.random()-0.5).slice(0, AV_MIN);
+  return order.map(i=>({i, t:1+Math.floor(Math.random()*3)}));
+}
+function drawAvatars(){
+  avG.innerHTML='';
+  const on = document.getElementById('avon').checked;
+  if(on){
+    for(const {i,t} of avCells){
+      const ty=AV_TYPES[t];
+      const [cx,cy]=centers[i];
+      const c=document.createElementNS(svgNS,'circle');
+      c.setAttribute('cx',cx); c.setAttribute('cy',cy); c.setAttribute('r',S*0.55);
+      c.setAttribute('fill','#111'); c.setAttribute('stroke',ty.color); c.setAttribute('stroke-width','2');
+      avG.appendChild(c);
+      const tx=document.createElementNS(svgNS,'text');
+      tx.setAttribute('x',cx); tx.setAttribute('y',cy+S*0.2);
+      tx.setAttribute('text-anchor','middle'); tx.setAttribute('font-size',S*0.8);
+      tx.setAttribute('font-weight','bold'); tx.setAttribute('fill',ty.color);
+      tx.textContent=ty.glyph;
+      avG.appendChild(tx);
+    }
+  }
+  const info=document.getElementById('avinfo');
+  if(!on) info.textContent='Avatar layer off.';
+  else if(!avCells.length) info.textContent='No avatars placed on this layout.';
+  else info.textContent=avCells.length+' avatar(s): '+Object.values(AV_TYPES).map(t=>t.glyph+' '+t.name).join(', ')+'.';
+}
+function newAvatarLayout(){
+  avCells = genAvatarLayer();
+  drawAvatars();
+}
+function syncAvatarControls(){
+  const on=document.getElementById('avon').checked;
+  document.getElementById('avnew').disabled=!on;
+}
+
+// ---------- palettes ----------
+function setPalette(arr){
+  pal = arr.slice();
+  for(let k=0;k<4;k++) document.getElementById('c'+k).value = pal[k];
+  draw(cur);
+  newAvatarLayout();  // each board gets its own NPC layout
+}
+function markBiome(name){
+  curBiome = name;
+  document.querySelectorAll('#biomes button').forEach(b=>b.classList.toggle('on', b.dataset.name===curBiome));
+}
+const biomeBox=document.getElementById('biomes');
+Object.keys(PALETTES).forEach(name=>{
+  const b=document.createElement('button');
+  b.textContent=name; b.dataset.name=name;
+  b.onclick=()=>{ markBiome(name); setPalette(PALETTES[name]); status('Palette: '+name); };
+  biomeBox.appendChild(b);
+});
+document.getElementById('rnd').onclick=()=>{
+  markBiome(null);
+  setPalette([randHex(),randHex(),randHex(),randHex()]);
+  status('New random palette');
+};
+for(let k=0;k<4;k++){
+  document.getElementById('c'+k).addEventListener('input',e=>{ pal[k]=e.target.value; draw(cur); });
+}
+document.getElementById('avon').onchange = ()=>{
+  syncAvatarControls();
+  if(document.getElementById('avon').checked && !avCells.length) newAvatarLayout();
+  else drawAvatars();
+};
+document.getElementById('avnew').onclick = ()=>{ newAvatarLayout(); status('New avatar layout'); };
+
+// ---------- game rules (unchanged) ----------
+function tok(){ return [0,1,2,3].map(()=>Math.floor(Math.random()*5)-2); }
+function apply(b,c,w){
+  const aff=[c,...nb[c]];
+  const out=aff.map(i=>{
+    const n=[0,0,0,0];
+    for(const j of nb[i]) n[b[j]]++;
+    let best=0,bs=-1e9;
+    for(let k=0;k<4;k++){
+      const s=w[k]+n[k]+(k===b[i]?0.5:0);
+      if(s>bs){bs=s;best=k;}
+    }
+    return best;
+  });
+  aff.forEach((i,t)=>{ b[i]=out[t]; });
+}
+function score(b){
+  let p1=0,p2=0;
+  for(let i=0;i<N;i++){ if(b[i]===1)p1++; if(b[i]===0)p2++; }
+  return [p1,p2];
+}
+async function playGame(show){
+  const b=new Uint8Array(N).map(()=>Math.floor(Math.random()*4));
+  const hands=[[tok(),tok(),tok(),tok()],[tok(),tok(),tok(),tok()]];
+  draw(b);
+  for(let m=0;m<12;m++){
+    if(stopFlag) return null;
+    const p=m%2;
+    const k=Math.floor(Math.random()*4);
+    const c=Math.floor(Math.random()*N);
+    apply(b,c,hands[p][k]);
+    draw(b);
+    if(show) status(`Move ${m+1}/12: P${p+1} plays token ${k+1} at cell ${c}`);
+    await sleep(delayFor());
+  }
+  return score(b);
+}
+let done=0,p1w=0,p2w=0,dr=0;
+function updateStats(){
+  const rate = done? (p1w/done*100).toFixed(1)+'%' : '-';
+  document.getElementById('stats').textContent=`Games: ${done}/500 | P1 wins ${p1w} | P2 wins ${p2w} | Draws ${dr} | P1 win rate: ${rate}`;
+  document.getElementById('prog').value=done;
+}
+function status(t){ document.getElementById('status').textContent=t; }
+function addLog(t){ const l=document.getElementById('log'); const d=document.createElement('div'); d.textContent=t; l.prepend(d); }
+function setBusy(v){
+  busy=v;
+  document.getElementById('watch').disabled=v;
+  document.getElementById('sim').disabled=v;
+}
+document.getElementById('watch').onclick=async()=>{
+  if(busy) return;
+  setBusy(true); stopFlag=false;
+  const r=await playGame(true);
+  if(r){ addLog(`Watch: P1 ${r[0]} - P2 ${r[1]}`); status('Watch finished'); }
+  setBusy(false);
+};
+document.getElementById('sim').onclick=async()=>{
+  if(busy) return;
+  setBusy(true); stopFlag=false;
+  done=0;p1w=0;p2w=0;dr=0; updateStats();
+  for(let g=1;g<=500&&!stopFlag;g++){
+    const r=await playGame(true);
+    if(!r) break;
+    done++;
+    if(r[0]>r[1])p1w++; else if(r[1]>r[0])p2w++; else dr++;
+    addLog(`Game ${g}: P1 ${r[0]} - P2 ${r[1]}`);
+    updateStats();
+  }
+  status(stopFlag?'Stopped':'Batch complete');
+  setBusy(false);
+};
+document.getElementById('stop').onclick=()=>{ stopFlag=true; };
+document.querySelectorAll('#speeds button').forEach(b=>{
+  b.onclick=()=>{
+    speed = b.dataset.s==='max' ? 'max' : Number(b.dataset.s);
+    document.querySelectorAll('#speeds button').forEach(x=>x.classList.toggle('on', x===b));
+  };
+});
+
+// ---------- init ----------
+syncAvatarControls();
+setPalette(PALETTES.forest);
+markBiome('forest');
 </script>
 </body></html>
