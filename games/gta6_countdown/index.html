@@ -2,61 +2,114 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GTA 6 Countdown</title>
 <style>
-  :root { color-scheme: dark; }
-  body {
-    margin: 0; min-height: 100vh; display: flex; flex-direction: column;
-    align-items: center; justify-content: center; gap: 1.5rem;
-    background: radial-gradient(circle at top, #3a0a4a 0%, #120818 60%, #050208 100%);
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #fff; text-align: center; padding: 1rem;
-  }
-  h1 { font-size: clamp(1.6rem, 5vw, 3rem); margin: 0; letter-spacing: 0.05em; text-transform: uppercase; color: #ff5ec8; text-shadow: 0 0 18px #ff2f9a; }
-  .sub { opacity: 0.75; margin: 0; font-size: 1rem; }
-  .grid { display: flex; gap: clamp(0.6rem, 2vw, 1.5rem); flex-wrap: wrap; justify-content: center; }
-  .box {
-    background: rgba(255,255,255,0.06); border: 1px solid rgba(255,94,200,0.35); border-radius: 14px;
-    padding: 1rem 1.2rem; min-width: 110px; box-shadow: 0 0 20px rgba(255,47,154,0.15);
-  }
-  .num { font-size: clamp(2.2rem, 8vw, 4.5rem); font-weight: 800; font-variant-numeric: tabular-nums; }
-  .label { text-transform: uppercase; font-size: 0.8rem; letter-spacing: 0.15em; opacity: 0.7; }
-  #done { display: none; font-size: clamp(1.8rem, 6vw, 3.5rem); color: #7dffb2; text-shadow: 0 0 20px #3aff8a; }
+  html, body { margin: 0; height: 100%; background: #05010f; color: #fff; font-family: 'Arial Black', Impact, sans-serif; overflow: hidden; }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center; transition: background 1s; }
+  #label { font-size: 3vw; letter-spacing: 0.4em; text-transform: uppercase; opacity: 0.85; }
+  #timer { font-size: 12vw; font-variant-numeric: tabular-nums; margin: 0.2em 0; text-shadow: 0 0 30px currentColor; }
+  #tier { font-size: 2.5vw; letter-spacing: 0.2em; }
+  #big { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 45vw; font-weight: 900; opacity: 0; pointer-events: none; }
+  #big.show { animation: pop 0.95s ease-out forwards; }
+  @keyframes pop { 0% { opacity: 1; transform: scale(1.6); } 100% { opacity: 0; transform: scale(0.6); } }
+  #flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
+  #flash.on { animation: flash 0.6s; }
+  @keyframes flash { 0% { opacity: 0.8; } 100% { opacity: 0; } }
+  body.shake #timer { animation: shake 0.1s infinite; }
+  @keyframes shake { 0% { transform: translate(2px,0); } 50% { transform: translate(-2px,1px); } 100% { transform: translate(1px,-2px); } }
+  #start { margin-top: 2em; font-size: 2vw; padding: 0.6em 1.4em; background: transparent; color: #fff; border: 2px solid #fff; cursor: pointer; font-family: inherit; }
+  #start:disabled { display: none; }
+  #go { font-size: 14vw; }
 </style>
 </head>
 <body>
-  <h1>GTA VI</h1>
-  <p class="sub">Release date: 19 November 2026</p>
-  <div class="grid" id="counter">
-    <div class="box"><div class="num" id="d">--</div><div class="label">Days</div></div>
-    <div class="box"><div class="num" id="h">--</div><div class="label">Hours</div></div>
-    <div class="box"><div class="num" id="m">--</div><div class="label">Minutes</div></div>
-    <div class="box"><div class="num" id="s">--</div><div class="label">Seconds</div></div>
-  </div>
-  <div id="done">IT'S OUT NOW!</div>
+<div id="label">GTA VI countdown</div>
+<div id="timer">--:--:--</div>
+<div id="tier">Loading</div>
+<button id="start">Press to play Space Walk</button>
+<audio id="music" loop src="https://s.t3ks.com/DX.mp3" preload="auto"></audio>
+<div id="big"></div>
+<div id="flash"></div>
+
 <script>
-  // 19 November 2026, 00:00 local time
-  const target = new Date(2026, 10, 19, 0, 0, 0).getTime();
-  const pad = n => String(n).padStart(2, '0');
+  // Same target as the vibegame page: 19 Nov 2026 00:00, browser local time
+  const TARGET = new Date(2026, 10, 19, 0, 0, 0).getTime();
+
+  const tiers = [
+    { min: 0,   name: 'Warming up',         bg: 'radial-gradient(circle,#2a0040,#05010f)', color: '#00e5ff' },
+    { min: 60,  name: 'Heat is rising',     bg: 'radial-gradient(circle,#3a0030,#080010)', color: '#ff44cc' },
+    { min: 120, name: 'Final stretch',      bg: 'radial-gradient(circle,#40000a,#100005)', color: '#ff8800' },
+    { min: 180, name: 'Point of no return', bg: 'radial-gradient(circle,#500000,#150000)', color: '#ff2222' },
+  ];
+  const lastHour = { name: 'LIFE IS A CRIME', bg: 'radial-gradient(circle,#600000,#000)', color: '#ffe600' };
+
+  const timerEl = document.getElementById('timer');
+  const tierEl = document.getElementById('tier');
+  const bigEl = document.getElementById('big');
+  const flashEl = document.getElementById('flash');
+  const music = document.getElementById('music');
+  const startBtn = document.getElementById('start');
+  let lastBig = -1;
+  let wentGo = false;
+
+  startBtn.addEventListener('click', () => { music.play(); startBtn.disabled = true; });
+
+  function pad(n) { return String(n).padStart(2, '0'); }
+
+  function showBig(text) {
+    bigEl.textContent = text;
+    bigEl.classList.remove('show');
+    void bigEl.offsetWidth;
+    bigEl.classList.add('show');
+  }
+
   function tick() {
-    const diff = target - Date.now();
-    if (diff <= 0) {
-      document.getElementById('counter').style.display = 'none';
-      document.getElementById('done').style.display = 'block';
-      clearInterval(timer);
+    const left = TARGET - Date.now();
+    const secs = Math.max(0, Math.ceil(left / 1000));
+    const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
+    const minsLeft = secs / 60;
+
+    let t = tiers[0];
+    for (const x of tiers) if (minsLeft <= 240 - x.min && x.min > 0 || x === tiers[0]) t = x;
+    // hours remaining drives the tier
+    const hoursLeft = secs / 3600;
+    if (hoursLeft <= 1) t = lastHour;
+    else if (hoursLeft <= 2) t = tiers[3];
+    else if (hoursLeft <= 3) t = tiers[2];
+    else if (hoursLeft <= 4) t = tiers[1];
+    else t = tiers[0];
+
+    document.body.style.background = t.bg;
+    timerEl.style.color = t.color;
+    tierEl.textContent = t.name;
+    tierEl.style.color = t.color;
+
+    if (secs <= 600 && secs > 0) document.body.classList.add('shake');
+    else document.body.classList.remove('shake');
+
+    if (secs <= 600 && secs > 60 && lastBig !== secs) {
+      if (secs % 60 === 0) { flashEl.classList.remove('on'); void flashEl.offsetWidth; flashEl.classList.add('on'); }
+    }
+
+    if (secs <= 60 && secs > 0 && lastBig !== secs) {
+      lastBig = secs;
+      showBig(String(secs));
+    }
+
+    if (left <= 0 && !wentGo) {
+      wentGo = true;
+      timerEl.textContent = '00:00:00';
+      tierEl.textContent = 'NOW';
+      showBig('GO');
+      flashEl.classList.add('on');
       return;
     }
-    const days = Math.floor(diff / 86400000);
-    const hours = Math.floor((diff % 86400000) / 3600000);
-    const mins = Math.floor((diff % 3600000) / 60000);
-    const secs = Math.floor((diff % 60000) / 1000);
-    document.getElementById('d').textContent = days;
-    document.getElementById('h').textContent = pad(hours);
-    document.getElementById('m').textContent = pad(mins);
-    document.getElementById('s').textContent = pad(secs);
+    if (!wentGo) timerEl.textContent = `${pad(h)}:${pad(m)}:${pad(s)}`;
   }
+
   tick();
-  const timer = setInterval(tick, 1000);
+  setInterval(tick, 250);
 </script>
 </body>
 </html>
