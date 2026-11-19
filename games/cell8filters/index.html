@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cell-8 filters</title>
+<style>
+/* The picture is the page; a narrow column of controls beside it. Same slate and inks as the game pages. */
+:root {
+  --bg: #eceef1; --panel: #f8f9fb; --ink: #1b2330; --muted: #5d6878; --line: #c9d0da; --focus: #1b2330; --good: #1c7c4a; --warn: #9a4a00;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bg: #12161c; --panel: #1a2029; --ink: #e6eaf0; --muted: #95a1b2; --line: #2f3946; --focus: #e6eaf0; --good: #5fd08f; --warn: #ffc98a; color-scheme: dark; }
+}
+:root[data-theme="dark"] { --bg: #12161c; --panel: #1a2029; --ink: #e6eaf0; --muted: #95a1b2; --line: #2f3946; --focus: #e6eaf0; --good: #5fd08f; --warn: #ffc98a; color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.45 var(--sans);
+  padding-block: 20px 40px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.wrap { max-width: 1180px; margin: 0 auto; display: grid; gap: 18px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px; }
+h1 { font: 600 22px/1.2 var(--mono); letter-spacing: -0.01em; margin: 0; }
+header p { margin: 0; color: var(--muted); max-width: 64ch; }
+a { color: inherit; }
+.main { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 20px; align-items: start; }
+@media (max-width: 880px) { .main { grid-template-columns: minmax(0, 1fr); } }
+.stage { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px; min-width: 0; }
+.stage.over { border-color: var(--focus); border-style: dashed; }
+canvas { display: block; width: 100%; height: auto; max-height: 82vh; object-fit: contain; background: #000; border-radius: 3px; }
+.side { display: grid; gap: 14px; min-width: 0; }
+h2 { font: 600 12px var(--sans); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 6px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+label { font-size: 13px; color: var(--muted); display: inline-flex; gap: 6px; align-items: center; }
+.slider { display: grid; grid-template-columns: 8.5em minmax(0, 1fr) 3.4em; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); margin: 3px 0; }
+.slider output { text-align: right; font: 12.5px var(--mono); color: var(--ink); }
+input[type="range"] { width: 100%; min-width: 0; accent-color: var(--ink); }
+select, button, input[type="number"] { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 5px 9px; }
+input[type="number"] { width: 8.5em; }
+button { cursor: pointer; font-weight: 600; }
+button:hover { border-color: var(--muted); }
+select:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.note { margin: 6px 0 0; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.lib button { font-weight: 500; font-size: 13px; padding: 4px 9px; }
+.lib button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); font-weight: 600; }
+.note.bad { color: var(--warn); font-weight: 600; }
+.rules { color: var(--muted); font-size: 13.5px; max-width: 72ch; }
+.rules p { margin: 0 0 8px; } .rules b { color: var(--ink); font-weight: 600; }
+[hidden] { display: none !important; }
+
+.groups { display: grid; gap: 8px; max-height: 46vh; overflow: auto; padding-right: 4px; }
+.groups h3 { font: 600 11px var(--sans); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 4px; }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; font-size: 13px; width: 100%; max-width: 900px; }
+th, td { padding: 4px 8px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 600; color: var(--muted); }
+td.yes { color: var(--good); font-weight: 600; } td.approx { color: var(--ink); } td.no { color: var(--warn); }
+.status { font-weight: 600; min-height: 1.45em; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Cell-8 filters</h1>
+    <p>The classic filter menu, rebuilt as cellular automata on a hexagonal grid. <a href="filters-demo.html">Gallery of all filters</a> · <a href="shader.html">The image shader</a> · <a href="index.html">The games</a></p>
+  </header>
+
+  <div class="main">
+    <div class="stage" id="stage">
+      <canvas id="view" width="800" height="600" aria-label="The picture, as the filter leaves it"></canvas>
+      <p class="status" id="status" aria-live="polite"></p>
+      <p class="note" id="info"></p>
+    </div>
+
+    <div class="side">
+      <div>
+        <h2>Filters</h2>
+        <div class="groups lib" id="filters"></div>
+        <p class="note" id="job" aria-live="polite"></p>
+      </div>
+      <div>
+        <h2>Apply</h2>
+        <div class="row">
+          <label><input type="checkbox" id="stack"> On top of the last result</label>
+          <button id="finish" type="button">Finish now</button>
+          <button id="reset" type="button">Original</button>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <label>Leave untouched <select id="mask"><option value="none">nothing</option><option value="dark">the darkest quarter</option><option value="light">the lightest quarter</option></select></label>
+        </div>
+        <div class="slider"><span>Steps a second</span><input id="speed" type="range" min="1" max="60" step="1" value="6"><output id="speedOut"></output></div>
+      </div>
+      <div>
+        <h2>Picture</h2>
+        <div class="row">
+          <button id="pick" type="button">Choose a picture</button>
+          <button id="builtin" type="button">Built-in</button>
+          <button id="compare" type="button" aria-pressed="false">Show original</button>
+          <button id="save" type="button">Save as PNG</button>
+          <input id="file" type="file" accept="image/*" hidden>
+        </div>
+        <p class="note">Or drop a picture on the canvas. It stays on this computer.</p>
+        <div class="slider"><span>Cells across</span><input id="cells" type="range" min="64" max="640" step="16" value="320"><output id="cellsOut"></output></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="rules">
+    <p><b>What runs.</b> The picture is laid on a hexagonal grid, one colour to a cell. A filter is a rule that gives each cell a new colour from its own colour and those of its six neighbours, applied to every cell at once, a set number of times. Many filters are two or three such rules one after another. Nothing else is used: no rule knows where its cell is or what the picture looks like far away.</p>
+    <p><b>The state of a cell</b> is three bytes of colour and one helper byte. The helper byte is a private source of chance (each cell mixes its own with its neighbours' at every step), and in Crystallize it records which cells have been claimed. <b>The port</b>, the eighth input of Cell-8, is used here as a mask: with "Leave untouched" set, cells of that tone are at port 0 and keep their colour.</p>
+    <p><b>How faithful these are.</b> Each filter was written from what the original is known to do, in whole-number arithmetic on seven cells. None was compared with the original's output. Those marked "approximation" below copy the idea of a filter whose exact method is different or unpublished. A step reaches one cell further, so a radius of n takes n steps.</p>
+    <p><b>What cannot be done this way,</b> and why, is listed in the table. The usual reason is that the filter needs to know where a cell is in the picture (twirls, tiles, halftone screens, flares), which a cellular automaton cannot.</p>
+  </div>
+
+  <div class="rules" style="max-width:none">
+    <h2>The filter menu, entry by entry</h2>
+    <p class="note" id="tally"></p>
+    <div class="scroll"><table id="menu"><tr><th>Menu</th><th>Filter</th><th>Here</th><th>How, or why not</th></tr></table></div>
+  </div>
+</div>
+
+<script>
+'use strict';
+/* ---------- the rules, on the processor (the reference the shader is checked against: selfTest below) ----------
+   A cell is [r, g, b, a]. Neighbour order: nw, ne, r, se, sw, l. All arithmetic is in whole numbers. */
+function pcg(v) {
+  const s = (Math.imul(v, 747796405) + 2891336453) >>> 0;
+  const w = Math.imul(((s >>> ((s >>> 28) + 4)) ^ s) >>> 0, 277803737) >>> 0;
+  return ((w >>> 22) ^ w) >>> 0;
+}
+function neighbours(x, y, W, H) {
+  const odd = y & 1, m = (a, n) => ((a % n) + n) % n, at = (dx, dy) => m(y + dy, H) * W + m(x + dx, W);
+  return [at(odd - 1, -1), at(odd, -1), at(1, 0), at(odd, 1), at(odd - 1, 1), at(-1, 0)];
+}
+const clamp = v => v < 0 ? 0 : v > 255 ? 255 : v;
+const lum = (S, i) => (54 * S[i] + 183 * S[i + 1] + 19 * S[i + 2]) >> 8;
+function stepCPU(S, P, W, H, st, hold) {
+  const T = new Uint8Array(S.length), I = st.I || [0, 0, 0, 0], w = st.w || [1, 0, 0, 0, 0, 0, 0], den = st.den || 1, bias = st.bias || 0;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const c = y * W + x, i = 4 * c, nb = neighbours(x, y, W, H).map(j => 4 * j);
+    if (hold && P[c] === 0) { for (let k = 0; k < 4; k++) T[i + k] = S[i + k]; continue; }
+    let h = pcg(S[i + 3]);
+    for (const j of nb) h = pcg((Math.imul(h, 31) + S[j + 3]) >>> 0);
+    const r = [S[i], S[i + 1], S[i + 2], h & 255];
+    if (st.k === 0) {                                       // kernel: a weighted sum of the seven cells
+      for (let k = 0; k < 3; k++) { let acc = w[0] * S[i + k]; for (let j = 0; j < 6; j++) acc += w[j + 1] * S[nb[j] + k]; r[k] = clamp(Math.floor((acc + 4096 * den) / den) - 4096 + bias); }
+    } else if (st.k === 1) {                                // rank: the I0-th smallest of the seven, if it differs from the cell by more than I1
+      for (let k = 0; k < 3; k++) { const v = [S[i + k]]; for (const j of nb) v.push(S[j + k]); v.sort((a, b) => a - b); if (Math.abs(S[i + k] - v[I[0]]) >= I[1]) r[k] = v[I[0]]; }
+    } else if (st.k === 2) {                                // edge: the largest difference from a neighbour
+      for (let k = 0; k < 3; k++) {
+        let d = 0, below = 0; for (const j of nb) { d = Math.max(d, Math.abs(S[i + k] - S[j + k])); if (S[j + k] < I[2]) below = 1; }
+        const e = Math.floor(d * I[1] / 16);
+        r[k] = I[0] === 0 ? clamp(e) : I[0] === 1 ? clamp(255 - e) : I[0] === 2 ? clamp(S[i + k] - e) : I[0] === 3 ? clamp(S[i + k] + e) : (S[i + k] >= I[2] && below ? 0 : 255);
+      }
+    } else if (st.k === 3) {                                // point: the cell alone
+      const L = lum(S, i);
+      for (let k = 0; k < 3; k++) { const v = S[i + k];
+        r[k] = I[0] === 0 ? 255 - v : I[0] === 1 ? (v < 128 ? v : 255 - v) : I[0] === 2 ? (L >= I[1] ? 255 : 0) : I[0] === 3 ? Math.floor(Math.floor(v * I[1] / 256) * 255 / (I[1] - 1)) : I[0] === 4 ? L : Math.abs((v * I[1]) % 510 - 255); }
+    } else if (st.k === 4) {                                // chance, from the helper bytes (I0 = 5: the chance value itself)
+      if (I[0] <= 2) { const j = (h >>> 8) % 7, src = j === 0 ? i : nb[j - 1];
+        if (I[0] === 0 || (I[0] === 1 && lum(S, src) < lum(S, i)) || (I[0] === 2 && lum(S, src) > lum(S, i))) for (let k = 0; k < 3; k++) r[k] = S[src + k];
+      } else for (let k = 0; k < 3; k++) { const b = (h >>> (8 + 8 * (I[2] ? 0 : k))) & 255;
+        r[k] = I[0] === 3 ? clamp(S[i + k] + Math.floor(((b - 128) * I[1] + 128 * 4096) / 128) - 4096) : I[0] === 4 ? ((I[2] ? lum(S, i) : S[i + k]) > b ? 255 : 0) : b; }
+    } else if (st.k === 5) {                                // surface: the mean of the seven cells that are within I0 of the cell
+      for (let k = 0; k < 3; k++) { let sum = S[i + k], n = 1; for (const j of nb) if (Math.abs(S[j + k] - S[i + k]) <= I[0]) { sum += S[j + k]; n++; } r[k] = Math.floor(sum / n); }
+    } else if (st.k === 6) {                                // crystal: a = 0 unclaimed, 255 claimed, 254 claimed and on a border, else undecided
+      const a = S[i + 3], pack = j => (S[j] << 16) | (S[j + 1] << 8) | S[j + 2];
+      r[3] = a;
+      if (a >= 1 && a <= 253) r[3] = a <= I[0] ? 255 : 0;
+      else if (a === 0) { for (const j of nb) if (S[j + 3] >= 254) { r[0] = S[j]; r[1] = S[j + 1]; r[2] = S[j + 2]; r[3] = 255; break; } }
+      else { let all = 1, edge = 0; for (const j of nb) { if (S[j + 3] < 254) all = 0; if (pack(j) > pack(i)) edge = 1; } r[3] = I[1] && all && edge ? 254 : 255; }
+    } else if (st.k === 7) {                                // wind: a cell takes its left neighbour's colour, dimmed by I0, if that is brighter
+      for (let k = 0; k < 3; k++) r[k] = Math.max(S[i + k], S[nb[5] + k] - I[0]);
+    } else {                                                // sharpen where the largest difference from a neighbour exceeds I0
+      for (let k = 0; k < 3; k++) { let d = 0, sum = 0; for (const j of nb) { d = Math.max(d, Math.abs(S[i + k] - S[j + k])); sum += S[j + k]; } if (d > I[0]) r[k] = clamp(Math.floor((9 * S[i + k] - sum + 4096 * 3) / 3) - 4096); }
+    }
+    T[i] = r[0]; T[i + 1] = r[1]; T[i + 2] = r[2]; T[i + 3] = r[3];
+  }
+  return T;
+}
+
+/* ---------- the same rules as a fragment shader ---------- */
+const VERT = `#version 300 es
+in vec2 a; void main() { gl_Position = vec4(a, 0.0, 1.0); }`;
+const STEP = `#version 300 es
+precision highp float; precision highp int; precision highp usampler2D;
+uniform usampler2D uState, uPort; uniform ivec2 uSize; uniform int uKind, uHold, uDen, uBias; uniform int uW[7]; uniform int uI[4];
+out uvec4 o;
+uint pcg(uint v) { uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
+ivec4 S(ivec2 p) { p = (p % uSize + uSize) % uSize; return ivec4(texelFetch(uState, p, 0)); }
+int lum(ivec4 c) { return (54 * c.r + 183 * c.g + 19 * c.b) >> 8; }
+int pack(ivec4 c) { return (c.r << 16) | (c.g << 8) | c.b; }
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy); int odd = p.y & 1;
+  ivec4 s = S(p);
+  if (uHold == 1 && texelFetch(uPort, p, 0).r == 0u) { o = uvec4(s); return; }
+  ivec4 n[6];
+  n[0] = S(p + ivec2(odd - 1, -1)); n[1] = S(p + ivec2(odd, -1)); n[2] = S(p + ivec2(1, 0));
+  n[3] = S(p + ivec2(odd, 1)); n[4] = S(p + ivec2(odd - 1, 1)); n[5] = S(p + ivec2(-1, 0));
+  uint h = pcg(uint(s.a));
+  for (int j = 0; j < 6; j++) h = pcg(h * 31u + uint(n[j].a));
+  ivec4 r = s; r.a = int(h & 255u);
+  if (uKind == 0) {
+    for (int k = 0; k < 3; k++) { int acc = uW[0] * s[k]; for (int j = 0; j < 6; j++) acc += uW[j + 1] * n[j][k]; r[k] = clamp((acc + 4096 * uDen) / uDen - 4096 + uBias, 0, 255); }
+  } else if (uKind == 1) {
+    for (int k = 0; k < 3; k++) {
+      int v[7]; v[0] = s[k]; for (int j = 0; j < 6; j++) v[j + 1] = n[j][k];
+      for (int a = 1; a < 7; a++) { int x = v[a]; int b = a - 1; while (b >= 0 && v[b] > x) { v[b + 1] = v[b]; b--; } v[b + 1] = x; }
+      if (abs(s[k] - v[uI[0]]) >= uI[1]) r[k] = v[uI[0]];
+    }
+  } else if (uKind == 2) {
+    for (int k = 0; k < 3; k++) {
+      int d = 0, below = 0; for (int j = 0; j < 6; j++) { d = max(d, abs(s[k] - n[j][k])); if (n[j][k] < uI[2]) below = 1; }
+      int e = d * uI[1] / 16;
+      r[k] = uI[0] == 0 ? clamp(e, 0, 255) : uI[0] == 1 ? clamp(255 - e, 0, 255) : uI[0] == 2 ? clamp(s[k] - e, 0, 255) : uI[0] == 3 ? clamp(s[k] + e, 0, 255) : (s[k] >= uI[2] && below == 1 ? 0 : 255);
+    }
+  } else if (uKind == 3) {
+    int L = lum(s);
+    for (int k = 0; k < 3; k++) { int v = s[k];
+      r[k] = uI[0] == 0 ? 255 - v : uI[0] == 1 ? (v < 128 ? v : 255 - v) : uI[0] == 2 ? (L >= uI[1] ? 255 : 0) : uI[0] == 3 ? (v * uI[1] / 256) * 255 / (uI[1] - 1) : uI[0] == 4 ? L : abs((v * uI[1]) % 510 - 255); }
+  } else if (uKind == 4) {
+    if (uI[0] <= 2) { int j = int((h >> 8u) % 7u); ivec4 src = s; if (j > 0) src = n[j - 1];
+      if (uI[0] == 0 || (uI[0] == 1 && lum(src) < lum(s)) || (uI[0] == 2 && lum(src) > lum(s))) r.rgb = src.rgb;
+    } else for (int k = 0; k < 3; k++) { int b = int((h >> uint(8 + 8 * (uI[2] == 1 ? 0 : k))) & 255u);
+      r[k] = uI[0] == 3 ? clamp(s[k] + ((b - 128) * uI[1] + 128 * 4096) / 128 - 4096, 0, 255) : uI[0] == 4 ? ((uI[2] == 1 ? lum(s) : s[k]) > b ? 255 : 0) : b; }
+  } else if (uKind == 5) {
+    for (int k = 0; k < 3; k++) { int sum = s[k], c = 1; for (int j = 0; j < 6; j++) if (abs(n[j][k] - s[k]) <= uI[0]) { sum += n[j][k]; c++; } r[k] = sum / c; }
+  } else if (uKind == 6) {
+    int a = s.a; r.a = a;
+    if (a >= 1 && a <= 253) r.a = a <= uI[0] ? 255 : 0;
+    else if (a == 0) { for (int j = 0; j < 6; j++) if (n[j].a >= 254) { r.rgb = n[j].rgb; r.a = 255; break; } }
+    else { int all = 1, edge = 0; for (int j = 0; j < 6; j++) { if (n[j].a < 254) all = 0; if (pack(n[j]) > pack(s)) edge = 1; } r.a = uI[1] == 1 && all == 1 && edge == 1 ? 254 : 255; }
+  } else if (uKind == 7) {
+    for (int k = 0; k < 3; k++) r[k] = max(s[k], n[5][k] - uI[0]);
+  } else {
+    for (int k = 0; k < 3; k++) { int d = 0, sum = 0; for (int j = 0; j < 6; j++) { d = max(d, abs(s[k] - n[j][k])); sum += n[j][k]; } if (d > uI[0]) r[k] = clamp((9 * s[k] - sum + 4096 * 3) / 3 - 4096, 0, 255); }
+  }
+  o = uvec4(r);
+}`;
+const SHOW = `#version 300 es
+precision highp float; precision highp int; precision highp usampler2D;
+uniform usampler2D uState; uniform sampler2D uImg; uniform ivec2 uSize; uniform vec2 uView; uniform int uLines, uOriginal;
+out vec4 o;
+void main() {
+  vec2 uv = vec2(gl_FragCoord.x / uView.x, 1.0 - gl_FragCoord.y / uView.y);
+  if (uOriginal == 1) { o = vec4(texture(uImg, uv).rgb, 1.0); return; }
+  vec2 g = uv * vec2(uSize);
+  ivec2 best = ivec2(0); float bd = 1e9;
+  for (int dr = -1; dr <= 1; dr++) {
+    int r = int(floor(g.y)) + dr; float shift = 0.5 * float(r & 1);
+    float c = floor(g.x - shift);
+    vec2 d = vec2(g.x - (c + 0.5 + shift), (g.y - (float(r) + 0.5)) * 0.8660254);
+    float dd = dot(d, d);
+    if (dd < bd) { bd = dd; best = ivec2(int(c), r); }
+  }
+  best = (best % uSize + uSize) % uSize;
+  uvec4 s = texelFetch(uState, best, 0);
+  o = vec4(uLines == 1 && s.a == 254u ? vec3(0.08, 0.08, 0.1) : vec3(s.rgb) / 255.0, 1.0);
+}`;
+
+/* ---------- the filters: each is a list of stages; a stage is a rule and a number of steps (0 = for ever) ---------- */
+const ALL = [1, 1, 1, 1, 1, 1];
+const KER = (w0, w, den, bias, n) => ({ k: 0, w: [w0].concat(w), den, bias: bias || 0, n: n === undefined ? 1 : n });
+const BLUR = n => KER(1, ALL, 7, 0, n);
+const RANK = (r, t, n) => ({ k: 1, I: [r, t || 0, 0, 0], n: n || 1 });
+const EDGE = (mode, gain, level) => ({ k: 2, I: [mode, gain || 16, level || 0, 0], n: 1 });
+const PT = (mode, arg) => ({ k: 3, I: [mode, arg || 0, 0, 0], n: 1 });
+const INVERT = 0, SOLAR = 1, THRESH = 2, POSTER = 3, GREY = 4, TRI = 5;
+const RND = (mode, gain, mono, n) => ({ k: 4, I: [mode, gain || 0, mono ? 1 : 0, 0], n: n || 1 });
+const SURF = (t, n) => ({ k: 5, I: [t, 0, 0, 0], n: n || 1 });
+const CRYS = (density, lines) => ({ k: 6, I: [density, lines ? 1 : 0, 0, 0], n: 30 });
+const WIND = (dim, n) => ({ k: 7, I: [dim, 0, 0, 0], n });
+const SHARP = KER(12, [-1, -1, -1, -1, -1, -1], 6), SHARPER = KER(9, [-1, -1, -1, -1, -1, -1], 3);
+const EMBOSS = KER(0, [-2, -1, 1, 2, 1, -1], 2, 128);
+const FILTERS = [
+  ['Blur', [
+    ['Blur', 'Each cell becomes the mean of itself and its six neighbours.', [BLUR(1)]],
+    ['Blur More', 'The same, three times.', [BLUR(3)]],
+    ['Gaussian Blur', 'The same, ten times. Repeated means tend to the Gaussian.', [BLUR(10)]],
+    ['Average', 'Blur without end: the picture runs down to its mean colour. Press Finish now to stop it.', [BLUR(0)]],
+    ['Motion Blur', 'The mean of a cell and its left and right neighbours, twelve times.', [KER(1, [0, 0, 1, 0, 0, 1], 3, 0, 12)]],
+    ['Surface Blur', 'A mean over only those neighbours close in value to the cell, so edges stay sharp. Six times.', [SURF(24, 6)]],
+    ['Smart Blur', 'The same with a tighter limit, twelve times.', [SURF(12, 12)]],
+  ]],
+  ['Sharpen', [
+    ['Sharpen', 'A cell moves away from the mean of its neighbours by one sixth of the difference each.', [SHARP]],
+    ['Sharpen More', 'The same, twice as strongly.', [SHARPER]],
+    ['Unsharp Mask', 'Radius one cell, amount 300%.', [KER(8, [-1, -1, -1, -1, -1, -1], 2)]],
+    ['Sharpen Edges', 'Sharpens only cells that differ from a neighbour by more than 24.', [{ k: 8, I: [24, 0, 0, 0], n: 1 }]],
+  ]],
+  ['Noise', [
+    ['Add Noise', 'Adds a chance amount to each colour of each cell.', [RND(3, 48)]],
+    ['Despeckle', 'Blurs everything but edges, once.', [SURF(20, 1)]],
+    ['Median', 'Each colour of a cell becomes the middle value of the seven.', [RANK(3)]],
+    ['Dust & Scratches', 'The median, but only where a cell differs from it by 40 or more.', [RANK(3, 40, 2)]],
+    ['Reduce Noise', 'The median where a cell stands out, then a blur that keeps edges.', [RANK(3, 30), SURF(16, 3)]],
+  ]],
+  ['Stylize', [
+    ['Diffuse', 'Each cell takes the colour of itself or a neighbour, by chance. Three times.', [RND(0, 0, 0, 3)]],
+    ['Diffuse (darken only)', 'The same, but only if the colour taken is darker.', [RND(1, 0, 0, 3)]],
+    ['Diffuse (lighten only)', 'The same, but only if it is lighter.', [RND(2, 0, 0, 3)]],
+    ['Emboss', 'The difference between the cells below right and above left, about mid grey.', [EMBOSS]],
+    ['Find Edges', 'The largest difference from a neighbour, dark on white.', [EDGE(1, 40)]],
+    ['Glowing Edges', 'The same, light on black, then softened.', [EDGE(0, 48), BLUR(1)]],
+    ['Solarize', 'Values above the middle are turned over.', [PT(SOLAR)]],
+    ['Trace Contour', 'Marks, in each colour, the cells at level 128 or above that touch a cell below it.', [EDGE(4, 16, 128)]],
+    ['Wind', 'Bright cells are drawn out to the right, fading as they go.', [WIND(14, 14)]],
+  ]],
+  ['Pixelate', [
+    ['Crystallize', 'About one cell in sixty is a seed; every other cell takes the colour of the seed that reaches it first.', [CRYS(4, false)]],
+    ['Facet', 'The median three times: small differences vanish into flat patches.', [RANK(3, 0, 3)]],
+    ['Fragment', 'The mean of the four diagonal neighbours, leaving the cell itself out.', [KER(0, [1, 1, 0, 1, 1, 0], 4)]],
+    ['Mezzotint', 'Each colour of each cell goes fully on or off, by comparing it with a chance value.', [RND(4, 0, 0)]],
+  ]],
+  ['Texture', [
+    ['Grain', 'Chance added equally to all three colours of a cell.', [RND(3, 40, 1)]],
+    ['Stained Glass', 'Crystallize, then a dark line wherever two crystals meet.', [CRYS(3, true)]],
+  ]],
+  ['Render', [
+    ['Clouds', 'Replaces the picture: chance values, softened sixteen times and stretched.', [RND(5, 0, 1), BLUR(16), KER(12, [0, 0, 0, 0, 0, 0], 1, -1400)]],
+  ]],
+  ['Other', [
+    ['High Pass', 'A cell minus the mean of its neighbours, about mid grey.', [KER(6, [-1, -1, -1, -1, -1, -1], 6, 128)]],
+    ['Maximum', 'The largest of the seven, twice: light areas spread.', [RANK(6, 0, 2)]],
+    ['Minimum', 'The smallest of the seven, twice: dark areas spread.', [RANK(0, 0, 2)]],
+    ['Offset', 'Every cell takes its left neighbour: the picture slides right, for ever, and comes round again.', [KER(0, [0, 0, 0, 0, 0, 1], 1, 0, 0)]],
+    ['Custom (Laplacian)', 'Any weights on the seven cells make a filter of this kind. These pick out fine detail.', [KER(-6, ALL, 1, 128)]],
+  ]],
+  ['Artistic (approximations)', [
+    ['Cutout', 'Five levels of each colour, then smoothed flat.', [BLUR(1), PT(POSTER, 5), RANK(3, 0, 4)]],
+    ['Dry Brush', 'Flattened by the median, then eight levels.', [RANK(3, 0, 3), PT(POSTER, 8)]],
+    ['Film Grain', 'Grain, with the picture slightly softened first.', [BLUR(1), RND(3, 36, 1)]],
+    ['Fresco', 'Dark areas spread, then flattened.', [RANK(0), RANK(3, 0, 3)]],
+    ['Paint Daubs', 'Flattened, then sharpened.', [RANK(3, 0, 3), SHARPER]],
+    ['Palette Knife', 'Flattened hard: the median eight times.', [RANK(3, 0, 8)]],
+    ['Poster Edges', 'Six levels, then edges darkened.', [PT(POSTER, 6), RANK(3), EDGE(2, 20)]],
+    ['Smudge Stick', 'Dark cells smeared into their neighbours, then softened.', [RND(1, 0, 0, 3), BLUR(1)]],
+    ['Sponge', 'Scattered, then flattened into blotches.', [RND(0, 0, 0, 4), RANK(3, 0, 3)]],
+    ['Watercolor', 'Flattened, with edges slightly darkened.', [RANK(3, 0, 4), EDGE(2, 10)]],
+  ]],
+  ['Brush Strokes (approximations)', [
+    ['Accented Edges', 'Edges brightened.', [EDGE(3, 16)]],
+    ['Angled Strokes', 'Blur along the diagonal from upper left to lower right.', [KER(1, [1, 0, 0, 1, 0, 0], 3, 0, 8)]],
+    ['Dark Strokes', 'Dark areas spread, then softened.', [RANK(0, 0, 2), BLUR(1)]],
+    ['Ink Outlines', 'Edges darkened strongly.', [RANK(3), EDGE(2, 40)]],
+    ['Spatter', 'Scattered five times.', [RND(0, 0, 0, 5)]],
+    ['Sprayed Strokes', 'Scattered, then blurred along the diagonal.', [RND(0, 0, 0, 3), KER(1, [1, 0, 0, 1, 0, 0], 3, 0, 3)]],
+    ['Sumi-e', 'Dark areas spread and softened, with dark edges.', [RANK(0, 0, 2), BLUR(2), EDGE(2, 24)]],
+  ]],
+  ['Sketch (approximations)', [
+    ['Bas Relief', 'Grey, embossed, softened.', [PT(GREY), BLUR(1), EMBOSS, BLUR(1)]],
+    ['Chrome', 'Grey, softened, then passed through a curve that folds back three times.', [PT(GREY), BLUR(4), PT(TRI, 3), BLUR(1)]],
+    ['Note Paper', 'Two tones, embossed, with grain.', [PT(GREY), BLUR(2), PT(THRESH, 128), EMBOSS, RND(3, 24, 1)]],
+    ['Photocopy', 'Grey, with only the edges kept, dark on white.', [PT(GREY), BLUR(1), EDGE(1, 64)]],
+    ['Plaster', 'Two tones, softened, embossed.', [PT(GREY), BLUR(3), PT(THRESH, 128), BLUR(2), EMBOSS, BLUR(1)]],
+    ['Reticulation', 'Grey turned to chance dots, slightly softened.', [PT(GREY), RND(4, 0, 1), BLUR(1)]],
+    ['Stamp', 'Softened, then pure black and white.', [PT(GREY), BLUR(3), PT(THRESH, 128)]],
+    ['Torn Edges', 'Black and white, with the boundary scattered and reset.', [PT(GREY), BLUR(2), PT(THRESH, 128), RND(0, 0, 0, 4), BLUR(1), PT(THRESH, 128)]],
+  ]],
+  ['Distort (approximation)', [
+    ['Glass (frosted)', 'Scattered eight times, as through ground glass.', [RND(0, 0, 0, 8)]],
+  ]],
+  ['Adjustments', [
+    ['Invert', 'Every value turned over.', [PT(INVERT)]],
+    ['Threshold', 'Black or white, by brightness.', [PT(THRESH, 128)]],
+    ['Posterize', 'Four levels of each colour.', [PT(POSTER, 4)]],
+    ['Desaturate', 'Grey, by brightness.', [PT(GREY)]],
+  ]],
+];
+/* the classic menu, entry by entry: [menu, filter, 'yes' | 'approx' | 'no', note]. For yes and approx the note is filled in from FILTERS. */
+const NO = [
+  ['Artistic', 'Colored Pencil', 'needs hatching in a fixed direction over a paper tone: a pattern laid by position'],
+  ['Artistic', 'Neon Glow', 'needs a glow colour chosen by the user mixed by distance from tones; not attempted'],
+  ['Artistic', 'Plastic Wrap', 'a lighting model over a height map; not attempted'],
+  ['Artistic', 'Rough Pastels', 'needs a canvas texture laid by position'],
+  ['Artistic', 'Underpainting', 'needs a canvas texture laid by position'],
+  ['Blur', 'Box Blur', 'a square box does not exist on a hexagonal grid; Blur is the hexagonal equivalent'],
+  ['Blur', 'Lens Blur', 'needs a depth map and an aperture shape many cells wide'],
+  ['Blur', 'Radial Blur', 'needs each cell to know its direction from a centre'],
+  ['Blur', 'Shape Blur', 'needs a large kernel of arbitrary shape'],
+  ['Brush Strokes', 'Crosshatch', 'not attempted; two diagonal blurs do not give its texture'],
+  ['Distort', 'Diffuse Glow', 'not attempted'],
+  ['Distort', 'Displace', 'moves cells by a second picture, over any distance'],
+  ['Distort', 'Ocean Ripple', 'moves cells along waves laid by position'],
+  ['Distort', 'Pinch', 'needs each cell to know where the centre is'],
+  ['Distort', 'Polar Coordinates', 'a change of coordinates over the whole picture'],
+  ['Distort', 'Ripple', 'moves cells along waves laid by position'],
+  ['Distort', 'Shear', 'moves each row by an amount that depends on where the row is'],
+  ['Distort', 'Spherize', 'needs each cell to know where the centre is'],
+  ['Distort', 'Twirl', 'needs each cell to know where the centre is'],
+  ['Distort', 'Wave', 'moves cells along waves laid by position'],
+  ['Distort', 'ZigZag', 'needs each cell to know where the centre is'],
+  ['Noise', '(all five are done)', ''],
+  ['Pixelate', 'Color Halftone', 'needs a screen of dots laid by position'],
+  ['Pixelate', 'Mosaic', 'needs square blocks laid by position; Crystallize is the version that grows'],
+  ['Pixelate', 'Pointillize', 'not attempted; it is Crystallize with gaps'],
+  ['Render', 'Difference Clouds', 'not attempted: it needs the clouds and the picture at once'],
+  ['Render', 'Fibers', 'not attempted'],
+  ['Render', 'Lens Flare', 'drawn from one chosen point across the picture'],
+  ['Render', 'Lighting Effects', 'lights placed by position'],
+  ['Sharpen', 'Smart Sharpen', 'removes a chosen kind of blur; not attempted'],
+  ['Sketch', 'Chalk & Charcoal', 'needs strokes in a fixed direction'],
+  ['Sketch', 'Charcoal', 'needs strokes in a fixed direction'],
+  ['Sketch', 'Conté Crayon', 'needs a canvas texture laid by position'],
+  ['Sketch', 'Graphic Pen', 'needs strokes in a fixed direction'],
+  ['Sketch', 'Halftone Pattern', 'needs a screen laid by position'],
+  ['Sketch', 'Water Paper', 'not attempted'],
+  ['Stylize', 'Extrude', 'needs blocks laid by position'],
+  ['Stylize', 'Tiles', 'needs tiles laid by position'],
+  ['Texture', 'Craquelure', 'not attempted'],
+  ['Texture', 'Mosaic Tiles', 'needs tiles laid by position'],
+  ['Texture', 'Patchwork', 'needs squares laid by position'],
+  ['Texture', 'Texturizer', 'needs a texture laid by position'],
+].filter(r => r[2]);
+
+(function () {
+  const $ = id => document.getElementById(id), canvas = $('view'), info = $('info'), status = $('status');
+  const gl = canvas.getContext('webgl2', { antialias: false, preserveDrawingBuffer: true });
+  if (!gl) { status.textContent = 'This browser does not offer WebGL 2, which the filters need.'; return; }
+  function program(fs) {
+    const p = gl.createProgram();
+    for (const [type, src] of [[gl.VERTEX_SHADER, VERT], [gl.FRAGMENT_SHADER, fs]]) {
+      const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+      gl.attachShader(p, s);
+    }
+    gl.bindAttribLocation(p, 0, 'a'); gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    return p;
+  }
+  const stepProg = program(STEP), showProg = program(SHOW), U = (p, n) => gl.getUniformLocation(p, n);
+  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1); gl.pixelStorei(gl.PACK_ALIGNMENT, 1);
+  function tex(filter) {
+    const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+    for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, filter], [gl.TEXTURE_MAG_FILTER, filter], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+    return t;
+  }
+  const state = [tex(gl.NEAREST), tex(gl.NEAREST)], portTex = tex(gl.NEAREST), imgTex = tex(gl.LINEAR), fbo = [gl.createFramebuffer(), gl.createFramebuffer()];
+  const setState = (t, data) => { gl.bindTexture(gl.TEXTURE_2D, t); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8UI, W, H, 0, gl.RGBA_INTEGER, gl.UNSIGNED_BYTE, data); };
+
+  let W = 0, H = 0, cur = 0, picture = null, pix = null, ports = null, original = null;
+  let job = null, last = 0, owed = 0, showOriginal = false, lines = false;      // job: { name, stages, stage, done, total }
+  const val = id => +$(id).value;
+
+  function builtIn() {
+    const c = document.createElement('canvas'); c.width = 960; c.height = 720;
+    const x = c.getContext('2d'), g = x.createLinearGradient(0, 0, 960, 720);
+    g.addColorStop(0, '#0b1d33'); g.addColorStop(0.5, '#27506e'); g.addColorStop(1, '#e9b872');
+    x.fillStyle = g; x.fillRect(0, 0, 960, 720);
+    const hex = (cx, cy, r, fill) => { x.beginPath(); for (let k = 0; k < 6; k++) { const a = Math.PI / 3 * k - Math.PI / 2; x.lineTo(cx + r * Math.cos(a), cy + r * Math.sin(a)); } x.closePath(); x.fillStyle = fill; x.fill(); };
+    hex(480, 360, 300, '#f4e3c1'); hex(480, 360, 215, '#c8553d'); hex(480, 360, 130, '#28666e'); hex(480, 360, 55, '#0b1d33');
+    x.fillStyle = '#f4e3c1'; x.beginPath(); x.arc(160, 150, 70, 0, 7); x.fill();
+    x.fillStyle = '#0b1d33'; x.beginPath(); x.arc(820, 590, 90, 0, 7); x.fill();
+    let h = 7;                                                // some speckle and fine lines, so the noise and edge filters have work to do
+    for (let i = 0; i < 2600; i++) { h = pcg(h + i); x.fillStyle = h & 1 ? 'rgba(255,255,255,.55)' : 'rgba(0,0,0,.55)'; x.fillRect((h >>> 4) % 960, (h >>> 14) % 720, 3, 3); }
+    x.strokeStyle = '#f4e3c1'; x.lineWidth = 3; for (let k = 0; k < 9; k++) { x.beginPath(); x.moveTo(40 + 22 * k, 470); x.lineTo(120 + 22 * k, 690); x.stroke(); }
+    return c;
+  }
+  function setPicture(src) {
+    const w = src.naturalWidth || src.width, h = src.naturalHeight || src.height, k = Math.min(1, 1600 / Math.max(w, h));
+    const c = document.createElement('canvas'); c.width = Math.max(2, Math.round(w * k)); c.height = Math.max(2, Math.round(h * k));
+    c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
+    picture = c;
+    gl.bindTexture(gl.TEXTURE_2D, imgTex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+    resize();
+  }
+  function resize() {
+    W = val('cells');
+    H = Math.max(2, 2 * Math.round(W * picture.height / picture.width / 0.8660254 / 2));
+    const scale = Math.max(1, Math.min(8, Math.floor(1600 / W)));
+    canvas.width = W * scale; canvas.height = Math.round(W * scale * picture.height / picture.width);
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(picture, 0, 0, W, H);
+    pix = x.getImageData(0, 0, W, H).data;
+    original = new Uint8Array(4 * W * H);
+    let h = 99;
+    for (let i = 0; i < W * H; i++) { h = pcg(h + i); original[4 * i] = pix[4 * i]; original[4 * i + 1] = pix[4 * i + 1]; original[4 * i + 2] = pix[4 * i + 2]; original[4 * i + 3] = 1 + h % 253; }
+    makePorts(); load(original); job = null; say(); draw();
+  }
+  function makePorts() {                                      // the port is a mask: 0 = leave alone (when a mask is chosen), 1 = filter
+    const n = W * H, mode = $('mask').value, L = new Float32Array(n);
+    ports = new Uint8Array(n).fill(1);
+    if (mode !== 'none') {
+      for (let i = 0; i < n; i++) L[i] = 0.2126 * pix[4 * i] + 0.7152 * pix[4 * i + 1] + 0.0722 * pix[4 * i + 2];
+      const sorted = Float32Array.from(L).sort(), lo = sorted[Math.floor(n / 4)], hi = sorted[Math.floor(3 * n / 4)];
+      for (let i = 0; i < n; i++) if (mode === 'dark' ? L[i] <= lo : L[i] >= hi) ports[i] = 0;
+    }
+    gl.bindTexture(gl.TEXTURE_2D, portTex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8UI, W, H, 0, gl.RED_INTEGER, gl.UNSIGNED_BYTE, ports);
+  }
+  function load(data) {
+    for (const k of [0, 1]) {
+      setState(state[k], data);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo[k]);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, state[k], 0);
+    }
+    cur = 0;
+  }
+  function step(st) {
+    gl.useProgram(stepProg);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, state[cur]); gl.uniform1i(U(stepProg, 'uState'), 0);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, portTex); gl.uniform1i(U(stepProg, 'uPort'), 1);
+    gl.uniform2i(U(stepProg, 'uSize'), W, H); gl.uniform1i(U(stepProg, 'uKind'), st.k); gl.uniform1i(U(stepProg, 'uHold'), $('mask').value === 'none' ? 0 : 1);
+    gl.uniform1i(U(stepProg, 'uDen'), st.den || 1); gl.uniform1i(U(stepProg, 'uBias'), st.bias || 0);
+    gl.uniform1iv(U(stepProg, 'uW'), st.w || [1, 0, 0, 0, 0, 0, 0]); gl.uniform1iv(U(stepProg, 'uI'), st.I || [0, 0, 0, 0]);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo[1 - cur]); gl.viewport(0, 0, W, H);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    cur = 1 - cur;
+  }
+  function draw() {
+    gl.useProgram(showProg);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, state[cur]); gl.uniform1i(U(showProg, 'uState'), 0);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, imgTex); gl.uniform1i(U(showProg, 'uImg'), 2);
+    gl.uniform2i(U(showProg, 'uSize'), W, H); gl.uniform2f(U(showProg, 'uView'), canvas.width, canvas.height);
+    gl.uniform1i(U(showProg, 'uLines'), lines ? 1 : 0); gl.uniform1i(U(showProg, 'uOriginal'), showOriginal ? 1 : 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    info.textContent = `${W} × ${H} cells`;
+  }
+  function say() {
+    if (!job) { status.textContent = 'The original picture.'; return; }
+    const st = job.stages[Math.min(job.stage, job.stages.length - 1)];
+    status.textContent = job.stage >= job.stages.length ? `${job.name}: done in ${job.total} ${job.total === 1 ? 'step' : 'steps'}.`
+      : st.n === 0 ? `${job.name}: step ${job.total}, running until stopped.`
+      : `${job.name}: step ${job.total + 1}` + (job.stages.length > 1 ? `, rule ${job.stage + 1} of ${job.stages.length}.` : ` of ${st.n}.`);
+  }
+  function advance() {                                        // one step of the current filter; false when there is nothing left to do
+    if (!job || job.stage >= job.stages.length) return false;
+    const st = job.stages[job.stage];
+    step(st); job.done++; job.total++;
+    if (st.n !== 0 && job.done >= st.n) { job.stage++; job.done = 0; }
+    return true;
+  }
+  function start(name, stages) {
+    if (!$('stack').checked || stages[0].k === 6) load(original);      // Crystallize reads the helper bytes as dealt at the start
+    lines = stages[stages.length - 1].k === 6 && stages[stages.length - 1].I[1] === 1;
+    job = { name, stages, stage: 0, done: 0, total: 0 };
+    say(); draw();
+  }
+  function frame(t) {
+    if (job && job.stage < job.stages.length) {
+      owed += Math.min(0.25, (t - last) / 1000) * val('speed');
+      let n = Math.min(8, Math.floor(owed)); owed -= Math.floor(owed);
+      if (n) { while (n-- && advance()); say(); draw(); }
+    }
+    last = t; requestAnimationFrame(frame);
+  }
+  function readState() {
+    const out = new Uint8Array(4 * W * H);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo[cur]); gl.readPixels(0, 0, W, H, gl.RGBA_INTEGER, gl.UNSIGNED_BYTE, out);
+    return out;
+  }
+  /* Every filter, shader against processor, value for value. Run from the console: selfTest() */
+  window.selfTest = function (cap = 6) {
+    const out = [], hold = $('mask').value !== 'none';
+    for (const [, list] of FILTERS) for (const [name, , stages] of list) {
+      load(original);
+      let S = original, bad = 0, steps = 0;
+      for (const st of stages) for (let k = 0; k < (st.n === 0 ? cap : Math.min(st.n, st.k === 6 ? 30 : cap)); k++) { S = stepCPU(S, ports, W, H, st, hold); step(st); steps++; }
+      const G = readState(); for (let i = 0; i < S.length; i++) if (S[i] !== G[i]) bad++;
+      let changed = 0; for (let i = 0; i < S.length; i += 4) if (S[i] !== original[i] || S[i + 1] !== original[i + 1] || S[i + 2] !== original[i + 2]) changed++;
+      out.push({ name, steps, mismatches: bad, changed: Math.round(100 * changed / (W * H)) });
+    }
+    load(original); job = null; say(); draw();
+    return out;
+  };
+  window.runFilter = function (name) { for (const [, list] of FILTERS) for (const f of list) if (f[0] === name) { start(f[0], f[2]); while (job.stages[job.stage] && job.stages[job.stage].n !== 0 && advance()); say(); draw(); return true; } return false; };
+
+  /* the page */
+  let count = 0;
+  const done = new Map();
+  for (const [group, list] of FILTERS) {
+    const box = document.createElement('div'), h = document.createElement('h3'), row = document.createElement('div');
+    h.textContent = group; row.className = 'row';
+    for (const [name, text, stages] of list) {
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = name; b.setAttribute('aria-pressed', 'false');
+      b.addEventListener('click', () => { document.querySelectorAll('#filters button').forEach(e => e.setAttribute('aria-pressed', String(e === b))); $('job').textContent = text; start(name, stages); });
+      row.appendChild(b); count++;
+      done.set(name, [group, text]);
+    }
+    box.append(h, row); $('filters').appendChild(box);
+  }
+  const rows = [];
+  for (const [name, [group, text]] of done) rows.push([group.replace(/ \(.*/, ''), name, /approx/.test(group) ? 'approx' : 'yes', text]);
+  for (const [menu, name, why] of NO) rows.push([menu, name, 'no', why]);
+  rows.sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
+  for (const [menu, name, kind, text] of rows) {
+    const tr = document.createElement('tr');
+    for (const [v, cls] of [[menu, ''], [name, ''], [kind === 'yes' ? 'yes' : kind === 'approx' ? 'approximation' : 'no', kind], [text, '']]) { const td = document.createElement('td'); td.textContent = v; if (cls) td.className = cls; tr.appendChild(td); }
+    $('menu').appendChild(tr);
+  }
+  const nNo = rows.filter(r => r[2] === 'no').length, nApprox = rows.filter(r => r[2] === 'approx').length;
+  $('tally').textContent = `${rows.length} entries: ${count - nApprox} done as the filter is defined, ${nApprox} as approximations, ${nNo} not done. The list of menu entries is from memory of the classic menu, not checked against a reference.`;
+  const sp = () => { $('speedOut').textContent = $('speed').value; $('cellsOut').textContent = $('cells').value; };
+  $('speed').addEventListener('input', sp); $('cells').addEventListener('input', sp); sp();
+  $('cells').addEventListener('change', resize);
+  $('mask').addEventListener('change', () => { makePorts(); });
+  $('finish').addEventListener('click', () => { if (!job) return; const st = job.stages[job.stage]; if (st && st.n === 0) job.stage = job.stages.length; else { let guard = 5000; while (guard-- && job.stages[job.stage] && job.stages[job.stage].n !== 0 && advance()); if (job.stages[job.stage]) job.stage = job.stages.length; } say(); draw(); });
+  $('reset').addEventListener('click', () => { load(original); job = null; lines = false; say(); draw(); });
+  $('compare').addEventListener('click', () => { showOriginal = !showOriginal; $('compare').setAttribute('aria-pressed', String(showOriginal)); $('compare').textContent = showOriginal ? 'Show result' : 'Show original'; draw(); });
+  $('builtin').addEventListener('click', () => setPicture(builtIn()));
+  $('pick').addEventListener('click', () => $('file').click());
+  function open(file) {
+    if (!file || !file.type.startsWith('image/')) return;
+    const url = URL.createObjectURL(file), im = new Image();
+    im.onload = () => { setPicture(im); URL.revokeObjectURL(url); };
+    im.onerror = () => { URL.revokeObjectURL(url); status.textContent = 'That file could not be read as a picture.'; };
+    im.src = url;
+  }
+  $('file').addEventListener('change', e => open(e.target.files[0]));
+  const stage = $('stage');
+  stage.addEventListener('dragover', e => { e.preventDefault(); stage.classList.add('over'); });
+  stage.addEventListener('dragleave', () => stage.classList.remove('over'));
+  stage.addEventListener('drop', e => { e.preventDefault(); stage.classList.remove('over'); open(e.dataTransfer.files[0]); });
+  $('save').addEventListener('click', () => {
+    draw();
+    canvas.toBlob(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = `cell8-filter-${(job ? job.name : 'original').toLowerCase().replace(/[^a-z0-9]+/g, '-')}.png`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); }, 'image/png');
+  });
+  setPicture(builtIn());
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
