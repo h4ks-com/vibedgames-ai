@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cell-8 image shader</title>
+<style>
+/* The picture is the page; a narrow column of controls beside it. Same slate and inks as the game pages. */
+:root {
+  --bg: #eceef1; --panel: #f8f9fb; --ink: #1b2330; --muted: #5d6878; --line: #c9d0da; --focus: #1b2330; --good: #1c7c4a; --warn: #9a4a00;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bg: #12161c; --panel: #1a2029; --ink: #e6eaf0; --muted: #95a1b2; --line: #2f3946; --focus: #e6eaf0; --good: #5fd08f; --warn: #ffc98a; color-scheme: dark; }
+}
+:root[data-theme="dark"] { --bg: #12161c; --panel: #1a2029; --ink: #e6eaf0; --muted: #95a1b2; --line: #2f3946; --focus: #e6eaf0; --good: #5fd08f; --warn: #ffc98a; color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.45 var(--sans);
+  padding-block: 20px 40px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.wrap { max-width: 1180px; margin: 0 auto; display: grid; gap: 18px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px; }
+h1 { font: 600 22px/1.2 var(--mono); letter-spacing: -0.01em; margin: 0; }
+header p { margin: 0; color: var(--muted); max-width: 64ch; }
+a { color: inherit; }
+.main { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 20px; align-items: start; }
+@media (max-width: 880px) { .main { grid-template-columns: minmax(0, 1fr); } }
+.stage { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px; min-width: 0; }
+.stage.over { border-color: var(--focus); border-style: dashed; }
+canvas { display: block; width: 100%; height: auto; max-height: 82vh; object-fit: contain; background: #000; border-radius: 3px; }
+.side { display: grid; gap: 14px; min-width: 0; }
+h2 { font: 600 12px var(--sans); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 6px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+label { font-size: 13px; color: var(--muted); display: inline-flex; gap: 6px; align-items: center; }
+.slider { display: grid; grid-template-columns: 8.5em minmax(0, 1fr) 3.4em; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); margin: 3px 0; }
+.slider output { text-align: right; font: 12.5px var(--mono); color: var(--ink); }
+input[type="range"] { width: 100%; min-width: 0; accent-color: var(--ink); }
+select, button, input[type="number"] { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 5px 9px; }
+input[type="number"] { width: 8.5em; }
+button { cursor: pointer; font-weight: 600; }
+button:hover { border-color: var(--muted); }
+select:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.note { margin: 6px 0 0; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.note.bad { color: var(--warn); font-weight: 600; }
+.rules { color: var(--muted); font-size: 13.5px; max-width: 72ch; }
+.rules p { margin: 0 0 8px; } .rules b { color: var(--ink); font-weight: 600; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Cell-8 image shader</h1>
+    <p>A hexagonal cellular automaton whose rule in each cell is chosen by a picture. <a href="index.html">The games</a></p>
+  </header>
+
+  <div class="main">
+    <div class="stage" id="stage">
+      <canvas id="view" width="800" height="600" aria-label="The automaton running on the picture"></canvas>
+      <p class="note" id="info" aria-live="polite"></p>
+    </div>
+
+    <div class="side">
+      <div>
+        <h2>Picture</h2>
+        <div class="row">
+          <button id="pick" type="button">Choose a picture</button>
+          <button id="builtin" type="button">Built-in</button>
+          <input id="file" type="file" accept="image/*" hidden>
+        </div>
+        <p class="note">Or drop a picture on the canvas. It stays on this computer.</p>
+      </div>
+
+      <div>
+        <h2>Ports</h2>
+        <div class="row">
+          <label>From <select id="portFrom"><option value="light">brightness</option><option value="hue">hue</option></select></label>
+          <label><input type="checkbox" id="hold" checked> Port 0 holds still</label>
+          <label><input type="checkbox" id="showPorts"> Show ports</label>
+        </div>
+        <div class="slider"><span>Ports</span><input id="ports" type="range" min="2" max="8" step="1" value="4"><output id="portsOut"></output></div>
+      </div>
+
+      <div>
+        <h2>Rule</h2>
+        <div class="row">
+          <label>Kind <select id="family"><option value="1">counting</option><option value="0">any table</option></select></label>
+          <label>States <select id="states"><option>4</option><option>8</option><option selected>16</option><option>64</option></select></label>
+          <label>Seed <input id="seed" type="number" min="1" step="1" value="8"></label>
+          <button id="newRule" type="button">New rule</button>
+        </div>
+        <div class="slider"><span>Stillness</span><input id="q" type="range" min="0" max="0.99" step="0.01" value="0.62"><output id="qOut"></output></div>
+        <div class="slider"><span>Port contrast</span><input id="spread" type="range" min="-1" max="1" step="0.02" value="0.5"><output id="spreadOut"></output></div>
+      </div>
+
+      <div>
+        <h2>Run</h2>
+        <div class="row">
+          <button id="play" type="button">Pause</button>
+          <button id="stepBtn" type="button">Step</button>
+          <button id="restart" type="button">Restart</button>
+          <label>Start from <select id="init"><option value="noise">noise</option><option value="image">the picture</option></select></label>
+        </div>
+        <div class="slider"><span>Steps a second</span><input id="speed" type="range" min="1" max="60" step="1" value="12"><output id="speedOut"></output></div>
+        <div class="slider"><span>Cells across</span><input id="cells" type="range" min="48" max="512" step="8" value="200"><output id="cellsOut"></output></div>
+      </div>
+
+      <div>
+        <h2>Look</h2>
+        <div class="slider"><span>Picture in the mix</span><input id="blend" type="range" min="0" max="1" step="0.01" value="0.55"><output id="blendOut"></output></div>
+        <div class="slider"><span>Palette</span><input id="hue" type="range" min="0" max="1" step="0.01" value="0.58"><output id="hueOut"></output></div>
+        <div class="row"><button id="save" type="button">Save as PNG</button></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="rules">
+    <p><b>What runs.</b> Each cell holds one of K states and has six neighbours on a hexagonal grid. Its next state is a function of eight inputs: its own state, the six neighbours, and its <b>port</b>. That is Cell-8. The port of every cell is read from the picture, so the picture decides which behaviour runs where.</p>
+    <p><b>The rule is never stored.</b> With 16 states and 4 ports the full table would have about a billion entries. Each cell computes its own entry instead, as a hash of the seed and its inputs. A seed is therefore a whole rule; "New rule" picks another.</p>
+    <p><b>Two kinds of rule.</b> <i>Any table:</i> the entry is a hash of all eight inputs, so the rule is a typical member of the whole Cell-8 rule space. Such rules have no structure in space and give coloured noise. <i>Counting:</i> a cell either keeps its state or moves on to the next one (after the last comes the first), and which it does depends only on its port and on two counts: how many neighbours are already in the next state, and how many are in its own. These are Cell-8 rules too, a small symmetric corner of the space, and many of them make waves, spirals and patches.</p>
+    <p><b>Stillness</b> is the share of entries that leave a cell as it is: near 1 the board freezes, near 0 it boils. <b>Port contrast</b> gives the ports different stillness, so that bright and dark parts of the picture move at different rates; at 0 the ports differ only in which rule they run.</p>
+    <p><b>Port 0 holds still.</b> With this on, cells at port 0 (the darkest part of the picture, or the first hue) never change, and act as walls. Turn it off and port 0 is a rule like the others.</p>
+    <p><b>Ports from the picture.</b> By brightness, the cells are divided into equal-sized groups from darkest to lightest. By hue, the colour circle is cut into equal sectors, and cells with almost no colour go to port 0.</p>
+    <p><b>The grid wraps round</b> at the edges. Everything is computed on the graphics card of this computer; no picture or setting leaves the page.</p>
+  </div>
+</div>
+
+<script>
+'use strict';
+/* ---------- the rule, on the processor (the reference the shader is checked against: selfTest below) ---------- */
+function pcg(v) {                                            // a 32-bit hash
+  const s = (Math.imul(v, 747796405) + 2891336453) >>> 0;
+  const w = Math.imul(((s >>> ((s >>> 28) + 4)) ^ s) >>> 0, 277803737) >>> 0;
+  return ((w >>> 22) ^ w) >>> 0;
+}
+function neighbours(x, y, W, H) {                            // self, nw, ne, r, se, sw, l; odd rows are shifted half a cell right
+  const odd = y & 1, m = (a, n) => ((a % n) + n) % n, at = (dx, dy) => m(y + dy, H) * W + m(x + dx, W);
+  return [at(0, 0), at(odd - 1, -1), at(odd, -1), at(1, 0), at(odd, 1), at(odd - 1, 1), at(-1, 0)];
+}
+function stepCPU(S, P, W, H, seed, K, q, hold, family) {
+  const T = new Uint8Array(S.length);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y * W + x, port = P[i];
+    if (hold && port === 0) { T[i] = S[i]; continue; }
+    let h = pcg((seed ^ Math.imul(port, 0x9E3779B9)) >>> 0);
+    const nb = neighbours(x, y, W, H);
+    if (family === 1) {                                      // counting rule: advance by one, or not, by two counts
+      const next = (S[i] + 1) % K; let nNext = 0, nSame = 0;
+      for (let j = 1; j < 7; j++) { if (S[nb[j]] === next) nNext++; if (S[nb[j]] === S[i]) nSame++; }
+      h = pcg((Math.imul(h, 31) + nNext) >>> 0); h = pcg((Math.imul(h, 31) + nSame) >>> 0);
+      T[i] = (h >>> 8) / 16777216 < Math.fround(q[port]) ? S[i] : next;
+      continue;
+    }
+    for (const j of nb) h = pcg((Math.imul(h, 31) + S[j]) >>> 0);
+    T[i] = (h >>> 8) / 16777216 < Math.fround(q[port]) ? S[i] : pcg(h) % K;
+  }
+  return T;
+}
+
+/* ---------- the same rule as a fragment shader ---------- */
+const VERT = `#version 300 es
+in vec2 a; void main() { gl_Position = vec4(a, 0.0, 1.0); }`;
+const STEP = `#version 300 es
+precision highp float; precision highp int; precision highp usampler2D;
+uniform usampler2D uState, uPort; uniform ivec2 uSize; uniform uint uSeed; uniform int uK, uHold, uFamily; uniform float uQ[8];
+out uint o;
+uint pcg(uint v) { uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
+uint S(ivec2 p) { p = (p % uSize + uSize) % uSize; return texelFetch(uState, p, 0).r; }
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy); int odd = p.y & 1;
+  uint self = S(p), port = texelFetch(uPort, p, 0).r;
+  if (uHold == 1 && port == 0u) { o = self; return; }
+  uint h = pcg(uSeed ^ (port * 0x9E3779B9u));
+  if (uFamily == 1) {
+    uint next = (self + 1u) % uint(uK), nNext = 0u, nSame = 0u;
+    ivec2 d[6] = ivec2[6](ivec2(odd - 1, -1), ivec2(odd, -1), ivec2(1, 0), ivec2(odd, 1), ivec2(odd - 1, 1), ivec2(-1, 0));
+    for (int j = 0; j < 6; j++) { uint v = S(p + d[j]); if (v == next) nNext++; if (v == self) nSame++; }
+    h = pcg(h * 31u + nNext); h = pcg(h * 31u + nSame);
+    o = float(h >> 8u) / 16777216.0 < uQ[int(port)] ? self : next;
+    return;
+  }
+  h = pcg(h * 31u + self);
+  h = pcg(h * 31u + S(p + ivec2(odd - 1, -1)));   // nw
+  h = pcg(h * 31u + S(p + ivec2(odd, -1)));       // ne
+  h = pcg(h * 31u + S(p + ivec2(1, 0)));          // r
+  h = pcg(h * 31u + S(p + ivec2(odd, 1)));        // se
+  h = pcg(h * 31u + S(p + ivec2(odd - 1, 1)));    // sw
+  h = pcg(h * 31u + S(p + ivec2(-1, 0)));         // l
+  o = float(h >> 8u) / 16777216.0 < uQ[int(port)] ? self : pcg(h) % uint(uK);
+}`;
+const SHOW = `#version 300 es
+precision highp float; precision highp int; precision highp usampler2D;
+uniform usampler2D uState, uPort; uniform sampler2D uImg; uniform ivec2 uSize; uniform vec2 uView; uniform int uK, uPorts, uShowPorts; uniform float uBlend, uHue;
+out vec4 o;
+void main() {
+  vec2 uv = vec2(gl_FragCoord.x / uView.x, 1.0 - gl_FragCoord.y / uView.y);          // origin at the top left
+  vec2 g = uv * vec2(uSize);                                                          // in cells and rows
+  ivec2 best = ivec2(0); float bd = 1e9;
+  for (int dr = -1; dr <= 1; dr++) {                                                  // nearest cell centre: a hexagon
+    int r = int(floor(g.y)) + dr; float shift = 0.5 * float(r & 1);
+    float c = floor(g.x - shift);
+    vec2 d = vec2(g.x - (c + 0.5 + shift), (g.y - (float(r) + 0.5)) * 0.8660254);
+    float dd = dot(d, d);
+    if (dd < bd) { bd = dd; best = ivec2(int(c), r); }
+  }
+  best = (best % uSize + uSize) % uSize;
+  uint s = texelFetch(uState, best, 0).r;
+  vec3 img = texture(uImg, uv).rgb;
+  if (uShowPorts == 1) { float p = float(texelFetch(uPort, best, 0).r) / float(max(uPorts - 1, 1)); o = vec4(mix(vec3(p), img, 0.25), 1.0); return; }
+  float t = float(s) / float(uK);
+  vec3 pal = s == 0u ? vec3(0.05, 0.06, 0.08) : 0.5 + 0.5 * cos(6.2831853 * (t + uHue + vec3(0.0, 0.33, 0.67)));
+  float lit = s == 0u ? 0.22 : 0.55 + 0.75 * t;
+  o = vec4(mix(pal, img * lit, uBlend), 1.0);
+}`;
+
+(function () {
+  const $ = id => document.getElementById(id), canvas = $('view'), info = $('info');
+  const gl = canvas.getContext('webgl2', { antialias: false, preserveDrawingBuffer: true });
+  if (!gl) { info.className = 'note bad'; info.textContent = 'This browser does not offer WebGL 2, which the shader needs.'; return; }
+  function program(fs) {
+    const p = gl.createProgram();
+    for (const [type, src] of [[gl.VERTEX_SHADER, VERT], [gl.FRAGMENT_SHADER, fs]]) {
+      const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+      gl.attachShader(p, s);
+    }
+    gl.bindAttribLocation(p, 0, 'a'); gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    return p;
+  }
+  const stepProg = program(STEP), showProg = program(SHOW), U = (p, n) => gl.getUniformLocation(p, n);
+  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1); gl.pixelStorei(gl.PACK_ALIGNMENT, 1);
+  function byteTex() {
+    const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+    for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.NEAREST], [gl.TEXTURE_MAG_FILTER, gl.NEAREST], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+    return t;
+  }
+  const setBytes = (t, W, H, data) => { gl.bindTexture(gl.TEXTURE_2D, t); gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8UI, W, H, 0, gl.RED_INTEGER, gl.UNSIGNED_BYTE, data); };
+  const state = [byteTex(), byteTex()], portTex = byteTex(), fbo = [gl.createFramebuffer(), gl.createFramebuffer()];
+  const imgTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, imgTex);
+  for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+
+  let W = 0, H = 0, cur = 0, gen = 0, playing = !(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  let picture = null, ports = null, lum = null, qs = new Float32Array(8), last = 0, owed = 0;
+  const val = id => +$(id).value;
+
+  function builtIn() {                                       // a picture made here, so the page needs no file
+    const c = document.createElement('canvas'); c.width = 960; c.height = 720;
+    const x = c.getContext('2d'), g = x.createLinearGradient(0, 0, 960, 720);
+    g.addColorStop(0, '#0b1d33'); g.addColorStop(0.5, '#27506e'); g.addColorStop(1, '#e9b872');
+    x.fillStyle = g; x.fillRect(0, 0, 960, 720);
+    const hex = (cx, cy, r, fill) => { x.beginPath(); for (let k = 0; k < 6; k++) { const a = Math.PI / 3 * k - Math.PI / 2; x.lineTo(cx + r * Math.cos(a), cy + r * Math.sin(a)); } x.closePath(); x.fillStyle = fill; x.fill(); };
+    hex(480, 360, 300, '#f4e3c1'); hex(480, 360, 215, '#c8553d'); hex(480, 360, 130, '#28666e'); hex(480, 360, 55, '#0b1d33');
+    x.fillStyle = '#f4e3c1'; x.beginPath(); x.arc(160, 150, 70, 0, 7); x.fill();
+    x.fillStyle = '#0b1d33'; x.beginPath(); x.arc(820, 590, 90, 0, 7); x.fill();
+    return c;
+  }
+  function setPicture(src) {                                  // src: a canvas or an image
+    const w = src.naturalWidth || src.width, h = src.naturalHeight || src.height, k = Math.min(1, 1280 / Math.max(w, h));
+    const c = document.createElement('canvas'); c.width = Math.max(2, Math.round(w * k)); c.height = Math.max(2, Math.round(h * k));
+    c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
+    picture = c;
+    gl.bindTexture(gl.TEXTURE_2D, imgTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+    resize();
+  }
+  function resize() {                                         // the grid follows the picture's shape; rows are 0.866 of a cell apart
+    W = val('cells');
+    H = Math.max(2, 2 * Math.round(W * picture.height / picture.width / 0.8660254 / 2));
+    const scale = Math.max(1, Math.min(8, Math.floor(1400 / W)));
+    canvas.width = W * scale; canvas.height = Math.round(W * scale * picture.height / picture.width);
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(picture, 0, 0, W, H);
+    lum = x.getImageData(0, 0, W, H).data;
+    makePorts(); restart();
+  }
+  function makePorts() {
+    const n = W * H, P = val('ports');
+    ports = new Uint8Array(n);
+    if ($('portFrom').value === 'hue') {
+      for (let i = 0; i < n; i++) {
+        const r = lum[4 * i] / 255, g = lum[4 * i + 1] / 255, b = lum[4 * i + 2] / 255, mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+        if (d < 0.08) { ports[i] = 0; continue; }
+        let h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+        ports[i] = Math.min(P - 1, Math.floor(((h + 6) % 6) / 6 * P));
+      }
+    } else {                                                  // equal-sized groups from darkest to lightest
+      const L = new Float32Array(n);
+      for (let i = 0; i < n; i++) L[i] = 0.2126 * lum[4 * i] + 0.7152 * lum[4 * i + 1] + 0.0722 * lum[4 * i + 2];
+      const sorted = Float32Array.from(L).sort(), cut = [];
+      for (let k = 1; k < P; k++) cut.push(sorted[Math.floor(n * k / P)]);
+      for (let i = 0; i < n; i++) { let p = 0; while (p < P - 1 && L[i] >= cut[p]) p++; ports[i] = p; }
+    }
+    setBytes(portTex, W, H, ports);
+  }
+  function initial() {
+    const n = W * H, K = val('states'), S = new Uint8Array(n);
+    if ($('init').value === 'image') for (let i = 0; i < n; i++) S[i] = Math.min(K - 1, Math.floor((0.2126 * lum[4 * i] + 0.7152 * lum[4 * i + 1] + 0.0722 * lum[4 * i + 2]) / 256 * K));
+    else { let h = pcg(val('seed') >>> 0); for (let i = 0; i < n; i++) { h = pcg(h + i); S[i] = h & 1 ? pcg(h) % K : 0; } }
+    return S;
+  }
+  function restart() {
+    const S = initial();
+    for (const k of [0, 1]) {
+      setBytes(state[k], W, H, S);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo[k]);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, state[k], 0);
+    }
+    cur = 0; gen = 0; draw();
+  }
+  function rule() {                                           // stillness of each port
+    const P = val('ports'), q = val('q'), sp = val('spread');
+    for (let p = 0; p < 8; p++) qs[p] = Math.max(0, Math.min(0.995, q - sp * 0.5 * (P > 1 ? p / (P - 1) - 0.5 : 0) * 2 * Math.min(q, 1 - q) / 0.5));
+    return qs;
+  }
+  function bind(prog) {
+    gl.useProgram(prog);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, state[cur]); gl.uniform1i(U(prog, 'uState'), 0);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, portTex); gl.uniform1i(U(prog, 'uPort'), 1);
+    gl.uniform2i(U(prog, 'uSize'), W, H); gl.uniform1i(U(prog, 'uK'), val('states'));
+  }
+  function step() {
+    bind(stepProg);
+    gl.uniform1ui(U(stepProg, 'uSeed'), val('seed') >>> 0); gl.uniform1i(U(stepProg, 'uHold'), $('hold').checked ? 1 : 0);
+    gl.uniform1fv(U(stepProg, 'uQ'), rule()); gl.uniform1i(U(stepProg, 'uFamily'), val('family'));
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo[1 - cur]); gl.viewport(0, 0, W, H);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    cur = 1 - cur; gen++;
+  }
+  function draw() {
+    bind(showProg);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, imgTex); gl.uniform1i(U(showProg, 'uImg'), 2);
+    gl.uniform2f(U(showProg, 'uView'), canvas.width, canvas.height);
+    gl.uniform1i(U(showProg, 'uPorts'), val('ports')); gl.uniform1i(U(showProg, 'uShowPorts'), $('showPorts').checked ? 1 : 0);
+    gl.uniform1f(U(showProg, 'uBlend'), val('blend')); gl.uniform1f(U(showProg, 'uHue'), val('hue'));
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    info.textContent = `${W} × ${H} cells · step ${gen}`;
+  }
+  function frame(t) {
+    if (playing) {
+      owed += Math.min(0.25, (t - last) / 1000) * val('speed');
+      let n = Math.min(8, Math.floor(owed)); owed -= Math.floor(owed);
+      if (n) { while (n--) step(); draw(); }
+    }
+    last = t; requestAnimationFrame(frame);
+  }
+  function readState() {
+    const out = new Uint8Array(W * H);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo[cur]); gl.readPixels(0, 0, W, H, gl.RED_INTEGER, gl.UNSIGNED_BYTE, out);
+    return out;
+  }
+  /* The shader against the processor, cell for cell. Run from the console: selfTest() */
+  window.selfTest = function (steps = 12) {
+    const was = playing; playing = false; restart();
+    let S = initial(), bad = 0;
+    for (let t = 0; t < steps; t++) {
+      S = stepCPU(S, ports, W, H, val('seed') >>> 0, val('states'), rule(), $('hold').checked, val('family')); step();
+      const G = readState(); for (let i = 0; i < S.length; i++) if (S[i] !== G[i]) bad++;
+    }
+    playing = was; draw();
+    return { cells: W * H, steps, mismatches: bad, alive: S.reduce((a, v) => a + (v ? 1 : 0), 0) };
+  };
+
+  /* controls */
+  const outs = { ports: v => v, q: v => (+v).toFixed(2), spread: v => (+v > 0 ? '+' : '') + (+v).toFixed(2), speed: v => v, cells: v => v, blend: v => Math.round(100 * v) + '%', hue: v => (+v).toFixed(2) };
+  for (const id in outs) { const f = () => { $(id + 'Out').textContent = outs[id]($(id).value); }; $(id).addEventListener('input', f); f(); }
+  for (const id of ['blend', 'hue', 'showPorts']) $(id).addEventListener('input', draw);
+  $('ports').addEventListener('change', () => { makePorts(); draw(); });
+  $('portFrom').addEventListener('change', () => { makePorts(); draw(); });
+  $('cells').addEventListener('change', resize);
+  for (const id of ['states', 'init', 'seed', 'family']) $(id).addEventListener('change', restart);
+  $('newRule').addEventListener('click', () => { $('seed').value = 1 + Math.floor(Math.random() * 999999); restart(); });
+  $('restart').addEventListener('click', restart);
+  $('stepBtn').addEventListener('click', () => { step(); draw(); });
+  $('play').addEventListener('click', () => { playing = !playing; $('play').textContent = playing ? 'Pause' : 'Play'; });
+  $('play').textContent = playing ? 'Pause' : 'Play';
+  $('builtin').addEventListener('click', () => setPicture(builtIn()));
+  $('pick').addEventListener('click', () => $('file').click());
+  function load(file) {
+    if (!file || !file.type.startsWith('image/')) return;
+    const url = URL.createObjectURL(file), im = new Image();
+    im.onload = () => { setPicture(im); URL.revokeObjectURL(url); };
+    im.onerror = () => { URL.revokeObjectURL(url); info.className = 'note bad'; info.textContent = 'That file could not be read as a picture.'; };
+    info.className = 'note'; im.src = url;
+  }
+  $('file').addEventListener('change', e => load(e.target.files[0]));
+  const stage = $('stage');
+  stage.addEventListener('dragover', e => { e.preventDefault(); stage.classList.add('over'); });
+  stage.addEventListener('dragleave', () => stage.classList.remove('over'));
+  stage.addEventListener('drop', e => { e.preventDefault(); stage.classList.remove('over'); load(e.dataTransfer.files[0]); });
+  $('save').addEventListener('click', () => {
+    draw();
+    canvas.toBlob(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = `cell8-shader-seed${val('seed')}-step${gen}.png`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); }, 'image/png');
+  });
+  setPicture(builtIn());
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
